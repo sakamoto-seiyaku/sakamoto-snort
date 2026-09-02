@@ -27,6 +27,8 @@ public final class RuntimeControlRequest {
             RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP;
     public static final String PRODUCT_SET_NETWORK_GATE =
             RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE;
+    public static final String PRODUCT_APPLY_EMPTY_POLICY =
+            RuntimeControlProtocol.ACTION_PRODUCT_APPLY_EMPTY_POLICY;
 
     public enum Action {
         START(RuntimeControlProtocol.ACTION_START),
@@ -37,7 +39,8 @@ public final class RuntimeControlRequest {
         PRODUCT_PROFILE_SELECT(RuntimeControlProtocol.ACTION_PRODUCT_PROFILE_SELECT),
         PRODUCT_BIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_BIND_APP),
         PRODUCT_UNBIND_APP(RuntimeControlProtocol.ACTION_PRODUCT_UNBIND_APP),
-        PRODUCT_SET_NETWORK_GATE(RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE);
+        PRODUCT_SET_NETWORK_GATE(RuntimeControlProtocol.ACTION_PRODUCT_SET_NETWORK_GATE),
+        PRODUCT_APPLY_EMPTY_POLICY(RuntimeControlProtocol.ACTION_PRODUCT_APPLY_EMPTY_POLICY);
 
         final String wireName;
 
@@ -200,6 +203,15 @@ public final class RuntimeControlRequest {
             AuthoringPolicyBundle.NetworkContextId context, boolean blocked, String requestId) {
         return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
                 Action.PRODUCT_SET_NETWORK_GATE, null, subjectId, context, blocked);
+    }
+
+    public static RuntimeControlRequest applyEmptyPolicy() {
+        return applyEmptyPolicy(UUID.randomUUID().toString());
+    }
+
+    public static RuntimeControlRequest applyEmptyPolicy(String requestId) {
+        return new RuntimeControlRequest(RuntimeControlProtocol.VERSION, requestId,
+                Action.PRODUCT_APPLY_EMPTY_POLICY, null, null, null, false);
     }
 
     public Map<String, String> encode() {

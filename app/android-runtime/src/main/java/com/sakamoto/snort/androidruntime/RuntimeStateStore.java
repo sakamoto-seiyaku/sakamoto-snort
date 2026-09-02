@@ -60,7 +60,8 @@ public final class RuntimeStateStore {
                     Boolean.parseBoolean(values.getProperty("mayBeActive", "false")),
                     parseLong(values, "pid", -1L),
                     parseLong(values, "generation", 0L),
-                    parseLong(values, "updatedAtMillis", 0L));
+                    parseLong(values, "updatedAtMillis", 0L),
+                    Boolean.parseBoolean(values.getProperty("protectionRunning", "false")));
             return ReadResult.valid(snapshot);
         } catch (Exception error) {
             return ReadResult.invalid(RuntimeSnapshot.error(RuntimeProfile.ROOT,

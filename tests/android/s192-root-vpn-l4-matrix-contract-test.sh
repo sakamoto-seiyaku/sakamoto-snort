@@ -7,10 +7,61 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 device_runner="$repo_root/tests/device/s192-root-vpn-l4-matrix-product.sh"
+graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
+host_graph_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
+abi_header="$repo_root/src/product/include/sakamoto_product_abi.h"
+api_source="$repo_root/src/product/vpp/product_core.api"
+plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
+vapi_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
+rust_source="$repo_root/crates/product-core/src/lib.rs"
+jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
+java_status="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java"
+java_service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 
 test -f "$device_runner"
 test -x "$device_runner"
+test -f "$graph_source"
+test -f "$host_graph_source"
+for source in "$abi_header" "$api_source" "$plugin_source" "$vapi_source" \
+  "$rust_source" "$jni_source" "$java_status" "$java_service"; do
+  test -f "$source"
+done
 bash -n "$device_runner"
+
+# Native evidence must correlate a completed typed match with the current
+# probe tuple.  A same-probe retransmit remains effective, a wrong destination
+# port remains visible as NO_MATCH, and unrelated background traffic cannot
+# erase the status consumed by this runner.
+for symbol in \
+  'l4_typed_match_policy_key' 'l4_typed_match_probe_key' \
+  'l4_typed_match_subject_key' \
+  'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_SAME_PROBE' \
+  'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_SAME_SUBJECT' \
+  'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_UNRELATED' \
+  'product_packet_graph_policy_association_fixture_cli'; do
+  grep -Fq "$symbol" "$graph_source" ||
+    { echo "S192 graph evidence seam missing: $symbol" >&2; exit 1; }
+done
+grep -Fq 'run-policy-association-fixture' "$host_graph_source"
+for field in \
+  'policy_l4_typed_match_policy_key' 'policy_l4_typed_match_probe_key' \
+  'policy_l4_last_evaluation_probe_key'; do
+  for source in "$abi_header" "$api_source" "$plugin_source" "$vapi_source" \
+    "$rust_source" "$jni_source"; do
+    grep -Fq "$field" "$source" ||
+      { echo "S192 status key is not wired: $field ($source)" >&2; exit 1; }
+  done
+done
+for field in policyL4TypedMatchPolicyKey policyL4TypedMatchProbeKey \
+  policyL4LastEvaluationProbeKey; do
+  grep -Fq "$field" "$java_status" ||
+    { echo "S192 Java status key missing: $field" >&2; exit 1; }
+done
+grep -Fq 'STATUS_ASSOCIATION_VALUE_COUNT = 3' "$jni_source"
+grep -Fq 'status.policyL4TypedMatchProbeKey == 0L' "$java_service"
+grep -Fq 'status.policyL4LastEvaluationProbeKey == 0L' "$java_service"
+grep -Fq 's192ProbePortsMatch' "$java_service"
+grep -Fq 'counters.probeEpochFallbackCandidate' "$java_service"
 
 # --help is the only executable smoke path in this contract; it exits before
 # device preflight and therefore cannot accidentally become physical execution.
@@ -138,6 +189,9 @@ grep -Fq 'root_vpn_same_rule_reason true' "$device_runner"
 # from a transport helper's counters.
 grep -Fq 'runtimeStart true' "$device_runner"
 grep -Fq 'runtimeStop true' "$device_runner"
+grep -Fq 'cold_start_control_activity' "$device_runner"
+grep -Fq 'preflight_cold_start_settled true' "$device_runner"
+grep -Fq 'am force-stop "$PACKAGE"' "$device_runner"
 grep -Fq 'wait_for_profile_ready root root-nfqueue' "$device_runner"
 grep -Fq 'wait_for_profile_ready vpn vpn-tun-hev-lwip' "$device_runner"
 grep -Fq 'root_restart_same_revision true' "$device_runner"

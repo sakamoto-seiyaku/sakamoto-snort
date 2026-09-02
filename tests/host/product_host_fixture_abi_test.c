@@ -12,7 +12,9 @@ _Static_assert (offsetof (sakamoto_product_status_t, generation) == 16U,
                 "status generation ABI changed");
 _Static_assert (offsetof (sakamoto_product_status_t, artifact_id) == 52U,
                 "status identity ABI changed");
-_Static_assert (sizeof (sakamoto_product_status_t) == 424U,
+_Static_assert (sizeof (sakamoto_product_policy_snapshot_t) == 264U,
+                "policy snapshot ABI changed");
+_Static_assert (sizeof (sakamoto_product_status_t) == 1304U,
                 "status ABI changed");
 
 static int
@@ -50,6 +52,11 @@ main (void)
                              NULL, 1, &status),
                            SAKAMOTO_PRODUCT_INVALID_ARGUMENT,
                            "invalid query");
+  sakamoto_product_policy_snapshot_t policy = {0};
+  failures += expect_code (sakamoto_product_session_apply_policy (
+                             NULL, 1, &policy, &status),
+                           SAKAMOTO_PRODUCT_INVALID_ARGUMENT,
+                           "invalid policy apply");
   failures += expect_code (sakamoto_product_session_disconnect (NULL),
                            SAKAMOTO_PRODUCT_INVALID_ARGUMENT,
                            "invalid disconnect");

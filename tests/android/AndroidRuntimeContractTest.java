@@ -338,6 +338,17 @@ public final class AndroidRuntimeContractTest {
         check("ok".equals(restored.coreHealth), "core health round-trips separately");
         check(restored.pid == 42L, "owner pid round-trips");
 
+        RuntimeSnapshot product = RuntimeSnapshot.runningProduct(
+                RuntimeProfile.ROOT, "vpp-runtime-health/v1", "v26.02-release",
+                "artifact-sha256:def", "arm64-v8a",
+                RuntimeSnapshot.ADAPTER_ROOT_NFQUEUE, true, 43L, 8L);
+        RuntimeStateStore.write(files.toFile(), product);
+        RuntimeSnapshot restoredProduct = RuntimeStateStore.read(files.toFile());
+        check(restoredProduct.protectionRunning,
+                "product protection running state round-trips");
+        check(RuntimeSnapshot.ADAPTER_ROOT_NFQUEUE.equals(restoredProduct.adapterReadiness),
+                "product adapter readiness round-trips without inference");
+
         RuntimeSnapshot failure = RuntimeSnapshot.error(
                 RuntimeProfile.VPN, "vpp-runtime-health/v1", "v26.02-release",
                 "arm64-v8a", "artifact-sha256:abc", "cleanup_failed",
@@ -1281,7 +1292,23 @@ public final class AndroidRuntimeContractTest {
         String[] nativeValues = {
                 "7", "41", "1", "0", "1", "1", "1", "0",
                 "artifact-41", "product_core.api/1.0.0@abcd1234", "v26.02-release",
-                "query failed", "2", "3"
+                "query failed", "2", "3", "176", "177", "2", "3", "44",
+                "5", "5", "5", "2", "3", "2", "3", "4", "5", "6", "7",
+                "8", "9", "10", "11", "6", "17", "1", "0",
+                "4294967295", "177", "99", "12", "13", "14", "15", "16",
+                "17", "18", "19", "20", "21", "22", "23", "24", "25",
+                "26", "27", "28", "29", "30", "31", "32", "33",
+                "2", "7", "8032009842424885559", "32", "2", "0", "1", "1",
+                "2", "2", "1", "1", "1", "34", "35", "36"
+                , "88", "88", "41", "18446744073709551600", "88", "88",
+                "0", "1", "1", "0", "0", "0", "1", "1",
+                "network-gate/v1/revision-88/uid-1010001/context-1/blocked",
+                "1010001", "1", "1", "136000017", "5836665117071779841",
+                "3", "88", "5836665117071779841", "1", "1010001", "1",
+                "136000017", "2", "1", "1", "3",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0"
         };
         Method parser = RuntimeControlNative.class.getDeclaredMethod(
                 "parseStatus", String[].class, int.class);
@@ -1304,6 +1331,127 @@ public final class AndroidRuntimeContractTest {
                 "native VPP revision stays in the revision field");
         check("query failed".equals(status.errorDetail),
                 "native error detail stays in the error field");
+        check(status.rootNfqueueQueueId == 176,
+                "native Root NFQUEUE queue id stays in the queue field");
+        check(status.rootNfqueueQueueLast == 177
+                        && status.rootNfqueueLaneCount == 2
+                        && status.rootNfqueueReadyLaneMask == 3,
+                "native Root NFQUEUE lane summary preserves its order");
+        check(status.rootNfqueueGeneration == 44L,
+                "native Root NFQUEUE generation stays in the generation field");
+        check(status.rootNfqueueVerdictAttempts == 5L
+                        && status.rootNfqueueInternalSettlements == 5L
+                        && status.rootNfqueueBufferReturns == 5L
+                        && status.rootNfqueueOriginLocalCompletions == 2L
+                        && status.rootNfqueueOriginRemoteCompletions == 3L
+                        && status.rootNfqueueLane0VerdictAttempts == 2L
+                        && status.rootNfqueueLane1VerdictAttempts == 3L,
+                "native Root NFQUEUE counters preserve their order");
+        check(status.rootNfqueueInputPackets == 4L
+                        && status.rootNfqueueOutputPackets == 5L
+                        && status.rootNfqueueIpv4Packets == 6L
+                        && status.rootNfqueueIpv6Packets == 7L
+                        && status.rootNfqueueTcpPackets == 8L
+                        && status.rootNfqueueUdpPackets == 9L
+                        && status.rootNfqueueUidKnownPackets == 10L
+                        && status.rootNfqueueUidUnknownPackets == 11L,
+                "native Root NFQUEUE S178 aggregate counters preserve their order");
+        check(status.rootNfqueueLastIpFamily == 6
+                        && status.rootNfqueueLastProtocol == 17
+                        && status.rootNfqueueLastHook == 1
+                        && status.rootNfqueueLastUidKnown == 0
+                        && status.rootNfqueueLastUid == -1
+                        && status.rootNfqueueLastQueueId == 177
+                        && status.rootNfqueueLastPacketId == 99,
+                "native Root NFQUEUE S178 last-packet fields preserve their order");
+        check(status.rootNfqueueVerdictSucceeded == 12L
+                        && status.rootNfqueueVerdictFailedDefinite == 13L
+                        && status.rootNfqueueVerdictOutcomeUnknown == 14L
+                        && status.rootNfqueueIngressIdentityMissing == 15L
+                        && status.rootNfqueueGraphSubmitFailOpens == 16L
+                        && status.rootNfqueueNonOwnerBypasses == 17L
+                        && status.rootNfqueueDuplicateCompletionDrops == 18L
+                        && status.rootNfqueueStaleCompletionDrops == 19L,
+                "native Root NFQUEUE S179 fault counters preserve their order");
+        check(status.vpnTunFdAttached == 20L
+                        && status.vpnDirectUdp4SocketAttached == 21L
+                        && status.vpnDirectUdp4ProtectSucceeded == 22L
+                        && status.vpnDirectUdp4BindSucceeded == 23L
+                        && status.vpnTunIngressPackets == 24L
+                        && status.vpnTunUdp4TunOriginPackets == 25L
+                        && status.vpnFlowStackAdmissions == 26L
+                        && status.vpnDirectUdp4SendSucceeded == 27L
+                        && status.vpnDirectUdp4TransportFailed == 28L
+                        && status.vpnFlowStackReturnPackets == 29L
+                        && status.vpnFlowStackReturnProvenancePackets == 30L
+                        && status.vpnTunWriteCompletions == 31L
+                        && status.vpnInfrastructureFaults == 32L
+                        && status.vpnDuplicateOrStaleDrops == 33L,
+                "native VPN UDP4 Direct Egress counters preserve their order");
+        check(status.productGraphWorkerCount == 2
+                        && status.productGraphFlowDomain == 7
+                        && status.productGraphHashSeed == 8032009842424885559L
+                        && status.productGraphHandoffCredits == 32,
+                "native Product graph worker layout fields preserve their order");
+        check(status.productGraphVppWorkerCount == 2
+                        && status.productGraphVppMainCore == 0
+                        && status.productGraphVppWorker0ThreadIndex == 1
+                        && status.productGraphVppWorker0Core == 1
+                        && status.productGraphVppWorker1ThreadIndex == 2
+                        && status.productGraphVppWorker1Core == 2,
+                "native Product graph VPP worker/core placement preserves its order");
+        check(status.productGraphEnabled == 1
+                        && status.productGraphAccepting == 1
+                        && status.productGraphWorkerLayoutReady == 1
+                        && status.productGraphObligationDebt == 34L
+                        && status.productGraphBufferDebt == 35L
+                        && status.productGraphHandoffDebt == 36L,
+                "native Product graph guardrail gauges preserve their order");
+        check(status.policyRequestedRevision == 88L
+                        && status.policyActiveRevision == 88L
+                        && status.policyGeneration == 41L
+                        && "18446744073709551600".equals(
+                        Long.toUnsignedString(status.policySnapshotHash))
+                        && status.policyWorker0Revision == 88L
+                        && status.policyWorker1Revision == 88L,
+                "native Product policy revision/hash fields preserve their order");
+        check(!status.policySnapshotEmpty,
+                "native Product policy snapshot empty flag preserves its order");
+        check(status.policyDefaultPass,
+                "native Product policy default-pass flag preserves its order");
+        check(status.policyGateClaimCount == 1,
+                "native Product policy Gate claim count preserves its order");
+        check(status.policyL4RuleCount == 0,
+                "native Product policy L4 count preserves its order");
+        check(status.policyLastApplyStatusCode == 0,
+                "native Product policy last apply status preserves its order");
+        check(!status.policyMixedRevision,
+                "native Product policy mixed-revision flag preserves its order");
+        check(status.policyArtifactMatch,
+                "native Product policy artifact-match flag preserves its order");
+        check(status.policyGenerationMatch,
+                "native Product policy generation-match flag preserves its order");
+        check("network-gate/v1/revision-88/uid-1010001/context-1/blocked".equals(
+                        status.policySnapshotIdentity),
+                "native Product policy snapshot identity preserves its order");
+        check(status.policyGateSubjectUid == 1010001
+                        && status.policyGateNetworkContext == 1
+                        && status.policyGateBlocked
+                        && status.policyGateReasonId == 136000017
+                        && status.policyGateRuleId == 5836665117071779841L,
+                "native Product Gate fields preserve their order");
+        check(status.policyDropRecords == 3L
+                        && status.policyLastDropRevision == 88L
+                        && status.policyLastDropRuleId == 5836665117071779841L
+                        && status.policyLastDropCompletionAttempts == 1L
+                        && status.policyLastDropUid == 1010001
+                        && status.policyLastDropNetworkContext == 1
+                        && status.policyLastDropReasonId == 136000017
+                        && status.policyLastDropVerdict == 2
+                        && status.policyLastDropWinner == 1
+                        && status.policyLastDropUidKnown
+                        && status.policyLastDropDeviceDirection == 3,
+                "native Product Gate drop evidence fields preserve their order");
     }
 
     private static void productCoreLifecycleRequiresTheExactLiveGeneration() throws Exception {
@@ -1313,7 +1461,21 @@ public final class AndroidRuntimeContractTest {
         String[] readyValues = {
                 "0", "42", "1", "0", "0", "1", "1", "1",
                 "product-core", "product_core.api/1.0.0@abcd1234",
-                "9258530f3804a152578ce11cc7c8a1e9eab88ed0", "", "1", "1"
+                "9258530f3804a152578ce11cc7c8a1e9eab88ed0", "", "1", "1",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "2", "7", "8032009842424885559", "32", "2", "0", "1", "1",
+                "2", "2", "1", "1", "1", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "",
+                "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
+                "0", "0", "0", "0", "0", "0"
         };
         RuntimeControlNative.Status ready = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) readyValues, 0);
@@ -1340,6 +1502,18 @@ public final class AndroidRuntimeContractTest {
                 "SAKAMOTO-172 does not promote an Adapter generation to core-only ready");
         check(ProductCoreLifecycle.canRetryConnection(false, true, 0, 24),
                 "a live sidecar gets a bounded retry after its first not-ready reply");
+        check(ProductCoreLifecycle.shouldKeepSessionForReadinessRetry(
+                        "product_core_not_ready", true),
+                "a connected Product Core session is polled while adapter readiness converges");
+        check(ProductCoreLifecycle.shouldKeepSessionForReadinessRetry(
+                        "product_worker_layout_mismatch", true),
+                "a connected Product Core session is polled while worker layout converges");
+        check(!ProductCoreLifecycle.shouldKeepSessionForReadinessRetry(
+                        "product_core_not_ready", false),
+                "an unavailable Product Core connection cannot be retained");
+        check(!ProductCoreLifecycle.shouldKeepSessionForReadinessRetry(
+                        "product_core_connect_failed", true),
+                "a failed VAPI connect is retried by reconnecting, not by retaining a session");
         check(!ProductCoreLifecycle.canRetryConnection(true, true, 0, 24),
                 "STOP cancels Product Core connection retries");
         check(!ProductCoreLifecycle.canRetryConnection(false, false, 0, 24),
@@ -1369,25 +1543,25 @@ public final class AndroidRuntimeContractTest {
 
     private static void productCoreIdentityValidatorFailsClosed() throws Exception {
         RuntimeControlNative.Status ready = productStatus(1, 1, 0, 42L,
-                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@92abd1ba",
                 "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
         check(ProductCoreLifecycle.isReady(42L,
                         "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready),
                 "matching Product Core identity is ready");
 
         RuntimeControlNative.Status wrongArtifact = productStatus(1, 1, 0, 42L,
-                "wrong-artifact", "product_core.api/1.0.0@1b103f1d",
+                "wrong-artifact", "product_core.api/1.0.0@92abd1ba",
                 "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
         check("product_artifact_identity_mismatch".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongArtifact)),
                 "wrong artifact identity has a stable failure code");
         check(!ProductCoreLifecycle.isReady(42L,
                         "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongArtifact),
                 "wrong artifact identity cannot become ready");
 
@@ -1396,45 +1570,45 @@ public final class AndroidRuntimeContractTest {
                 "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
         check("product_api_identity_mismatch".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongApi)),
                 "wrong generated API identity has a stable failure code");
 
         RuntimeControlNative.Status wrongRevision = productStatus(1, 1, 0, 42L,
-                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@92abd1ba",
                 "wrong-revision");
         check("product_vpp_revision_mismatch".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongRevision)),
                 "wrong VPP revision has a stable failure code");
 
         RuntimeControlNative.Status wrongAbi = productStatus(2, 1, 0, 42L,
-                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@92abd1ba",
                 "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
         check("product_protocol_mismatch".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongAbi)),
                 "wrong numeric ABI has a stable protocol failure code");
         check(!ProductCoreLifecycle.isReady(42L,
                         "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, wrongAbi),
                 "wrong numeric ABI cannot become ready");
 
         RuntimeControlNative.Status wrongApiVersion = productStatus(1, 2, 0, 42L,
-                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@1b103f1d",
+                "sakamoto-product-vpp-host-v1", "product_core.api/1.0.0@92abd1ba",
                 "9258530f3804a152578ce11cc7c8a1e9eab88ed0");
         check("product_protocol_mismatch".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
                         wrongApiVersion)),
                 "wrong numeric API has a stable protocol failure code");
         check(!ProductCoreLifecycle.isReady(42L,
                         "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
                         wrongApiVersion),
                 "wrong numeric API cannot become ready");
@@ -1443,7 +1617,7 @@ public final class AndroidRuntimeContractTest {
                 "", "", "");
         check("product_core_query_failed".equals(ProductCoreLifecycle.validate(
                         42L, "sakamoto-product-vpp-host-v1",
-                        "product_core.api/1.0.0@1b103f1d",
+                        "product_core.api/1.0.0@92abd1ba",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1,
                         failedReply)),
                 "failed reply keeps its typed native failure rather than identity mismatch");
@@ -1456,11 +1630,26 @@ public final class AndroidRuntimeContractTest {
                                                               String vppRevision) {
         return new RuntimeControlNative.Status(abiVersion, apiVersion, code, code, generation,
                 true, false, false, true, true, true, artifactId, apiIdentity, vppRevision,
-                "", "", "");
+                "", "", "",
+                0L, 0L, 0L,
+                0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0, 0, 0, 0, 0, 0, 0,
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L,
+                1, 0, 0L, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0L, 0L, 0L,
+                0L, 0L, generation, 0L, 0L, 0L,
+                false, false, 0, 0, 0, false, false, false, "",
+                0, 0, false, 0, 0L, 0L, 0L, 0L, 0L,
+                0, 0, 0, 0, 0, false, 0,
+                0L, 0L, 0L, 0L, 0L, 0L,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     private static void productCoreNativeFailureCodesRemainVisible() {
-        int[] nativeCodes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+        int[] nativeCodes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
         String[] productCodes = {
                 "product_core_invalid_argument",
                 "product_core_allocation_failed",
@@ -1472,7 +1661,9 @@ public final class AndroidRuntimeContractTest {
                 "product_core_protocol_mismatch",
                 "product_core_internal_error",
                 "product_core_unknown_tag",
-                "product_core_disconnect_failed"
+                "product_core_disconnect_failed",
+                "product_policy_store_failed",
+                "product_policy_apply_failed"
         };
         for (int index = 0; index < nativeCodes.length; index++) {
             RuntimeControlNative.Status status = productStatus(1, 1, nativeCodes[index], 42L,
@@ -1513,6 +1704,15 @@ public final class AndroidRuntimeContractTest {
         check(!ProductCoreLifecycle.isRetryableConnectionFailure(
                         "product_core_unknown_failure"),
                 "an unknown native failure is surfaced immediately");
+        check(!ProductCoreLifecycle.isRetryableConnectionFailure(
+                        "product_worker_layout_mismatch"),
+                "worker layout is not a generic connect failure");
+        check(ProductCoreLifecycle.isRetryableStartupReadinessFailure(
+                        "product_worker_layout_mismatch"),
+                "worker layout mismatch may converge during bounded startup readiness");
+        check(ProductCoreLifecycle.isRetryableStartupTransportFailure(
+                        "product_core_unknown_failure"),
+                "an unavailable startup transport is retried only by the startup path");
     }
 
     private static void productCoreOwnerDecisionIsFailClosed() {
@@ -1552,14 +1752,25 @@ public final class AndroidRuntimeContractTest {
                 "canonical owner paths round-trip through the durable record");
         String canonicalGlobalCommand = ProductCoreOwner.buildGlobalProcessAuditCommand(
                 realPixelNativeLibraryPath, "10123");
-        check(canonicalGlobalCommand.contains("[ \"$exe\" = '"
-                        + realPixelNativeLibraryPath + "' ]"),
-                "global owner audit preserves the exact canonical native-library path");
+        check(canonicalGlobalCommand.contains("case \"$exe\" in '"
+                        + realPixelNativeLibraryPath + "'|*/'libvpp_runtime.so'|*/'libvpp_runtime.so (deleted)'"),
+                "global owner audit treats an upgraded/deleted same-name VPP executable as live");
+        int canonicalGlobalCandidate = canonicalGlobalCommand.indexOf(
+                "index(args, executable) > 0");
+        int canonicalGlobalReadlink = canonicalGlobalCommand.indexOf("readlink");
+        check(canonicalGlobalCandidate >= 0
+                        && canonicalGlobalCandidate < canonicalGlobalReadlink,
+                "global owner audit filters ps args to product executable candidates before proc exe reads");
         String canonicalOwnerCommand = ProductCoreOwner.buildProcessAuditCommand(
                 canonicalPathOwner, realPixelNativeLibraryPath, "10123");
-        check(canonicalOwnerCommand.contains("[ \"$exe\" = '"
-                        + realPixelNativeLibraryPath + "' ]"),
-                "owner audit preserves the exact canonical native-library path");
+        check(canonicalOwnerCommand.contains("case \"$exe\" in '"
+                        + realPixelNativeLibraryPath + "'|*/'libvpp_runtime.so'|*/'libvpp_runtime.so (deleted)'"),
+                "owner audit keeps an upgraded/deleted same-name VPP executable tied to its owner");
+        int canonicalOwnerCandidate = canonicalOwnerCommand.indexOf(
+                "index(args, executable) > 0 || index(args, startup) > 0");
+        int canonicalOwnerReadlink = canonicalOwnerCommand.indexOf("readlink");
+        check(canonicalOwnerCandidate >= 0 && canonicalOwnerCandidate < canonicalOwnerReadlink,
+                "owner audit filters ps args to product candidates before proc exe reads");
         check(canonicalOwnerCommand.contains("grep -F -x -- 'SAKAMOTO_VPP_RUNTIME_DIR="
                         + canonicalPathOwner.runtimePath + "'"),
                 "owner audit preserves the canonical owner runtime path");
@@ -1701,13 +1912,19 @@ public final class AndroidRuntimeContractTest {
                 "global owner audit does not require a registered owner token");
         check(globalCommand.contains("readlink")
                         && globalCommand.contains("libvpp_runtime.so"),
-                "global owner audit checks the exact executable identity");
+                "global owner audit checks the Product Core executable identity");
         check(globalCommand.contains("-v audit_pid=\"$$\"")
                         && globalCommand.contains("$1 != audit_pid")
                         && globalCommand.contains("$3 != \"ps\""),
                 "global owner audit excludes its shell and known ps helper row");
+        check(globalCommand.contains("-v executable='/data/app/example/lib/arm64-v8a/libvpp_runtime.so'"),
+                "global owner audit carries the product executable into the ps prefilter");
+        check(globalCommand.contains("index(args, executable) > 0"),
+                "global owner audit skips unrelated UID processes before proc exe reads");
         check(globalCommand.contains("if [ ! -e \"$proc\" ]; then continue; fi;"),
                 "global owner audit ignores a process that vanished before readlink");
+        check(globalCommand.contains("*/'libvpp_runtime.so (deleted)'"),
+                "global owner audit catches a still-live Product Core process after APK upgrade");
         try {
             Path globalScript = Files.createTempFile("sakamoto-product-global-owner-audit", ".sh");
             try {
@@ -1752,8 +1969,15 @@ public final class AndroidRuntimeContractTest {
                         && command.contains("$1 != audit_pid")
                         && command.contains("$3 != \"ps\""),
                 "owner audit excludes its shell and known ps helper row");
+        check(command.contains("-v executable='/data/app/example/lib/arm64-v8a/libvpp_runtime.so'")
+                        && command.contains("-v startup='/data/user/0/example/files/profiles/root/vpp/startup.conf'"),
+                "owner audit carries product executable and startup into the ps prefilter");
+        check(command.contains("index(args, executable) > 0 || index(args, startup) > 0"),
+                "owner audit skips unrelated UID processes before proc exe reads");
         check(command.contains("if [ ! -e \"$proc\" ]; then continue; fi;"),
                 "owner audit ignores a process that vanished before readlink");
+        check(command.contains("*/'libvpp_runtime.so (deleted)'"),
+                "owner audit catches a still-live generation owner after APK upgrade");
         try {
             Path script = Files.createTempFile("sakamoto-product-owner-audit", ".sh");
             try {
@@ -1985,8 +2209,9 @@ public final class AndroidRuntimeContractTest {
                 "compiled payload encodes explicit known UID");
         check(result.applyPayload.contains("\"networkGate\":{\"rules\":["),
                 "compiled payload uses per-context GateTable rules");
-        check(!result.applyPayload.contains("\"networkContext\":1"),
-                "open Wi-Fi Gate compiles as PASS_NEXT by omitting a drop rule");
+        check(result.applyPayload.contains("\"networkContext\":1")
+                        && result.applyPayload.contains("\"blocked\":false"),
+                "open Wi-Fi Gate compiles as a revisioned open rule");
         check(result.applyPayload.contains("\"networkContext\":2")
                         && result.applyPayload.contains("\"networkContext\":3"),
                 "compiled payload maps Mobile and VPN NetworkContextId values");
@@ -2005,8 +2230,10 @@ public final class AndroidRuntimeContractTest {
         check(openResult.ok, "open GateMatrix compiles");
         check(openResult.applyPayload.contains("\"revision\":5"),
                 "open GateMatrix compiles as a new revision");
-        check(!openResult.applyPayload.contains("\"rules\""),
-                "open Gate does not compile a blocking GateTable entry");
+        check(openResult.applyPayload.contains("\"rules\"")
+                        && openResult.applyPayload.contains("\"blocked\":false")
+                        && !openResult.applyPayload.contains("\"blocked\":true"),
+                "open Gate compiles a successor open snapshot without a blocking claim");
 
         AuthoringPolicyBundle unsupported = AuthoringPolicyBundle.restore(9L, "test",
                 blocked.gateMatrix, blocked.l4Rules, 1);
@@ -2065,6 +2292,20 @@ public final class AndroidRuntimeContractTest {
                         AuthoringPolicyBundle.L4Action.DROP, 10, 3);
         check(dropHttps.ruleId != samePriorityDifferentOrder.ruleId,
                 "L4 stable rule IDs distinguish explicit order values");
+        AuthoringPolicyBundle.L4Rule allowHttps = AuthoringPolicyBundle.L4Rule.create(app,
+                AuthoringPolicyBundle.IpFamily.IPV4, "10.0.0.0/8", "192.0.2.0/24",
+                null, AuthoringPolicyBundle.PortRange.exact(443), 6,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT,
+                AuthoringPolicyBundle.NetworkContextId.WIFI,
+                AuthoringPolicyBundle.L4Action.ALLOW, 10, 2);
+        AuthoringPolicyBundle toggled = AuthoringPolicyBundle.empty()
+                .withL4Rule(dropHttps)
+                .withL4Rule(allowHttps);
+        check(dropHttps.ruleId == allowHttps.ruleId
+                        && toggled.l4RuleCount == 1
+                        && toggled.l4Rules.get(0).action
+                        == AuthoringPolicyBundle.L4Action.ALLOW,
+                "L4 successor action replaces the same tuple instead of adding a second rule");
     }
 
     private static void l4RuleListCompilesToPacketPolicyApplyPayload() {
@@ -2279,9 +2520,14 @@ public final class AndroidRuntimeContractTest {
                 "transaction persistence failure leaves ProductState unpublished");
         check(!ProductPolicyTransactionStore.readResult(writerFailureFiles.toFile()).present,
                 "transaction persistence failure leaves no durable checkpoint");
-        check(writerFailurePayloads.toString().contains("\"revision\":1")
-                        && writerFailurePayloads.toString().contains("\"revision\":0"),
-                "transaction persistence failure rolls runtime back to previous snapshot");
+        String rollbackPayloads = writerFailurePayloads.toString();
+        int firstTypedApply = rollbackPayloads.indexOf("\"bundlePayload\":\"");
+        int rollbackTypedApply = firstTypedApply < 0 ? -1
+                : rollbackPayloads.indexOf("\"bundlePayload\":\"", firstTypedApply + 1);
+        check(rollbackPayloads.contains("\"revision\":1")
+                        && firstTypedApply >= 0 && rollbackTypedApply > firstTypedApply
+                        && !rollbackPayloads.contains("\"nativeApply\":\"s191-scalar\""),
+                "transaction persistence failure rolls runtime back through the typed snapshot path");
     }
 
     private static void localProductBackendExposesPolicyImportExportAndRestore()

@@ -25,6 +25,7 @@ test -f "$plugin_cmake"
 grep -Fq -- 'VPP_LIBRARY_DIR' "$plugin_cmake"
 grep -Fq -- '--no-as-needed' "$plugin_cmake"
 grep -Fq -- 'target_link_libraries(product_core_plugin' "$plugin_cmake"
+grep -Fq -- 'libvnet.so' "$plugin_cmake"
 grep -Fq 'flock' "$build_script"
 grep -Fq 'RENAME_NOREPLACE = 1' "$build_script"
 grep -Fq 'RENAME_EXCHANGE = 2' "$build_script"
@@ -429,6 +430,7 @@ plugin_dynamic="$work_dir/product-plugin.dynamic"
 for library in \
   libvlibapi.so \
   libvlibmemory.so \
+  libvnet.so \
   libvlib.so \
   libvppinfra.so; do
   grep -Fq "Shared library: [$library]" "$plugin_dynamic" || {
@@ -447,7 +449,7 @@ poc_paths="$(cd "$product_stage" && find . -mindepth 1 -print)"
 forbidden_path=""
 while IFS= read -r path; do
   case "${path,,}" in
-    *poc*|*nfqueue*|*hev*|*sucre*|*fixture*)
+    *poc*|*hev*|*sucre*|*fixture*)
       forbidden_path="$path"
       break
       ;;

@@ -487,7 +487,7 @@ public final class RuntimeOwnershipReconciliation {
      * finalized as a clean terminal stop. The strong PID witness must already
      * be MISSING when cleanup is being retried, the in-process handle must be
      * gone, and a fresh global audit must prove both profiles are NONE with no
-     * residue. A successful terminateAndClean already carries that strong
+     * residue. A successful Product Core cleanup already carries that strong
      * identity witness; after it removes the profile token, the post-cleanup
      * identity may be UNKNOWN. Ordinary cleanup failures, live owners, and
      * unreadable global audits remain fail-closed.

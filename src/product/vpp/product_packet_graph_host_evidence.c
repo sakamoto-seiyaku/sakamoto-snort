@@ -23,5 +23,9 @@
 #define PRODUCT_GRAPH_POLICY_FIXTURE "s192-typed-l4-bundle-v1"
 #define PRODUCT_GRAPH_RUN_POLICY_FIXTURE_COMMAND \
   "product packet-graph run-policy-fixture"
+#define PRODUCT_GRAPH_RUN_POLICY_ASSOCIATION_FIXTURE_COMMAND \
+  "product packet-graph run-policy-association-fixture"
+#define PRODUCT_GRAPH_RUN_GATE_TABLE_FIXTURE_COMMAND \
+  "product packet-graph run-gate-table-fixture"
 
 #include "product_packet_graph.c"

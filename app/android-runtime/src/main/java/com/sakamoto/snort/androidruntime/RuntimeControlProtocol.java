@@ -17,6 +17,8 @@ public final class RuntimeControlProtocol {
             "product_set_network_gate";
     public static final String ACTION_PRODUCT_SET_L4_RULE =
             "product_set_l4_rule";
+    public static final String ACTION_PRODUCT_APPLY_EMPTY_POLICY =
+            "product_apply_empty_policy";
 
     public static final String EXTRA_PROTOCOL_VERSION = "runtimeControlProtocolVersion";
     public static final String EXTRA_ACTION = "runtimeControlAction";
@@ -41,6 +43,18 @@ public final class RuntimeControlProtocol {
     public static final String EXTRA_REQUEST_TIME_MILLIS = "runtimeRequestTimeMillis";
     /** Debug-only fault seam; ignored unless the app is debuggable. */
     public static final String EXTRA_CLEANUP_FAULT = "runtimeCleanupFault";
+    /** Debug-only Root NFQUEUE fault mode; ignored unless the app is debuggable. */
+    public static final String EXTRA_ROOT_NFQUEUE_FAULT_MODE =
+            "runtimeRootNfqueueFaultMode";
+    /** Debug-only VPN fault mode; ignored unless the app is debuggable. */
+    public static final String EXTRA_VPN_FAULT_MODE =
+            "runtimeVpnFaultMode";
+    /** Debug-only VPN lifecycle/fd event; ignored unless the app is debuggable. */
+    public static final String EXTRA_VPN_FAULT_EVENT =
+            "runtimeVpnFaultEvent";
+    /** Debug-only one-shot typed policy mutation fault; ignored unless debuggable. */
+    public static final String EXTRA_POLICY_MUTATION_FAULT_MODE =
+            "runtimePolicyMutationFaultMode";
 
     private RuntimeControlProtocol() {}
 }

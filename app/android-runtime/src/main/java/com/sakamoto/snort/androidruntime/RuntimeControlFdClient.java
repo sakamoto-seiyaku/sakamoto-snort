@@ -23,6 +23,10 @@ public final class RuntimeControlFdClient {
     public static final String POLICY_APPLY = "POLICY.APPLY";
     public static final String VPN_TUN_ATTACH = "VPN_TUN.ATTACH";
     public static final String VPN_TRANSPORT_ATTACH = "VPN_TRANSPORT.ATTACH";
+    public static final String VPN_UDP6_TRANSPORT_ATTACH = "VPN_UDP6_TRANSPORT.ATTACH";
+    public static final String VPN_TCP_TRANSPORT_ATTACH = "VPN_TCP_TRANSPORT.ATTACH";
+    public static final String VPN_TCP6_TRANSPORT_ATTACH = "VPN_TCP6_TRANSPORT.ATTACH";
+    public static final String VPN_FAULT_CLOSE_TUN = "VPN_FAULT.CLOSE_TUN";
     private static final int CONTROL_SOCKET_TIMEOUT_MILLIS = 2500;
     private static final int CONTROL_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
@@ -57,6 +61,18 @@ public final class RuntimeControlFdClient {
                 return AttachResult.error("VPN_TRANSPORT_HANDOFF_UNAVAILABLE",
                         "native runtime did not advertise VPN transport fd handoff");
             }
+            if (!hasCapability(capabilities, "vpn-direct-udp6-protected-socket-handoff")) {
+                return AttachResult.error("VPN_UDP6_TRANSPORT_HANDOFF_UNAVAILABLE",
+                        "native runtime did not advertise VPN UDP6 protected socket handoff");
+            }
+            if (!hasCapability(capabilities, "vpn-direct-tcp6-protected-socket-handoff")) {
+                return AttachResult.error("VPN_TCP6_TRANSPORT_HANDOFF_UNAVAILABLE",
+                        "native runtime did not advertise VPN TCP6 protected socket handoff");
+            }
+            if (!hasCapability(capabilities, "vpn-policy-hints-v1")) {
+                return AttachResult.error("VPN_POLICY_HINTS_UNAVAILABLE",
+                        "native runtime did not advertise VPN Product policy hints");
+            }
             return AttachResult.accepted(new JSONObject()
                     .put("adapter", ProductPacketAdapterContract.VPN_ADAPTER)
                     .put("fdAttached", false)
@@ -80,9 +96,21 @@ public final class RuntimeControlFdClient {
      * written, while the native runtime receives an SCM_RIGHTS duplicate.
      */
     public static AttachResult attachVpnTun(int rawFd, boolean enableIpv6) {
+        return attachVpnTun(rawFd, enableIpv6, -1, 0);
+    }
+
+    /**
+     * Consumes {@code rawFd} and attaches Product policy facts for TUN-origin packet matching.
+     */
+    public static AttachResult attachVpnTun(
+            int rawFd, boolean enableIpv6, int policySubjectUid, int networkContext) {
         JSONObject args = new JSONObject();
         try {
             args.put("enableIpv6", enableIpv6);
+            if (policySubjectUid >= 0 && networkContext > 0) {
+                args.put("policySubjectUid", policySubjectUid);
+                args.put("networkContext", networkContext);
+            }
         } catch (JSONException error) {
             return AttachResult.error("VPN_TUN_ATTACH_INVALID_ARGUMENT", messageOf(error));
         }
@@ -95,6 +123,30 @@ public final class RuntimeControlFdClient {
      */
     public static AttachResult attachVpnTransport(int rawFd) {
         return callWithFd(2, VPN_TRANSPORT_ATTACH, new JSONObject(), rawFd);
+    }
+
+    /**
+     * Consumes {@code rawFd}: the local descriptor is closed after the complete netstring frame is
+     * written, while the native runtime receives an SCM_RIGHTS duplicate.
+     */
+    public static AttachResult attachVpnUdp6Transport(int rawFd) {
+        return callWithFd(182, VPN_UDP6_TRANSPORT_ATTACH, new JSONObject(), rawFd);
+    }
+
+    /**
+     * Consumes {@code rawFd}: the local descriptor is closed after the complete netstring frame is
+     * written, while the native runtime receives an SCM_RIGHTS duplicate.
+     */
+    public static AttachResult attachVpnTcpTransport(int rawFd) {
+        return callWithFd(181, VPN_TCP_TRANSPORT_ATTACH, new JSONObject(), rawFd);
+    }
+
+    /**
+     * Consumes {@code rawFd}: the local descriptor is closed after the complete netstring frame is
+     * written, while the native runtime receives an SCM_RIGHTS duplicate.
+     */
+    public static AttachResult attachVpnTcp6Transport(int rawFd) {
+        return callWithFd(183, VPN_TCP6_TRANSPORT_ATTACH, new JSONObject(), rawFd);
     }
 
     public static AttachResult applyPacketPolicy(JSONObject args) {

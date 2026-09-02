@@ -426,7 +426,7 @@ public final class LocalProductBackend {
             return;
         }
         AuthoringPolicyCompiler.CompileResult compiled =
-                AuthoringPolicyCompiler.compilePacketPolicyApply(rollbackRuntimeBundle);
+                AuthoringPolicyCompiler.compilePolicyBundle(rollbackRuntimeBundle);
         if (!compiled.ok) {
             return;
         }

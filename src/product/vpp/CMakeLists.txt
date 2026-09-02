@@ -49,6 +49,7 @@ if(ANDROID)
   foreach(vpp_library IN ITEMS
       libvlibapi.so
       libvlibmemory.so
+      libvnet.so
       libvlib.so
       libvppinfra.so)
     set(vpp_library_path "${VPP_LIBRARY_DIR}/${vpp_library}")
@@ -207,6 +208,10 @@ add_vpp_plugin(product_core
   SOURCES
     product_core_plugin.c
     product_packet.c
+    product_l4_policy.c
+    product_flow_entry.c
+    product_root_nfqueue_adapter.c
+    product_vpn_udp4_adapter.c
     ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
     product_core.api
@@ -215,6 +220,8 @@ add_vpp_plugin(product_core
   COMPONENT
     vpp-plugin-core
 )
+target_include_directories(product_core_plugin PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )

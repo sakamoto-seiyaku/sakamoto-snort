@@ -14,7 +14,8 @@ public final class ProductCoreLifecycle {
     public static String validate(long generation, String expectedArtifactId,
                                   String expectedApiIdentity, String expectedVppRevision,
                                   int expectedAbiVersion, int expectedApiVersion,
-                                  RuntimeControlNative.Status status) {
+                                  RuntimeControlNative.Status status,
+                                  boolean expectedAdapterAvailable) {
         if (generation <= 0L || status == null) {
             return "product_protocol_mismatch";
         }
@@ -42,12 +43,28 @@ public final class ProductCoreLifecycle {
         if (revision.isEmpty() || !revision.equals(status.vppRevision)) {
             return "product_vpp_revision_mismatch";
         }
-        if (!status.coreReady || status.adapterAvailable || status.protectionRunning
+        if (status.productGraphWorkerCount <= 0
+                || status.productGraphWorkerCount != status.productGraphVppWorkerCount
+                || status.productGraphWorkerLayoutReady == 0) {
+            return "product_worker_layout_mismatch";
+        }
+        if (!status.coreReady
+                || status.adapterAvailable != expectedAdapterAvailable
+                || status.protectionRunning != expectedAdapterAvailable
                 || !status.pluginLoaded || !status.vapiHandleLive || !status.generationLive
                 || status.artifactId.isEmpty() || status.apiIdentity.isEmpty()) {
             return "product_core_not_ready";
         }
         return "";
+    }
+
+    /** S172 core-only callers remain exact about adapter unavailability. */
+    public static String validate(long generation, String expectedArtifactId,
+                                  String expectedApiIdentity, String expectedVppRevision,
+                                  int expectedAbiVersion, int expectedApiVersion,
+                                  RuntimeControlNative.Status status) {
+        return validate(generation, expectedArtifactId, expectedApiIdentity,
+                expectedVppRevision, expectedAbiVersion, expectedApiVersion, status, false);
     }
 
     /** Identity/protocol failures cannot become valid through connection retry. */
@@ -56,7 +73,8 @@ public final class ProductCoreLifecycle {
                 || "product_generation_mismatch".equals(code)
                 || "product_artifact_identity_mismatch".equals(code)
                 || "product_api_identity_mismatch".equals(code)
-                || "product_vpp_revision_mismatch".equals(code);
+                || "product_vpp_revision_mismatch".equals(code)
+                || "product_worker_layout_mismatch".equals(code);
     }
 
     /** Preserve the fixed native Product Core status tag at the visible runtime seam. */
@@ -89,6 +107,14 @@ public final class ProductCoreLifecycle {
                 return "product_core_unknown_tag";
             case 11:
                 return "product_core_disconnect_failed";
+            case 12:
+                return "product_policy_store_failed";
+            case 13:
+                return "product_policy_apply_failed";
+            case 14:
+                return "product_policy_outcome_unknown";
+            case 15:
+                return "product_policy_mutation_fenced";
             default:
                 return "product_core_unknown_failure";
         }
@@ -100,12 +126,55 @@ public final class ProductCoreLifecycle {
                 || "product_core_connect_failed".equals(code);
     }
 
+    /**
+     * Startup readiness can lag behind a live VAPI session. Keep polling the
+     * same generation until the bounded lifecycle timeout proves the worker
+     * layout never converged.
+     */
+    public static boolean isRetryableStartupReadinessFailure(String code) {
+        return isRetryableConnectionFailure(code)
+                || "product_worker_layout_mismatch".equals(code);
+    }
+
+    /**
+     * Root startup can expose the API socket before chmod/connect is fully
+     * usable from the app process. While the generation process is still
+     * alive, treat an unavailable native connect as the same bounded startup
+     * race; typed protocol/identity failures remain terminal.
+     */
+    public static boolean isRetryableStartupTransportFailure(String code) {
+        return "product_core_unavailable".equals(code)
+                || "product_core_unknown_failure".equals(code);
+    }
+
+    /**
+     * A live Product Core session must not be closed just because adapter
+     * readiness is still converging. Closing retires the generation in Rust,
+     * so the retry loop must poll the same session until it becomes ready or a
+     * terminal failure appears.
+     */
+    public static boolean shouldKeepSessionForReadinessRetry(String code,
+                                                             boolean sessionConnected) {
+        return sessionConnected && ("product_core_not_ready".equals(code)
+                || "product_worker_layout_mismatch".equals(code));
+    }
+
     public static boolean isReady(long generation, String expectedArtifactId,
                                   String expectedApiIdentity, String expectedVppRevision,
                                   int expectedAbiVersion, int expectedApiVersion,
                                   RuntimeControlNative.Status status) {
         return validate(generation, expectedArtifactId, expectedApiIdentity, expectedVppRevision,
                 expectedAbiVersion, expectedApiVersion, status).isEmpty();
+    }
+
+    public static boolean isReady(long generation, String expectedArtifactId,
+                                  String expectedApiIdentity, String expectedVppRevision,
+                                  int expectedAbiVersion, int expectedApiVersion,
+                                  RuntimeControlNative.Status status,
+                                  boolean expectedAdapterAvailable) {
+        return validate(generation, expectedArtifactId, expectedApiIdentity, expectedVppRevision,
+                expectedAbiVersion, expectedApiVersion, status,
+                expectedAdapterAvailable).isEmpty();
     }
 
     public static boolean canRetryConnection(boolean stopRequested, boolean processAlive,

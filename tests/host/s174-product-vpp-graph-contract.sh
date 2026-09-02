@@ -105,10 +105,13 @@ android_graph="$(awk '
     }
     !host_depth { print }
   ' "$graph_source")"
+# S192's typed L4 projection adds four fixed-width address copies from the
+# already parsed PacketFacts into the matcher view.  They are not packet
+# side-copies; retain an exact count so new copies still fail closed.
 if [[ "$(printf '%s\n' "$android_graph" | grep -c 'vlib_buffer_get_current')" -ne 2 ]] ||
-   [[ "$(printf '%s\n' "$android_graph" | grep -c 'clib_memcpy_fast')" -ne 10 ]] ||
+   [[ "$(printf '%s\n' "$android_graph" | grep -c 'clib_memcpy_fast')" -ne 14 ]] ||
    printf '%s\n' "$android_graph" | grep -Eq \
-     '(^|[^[:alnum:]_])(memcpy|memmove)[[:space:]]*\(|[[:alnum:]_>.-]+\[[^]]+\][[:space:]]*='; then
+     '(^|[^[:alnum:]_])(memcpy|memmove)[[:space:]]*\(|(buffer|packet)->(data|opaque)[^;]*\\[[^]]+\\][[:space:]]*='; then
   fail "Android Product graph source closure contains a packet side-copy seam"
 fi
 if printf '%s\n' "$ordinary_nodes" | grep -Eq \

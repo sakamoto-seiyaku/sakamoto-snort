@@ -14,7 +14,7 @@ public final class ProductPacketAdapterContract {
     public static final String TRANSPORT_OUTCOME_SEPARATE =
             "transport-outcome-separate";
     public static final String ROOT_ADAPTER = "root-nfqueue";
-    public static final String VPN_ADAPTER = RuntimeSnapshot.ADAPTER_VPN_TUN_FD_COMPAT;
+    public static final String VPN_ADAPTER = RuntimeSnapshot.ADAPTER_VPN_TUN_HEV_LWIP;
 
     public final RuntimeProfile profile;
     public final String adapterName;
@@ -23,6 +23,12 @@ public final class ProductPacketAdapterContract {
     public final String transportOutcomeModel;
     public final String uidMissHandling;
     public final boolean requiresVpnPlatformSession;
+    /** Root NFQUEUE must be authorised before the Product VPP is launched. */
+    public final boolean requiresRootAuthorization;
+    /** Exact VAPI expectation after one successful Product VPP launch. */
+    public final boolean adapterReadyOnStart;
+    /** Exact VAPI expectation after the profile-specific Android fd handoff. */
+    public final boolean adapterReadyAfterHandoff;
     public final boolean enableIpv6;
     public final boolean productLaunchAllowed;
     public final String unavailableErrorCode;
@@ -31,7 +37,11 @@ public final class ProductPacketAdapterContract {
     private ProductPacketAdapterContract(RuntimeProfile profile, String adapterName,
                                          String platformInterface, String completionModel,
                                          String transportOutcomeModel, String uidMissHandling,
-                                         boolean requiresVpnPlatformSession, boolean enableIpv6,
+                                         boolean requiresVpnPlatformSession,
+                                         boolean requiresRootAuthorization,
+                                         boolean adapterReadyOnStart,
+                                         boolean adapterReadyAfterHandoff,
+                                         boolean enableIpv6,
                                          boolean productLaunchAllowed,
                                          String unavailableErrorCode,
                                          String unavailableMessage) {
@@ -42,6 +52,9 @@ public final class ProductPacketAdapterContract {
         this.transportOutcomeModel = text(transportOutcomeModel);
         this.uidMissHandling = text(uidMissHandling);
         this.requiresVpnPlatformSession = requiresVpnPlatformSession;
+        this.requiresRootAuthorization = requiresRootAuthorization;
+        this.adapterReadyOnStart = adapterReadyOnStart;
+        this.adapterReadyAfterHandoff = adapterReadyAfterHandoff;
         this.enableIpv6 = enableIpv6;
         this.productLaunchAllowed = productLaunchAllowed;
         this.unavailableErrorCode = text(unavailableErrorCode);
@@ -57,10 +70,13 @@ public final class ProductPacketAdapterContract {
                     TRANSPORT_OUTCOME_SEPARATE,
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
                     true,
+                    false,
+                    false,
+                    true,
                     true,
                     true,
                     "vpn_adapter_unavailable",
-                    "VPN/TUN product packet adapter is not integrated yet");
+                    "");
         }
         return new ProductPacketAdapterContract(selected, ROOT_ADAPTER,
                 "Root NFQUEUE lanes",
@@ -68,6 +84,9 @@ public final class ProductPacketAdapterContract {
                 "kernel verdict outcome",
                 UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
                 false,
+                true,
+                true,
+                true,
                 false,
                 true,
                 "",

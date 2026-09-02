@@ -549,14 +549,19 @@ build_native_stage() {
   product_api_crc="$(strict_manifest_value "$product_source_manifest" product.api.crc)"
   [[ "$product_api_crc" =~ ^[[:xdigit:]]{8}$ ]] || \
     die "source product API CRC has an invalid format"
-  generated_api_crc="$(grep -Eio '"vl_api_version"[[:space:]]*:[[:space:]]*"0x?[0-9a-f]{8}"' \
-    "$generated_api_json" | sed -E 's/.*0x?([0-9a-f]{8}).*/\1/I' | head -n 1)"
+  generated_api_crc="$(grep -Eio '"vl_api_version"[[:space:]]*:[[:space:]]*"(0x)?[0-9a-f]{1,8}"' \
+    "$generated_api_json" |
+    sed -E 's/.*"vl_api_version"[[:space:]]*:[[:space:]]*"(0x)?([0-9a-f]{1,8})".*/\2/I' |
+    head -n 1)"
+  if [[ "$generated_api_crc" =~ ^[[:xdigit:]]{1,7}$ ]]; then
+    generated_api_crc="$(printf '%08x' "0x$generated_api_crc")"
+  fi
   [[ "$generated_api_crc" =~ ^[[:xdigit:]]{8}$ ]] || \
     die "generated product API CRC is missing"
   [[ "${generated_api_crc,,}" == "${product_api_crc,,}" ]] || \
-    die "generated API CRC does not match product identity"
+    die "generated API CRC does not match product identity: actual=${generated_api_crc,,} expected=${product_api_crc,,}"
   [[ "${product_api_identity##*@}" == "${generated_api_crc,,}" ]] || \
-    die "generated API CRC does not match product identity"
+    die "generated API CRC does not match product identity: actual=${generated_api_crc,,} identity=$product_api_identity"
 
   export CC_aarch64_linux_android="$android_clang"
   export AR_aarch64_linux_android="$llvm_ar"
@@ -689,7 +694,7 @@ build_native_stage() {
   forbidden_stage_path=""
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
-      *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*)
+      *poc*|*experiment*|*fixture*|*hev*|*sucre*)
         forbidden_stage_path="$stage_path"
         die "retired or POC artifact entered product stage: $forbidden_stage_path"
         ;;
@@ -825,6 +830,7 @@ build_apk_only() {
   local debug_cert="${SAKAMOTO_ANDROID_DEBUG_CERT:-/home/js/android/lineage/build/make/target/product/security/testkey.x509.pem}"
   local ndk_root="${SAKAMOTO_ANDROID_NDK_ROOT:-/home/js/.local/share/android-sdk/ndk/29.0.14206865}"
   local llvm_readelf="$ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+  local strings_bin
   local java_bin
   local java_launcher
   local javac_bin
@@ -867,6 +873,9 @@ build_apk_only() {
   local vpp_runtime_payload_bytes
   local vpp_runtime_closure_sha256
   local measured_vpp_runtime_closure_sha256
+  local product_api_crc
+  local plugin_strings
+  local plugin_api_identities
 
   [[ -n "$product_stage_input" ]] || \
     die "apk-only requires an explicit product stage"
@@ -906,6 +915,9 @@ build_apk_only() {
     die "source product artifact identity has an invalid format"
   [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
     die "source product API identity has an invalid format"
+  [[ "$product_api_identity" =~ ^product_core\.api/1\.0\.0@[[:xdigit:]]{8}$ ]] || \
+    die "source product API identity has an invalid CRC marker"
+  product_api_crc="${product_api_identity##*@}"
   [[ "$product_abi_version" == 1 && "$product_api_version" == 1 ]] || \
     die "source product ABI/API versions must be 1"
   require_product_manifest_line "artifactId=$product_artifact_id"
@@ -943,7 +955,7 @@ build_apk_only() {
 
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
-      *poc*|*experiment*|*fixture*|*nfqueue*|*hev*|*sucre*|*snortd*|*removed-cxx*)
+      *poc*|*experiment*|*fixture*|*hev*|*sucre*|*snortd*|*removed-cxx*)
         forbidden_path="$stage_path"
         die "apk-only refuses retired/POC product artifact: $forbidden_path"
         ;;
@@ -982,6 +994,20 @@ build_apk_only() {
   plugin_source="$native_dir/$plugin_name"
   [[ -f "$plugin_source" && ! -L "$plugin_source" ]] || \
     die "product stage plugin is missing or not a regular file"
+  strings_bin="$(command -v strings 2>/dev/null || true)"
+  [[ -n "$strings_bin" && -x "$strings_bin" ]] || \
+    die "strings is required to verify the staged Product Core plugin identity"
+  plugin_strings="$("$strings_bin" "$plugin_source" 2>/dev/null)" || \
+    die "cannot inspect staged Product Core plugin identity"
+  plugin_api_identities="$(printf '%s\n' "$plugin_strings" |
+    sed -n -E 's/.*(product_core\.api\/1\.0\.0@[[:xdigit:]]{8}).*/\1/p' |
+    sort -u)"
+  [[ "$plugin_api_identities" == "$product_api_identity" ]] || \
+    die "product_artifact_identity_mismatch: plugin API identity does not match the stage"
+  if ! grep -Fq "\"vl_api_version\": \"0x${product_api_crc,,}\"" \
+      <<<"$plugin_strings"; then
+    die "product_artifact_identity_mismatch: plugin generated API CRC does not match the stage"
+  fi
   if [[ "$(sha256sum "$native_dir/libvpp_runtime.so" | awk '{print $1}')" \
       != "$vpp_binary_sha256" ]]; then
     die "product_artifact_hash_mismatch: VPP executable does not match product stage"
@@ -1103,6 +1129,7 @@ build_apk_only() {
       -bootclasspath "$android_jar" -classpath "$javac_classpath" \
       -verbose -d "$classes_dir" "${java_sources[@]}" >"$javac_log" 2>&1; then
     sed -n '1,160p' "$javac_log" >&2
+    tail -160 "$javac_log" >&2
     die "Android Java compilation failed; see $javac_log"
   fi
   mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)

@@ -1,10 +1,10 @@
 # Android Runtime incubator
 
 > **Current state:** ADR-0008 removed the C++ daemon and its APK artifact.
-> `build-debug-apk.sh` intentionally exits with `c_vpp_mainline_required`
-> semantics until a VPP-native C product runtime and lifecycle contract exist.
-> The Java lifecycle/UI code is retained as future platform integration context,
-> not proof of a runnable product runtime.
+> S171-S196 now provide the VPP-native Product Core runtime and lifecycle
+> contract. `build-debug-apk.sh` stages `libvpp_runtime.so` with
+> `libproduct_core_plugin.so`; current acceptance boundaries are recorded in
+> `docs/testing/SAKAMOTO_195_RECOVERY_ACCEPTANCE_DOSSIER.md`.
 
 `app/android-runtime/` is the forward implementation slice for SAKAMOTO-67.
 It is separate from `experiments/vpp-nfq-poc/android/vpn-lite/`, which remains
@@ -14,11 +14,13 @@ migration evidence and a disposable harness.
 sends the versioned `android-runtime-control/v1` start/query/stop request and
 renders the durable bounded snapshot. Root and VPN select one profile-owned VPP
 core directory and one artifact identity contract; only one profile can be
-active at a time. SAKAMOTO-67 does not claim either packet Adapter is ready.
+active at a time. S171-S196 evidence covers the current Root/VPN Product Core
+adapter and lifecycle contracts; release/OEM/long-soak claims remain separate.
 
 The build refuses to claim core readiness when the packaged VPP binary hash or
 generated-VAPI control identity does not match the manifest. Adapter readiness
-is explicitly `unavailable`; plugin presence is not a readiness signal.
+is reported from the Product Core VAPI status and is not inferred from plugin
+presence alone.
 
 The default build input is `build-output/android-vpp-runtime/stage`. When that
 stage is incomplete, the repository-local staging boundary consumes the pinned

@@ -42,6 +42,30 @@ target_compile_options(sakamoto-product-l4-policy-test PRIVATE
 target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
   sakamoto_product_l4_policy)
 
+# The first stateful seam is a fixed-capacity, worker-private FlowEntry pool.
+# It has no VPP/Android/Rust dependency so its bounded semantics stay host
+# testable before graph integration.
+add_library(sakamoto_product_flow_entry STATIC
+  src/product/vpp/product_flow_entry.c
+)
+target_include_directories(sakamoto_product_flow_entry PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
+)
+target_compile_features(sakamoto_product_flow_entry PRIVATE c_std_11)
+target_compile_options(sakamoto_product_flow_entry PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sakamoto-product-flow-entry-test
+  tests/host/product_flow_entry_test.c
+)
+target_include_directories(sakamoto-product-flow-entry-test PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
+)
+target_compile_features(sakamoto-product-flow-entry-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-flow-entry-test PRIVATE
+  -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-flow-entry-test PRIVATE
+  sakamoto_product_flow_entry)
+
 add_executable(sakamoto-product-host-fixture-abi-test
   tests/host/product_host_fixture_abi_test.c
 )
@@ -58,14 +82,25 @@ add_test(NAME sakamoto-product-host-fixture-abi-test
   COMMAND sakamoto-product-host-fixture-abi-test)
 add_test(NAME sakamoto-product-l4-policy-test
   COMMAND sakamoto-product-l4-policy-test)
+add_test(NAME sakamoto-product-flow-entry-test
+  COMMAND sakamoto-product-flow-entry-test)
+add_test(NAME sakamoto-product-flow-entry-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_flow_entry_contract.sh")
 add_test(NAME sakamoto-product-l4-policy-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_l4_policy_contract.sh")
 add_test(NAME sakamoto-product-vpp-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpp_contract.sh")
+add_test(NAME sakamoto-product-external-graph-ownership-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_external_graph_ownership_contract.sh")
 add_test(NAME sakamoto-s174-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s174-product-packet-kernel-contract.sh")
+add_test(NAME sakamoto-s192-product-packet-graph-policy-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s192-product-packet-graph-policy-contract.sh")
 add_test(NAME sakamoto-s175-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s175-product-packet-kernel-contract.sh")
@@ -78,6 +113,24 @@ add_test(NAME sakamoto-s175-host-vpp-core-stage-contract
 add_test(NAME sakamoto-s175-android-vpp-core-profile-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s175-android-vpp-core-profile-contract-test.sh")
+add_test(NAME sakamoto-s176-root-nfqueue-output-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s176-root-nfqueue-output-contract-test.sh")
+add_test(NAME sakamoto-s187-worker-core-guardrails-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s187-worker-core-guardrails-contract-test.sh")
+add_test(NAME sakamoto-s188-empty-policy-snapshot-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s188-empty-policy-snapshot-contract-test.sh")
+add_test(NAME sakamoto-s189-root-network-gate-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s189-root-network-gate-contract-test.sh")
+add_test(NAME sakamoto-s190-vpn-network-gate-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s190-vpn-network-gate-contract-test.sh")
+add_test(NAME sakamoto-s191-root-tcp4-l4-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s191-root-tcp4-l4-contract-test.sh")
 add_test(NAME sakamoto-product-host-query-identity-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_query_identity_contract.sh")
 add_test(NAME sakamoto-product-host-residue-contract
@@ -93,6 +146,13 @@ add_test(NAME sakamoto-product-path-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_path_contract.sh")
 add_test(NAME sakamoto-product-core-profile-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_core_profile_contract.sh")
+
+add_test(NAME sakamoto-s194-product-mutation-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s194-product-mutation-contract.sh")
+add_test(NAME sakamoto-s194-android-product-mutation-contract
+  COMMAND bash
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s194-product-mutation-contract-test.sh")
 
 add_custom_target(sakamoto-vpp-mainline-pending
   COMMAND "${CMAKE_COMMAND}" -E echo

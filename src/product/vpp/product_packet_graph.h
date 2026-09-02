@@ -21,6 +21,18 @@
 #define PRODUCT_PACKET_GRAPH_L4_EVALUATION_NONE UINT32_C (0)
 #define PRODUCT_PACKET_GRAPH_L4_EVALUATION_MATCH UINT32_C (1)
 #define PRODUCT_PACKET_GRAPH_L4_EVALUATION_NO_MATCH UINT32_C (2)
+#define PRODUCT_PACKET_GRAPH_GATE_TABLE_MAX_ENTRIES UINT32_C (64)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NONE UINT32_C (0)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE UINT32_C (1)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_UID UINT32_C (2)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_CONTEXT UINT32_C (3)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_IFINDEX UINT32_C (4)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_DIRECTION UINT32_C (5)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_FAMILY UINT32_C (6)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PROTOCOL UINT32_C (7)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_ADDRESS UINT32_C (8)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE UINT32_C (9)
+#define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORT UINT32_C (10)
 
 /*
  * Policy-hint direction is the normalized Device Packet Direction: INPUT is
@@ -54,11 +66,7 @@ typedef struct
   uint32_t reason_id;
 } product_packet_graph_gate_policy_t;
 
-/*
- * S191 deliberately carries one stateless IPv4/TCP classifier.  Its scalar
- * addresses are network-order u32 values; they are not the byte-array
- * address projection used by the future multi-rule matcher.
- */
+/* S191 compatibility input.  Typed S192 bundles use the GateTable below. */
 typedef struct
 {
   uint64_t revision;
@@ -82,11 +90,37 @@ typedef struct
   uint8_t action;
 } product_packet_graph_l4_policy_t;
 
+/*
+ * Gate entries use the same normalized predicate shape as the L4 matcher, but
+ * allow family/protocol/direction wildcards.  The graph owns a fixed table of
+ * these entries; disabled bundle entries are removed before publication.
+ */
+typedef product_l4_policy_rule_t product_packet_graph_gate_entry_t;
+
 typedef struct
 {
+  uint32_t entry_count;
+  uint32_t max_probes;
+  product_packet_graph_gate_entry_t
+    entries[PRODUCT_PACKET_GRAPH_GATE_TABLE_MAX_ENTRIES];
+} product_packet_graph_gate_table_t;
+
+typedef struct
+{
+  uint64_t active_generation;
   uint64_t active_revision;
   uint64_t snapshot_hash;
+  uint32_t active_entry_count;
+  uint32_t max_probes;
   uint64_t rule_id;
+  uint64_t last_match_revision;
+  uint64_t last_match_rule_id;
+  uint32_t last_match_winner_rank;
+  uint32_t last_match_probes;
+  uint32_t last_match_candidate_count;
+  uint32_t last_no_match_reason;
+  uint32_t last_match_action;
+  uint32_t last_match_reason_id;
   uint64_t drop_records;
   uint64_t last_drop_revision;
   uint64_t last_drop_rule_id;
@@ -141,6 +175,11 @@ typedef struct
   uint32_t last_match_probes;
   uint32_t last_match_candidate_count;
   uint32_t last_no_match_reason;
+  /* S192 evidence identity.  Keys are zero when no typed evaluation has
+   * committed for the current graph generation. */
+  uint64_t typed_match_policy_key;
+  uint64_t typed_match_probe_key;
+  uint64_t last_evaluation_probe_key;
 } product_packet_graph_l4_status_t;
 
 typedef enum
@@ -170,29 +209,49 @@ typedef struct
   uint8_t terminal_preserved;
   uint32_t winner;
   uint64_t revision;
+  uint64_t snapshot_hash;
   uint64_t rule_id;
   uint32_t reason_id;
 } product_packet_graph_policy_evaluation_t;
 
+/* Bounded worker-local FlowEntry evidence; this is deliberately not ABI data. */
+typedef struct
+{
+  uint32_t worker_count;
+  uint32_t max_entries_per_worker;
+  uint32_t active_entries;
+  uint64_t active_generation;
+  uint64_t active_revision;
+  uint64_t active_snapshot_hash;
+  uint64_t allocation_count;
+  uint64_t reuse_count;
+  uint64_t early_drop_count;
+  uint64_t wrong_owner_count;
+  uint64_t capacity_rejection_count;
+  uint64_t revision_invalidation_count;
+  uint64_t revision_mismatch_count;
+  uint64_t unavailable_count;
+  uint64_t pass_next_count;
+  uint64_t drop_count;
+  uint64_t flush_count;
+} product_packet_graph_flow_status_t;
+
 /*
- * One complete graph policy publication.  The caller owns l4_rules for the
- * duration of the call; the graph compiles a private copy into its inactive
- * immutable bank before publishing it.  Rules must already be projected to
- * product_l4_policy_rule_t (IPv4 bytes [0..3], tail zero) and must exclude
- * disabled bundle entries.  A bundle currently carries at most one blocked
- * Gate claim because the existing Gate stage is scalar; L4 supports the full
- * bounded matcher view.
+ * One complete graph policy publication.  The caller owns both rule arrays for
+ * the duration of the call; the graph copies the GateTable and compiles the L4
+ * view into its inactive immutable bank before publishing it.  Rules must
+ * already be projected to product_l4_policy_rule_t (IPv4 bytes [0..3], tail
+ * zero) and must exclude disabled bundle entries.
  */
 typedef struct
 {
   uint64_t generation;
   uint64_t revision;
   uint64_t snapshot_hash;
+  const product_packet_graph_gate_entry_t *gate_entries;
+  uint32_t gate_entry_count;
   const product_l4_policy_rule_t *l4_rules;
   uint32_t l4_rule_count;
-  uint8_t gate_present;
-  uint8_t reserved[3];
-  product_packet_graph_gate_policy_t gate;
 } product_packet_graph_policy_bundle_t;
 
 int product_packet_graph_start_external (vlib_main_t *vm, u64 generation);
@@ -223,6 +282,8 @@ void product_packet_graph_publish_l4_policy (
 void product_packet_graph_clear_l4_policy (uint64_t revision,
                                             uint64_t snapshot_hash);
 void product_packet_graph_l4_status (product_packet_graph_l4_status_t *status);
+void product_packet_graph_flow_status (
+  product_packet_graph_flow_status_t *status);
 
 /* Typed S192 bundle seam.  Invalid input is rejected before publication. */
 product_packet_result_t product_packet_graph_publish_policy_bundle (
@@ -242,7 +303,9 @@ product_packet_result_t product_packet_graph_policy_stage (
  * buffers cannot reuse a previous packet's subject or network context.
  * `profile_id` is the normalized Device Packet Direction; `interface_id`
  * carries adapter interface/provenance and must not be reinterpreted as
- * direction by the graph.
+ * direction by the graph.  A failed or stale read returns zero and fills
+ * every hint field with its explicit unknown sentinel (`UINT32_MAX`, or
+ * `UINT64_MAX` for network_context_id).
  */
 void product_packet_graph_set_policy_hints (vlib_buffer_t *buffer,
                                             const product_packet_hints_t *hints,
@@ -251,6 +314,11 @@ int product_packet_graph_get_policy_hints (const vlib_buffer_t *buffer,
                                            uint16_t generation,
                                            product_packet_hints_t *hints);
 
+/*
+ * Returns 1 only after the graph has consumed and returned the buffer.  A zero
+ * return leaves the buffer with the Adapter caller.  Completion success is
+ * reported through the registered callback and is not the ownership result.
+ */
 int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                           const product_packet_hints_t *hints,
                                           u64 origin_obligation_id,

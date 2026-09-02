@@ -42,7 +42,7 @@ fn response(generation: u64, status: u32, detail: &[u8]) -> Vec<u8> {
     let flags = CORE_READY | PLUGIN_LOADED | VAPI_LIVE | GENERATION_LIVE;
     bytes[20..24].copy_from_slice(&flags.to_le_bytes());
     bytes[24..24 + 15].copy_from_slice(b"host-fixture-v1");
-    bytes[120..120 + 31].copy_from_slice(b"product_core.api/1.0.0@1b103f1d");
+    bytes[120..120 + 31].copy_from_slice(b"product_core.api/1.0.0@aa3af3cd");
     bytes[216..216 + 8].copy_from_slice(b"fixture1");
     let detail_len = detail.len().min(127);
     bytes[264..264 + detail_len].copy_from_slice(&detail[..detail_len]);

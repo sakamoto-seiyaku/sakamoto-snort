@@ -58,7 +58,42 @@ for field in \
   'artifactId' \
   'apiIdentity' \
   'vppRevision' \
-  'errorDetail'; do
+  'errorDetail' \
+  'rootNfqueueQueueId' \
+  'rootNfqueueQueueLast' \
+  'rootNfqueueLaneCount' \
+  'rootNfqueueReadyLaneMask' \
+  'rootNfqueueGeneration' \
+  'rootNfqueueVerdictAttempts' \
+  'rootNfqueueInternalSettlements' \
+  'rootNfqueueBufferReturns' \
+  'rootNfqueueOriginLocalCompletions' \
+  'rootNfqueueOriginRemoteCompletions' \
+  'rootNfqueueLane0VerdictAttempts' \
+  'rootNfqueueLane1VerdictAttempts' \
+  'rootNfqueueInputPackets' \
+  'rootNfqueueOutputPackets' \
+  'rootNfqueueIpv4Packets' \
+  'rootNfqueueIpv6Packets' \
+  'rootNfqueueTcpPackets' \
+  'rootNfqueueUdpPackets' \
+  'rootNfqueueUidKnownPackets' \
+  'rootNfqueueUidUnknownPackets' \
+  'rootNfqueueLastIpFamily' \
+  'rootNfqueueLastProtocol' \
+  'rootNfqueueLastHook' \
+  'rootNfqueueLastUidKnown' \
+  'rootNfqueueLastUid' \
+  'rootNfqueueLastQueueId' \
+  'rootNfqueueLastPacketId' \
+  'rootNfqueueVerdictSucceeded' \
+  'rootNfqueueVerdictFailedDefinite' \
+  'rootNfqueueVerdictOutcomeUnknown' \
+  'rootNfqueueIngressIdentityMissing' \
+  'rootNfqueueGraphSubmitFailOpens' \
+  'rootNfqueueNonOwnerBypasses' \
+  'rootNfqueueDuplicateCompletionDrops' \
+  'rootNfqueueStaleCompletionDrops'; do
   grep -Fq "$field" "$java_source"
 done
 if grep -Fq 'show_version' "$jni_source" || grep -Fq 'show_version' "$java_source"; then

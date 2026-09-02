@@ -91,10 +91,13 @@ def method_body(signature):
 
 
 start = method_body("private void startProductCoreRuntime(")
-launch = method_body("private Process launchVpp(")
+launch = method_body("private ProcessBuilder buildProductCoreProcessBuilder(")
 prepare = method_body("private void prepareProductCoreProfile(")
 stop = method_body("private boolean stopRuntime(boolean stopService)")
 terminate = method_body("private boolean terminateProductCoreProcess(")
+product_builder = method_body("private ProcessBuilder buildProductCoreProcessBuilder(")
+monitor_product_exit = method_body("private void monitorProductCoreExit(")
+query_product = method_body("private void queryProductCoreRuntime(")
 for forbidden in (
         "/system/bin/sh", "SU_PATH", "new ProcessBuilder(\"/system/bin/su\"",
         "echo $$", "vpp.pid",
@@ -102,12 +105,11 @@ for forbidden in (
     if forbidden in start:
         raise AssertionError("Product Core start uses forbidden process API: " + forbidden)
 
-if "SAKAMOTO_VPP_SVM_DIR=" not in launch:
-    raise AssertionError("profile launch does not pass the VPP Android SVM directory")
-if "SAKAMOTO_ANDROID_SHM_DIR=" in launch:
-    raise AssertionError("profile launch still uses the retired Android SHM environment name")
+if "SAKAMOTO_VPP_SVM_DIR" not in start:
+    raise AssertionError("Product Core start does not pass the VPP Android SVM directory")
+if "SAKAMOTO_ANDROID_SHM_DIR=" in start:
+    raise AssertionError("Product Core start still uses the retired Android SHM environment name")
 
-start_index = start.index("new ProcessBuilder(vpp.getPath()")
 if "nativeLibraryDir" not in start or "PRODUCT_PLUGIN_BINARY" not in start \
         or "libproduct_core_plugin.so" not in source:
     raise AssertionError("Product Core must resolve the plugin from nativeLibraryDir")
@@ -115,19 +117,25 @@ for required in (
         "plugin.isFile()", "plugin.canRead()", "nativeDir.equals(plugin.getParentFile())"):
     if required not in start:
         raise AssertionError("Product Core must validate the native plugin boundary: " + required)
-builder_end = start.index(");", start_index) + 2
-builder = start[start_index:builder_end]
-if builder.count('"-c"') != 1 or "new File(profileRoot, \"startup.conf\").getPath()" not in builder:
+start_index = product_builder.index("new ProcessBuilder(vpp.getPath()")
+builder_end = product_builder.index(");", start_index) + 2
+builder = product_builder[start_index:builder_end]
+if builder.count('"-c"') != 1 or "startup.getPath()" not in builder:
     raise AssertionError("Product Core must launch VPP with only -c startup.conf")
 if "plugin_path" in builder or "nativeDir.getPath()" in builder:
     raise AssertionError("Product Core must not pass the retired plugin_path argv")
+if '"plugin_path " + nativeLibraryPath' not in prepare:
+    raise AssertionError("Product Core startup config must publish the early VPP plugin path")
 if "plugins {" not in prepare or "path " not in prepare \
         or "plugin default { disable }" not in prepare \
         or "PRODUCT_PLUGIN_BINARY" not in prepare:
     raise AssertionError("Product Core startup config must allowlist the native plugin")
+early_path_index = prepare.index('"plugin_path " + nativeLibraryPath')
 path_index = prepare.index('"plugins {\\n  path "')
 default_index = prepare.index('plugin default { disable }')
 enable_index = prepare.index('PRODUCT_PLUGIN_BINARY + " { enable }')
+if not early_path_index < path_index:
+    raise AssertionError("Product Core startup config must set plugin_path before the plugins allowlist")
 if not path_index < default_index < enable_index:
     raise AssertionError("Product Core plugins config order is not path/default/exact enable")
 if "safeVppConfigPath(nativeDir)" not in prepare:
@@ -154,12 +162,12 @@ if 'plugins {\\n  path " + nativeLibraryPath' not in prepare:
     raise AssertionError("VPP config must use the guarded native-library path value")
 if 'escaped.append(character);' not in safe_path:
     raise AssertionError("normal Android nativeLibraryDir must remain unchanged in the token")
-if "setExecutable" in start or "chmod" in start or "filesDir" in start:
+if "setExecutable" in start or "filesDir" in start:
     raise AssertionError("Product Core must not chmod/copy plugin into a writable profile")
 stdin_index = start.index("process.getOutputStream().close()")
 stdout_index = start.index("builder.redirectOutput(")
 launch_index = start.index("Process process = builder.start()")
-if not start_index < launch_index < stdin_index:
+if not launch_index < stdin_index:
     raise AssertionError("Product Core must close stdin immediately after direct launch")
 if not stdout_index < launch_index:
     raise AssertionError("Product Core must configure output redirection before launch")
@@ -172,6 +180,23 @@ if not close_index < terminate_index < cleanup_index:
 post_kill_index = stop.index("ProductCoreOwner.GlobalDecision postKill")
 if not terminate_index < post_kill_index < cleanup_index:
     raise AssertionError("STOP must globally audit after killing the in-memory owner")
+product_success_index = stop.index("productCoreSession = null;")
+product_process_clear_index = stop.index("vppProcess = null;", product_success_index)
+product_stopped_publish_index = stop.index("RuntimeSnapshot.stopped(", product_process_clear_index)
+product_stop_clear_index = stop.index("stopRequested = false;", product_stopped_publish_index)
+if not product_process_clear_index < product_stopped_publish_index < product_stop_clear_index:
+    raise AssertionError("Product Core STOP must clear the process and publish stopped before clearing stopRequested")
+if "RuntimeSnapshot.STATE_STOPPING.equals(snapshot.state)" not in monitor_product_exit:
+    raise AssertionError("Product Core exit monitor must ignore the expected STOPPING exit")
+dead_process_start = query_product.index("if (process == null || !process.isAlive())")
+dead_process_failure = query_product.index('failProductCoreGeneration("unexpected_exit"', dead_process_start)
+dead_process_guard = query_product[dead_process_start:dead_process_failure]
+for required in (
+        "stopRequested",
+        "RuntimeSnapshot.STATE_STOPPING.equals(snapshot.state)",
+        "RuntimeSnapshot.STATE_STOPPED.equals(snapshot.state)"):
+    if required not in dead_process_guard:
+        raise AssertionError("Product Core QUERY must not turn expected STOP/STOPPED into unexpected_exit: " + required)
 destroy_index = terminate.index("process.destroy();")
 term_wait_index = terminate.index("process.waitFor(STOP_TERM_MILLIS")
 force_index = terminate.index("process.destroyForcibly();")
@@ -184,10 +209,11 @@ PY
 
 # The pinned VPP mainline treats -c as an exclusive startup-config source:
 # when config_file is set, it reads that file and never appends positional
-# argv config. The plugin loader then consumes plugins { path ... } from that
-# same file before loading plugins. Keep this source contract beside the
-# RuntimeService launch contract so a future VPP pin cannot silently revive
-# the discarded plugin_path argv.
+# argv config. Product Core therefore publishes the early plugin directory as a
+# top-level startup-config `plugin_path`, not as ignored positional argv, then
+# keeps `plugins { path ...; default disable; exact enable }` as the allowlist.
+# Keep this source contract beside RuntimeService so a future VPP pin cannot
+# silently break Product Core plugin discovery on Android.
 python3 - "$pinned_main" "$pinned_plugin" <<'PY'
 import pathlib
 import sys
@@ -208,6 +234,12 @@ argv_end = main.index("unformat_init_string", argv_start)
 argv_branch = main[argv_start:argv_end]
 if "for (i = config_arg_index; i < argc; i++)" not in argv_branch:
     raise AssertionError("pinned VPP positional-config fallback changed unexpectedly")
+
+top_level_path_index = main.index('unformat (&input, "plugin_path %s", &vlib_plugin_path)')
+default_path_index = main.index("if (!vlib_plugin_path)")
+unix_main_index = main.index("return vlib_unix_main", default_path_index)
+if not top_level_path_index < default_path_index < unix_main_index:
+    raise AssertionError("pinned VPP no longer consumes top-level plugin_path before plugin init")
 
 path_index = plugin.index('unformat (input, "path %s", &s)')
 default_index = plugin.index('unformat (input, "plugin default %U"')

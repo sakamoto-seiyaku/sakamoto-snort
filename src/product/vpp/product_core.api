@@ -26,7 +26,243 @@ define product_core_status_reply {
     bool core_ready;
     bool adapter_available;
     bool protection_running;
+    u32 root_nfqueue_queue_id;
+    u32 root_nfqueue_queue_last;
+    u32 root_nfqueue_lane_count;
+    u32 root_nfqueue_ready_lane_mask;
+    u64 root_nfqueue_generation;
+    u64 root_nfqueue_verdict_attempts;
+    u64 root_nfqueue_internal_settlements;
+    u64 root_nfqueue_buffer_returns;
+    u64 root_nfqueue_origin_local_completions;
+    u64 root_nfqueue_origin_remote_completions;
+    u64 root_nfqueue_lane0_verdict_attempts;
+    u64 root_nfqueue_lane1_verdict_attempts;
+    u64 root_nfqueue_input_packets;
+    u64 root_nfqueue_output_packets;
+    u64 root_nfqueue_ipv4_packets;
+    u64 root_nfqueue_ipv6_packets;
+    u64 root_nfqueue_tcp_packets;
+    u64 root_nfqueue_udp_packets;
+    u64 root_nfqueue_uid_known_packets;
+    u64 root_nfqueue_uid_unknown_packets;
+    u32 root_nfqueue_last_ip_family;
+    u32 root_nfqueue_last_protocol;
+    u32 root_nfqueue_last_hook;
+    u32 root_nfqueue_last_uid_known;
+    u32 root_nfqueue_last_uid;
+    u32 root_nfqueue_last_queue_id;
+    u32 root_nfqueue_last_packet_id;
+    u64 root_nfqueue_verdict_succeeded;
+    u64 root_nfqueue_verdict_failed_definite;
+    u64 root_nfqueue_verdict_outcome_unknown;
+    u64 root_nfqueue_ingress_identity_missing;
+    u64 root_nfqueue_graph_submit_fail_opens;
+    u64 root_nfqueue_non_owner_bypasses;
+    u64 root_nfqueue_duplicate_completion_drops;
+    u64 root_nfqueue_stale_completion_drops;
+    u64 vpn_tun_fd_attached;
+    u64 vpn_direct_udp4_socket_attached;
+    u64 vpn_direct_udp4_protect_succeeded;
+    u64 vpn_direct_udp4_bind_succeeded;
+    u64 vpn_tun_ingress_packets;
+    u64 vpn_tun_udp4_tun_origin_packets;
+    u64 vpn_flow_stack_admissions;
+    u64 vpn_direct_udp4_send_succeeded;
+    u64 vpn_direct_udp4_transport_failed;
+    u64 vpn_flow_stack_return_packets;
+    u64 vpn_flow_stack_return_provenance_packets;
+    u64 vpn_tun_write_completions;
+    u64 vpn_infrastructure_faults;
+    u64 vpn_duplicate_or_stale_drops;
+    u32 product_graph_worker_count;
+    u32 product_graph_flow_domain;
+    u64 product_graph_hash_seed;
+    u32 product_graph_handoff_credits;
+    u32 product_graph_vpp_worker_count;
+    u32 product_graph_vpp_main_core;
+    u32 product_graph_vpp_worker0_thread_index;
+    u32 product_graph_vpp_worker0_core;
+    u32 product_graph_vpp_worker1_thread_index;
+    u32 product_graph_vpp_worker1_core;
+    u32 product_graph_enabled;
+    u32 product_graph_accepting;
+    u32 product_graph_worker_layout_ready;
+    u64 product_graph_obligation_debt;
+    u64 product_graph_buffer_debt;
+    u64 product_graph_handoff_debt;
+    u64 policy_requested_revision;
+    u64 policy_active_revision;
+    u64 policy_generation;
+    u64 policy_snapshot_hash;
+    u64 policy_worker0_revision;
+    u64 policy_worker1_revision;
+    u32 policy_snapshot_empty;
+    u32 policy_default_pass;
+    u32 policy_gate_claim_count;
+    u32 policy_l4_rule_count;
+    u32 policy_last_apply_status_code;
+    u32 policy_mixed_revision;
+    u32 policy_artifact_match;
+    u32 policy_generation_match;
+    u32 policy_gate_subject_uid;
+    u32 policy_gate_network_context;
+    bool policy_gate_blocked;
+    u32 policy_gate_reason_id;
+    u64 policy_gate_rule_id;
+    u64 policy_drop_records;
+    u64 policy_last_drop_revision;
+    u64 policy_last_drop_rule_id;
+    u64 policy_last_drop_completion_attempts;
+    u32 policy_last_drop_uid;
+    u32 policy_last_drop_network_context;
+    u32 policy_last_drop_reason_id;
+    u32 policy_last_drop_verdict;
+    u32 policy_last_drop_winner;
+    bool policy_last_drop_uid_known;
+    u32 policy_last_drop_device_direction;
+    /* S191 explicit L4 active-rule and evaluation evidence. */
+    u64 policy_l4_active_revision;
+    u64 policy_l4_rule_id;
+    u64 policy_l4_match_records;
+    u64 policy_l4_no_match_records;
+    u64 policy_l4_last_match_revision;
+    u64 policy_l4_last_match_rule_id;
+    u32 policy_l4_subject_uid;
+    u32 policy_l4_network_context;
+    u32 policy_l4_ip_family;
+    u32 policy_l4_ip_protocol;
+    u32 policy_l4_direction;
+    u32 policy_l4_action;
+    u32 policy_l4_priority;
+    u32 policy_l4_order;
+    u32 policy_l4_reason_id;
+    u32 policy_l4_last_match_uid;
+    u32 policy_l4_last_match_network_context;
+    u32 policy_l4_last_match_reason_id;
+    u32 policy_l4_last_match_verdict;
+    u32 policy_l4_last_match_winner;
+    u32 policy_l4_last_match_uid_known;
+    u32 policy_l4_last_match_device_direction;
+    u32 policy_l4_last_match_action;
+    u32 policy_l4_last_evaluation_result;
+    u32 policy_l4_last_evaluation_verdict;
+    u32 policy_l4_last_evaluation_device_direction;
+    /* S192 bounded matcher-view evidence extension. */
+    u32 policy_l4_view_active;
+    u32 policy_l4_view_rule_count;
+    u32 policy_l4_view_max_probes;
+    u32 policy_l4_view_last_match_winner_rank;
+    u32 policy_l4_view_last_match_probes;
+    u32 policy_l4_view_last_match_candidate_count;
+    u32 policy_l4_view_last_no_match_reason;
+    /* S192 typed-match/evaluation correlation keys. */
+    u64 policy_l4_typed_match_policy_key;
+    u64 policy_l4_typed_match_probe_key;
+    u64 policy_l4_last_evaluation_probe_key;
     string artifact_id[96];
     string api_identity[96];
     string vpp_revision[48];
+    string policy_snapshot_identity[96];
+};
+
+/**
+ * Publish one complete immutable policy snapshot for the active generation.
+ * SAKAMOTO-188 uses the empty default-pass form; SAKAMOTO-189 permits one
+ * Root Network Gate claim.  Status readback is served by product_core_status.
+ */
+define product_core_policy_apply {
+    u32 client_index;
+    u32 context;
+    u64 generation;
+    u64 requested_revision;
+    u64 snapshot_hash;
+    bool snapshot_empty;
+    bool default_pass;
+    u32 gate_claim_count;
+    u32 l4_rule_count;
+    u32 gate_subject_uid;
+    u32 gate_network_context;
+    bool gate_blocked;
+    u32 gate_reason_id;
+    u64 gate_rule_id;
+    u32 l4_subject_uid;
+    u32 l4_network_context;
+    u32 l4_ip_family;
+    u32 l4_ip_protocol;
+    u32 l4_direction;
+    u32 l4_action;
+    u32 l4_source_prefix_len;
+    u32 l4_destination_prefix_len;
+    u32 l4_source_port_first;
+    u32 l4_source_port_last;
+    u32 l4_destination_port_first;
+    u32 l4_destination_port_last;
+    u32 l4_priority;
+    u32 l4_order;
+    u32 l4_reason_id;
+    u32 l4_reserved;
+    u64 l4_rule_id;
+    u8 l4_source_address[16];
+    u8 l4_destination_address[16];
+    string snapshot_identity[96];
+};
+
+define product_core_policy_apply_reply {
+    u32 context;
+    i32 retval;
+};
+
+/*
+ * SAKAMOTO-192 typed successor wire contract.  This source declaration is
+ * intentionally ahead of the checked-in VAPI output: the generated artifact
+ * must be regenerated and identity-reviewed before a runtime can advertise
+ * this message.  A bundle is one bounded snapshot, never a stream of legacy
+ * product_core_policy_apply requests.
+ */
+typedef product_policy_rule_entry {
+    u32 subject_uid;
+    u32 network_context;
+    u32 ifindex;
+    u32 rule_kind;
+    u32 ip_family;
+    u32 ip_protocol;
+    u32 direction;
+    u32 action;
+    u32 enabled;
+    u32 source_prefix_len;
+    u32 destination_prefix_len;
+    u32 source_port_first;
+    u32 source_port_last;
+    u32 destination_port_first;
+    u32 destination_port_last;
+    u32 priority;
+    u32 order;
+    u32 reason_id;
+    u32 reserved;
+    u64 rule_id;
+    u8 source_address[16];
+    u8 destination_address[16];
+};
+
+define product_core_policy_bundle_apply {
+    u32 client_index;
+    u32 context;
+    u64 generation;
+    u32 abi_version;
+    u32 struct_size;
+    u64 requested_revision;
+    u64 snapshot_hash;
+    u32 gate_entry_count;
+    u32 l4_rule_count;
+    u32 default_pass;
+    u32 reserved;
+    u8 snapshot_identity[96];
+    vl_api_product_policy_rule_entry_t gate_entries[64];
+    vl_api_product_policy_rule_entry_t l4_entries[64];
+};
+
+define product_core_policy_bundle_apply_reply {
+    u32 context;
+    i32 retval;
 };

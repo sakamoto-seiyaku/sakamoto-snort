@@ -28,6 +28,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.net.InetSocketAddress;
 import java.net.DatagramPacket;
@@ -59,10 +60,20 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_RUNTIME_RESUME = "runtimeResume";
     private static final String EXTRA_RUNTIME_PROFILE = "runtimeProfile";
     private static final String EXTRA_RUNTIME_CLEANUP_FAULT = "runtimeCleanupFault";
+    private static final String EXTRA_RUNTIME_ROOT_NFQUEUE_FAULT_MODE =
+            "runtimeRootNfqueueFaultMode";
+    private static final String EXTRA_RUNTIME_VPN_FAULT_MODE =
+            "runtimeVpnFaultMode";
+    private static final String EXTRA_RUNTIME_VPN_FAULT_EVENT =
+            "runtimeVpnFaultEvent";
+    private static final String EXTRA_RUNTIME_POLICY_MUTATION_FAULT_MODE =
+            "runtimePolicyMutationFaultMode";
+    private static final String EXTRA_DEBUG_REFRESH = "debugRefresh";
     private static final String EXTRA_DEBUG_TRAFFIC = "debugTraffic";
     private static final String EXTRA_DEBUG_TRAFFIC_HOST = "debugTrafficHost";
     private static final String EXTRA_DEBUG_TRAFFIC_PORT = "debugTrafficPort";
     private static final String EXTRA_DEBUG_TRAFFIC_SOURCE_PORT = "debugTrafficSourcePort";
+    private static final String EXTRA_DEBUG_TRAFFIC_NONCE = "debugTrafficNonce";
     private static final String EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS =
             "debugTrafficTimeoutMillis";
     // Evidence-only escape hatch; ordinary probes keep the platform default route.
@@ -72,6 +83,9 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_UDP_TRAFFIC_PORT = "debugUdpPort";
     private static final String EXTRA_DEBUG_UDP_TRAFFIC_SOURCE_PORT =
             "debugUdpSourcePort";
+    private static final String EXTRA_DEBUG_UDP_TRAFFIC_NONCE = "debugUdpNonce";
+    private static final String EXTRA_DEBUG_UDP_TRAFFIC_EXPECT_REPLY =
+            "debugUdpExpectReply";
     private static final String EXTRA_DEBUG_UDP_TRAFFIC_TIMEOUT_MILLIS =
             "debugUdpTimeoutMillis";
     private static final String EXTRA_DEBUG_DOWNLOAD = "debugDownload";
@@ -80,14 +94,23 @@ public class DebugControlActivity extends Activity {
             "debugDownloadTimeoutMillis";
     private static final String EXTRA_DEBUG_DOWNLOAD_MAX_BYTES = "debugDownloadMaxBytes";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
+    private static final String EXTRA_DEBUG_APPLY_EMPTY_POLICY = "debugApplyEmptyPolicy";
     private static final String EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY =
             "debugL4PrefillFromActivity";
     private static final String EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS =
             "debugExportReleaseDiagnostics";
     private static final String EXTRA_DEBUG_LISTEN = "debugListen";
+    private static final String EXTRA_DEBUG_LISTEN_HOST = "debugListenHost";
     private static final String EXTRA_DEBUG_LISTEN_PORT = "debugListenPort";
+    private static final String EXTRA_DEBUG_LISTEN_NONCE = "debugListenNonce";
     private static final String EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS =
             "debugListenTimeoutMillis";
+    private static final String EXTRA_DEBUG_UDP_LISTEN = "debugUdpListen";
+    private static final String EXTRA_DEBUG_UDP_LISTEN_HOST = "debugUdpListenHost";
+    private static final String EXTRA_DEBUG_UDP_LISTEN_PORT = "debugUdpListenPort";
+    private static final String EXTRA_DEBUG_UDP_LISTEN_NONCE = "debugUdpListenNonce";
+    private static final String EXTRA_DEBUG_UDP_LISTEN_TIMEOUT_MILLIS =
+            "debugUdpListenTimeoutMillis";
     private static final String EXTRA_DEBUG_BIND_APPLICATION_SUBJECT =
             "debugBindApplicationSubject";
     private static final String EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT =
@@ -130,6 +153,10 @@ public class DebugControlActivity extends Activity {
             "debug/traffic-probe.properties";
     private static final String DEBUG_UDP_TRAFFIC_PROBE_RESULT_PATH =
             "debug/udp-traffic-probe.properties";
+    private static final String DEBUG_TCP_LISTENER_RESULT_PATH =
+            "debug/tcp-listener.properties";
+    private static final String DEBUG_UDP_LISTENER_RESULT_PATH =
+            "debug/udp-listener.properties";
     private static final String DEBUG_DOWNLOAD_PROBE_RESULT_PATH =
             "debug/download-probe.properties";
     private static final String DEBUG_L4_PREFILL_RESULT_PATH =
@@ -183,6 +210,10 @@ public class DebugControlActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (applyHeadlessControlIntent(getIntent())) {
+            finish();
+            return;
+        }
         setContentView(buildUi());
         refreshProductCatalog();
         refreshStatus();
@@ -193,7 +224,86 @@ public class DebugControlActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (applyHeadlessControlIntent(intent)) {
+            finish();
+            return;
+        }
         applyControlIntent(intent);
+    }
+
+    private boolean applyHeadlessControlIntent(Intent intent) {
+        if (intent == null || hasInteractiveDebugExtras(intent)) {
+            return false;
+        }
+        boolean handled = false;
+        if (intent.hasExtra(EXTRA_RUNTIME_CLEANUP_FAULT)) {
+            backend.setCleanupFault(this,
+                    intent.getBooleanExtra(EXTRA_RUNTIME_CLEANUP_FAULT, false));
+            handled = true;
+        }
+        String rootNfqueueFaultMode = null;
+        if (intent.hasExtra(EXTRA_RUNTIME_ROOT_NFQUEUE_FAULT_MODE)) {
+            rootNfqueueFaultMode =
+                    intent.getStringExtra(EXTRA_RUNTIME_ROOT_NFQUEUE_FAULT_MODE);
+            backend.setRootNfqueueFaultMode(this, rootNfqueueFaultMode);
+            handled = true;
+        }
+        String vpnFaultMode = null;
+        if (intent.hasExtra(EXTRA_RUNTIME_VPN_FAULT_MODE)) {
+            vpnFaultMode = intent.getStringExtra(EXTRA_RUNTIME_VPN_FAULT_MODE);
+            backend.setVpnFaultMode(this, vpnFaultMode);
+            handled = true;
+        }
+        if (intent.hasExtra(EXTRA_RUNTIME_VPN_FAULT_EVENT)) {
+            backend.sendVpnFaultEvent(this,
+                    intent.getStringExtra(EXTRA_RUNTIME_VPN_FAULT_EVENT));
+            handled = true;
+        }
+        if (intent.hasExtra(EXTRA_RUNTIME_POLICY_MUTATION_FAULT_MODE)) {
+            backend.setPolicyMutationFaultMode(this,
+                    intent.getStringExtra(EXTRA_RUNTIME_POLICY_MUTATION_FAULT_MODE));
+            handled = true;
+        }
+        if (intent.getBooleanExtra(EXTRA_RUNTIME_PAUSE, false)) {
+            backend.pauseProtection(this);
+            handled = true;
+        } else if (intent.getBooleanExtra(EXTRA_RUNTIME_RESUME, false)) {
+            backend.resumeProtection(this);
+            handled = true;
+        } else if (intent.getBooleanExtra(EXTRA_RUNTIME_STOP, false)) {
+            backend.stop(this);
+            handled = true;
+        } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
+            String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
+            RuntimeProfile selected = RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
+                    ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
+            backend.start(this, selected, rootNfqueueFaultMode, vpnFaultMode);
+            handled = true;
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_REFRESH, false)) {
+            backend.queryService(this);
+            handled = true;
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_EMPTY_POLICY, false)) {
+            backend.applyEmptyPolicy(this);
+            handled = true;
+        }
+        return handled;
+    }
+
+    private boolean hasInteractiveDebugExtras(Intent intent) {
+        return intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_UDP_TRAFFIC, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_DOWNLOAD, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)
+                || intent.getBooleanExtra(EXTRA_DEBUG_UDP_LISTEN, false)
+                || intent.getStringExtra(EXTRA_DEBUG_BIND_APPLICATION_SUBJECT) != null
+                || intent.getStringExtra(EXTRA_DEBUG_UNBIND_APPLICATION_SUBJECT) != null
+                || intent.getStringExtra(EXTRA_DEBUG_SET_NETWORK_GATE_SUBJECT) != null
+                || intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_SUBJECT) != null;
     }
 
     private void applyControlIntent(Intent intent) {
@@ -204,6 +314,25 @@ public class DebugControlActivity extends Activity {
             backend.setCleanupFault(this,
                     intent.getBooleanExtra(EXTRA_RUNTIME_CLEANUP_FAULT, false));
         }
+        String rootNfqueueFaultMode = null;
+        if (intent.hasExtra(EXTRA_RUNTIME_ROOT_NFQUEUE_FAULT_MODE)) {
+            rootNfqueueFaultMode =
+                    intent.getStringExtra(EXTRA_RUNTIME_ROOT_NFQUEUE_FAULT_MODE);
+            backend.setRootNfqueueFaultMode(this, rootNfqueueFaultMode);
+        }
+        String vpnFaultMode = null;
+        if (intent.hasExtra(EXTRA_RUNTIME_VPN_FAULT_MODE)) {
+            vpnFaultMode = intent.getStringExtra(EXTRA_RUNTIME_VPN_FAULT_MODE);
+            backend.setVpnFaultMode(this, vpnFaultMode);
+        }
+        if (intent.hasExtra(EXTRA_RUNTIME_VPN_FAULT_EVENT)) {
+            backend.sendVpnFaultEvent(this,
+                    intent.getStringExtra(EXTRA_RUNTIME_VPN_FAULT_EVENT));
+        }
+        if (intent.hasExtra(EXTRA_RUNTIME_POLICY_MUTATION_FAULT_MODE)) {
+            backend.setPolicyMutationFaultMode(this,
+                    intent.getStringExtra(EXTRA_RUNTIME_POLICY_MUTATION_FAULT_MODE));
+        }
         if (intent.getBooleanExtra(EXTRA_RUNTIME_PAUSE, false)) {
             main.post(this::pauseProtection);
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_RESUME, false)) {
@@ -212,13 +341,31 @@ public class DebugControlActivity extends Activity {
             main.post(this::stopRuntime);
         } else if (intent.getBooleanExtra(EXTRA_RUNTIME_START, false)) {
             String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
+            RuntimeProfile selected = profileFromSpinner();
             if (profileSpinner != null && profile != null) {
-                RuntimeProfile selected = RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
+                selected = RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
                         ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
                 requestedProfile = selected;
                 setProfileSpinnerSelection(selected);
             }
-            main.post(this::startSelected);
+            final String requestedRootNfqueueFaultMode = rootNfqueueFaultMode;
+            final String requestedVpnFaultMode = vpnFaultMode;
+            final RuntimeProfile requestedRuntimeProfile = selected;
+            startProfile(requestedRuntimeProfile, requestedRootNfqueueFaultMode,
+                    requestedVpnFaultMode, false);
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_REFRESH, false)) {
+            main.post(() -> {
+                refreshStatus();
+                refreshProductCatalog();
+            });
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_EMPTY_POLICY, false)) {
+            main.post(() -> {
+                backend.applyEmptyPolicy(this);
+                action("Debug empty policy apply requested.");
+                refreshStatus();
+            });
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)) {
             String host = intent.getStringExtra(EXTRA_DEBUG_TRAFFIC_HOST);
@@ -229,6 +376,7 @@ public class DebugControlActivity extends Activity {
                     EXTRA_DEBUG_TRAFFIC_PORT, DEBUG_TRAFFIC_PORT), DEBUG_TRAFFIC_PORT);
             int sourcePort = boundedOptionalPort(intent.getIntExtra(
                     EXTRA_DEBUG_TRAFFIC_SOURCE_PORT, 0));
+            String nonce = boundedNonce(intent.getStringExtra(EXTRA_DEBUG_TRAFFIC_NONCE));
             int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
                     EXTRA_DEBUG_TRAFFIC_TIMEOUT_MILLIS, DEBUG_TRAFFIC_TIMEOUT_MILLIS),
                     DEBUG_TRAFFIC_TIMEOUT_MILLIS);
@@ -236,10 +384,11 @@ public class DebugControlActivity extends Activity {
             final String probeHost = host;
             final int probePort = port;
             final int probeSourcePort = sourcePort;
+            final String probeNonce = nonce;
             final int probeTimeoutMillis = timeoutMillis;
             final boolean probeBindToVpn = bindToVpn;
             main.post(() -> runDebugTrafficProbe(
-                    probeHost, probePort, probeSourcePort, probeTimeoutMillis,
+                    probeHost, probePort, probeSourcePort, probeTimeoutMillis, probeNonce,
                     probeBindToVpn));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_UDP_TRAFFIC, false)) {
@@ -252,6 +401,9 @@ public class DebugControlActivity extends Activity {
                     DEBUG_UDP_TRAFFIC_PORT);
             int sourcePort = boundedOptionalPort(intent.getIntExtra(
                     EXTRA_DEBUG_UDP_TRAFFIC_SOURCE_PORT, 0));
+            String nonce = boundedNonce(intent.getStringExtra(EXTRA_DEBUG_UDP_TRAFFIC_NONCE));
+            boolean expectReply = intent.getBooleanExtra(
+                    EXTRA_DEBUG_UDP_TRAFFIC_EXPECT_REPLY, !nonce.isEmpty());
             int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
                     EXTRA_DEBUG_UDP_TRAFFIC_TIMEOUT_MILLIS, DEBUG_UDP_TRAFFIC_TIMEOUT_MILLIS),
                     DEBUG_UDP_TRAFFIC_TIMEOUT_MILLIS);
@@ -262,10 +414,13 @@ public class DebugControlActivity extends Activity {
             final String probeHost = host;
             final int probePort = port;
             final int probeSourcePort = sourcePort;
+            final String probeNonce = nonce;
+            final boolean probeExpectReply = expectReply;
             final int probeTimeoutMillis = timeoutMillis;
             final boolean probeBindToVpn = bindToVpn;
             main.post(() -> runDebugUdpTrafficProbe(
                     probeHost, probePort, probeSourcePort, probeTimeoutMillis,
+                    probeNonce, probeExpectReply,
                     probeBindToVpn));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_DOWNLOAD, false)) {
@@ -285,12 +440,36 @@ public class DebugControlActivity extends Activity {
                     downloadUrl, downloadTimeoutMillis, downloadMaxBytes));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)) {
+            String host = intent.getStringExtra(EXTRA_DEBUG_LISTEN_HOST);
+            if (host == null || host.isEmpty()) {
+                host = "0.0.0.0";
+            }
             int port = boundedPort(intent.getIntExtra(
                     EXTRA_DEBUG_LISTEN_PORT, DEBUG_LISTEN_PORT), DEBUG_LISTEN_PORT);
+            String nonce = boundedNonce(intent.getStringExtra(EXTRA_DEBUG_LISTEN_NONCE));
             int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
                     EXTRA_DEBUG_LISTEN_TIMEOUT_MILLIS, DEBUG_LISTEN_TIMEOUT_MILLIS),
                     DEBUG_LISTEN_TIMEOUT_MILLIS);
-            main.post(() -> runDebugTrafficListener(port, timeoutMillis));
+            final String listenHost = host;
+            final String listenNonce = nonce;
+            main.post(() -> runDebugTrafficListener(
+                    listenHost, port, timeoutMillis, listenNonce));
+        }
+        if (intent.getBooleanExtra(EXTRA_DEBUG_UDP_LISTEN, false)) {
+            String host = intent.getStringExtra(EXTRA_DEBUG_UDP_LISTEN_HOST);
+            if (host == null || host.isEmpty()) {
+                host = "0.0.0.0";
+            }
+            int port = boundedPort(intent.getIntExtra(
+                    EXTRA_DEBUG_UDP_LISTEN_PORT, DEBUG_LISTEN_PORT), DEBUG_LISTEN_PORT);
+            String nonce = boundedNonce(intent.getStringExtra(EXTRA_DEBUG_UDP_LISTEN_NONCE));
+            int timeoutMillis = boundedTimeoutMillis(intent.getIntExtra(
+                    EXTRA_DEBUG_UDP_LISTEN_TIMEOUT_MILLIS, DEBUG_LISTEN_TIMEOUT_MILLIS),
+                    DEBUG_LISTEN_TIMEOUT_MILLIS);
+            final String listenHost = host;
+            final String listenNonce = nonce;
+            main.post(() -> runDebugUdpTrafficListener(
+                    listenHost, port, timeoutMillis, listenNonce));
         }
         String bindSubject = intent.getStringExtra(EXTRA_DEBUG_BIND_APPLICATION_SUBJECT);
         if (bindSubject != null && !bindSubject.trim().isEmpty()) {
@@ -475,14 +654,33 @@ public class DebugControlActivity extends Activity {
     }
 
     private void startSelected() {
+        startSelected(null, null);
+    }
+
+    private void startSelected(String rootNfqueueFaultMode) {
+        startSelected(rootNfqueueFaultMode, null);
+    }
+
+    private void startSelected(String rootNfqueueFaultMode, String vpnFaultMode) {
         RuntimeProfile profile = profileFromSpinner();
+        startProfile(profile, rootNfqueueFaultMode, vpnFaultMode);
+    }
+
+    private void startProfile(RuntimeProfile profile, String rootNfqueueFaultMode,
+                              String vpnFaultMode) {
+        startProfile(profile, rootNfqueueFaultMode, vpnFaultMode, true);
+    }
+
+    private void startProfile(RuntimeProfile profile, String rootNfqueueFaultMode,
+                              String vpnFaultMode, boolean requireVpnPrepare) {
         requestedProfile = profile;
-        if (profile == RuntimeProfile.VPN && !ensureVpnPreparedForStart()) {
+        if (requireVpnPrepare && profile == RuntimeProfile.VPN
+                && !ensureVpnPreparedForStart()) {
             return;
         }
         RuntimeControlBackend.StartResult result;
         try {
-            result = backend.start(this, profile);
+            result = backend.start(this, profile, rootNfqueueFaultMode, vpnFaultMode);
         } catch (RuntimeException error) {
             requestedProfile = null;
             action("Start failed: runtime_start_failed"
@@ -967,15 +1165,21 @@ public class DebugControlActivity extends Activity {
 
     private void runDebugTrafficProbe(
             String host, int port, int sourcePort, int timeoutMillis) {
-        runDebugTrafficProbe(host, port, sourcePort, timeoutMillis, false);
+        runDebugTrafficProbe(host, port, sourcePort, timeoutMillis, "", false);
     }
 
     private void runDebugTrafficProbe(
             String host, int port, int sourcePort, int timeoutMillis, boolean bindToVpn) {
+        runDebugTrafficProbe(host, port, sourcePort, timeoutMillis, "", bindToVpn);
+    }
+
+    private void runDebugTrafficProbe(
+            String host, int port, int sourcePort, int timeoutMillis, String nonce,
+            boolean bindToVpn) {
         action("Debug traffic probe requested.");
         Thread probe = new Thread(() -> {
             DebugTrafficProbeResult probeResult = runDebugTrafficProbeBlockingWithOptions(
-                    host, port, sourcePort, timeoutMillis, true, bindToVpn);
+                    host, port, sourcePort, timeoutMillis, true, bindToVpn, nonce);
             writeDebugTrafficProbeResult(
                     host, port, sourcePort, timeoutMillis, bindToVpn, probeResult);
             final String display = probeResult.message;
@@ -986,10 +1190,16 @@ public class DebugControlActivity extends Activity {
 
     private void runDebugUdpTrafficProbe(
             String host, int port, int sourcePort, int timeoutMillis, boolean bindToVpn) {
+        runDebugUdpTrafficProbe(host, port, sourcePort, timeoutMillis, "", false, bindToVpn);
+    }
+
+    private void runDebugUdpTrafficProbe(
+            String host, int port, int sourcePort, int timeoutMillis, String nonce,
+            boolean expectReply, boolean bindToVpn) {
         action("Debug UDP traffic probe requested.");
         Thread probe = new Thread(() -> {
             DebugUdpTrafficProbeResult probeResult = runDebugUdpTrafficProbeBlocking(
-                    host, port, sourcePort, timeoutMillis, bindToVpn);
+                    host, port, sourcePort, timeoutMillis, nonce, expectReply, bindToVpn);
             writeDebugUdpTrafficProbeResult(
                     host, port, sourcePort, timeoutMillis, bindToVpn, probeResult);
             final String display = probeResult.message;
@@ -1014,12 +1224,32 @@ public class DebugControlActivity extends Activity {
     }
 
     private void runDebugTrafficListener(int port, int timeoutMillis) {
-        action("Debug traffic listener requested on 0.0.0.0:" + port + ".");
+        runDebugTrafficListener("0.0.0.0", port, timeoutMillis, "");
+    }
+
+    private void runDebugTrafficListener(
+            String host, int port, int timeoutMillis, String expectedNonce) {
+        action("Debug traffic listener requested on " + host + ":" + port + ".");
         Thread listener = new Thread(() -> {
-            String result = runDebugTrafficListenerBlocking(port, timeoutMillis);
-            final String display = result;
+            DebugListenerProbeResult result = runDebugTrafficListenerBlocking(
+                    host, port, timeoutMillis, expectedNonce);
+            writeDebugTcpListenerResult(host, port, timeoutMillis, expectedNonce, result);
+            final String display = result.message;
             main.post(() -> action(display));
         }, "sakamoto-debug-listener");
+        listener.start();
+    }
+
+    private void runDebugUdpTrafficListener(
+            String host, int port, int timeoutMillis, String expectedNonce) {
+        action("Debug UDP traffic listener requested on " + host + ":" + port + ".");
+        Thread listener = new Thread(() -> {
+            DebugListenerProbeResult result = runDebugUdpTrafficListenerBlocking(
+                    host, port, timeoutMillis, expectedNonce);
+            writeDebugUdpListenerResult(host, port, timeoutMillis, expectedNonce, result);
+            final String display = result.message;
+            main.post(() -> action(display));
+        }, "sakamoto-debug-udp-listener");
         listener.start();
     }
 
@@ -1117,24 +1347,24 @@ public class DebugControlActivity extends Activity {
     private String runDebugTrafficProbeBlocking(
             String host, int port, int sourcePort, int timeoutMillis, boolean includeEndpoint) {
         return runDebugTrafficProbeBlockingWithOptions(
-                host, port, sourcePort, timeoutMillis, includeEndpoint, false).message;
+                host, port, sourcePort, timeoutMillis, includeEndpoint, false, "").message;
     }
 
     private DebugUdpTrafficProbeResult runDebugUdpTrafficProbeBlocking(
-            String host, int port, int sourcePort, int timeoutMillis, boolean bindToVpn) {
-        if (!bindToVpn) {
-            DebugTrafficProbeBinding binding = DebugTrafficProbeBinding.failed(
-                    "vpn_bind_required", -1L,
-                    "UDP debug probe requires an active VPN Network binding");
-            return new DebugUdpTrafficProbeResult(
-                    "udp_bind_failed",
-                    "Debug UDP traffic probe failed before send: VPN binding is required.",
-                    binding);
-        }
-        DebugTrafficProbeBinding binding = DebugTrafficProbeBinding.notAttempted();
+            String host, int port, int sourcePort, int timeoutMillis, String nonce,
+            boolean expectReply, boolean bindToVpn) {
+        DebugTrafficProbeBinding binding = bindToVpn
+                ? DebugTrafficProbeBinding.notAttempted()
+                : DebugTrafficProbeBinding.notRequested();
         try (DatagramSocket socket = new DatagramSocket(null)) {
             socket.setReuseAddress(true);
-            socket.bind(new InetSocketAddress(sourcePort));
+            InetAddress address = InetAddress.getByName(host);
+            if (address.getAddress().length == 16) {
+                socket.bind(new InetSocketAddress(
+                        InetAddress.getByName("::"), sourcePort));
+            } else {
+                socket.bind(new InetSocketAddress(sourcePort));
+            }
             if (bindToVpn) {
                 binding = bindDebugDatagramSocketToVpn(socket);
                 if (!binding.isBound()) {
@@ -1146,11 +1376,25 @@ public class DebugControlActivity extends Activity {
                 }
             }
 
-            InetAddress address = InetAddress.getByName(host);
-            byte[] payload = "sakamoto-debug-udp".getBytes(StandardCharsets.UTF_8);
+            byte[] payload = (nonce == null || nonce.isEmpty()
+                    ? "sakamoto-debug-udp" : nonce).getBytes(StandardCharsets.UTF_8);
             DatagramPacket packet = new DatagramPacket(payload, payload.length,
                     address, port);
             socket.send(packet);
+            if (expectReply) {
+                socket.setSoTimeout(timeoutMillis);
+                byte[] response = new byte[Math.max(payload.length, 1)];
+                DatagramPacket reply = new DatagramPacket(response, response.length);
+                socket.receive(reply);
+                boolean matched = reply.getLength() == payload.length
+                        && Arrays.equals(payload, Arrays.copyOf(response, reply.getLength()));
+                String result = matched ? "udp_echo_matched" : "udp_echo_mismatch";
+                String message = matched
+                        ? "Debug UDP echo matched."
+                        : "Debug UDP echo mismatch.";
+                return new DebugUdpTrafficProbeResult(
+                        result, message, binding, nonce, payload.length, reply.getLength());
+            }
             // Keep the datagram socket alive briefly so the VPN-side owner
             // lookup can observe the just-sent tuple before the fixture closes
             // it.  This is still a send-only probe; no reply is read or
@@ -1165,22 +1409,25 @@ public class DebugControlActivity extends Activity {
             String message = "Debug UDP datagram sent to " + host + ":" + port
                     + (sourcePort > 0 ? " from source port " + sourcePort : "")
                     + ". No external reply is claimed.";
-            return new DebugUdpTrafficProbeResult("udp_datagram_sent", message, binding);
+            return new DebugUdpTrafficProbeResult(
+                    "udp_datagram_sent", message, binding, nonce, payload.length, 0);
         } catch (IOException error) {
             String message = "Debug UDP traffic probe failed: "
                     + (error.getMessage() == null
                     ? error.getClass().getSimpleName() : error.getMessage());
-            return new DebugUdpTrafficProbeResult("udp_datagram_failed", message, binding);
+            return new DebugUdpTrafficProbeResult(
+                    "udp_datagram_failed", message, binding, nonce, 0, 0);
         } catch (RuntimeException error) {
             String message = "Debug UDP traffic probe failed: "
                     + error.getClass().getSimpleName();
-            return new DebugUdpTrafficProbeResult("udp_datagram_failed", message, binding);
+            return new DebugUdpTrafficProbeResult(
+                    "udp_datagram_failed", message, binding, nonce, 0, 0);
         }
     }
 
     private DebugTrafficProbeResult runDebugTrafficProbeBlockingWithOptions(
             String host, int port, int sourcePort, int timeoutMillis,
-            boolean includeEndpoint, boolean bindToVpn) {
+            boolean includeEndpoint, boolean bindToVpn, String nonce) {
         DebugTrafficProbeBinding binding = bindToVpn
                 ? DebugTrafficProbeBinding.notAttempted()
                 : DebugTrafficProbeBinding.notRequested();
@@ -1197,10 +1444,35 @@ public class DebugControlActivity extends Activity {
                             + (binding.error.isEmpty() ? "" : " (" + binding.error + ")");
                     return new DebugTrafficProbeResult(
                             includeEndpoint ? failure : "tcp_connect_failed",
-                            binding.result, binding.networkHandle, binding.error);
+                            binding.result, binding.networkHandle, binding.error,
+                            nonce, 0, 0);
                 }
             }
             socket.connect(new InetSocketAddress(host, port), timeoutMillis);
+            if (nonce != null && !nonce.isEmpty()) {
+                byte[] request = nonce.getBytes(StandardCharsets.UTF_8);
+                byte[] response = new byte[request.length];
+                int received = 0;
+                socket.setSoTimeout(timeoutMillis);
+                OutputStream out = socket.getOutputStream();
+                out.write(request);
+                out.flush();
+                InputStream in = socket.getInputStream();
+                while (received < response.length) {
+                    int count = in.read(response, received, response.length - received);
+                    if (count < 0) {
+                        break;
+                    }
+                    received += count;
+                }
+                boolean matched = received == request.length
+                        && Arrays.equals(request, response);
+                return new DebugTrafficProbeResult(
+                        matched ? "Debug traffic probe echo matched."
+                                : "Debug traffic probe echo mismatch.",
+                        binding.result, binding.networkHandle, binding.error,
+                        nonce, request.length, received);
+            }
             if (includeEndpoint) {
                 String message = "Debug traffic probe connected to "
                         + host + ":" + port
@@ -1228,7 +1500,8 @@ public class DebugControlActivity extends Activity {
                 message = "tcp_connect_failed";
             }
             return new DebugTrafficProbeResult(
-                    message, binding.result, binding.networkHandle, binding.error);
+                    message, binding.result, binding.networkHandle, binding.error,
+                    nonce, 0, 0);
         } catch (RuntimeException error) {
             String message;
             if (includeEndpoint) {
@@ -1239,7 +1512,8 @@ public class DebugControlActivity extends Activity {
                 message = "tcp_connect_failed";
             }
             return new DebugTrafficProbeResult(
-                    message, binding.result, binding.networkHandle, binding.error);
+                    message, binding.result, binding.networkHandle, binding.error,
+                    nonce, 0, 0);
         }
     }
 
@@ -1285,43 +1559,41 @@ public class DebugControlActivity extends Activity {
                     "ConnectivityManager unavailable");
         }
 
-        final Network network;
+        final Network[] networks;
         try {
-            network = connectivityManager.getActiveNetwork();
+            networks = connectivityManager.getAllNetworks();
         } catch (RuntimeException error) {
             return DebugVpnNetwork.unavailable(
-                    "active_network_lookup_failed", -1L, boundedError(error));
+                    "vpn_network_lookup_failed", -1L, boundedError(error));
         }
-        if (network == null) {
+        if (networks == null || networks.length == 0) {
             return DebugVpnNetwork.unavailable(
-                    "no_active_network", -1L, "active Network is null");
+                    "no_networks", -1L, "ConnectivityManager returned no networks");
         }
-
-        final long networkHandle;
-        try {
-            networkHandle = network.getNetworkHandle();
-        } catch (RuntimeException error) {
-            return DebugVpnNetwork.unavailable(
-                    "network_handle_lookup_failed", -1L, boundedError(error));
+        for (Network network : networks) {
+            if (network == null) {
+                continue;
+            }
+            final long networkHandle;
+            try {
+                networkHandle = network.getNetworkHandle();
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            final NetworkCapabilities capabilities;
+            try {
+                capabilities = connectivityManager.getNetworkCapabilities(network);
+            } catch (RuntimeException ignored) {
+                continue;
+            }
+            if (capabilities != null
+                    && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                return DebugVpnNetwork.available(network, networkHandle);
+            }
         }
-        final NetworkCapabilities capabilities;
-        try {
-            capabilities = connectivityManager.getNetworkCapabilities(network);
-        } catch (RuntimeException error) {
-            return DebugVpnNetwork.unavailable(
-                    "network_capabilities_lookup_failed", networkHandle, boundedError(error));
-        }
-        if (capabilities == null) {
-            return DebugVpnNetwork.unavailable(
-                    "network_capabilities_unavailable", networkHandle,
-                    "active Network capabilities are null");
-        }
-        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-            return DebugVpnNetwork.unavailable(
-                    "active_network_not_vpn", networkHandle,
-                    "active Network has no TRANSPORT_VPN capability");
-        }
-        return DebugVpnNetwork.available(network, networkHandle);
+        return DebugVpnNetwork.unavailable(
+                "vpn_network_not_found", -1L,
+                "no Network has TRANSPORT_VPN capability");
     }
 
     private DebugDownloadProbeResult runDebugDownloadProbeBlocking(
@@ -1389,11 +1661,17 @@ public class DebugControlActivity extends Activity {
                 ? (bindToVpn ? "unknown" : "not_requested") : probeResult.bindResult;
         long bindNetworkHandle = probeResult == null ? -1L : probeResult.bindNetworkHandle;
         String bindError = probeResult == null ? "" : probeResult.bindError;
+        String nonce = probeResult == null ? "" : probeResult.nonce;
+        int requestBytes = probeResult == null ? 0 : probeResult.requestBytes;
+        int responseBytes = probeResult == null ? 0 : probeResult.responseBytes;
         String resultCode = debugTrafficProbeResultCode(result);
         String text = "host=" + propertyValue(host) + "\n"
                 + "port=" + port + "\n"
                 + "sourcePort=" + sourcePort + "\n"
                 + "timeoutMillis=" + timeoutMillis + "\n"
+                + "nonce=" + propertyValue(nonce) + "\n"
+                + "requestBytes=" + requestBytes + "\n"
+                + "responseBytes=" + responseBytes + "\n"
                 + "bindToVpn=" + bindToVpn + "\n"
                 + "bindResult=" + propertyValue(bindResult) + "\n"
                 + "bindNetworkHandle=" + bindNetworkHandle + "\n"
@@ -1406,6 +1684,7 @@ public class DebugControlActivity extends Activity {
         } catch (IOException ignored) {
             // Debug evidence must never change product control behavior.
         }
+        backend.queryService(this);
     }
 
     private void writeDebugUdpTrafficProbeResult(
@@ -1422,10 +1701,16 @@ public class DebugControlActivity extends Activity {
                 ? (bindToVpn ? "unknown" : "not_requested") : probeResult.bindResult;
         long bindNetworkHandle = probeResult == null ? -1L : probeResult.bindNetworkHandle;
         String bindError = probeResult == null ? "" : probeResult.bindError;
+        String nonce = probeResult == null ? "" : probeResult.nonce;
+        int requestBytes = probeResult == null ? 0 : probeResult.requestBytes;
+        int responseBytes = probeResult == null ? 0 : probeResult.responseBytes;
         String text = "host=" + propertyValue(host) + "\n"
                 + "port=" + port + "\n"
                 + "sourcePort=" + sourcePort + "\n"
                 + "timeoutMillis=" + timeoutMillis + "\n"
+                + "nonce=" + propertyValue(nonce) + "\n"
+                + "requestBytes=" + requestBytes + "\n"
+                + "responseBytes=" + responseBytes + "\n"
                 + "bindToVpn=" + bindToVpn + "\n"
                 + "bindResult=" + propertyValue(bindResult) + "\n"
                 + "bindNetworkHandle=" + bindNetworkHandle + "\n"
@@ -1438,6 +1723,52 @@ public class DebugControlActivity extends Activity {
         } catch (IOException ignored) {
             // Debug evidence must never change product control behavior.
         }
+        backend.queryService(this);
+    }
+
+    private void writeDebugTcpListenerResult(
+            String host, int port, int timeoutMillis, String expectedNonce,
+            DebugListenerProbeResult result) {
+        writeDebugListenerResult(DEBUG_TCP_LISTENER_RESULT_PATH, "tcp",
+                host, port, timeoutMillis, expectedNonce, result);
+    }
+
+    private void writeDebugUdpListenerResult(
+            String host, int port, int timeoutMillis, String expectedNonce,
+            DebugListenerProbeResult result) {
+        writeDebugListenerResult(DEBUG_UDP_LISTENER_RESULT_PATH, "udp",
+                host, port, timeoutMillis, expectedNonce, result);
+    }
+
+    private void writeDebugListenerResult(
+            String relativePath, String protocol, String host, int port, int timeoutMillis,
+            String expectedNonce, DebugListenerProbeResult result) {
+        File file = new File(getFilesDir(), relativePath);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            return;
+        }
+        DebugListenerProbeResult safe = result == null
+                ? new DebugListenerProbeResult(
+                protocol + "_listener_unknown", "Debug listener result unavailable.",
+                "", 0, 0, "")
+                : result;
+        String text = "protocol=" + propertyValue(protocol) + "\n"
+                + "host=" + propertyValue(host) + "\n"
+                + "port=" + port + "\n"
+                + "timeoutMillis=" + timeoutMillis + "\n"
+                + "expectedNonce=" + propertyValue(expectedNonce) + "\n"
+                + "remote=" + propertyValue(safe.remote) + "\n"
+                + "requestBytes=" + safe.requestBytes + "\n"
+                + "responseBytes=" + safe.responseBytes + "\n"
+                + "result=" + propertyValue(safe.result) + "\n"
+                + "message=" + propertyValue(safe.message) + "\n";
+        try (FileOutputStream out = new FileOutputStream(file, false)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // Debug evidence must never change product control behavior.
+        }
+        backend.queryService(this);
     }
 
     private void writeDebugDownloadProbeResult(
@@ -1509,6 +1840,14 @@ public class DebugControlActivity extends Activity {
     }
 
     private static String debugTrafficProbeResultCode(String result) {
+        if ("tcp_echo_matched".equals(result)
+                || (result != null && result.startsWith("Debug traffic probe echo matched"))) {
+            return "tcp_echo_matched";
+        }
+        if ("tcp_echo_mismatch".equals(result)
+                || (result != null && result.startsWith("Debug traffic probe echo mismatch"))) {
+            return "tcp_echo_mismatch";
+        }
         if ("tcp_connect_succeeded".equals(result)
                 || (result != null && result.startsWith("Debug traffic probe connected"))) {
             return "tcp_connect_succeeded";
@@ -1531,21 +1870,98 @@ public class DebugControlActivity extends Activity {
         return candidate;
     }
 
-    private String runDebugTrafficListenerBlocking(int port, int timeoutMillis) {
-        try (ServerSocket server = new ServerSocket(port)) {
+    private DebugListenerProbeResult runDebugTrafficListenerBlocking(
+            String host, int port, int timeoutMillis, String expectedNonce) {
+        try (ServerSocket server = new ServerSocket()) {
+            server.setReuseAddress(true);
+            server.bind(new InetSocketAddress(InetAddress.getByName(host), port), 1);
             server.setSoTimeout(timeoutMillis);
             try (Socket socket = server.accept()) {
-                return "Debug traffic listener accepted from "
-                        + socket.getRemoteSocketAddress() + " on port " + port + ".";
+                if (expectedNonce == null || expectedNonce.isEmpty()) {
+                    return new DebugListenerProbeResult(
+                            "tcp_listener_accepted",
+                            "Debug traffic listener accepted from "
+                                    + socket.getRemoteSocketAddress() + " on port "
+                                    + port + ".",
+                            "", 0, 0, String.valueOf(socket.getRemoteSocketAddress()));
+                }
+                socket.setSoTimeout(timeoutMillis);
+                byte[] expected = expectedNonce.getBytes(StandardCharsets.UTF_8);
+                byte[] request = new byte[expected.length];
+                int received = 0;
+                InputStream in = socket.getInputStream();
+                while (received < request.length) {
+                    int count = in.read(request, received, request.length - received);
+                    if (count < 0) {
+                        break;
+                    }
+                    received += count;
+                }
+                OutputStream out = socket.getOutputStream();
+                out.write(request, 0, received);
+                out.flush();
+                boolean matched = received == expected.length
+                        && Arrays.equals(expected, request);
+                return new DebugListenerProbeResult(
+                        matched ? "tcp_echo_matched" : "tcp_echo_mismatch",
+                        matched ? "Debug TCP listener echo matched."
+                                : "Debug TCP listener echo mismatch.",
+                        expectedNonce, received, received,
+                        String.valueOf(socket.getRemoteSocketAddress()));
             }
         } catch (IOException error) {
-            return "Debug traffic listener failed: "
-                    + (error.getMessage() == null
-                    ? error.getClass().getSimpleName()
+            String message = "Debug traffic listener failed: "
+                    + (error.getMessage() == null ? error.getClass().getSimpleName()
                     : error.getMessage());
+            return new DebugListenerProbeResult(
+                    "tcp_listener_failed", message, expectedNonce, 0, 0, "");
         } catch (RuntimeException error) {
-            return "Debug traffic listener failed: "
-                    + error.getClass().getSimpleName();
+            String message = "Debug traffic listener failed: " + error.getClass().getSimpleName();
+            return new DebugListenerProbeResult(
+                    "tcp_listener_failed", message, expectedNonce, 0, 0, "");
+        }
+    }
+
+    private DebugListenerProbeResult runDebugUdpTrafficListenerBlocking(
+            String host, int port, int timeoutMillis, String expectedNonce) {
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(InetAddress.getByName(host), port));
+            socket.setSoTimeout(timeoutMillis);
+            int capacity = expectedNonce == null || expectedNonce.isEmpty()
+                    ? 512 : Math.max(expectedNonce.getBytes(StandardCharsets.UTF_8).length, 1);
+            byte[] request = new byte[capacity];
+            DatagramPacket packet = new DatagramPacket(request, request.length);
+            socket.receive(packet);
+            byte[] response = Arrays.copyOf(packet.getData(), packet.getLength());
+            socket.send(new DatagramPacket(response, response.length,
+                    packet.getAddress(), packet.getPort()));
+            if (expectedNonce == null || expectedNonce.isEmpty()) {
+                return new DebugListenerProbeResult(
+                        "udp_datagram_received",
+                        "Debug UDP listener received and echoed a datagram.",
+                        "", packet.getLength(), response.length,
+                        packet.getAddress().getHostAddress() + ":" + packet.getPort());
+            }
+            byte[] expected = expectedNonce.getBytes(StandardCharsets.UTF_8);
+            boolean matched = packet.getLength() == expected.length
+                    && Arrays.equals(expected, response);
+            return new DebugListenerProbeResult(
+                    matched ? "udp_echo_matched" : "udp_echo_mismatch",
+                    matched ? "Debug UDP listener echo matched."
+                            : "Debug UDP listener echo mismatch.",
+                    expectedNonce, packet.getLength(), response.length,
+                    packet.getAddress().getHostAddress() + ":" + packet.getPort());
+        } catch (IOException error) {
+            String message = "Debug UDP listener failed: "
+                    + (error.getMessage() == null ? error.getClass().getSimpleName()
+                    : error.getMessage());
+            return new DebugListenerProbeResult(
+                    "udp_listener_failed", message, expectedNonce, 0, 0, "");
+        } catch (RuntimeException error) {
+            String message = "Debug UDP listener failed: " + error.getClass().getSimpleName();
+            return new DebugListenerProbeResult(
+                    "udp_listener_failed", message, expectedNonce, 0, 0, "");
         }
     }
 
@@ -1568,6 +1984,17 @@ public class DebugControlActivity extends Activity {
             return fallback;
         }
         return candidate;
+    }
+
+    private String boundedNonce(String candidate) {
+        if (candidate == null) {
+            return "";
+        }
+        String value = candidate.replace('\r', '_').replace('\n', '_');
+        if (value.length() > 128) {
+            return value.substring(0, 128);
+        }
+        return value;
     }
 
     private String formatDebugPolicyProbeResult(
@@ -1863,14 +2290,26 @@ public class DebugControlActivity extends Activity {
         final String bindResult;
         final long bindNetworkHandle;
         final String bindError;
+        final String nonce;
+        final int requestBytes;
+        final int responseBytes;
 
         DebugUdpTrafficProbeResult(String result, String message,
                                    DebugTrafficProbeBinding binding) {
+            this(result, message, binding, "", 0, 0);
+        }
+
+        DebugUdpTrafficProbeResult(String result, String message,
+                                   DebugTrafficProbeBinding binding, String nonce,
+                                   int requestBytes, int responseBytes) {
             this.result = result == null ? "udp_probe_unknown" : result;
             this.message = message == null ? "" : message;
             this.bindResult = binding == null ? "unknown" : binding.result;
             this.bindNetworkHandle = binding == null ? -1L : binding.networkHandle;
             this.bindError = binding == null ? "" : binding.error;
+            this.nonce = nonce == null ? "" : nonce;
+            this.requestBytes = Math.max(0, requestBytes);
+            this.responseBytes = Math.max(0, responseBytes);
         }
     }
 
@@ -1879,13 +2318,45 @@ public class DebugControlActivity extends Activity {
         final String bindResult;
         final long bindNetworkHandle;
         final String bindError;
+        final String nonce;
+        final int requestBytes;
+        final int responseBytes;
 
         DebugTrafficProbeResult(
                 String message, String bindResult, long bindNetworkHandle, String bindError) {
+            this(message, bindResult, bindNetworkHandle, bindError, "", 0, 0);
+        }
+
+        DebugTrafficProbeResult(
+                String message, String bindResult, long bindNetworkHandle, String bindError,
+                String nonce, int requestBytes, int responseBytes) {
             this.message = message;
             this.bindResult = bindResult == null ? "unknown" : bindResult;
             this.bindNetworkHandle = bindNetworkHandle;
             this.bindError = bindError == null ? "" : bindError;
+            this.nonce = nonce == null ? "" : nonce;
+            this.requestBytes = Math.max(0, requestBytes);
+            this.responseBytes = Math.max(0, responseBytes);
+        }
+    }
+
+    private static final class DebugListenerProbeResult {
+        final String result;
+        final String message;
+        final String nonce;
+        final int requestBytes;
+        final int responseBytes;
+        final String remote;
+
+        DebugListenerProbeResult(
+                String result, String message, String nonce, int requestBytes,
+                int responseBytes, String remote) {
+            this.result = result == null ? "listener_unknown" : result;
+            this.message = message == null ? "" : message;
+            this.nonce = nonce == null ? "" : nonce;
+            this.requestBytes = Math.max(0, requestBytes);
+            this.responseBytes = Math.max(0, responseBytes);
+            this.remote = remote == null ? "" : remote;
         }
     }
 

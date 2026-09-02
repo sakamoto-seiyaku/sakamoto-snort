@@ -33,6 +33,7 @@ readonly L4_STORE_PATH="files/product-policy/l4-intent.properties"
 readonly TCP_PROBE_PATH="files/debug/traffic-probe.properties"
 readonly UDP_PROBE_PATH="files/debug/udp-traffic-probe.properties"
 readonly WAIT_ATTEMPTS="${S192_WAIT_ATTEMPTS:-120}"
+readonly VPN_NETWORK_WAIT_ATTEMPTS="${S192_VPN_NETWORK_WAIT_ATTEMPTS:-45}"
 readonly ADB_TIMEOUT_SECONDS="${S192_ADB_COMMAND_TIMEOUT_SECONDS:-20}"
 readonly MATRIX_POLICY_CONTEXT="${S192_NETWORK_CONTEXT:-wifi}"
 
@@ -384,6 +385,71 @@ wait_for_profile_ready() {
   fail_closed "$profile Product Core did not reach running/$adapter"
 }
 
+capture_vpn_connectivity() {
+  local label="$1"
+  adb_target shell dumpsys connectivity \
+    > "$RESULT_DIR/connectivity.${label}.txt" 2>&1 || true
+}
+
+vpn_network_present() {
+  local file="$1"
+  python3 - "$file" "$PACKAGE" "$app_uid" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+package = sys.argv[2]
+uid = sys.argv[3]
+text = path.read_text(encoding="utf-8", errors="replace")
+
+# Keep all checks inside one NetworkAgentInfo block.  Global greps could
+# combine this app's VPN package with another network's tun0 or owner UID.
+for block in re.split(r"(?=NetworkAgentInfo\{)", text):
+    if f"VPN:{package}" not in block:
+        continue
+    if "InterfaceName: tun0" not in block:
+        continue
+    transports = re.search(r"Transports:\s*([A-Z0-9_|]+)", block)
+    if transports is None or "VPN" not in transports.group(1).split("|"):
+        continue
+    if re.search(rf"\bOwnerUid:\s*{re.escape(uid)}\b", block) is None:
+        continue
+    handle = re.search(r"\bhandle\{([0-9]+)\}", block)
+    print(f"networkHandle={handle.group(1) if handle else -1}")
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+wait_for_vpn_network() {
+  local label="$1"
+  local output="$RESULT_DIR/connectivity.${label}.txt"
+  local attempts_dir="$RESULT_DIR/connectivity.${label}.attempts"
+  local attempts_log="$RESULT_DIR/connectivity.${label}.attempts.tsv"
+  local attempt
+  local match
+  mkdir -p "$attempts_dir"
+  : > "$attempts_log"
+  for ((attempt = 1; attempt <= VPN_NETWORK_WAIT_ATTEMPTS; attempt++)); do
+    capture_vpn_connectivity "$label"
+    cp "$output" \
+      "$attempts_dir/attempt-$(printf '%03d' "$attempt").txt" 2>/dev/null || true
+    if match="$(vpn_network_present "$output" 2>/dev/null)"; then
+      printf '%s\t%s\tpresent\t%s\n' \
+        "$attempt" "$(date +%s)" "$match" >> "$attempts_log"
+      kv "${label}.vpn_network_present" true
+      kv "${label}.vpn_network_attempt" "$attempt"
+      kv "${label}.vpn_network_handle" "${match#networkHandle=}"
+      return 0
+    fi
+    printf '%s\t%s\tabsent\n' "$attempt" "$(date +%s)" >> "$attempts_log"
+    sleep 1
+  done
+  kv "${label}.vpn_network_present" false
+  fail_closed "$label did not show app-owned TRANSPORT_VPN/tun0 network for UID $app_uid"
+}
+
 stop_profile() {
   local profile="$1"
   local label="$2"
@@ -418,6 +484,14 @@ clear_product_policy_files() {
   clear_app_file "$MATRIX_STATUS_PATH"
   clear_app_file "$TCP_PROBE_PATH"
   clear_app_file "$UDP_PROBE_PATH"
+}
+
+# RuntimeService stop is delivered through a headless Activity.  Force-stop
+# and settle the control process before the first profile start so a delayed
+# stop intent cannot terminate the new Product Core owner.
+cold_start_control_activity() {
+  adb_target shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
+  sleep 2
 }
 
 case_metadata() {
@@ -478,7 +552,8 @@ wait_for_authoring_count() {
   for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
     read_app_file "$POLICY_BUNDLE_PATH" > "$bundle"
     if grep -Fxq "l4RuleCount=${expected}" "$bundle" \
-        && grep -Fxq 'defaultPass=true' "$bundle"; then
+        && (grep -Fxq 'defaultPass=1' "$bundle" \
+            || grep -Fxq 'defaultPass=true' "$bundle"); then
       return 0
     fi
     sleep 0.5
@@ -561,7 +636,8 @@ if snapshot_hash <= 0:
 identity = need("snapshotIdentity")
 need("gateEntryCount", "0")
 need("l4RuleCount", "4")
-need("defaultPass", "true")
+if props.get("defaultPass") not in ("1", "true"):
+    raise SystemExit(f"defaultPass={props.get('defaultPass')!r}, expected 1/true")
 
 expected = (
     (4, 6, 0, "drop", host4, 32),
@@ -753,6 +829,7 @@ wait_for_probe_result() {
   local expected_nonce="$3"
   local mode="$4"
   local output="$5"
+  local bind_to_vpn="${6:-false}"
   local attempt
   local evidence
   local result
@@ -761,6 +838,15 @@ wait_for_probe_result() {
     printf '%s\n' "$evidence" > "$output"
     if grep -Fxq "nonce=${expected_nonce}" <<<"$evidence" \
         && grep -Fxq "uid=${expected_uid}" <<<"$evidence"; then
+      if [[ "$bind_to_vpn" == true ]]; then
+        if grep -Fxq 'bindResult=vpn_network_not_found' <<<"$evidence"; then
+          return 2
+        fi
+        if ! grep -Fxq 'bindResult=bound' <<<"$evidence"; then
+          sleep 0.5
+          continue
+        fi
+      fi
       result="$(awk -F= '$1 == "result" { print substr($0, 8); exit }' <<<"$evidence")"
       if [[ "$mode" == "allow" && "$path" == "$TCP_PROBE_PATH" \
             && "$result" == "tcp_echo_matched" ]]; then
@@ -936,23 +1022,51 @@ run_tcp_probe() {
   local host_file="$RESULT_DIR/host-${label}.properties"
   local probe_file="$RESULT_DIR/${label}.traffic-probe.properties"
   local status_action="$CASE_ACTION"
-  rm -f "$ready_file" "$host_file"
-  clear_app_file "$TCP_PROBE_PATH"
-  host_tcp_echo_once "$CASE_FAMILY" "$host" "$port" "$nonce" \
-    "$ready_file" "$host_file" &
-  server_pid=$!
-  wait_for_host_ready "$ready_file" \
-    || fail_closed "host TCP endpoint did not become ready (${label})"
-  start_activity --ez debugTraffic true \
-    --es debugTrafficHost "$host" \
-    --ei debugTrafficPort "$port" \
-    --es debugTrafficNonce "$nonce" \
-    --ei debugTrafficTimeoutMillis "$timeout_ms" \
-    --ez debugTrafficBindToVpn "$bind_to_vpn"
-  wait_for_probe_result "$TCP_PROBE_PATH" "$app_uid" "$nonce" "$mode" "$probe_file" \
-    || fail_closed "${label} TCP app probe did not satisfy ${mode}"
-  wait "$server_pid" || true
-  server_pid=""
+  local probe_rc=1
+  local probe_relaunches=0
+  while :; do
+    rm -f "$ready_file" "$host_file"
+    clear_app_file "$TCP_PROBE_PATH"
+    host_tcp_echo_once "$CASE_FAMILY" "$host" "$port" "$nonce" \
+      "$ready_file" "$host_file" &
+    server_pid=$!
+    wait_for_host_ready "$ready_file" \
+      || fail_closed "host TCP endpoint did not become ready (${label})"
+    start_activity --ez debugTraffic true \
+      --es debugTrafficHost "$host" \
+      --ei debugTrafficPort "$port" \
+      --es debugTrafficNonce "$nonce" \
+      --ei debugTrafficTimeoutMillis "$timeout_ms" \
+      --ez debugTrafficBindToVpn "$bind_to_vpn"
+    if wait_for_probe_result "$TCP_PROBE_PATH" "$app_uid" "$nonce" "$mode" \
+        "$probe_file" "$bind_to_vpn"; then
+      probe_rc=0
+    else
+      probe_rc=$?
+    fi
+    if (( probe_rc == 0 )); then
+      wait "$server_pid" || true
+      server_pid=""
+      break
+    fi
+    if [[ "$bind_to_vpn" == true && "$probe_rc" == 2 \
+        && "$probe_relaunches" == 0 ]]; then
+      probe_relaunches=1
+      cp "$probe_file" \
+        "$RESULT_DIR/${label}.bind-retry-1.traffic-probe.properties" \
+        2>/dev/null || true
+      cp "$host_file" \
+        "$RESULT_DIR/${label}.bind-retry-1.host.properties" \
+        2>/dev/null || true
+      kill "$server_pid" >/dev/null 2>&1 || true
+      wait "$server_pid" >/dev/null 2>&1 || true
+      server_pid=""
+      wait_for_vpn_network "${label}-bind-retry"
+      kv "${label}.vpn_probe_relaunched" true
+      continue
+    fi
+    fail_closed "${label} TCP app probe did not satisfy ${mode}"
+  done
   validate_host_result "$host_file" tcp "$mode"
   if [[ "$evaluation" == no_match ]]; then
     status_action=none
@@ -978,24 +1092,52 @@ run_udp_probe() {
   local host_file="$RESULT_DIR/host-${label}.properties"
   local probe_file="$RESULT_DIR/${label}.udp-probe.properties"
   local status_action="$CASE_ACTION"
-  rm -f "$ready_file" "$host_file"
-  clear_app_file "$UDP_PROBE_PATH"
-  host_udp_echo_once "$CASE_FAMILY" "$host" "$port" "$nonce" \
-    "$ready_file" "$host_file" &
-  server_pid=$!
-  wait_for_host_ready "$ready_file" \
-    || fail_closed "host UDP endpoint did not become ready (${label})"
-  start_activity --ez debugUdpTraffic true \
-    --es debugUdpHost "$host" \
-    --ei debugUdpPort "$port" \
-    --es debugUdpNonce "$nonce" \
-    --ez debugUdpExpectReply true \
-    --ez debugTrafficBindToVpn "$bind_to_vpn" \
-    --ei debugUdpTimeoutMillis "$timeout_ms"
-  wait_for_probe_result "$UDP_PROBE_PATH" "$app_uid" "$nonce" "$mode" "$probe_file" \
-    || fail_closed "${label} UDP app probe did not satisfy ${mode}"
-  wait "$server_pid" || true
-  server_pid=""
+  local probe_rc=1
+  local probe_relaunches=0
+  while :; do
+    rm -f "$ready_file" "$host_file"
+    clear_app_file "$UDP_PROBE_PATH"
+    host_udp_echo_once "$CASE_FAMILY" "$host" "$port" "$nonce" \
+      "$ready_file" "$host_file" &
+    server_pid=$!
+    wait_for_host_ready "$ready_file" \
+      || fail_closed "host UDP endpoint did not become ready (${label})"
+    start_activity --ez debugUdpTraffic true \
+      --es debugUdpHost "$host" \
+      --ei debugUdpPort "$port" \
+      --es debugUdpNonce "$nonce" \
+      --ez debugUdpExpectReply true \
+      --ez debugTrafficBindToVpn "$bind_to_vpn" \
+      --ei debugUdpTimeoutMillis "$timeout_ms"
+    if wait_for_probe_result "$UDP_PROBE_PATH" "$app_uid" "$nonce" "$mode" \
+        "$probe_file" "$bind_to_vpn"; then
+      probe_rc=0
+    else
+      probe_rc=$?
+    fi
+    if (( probe_rc == 0 )); then
+      wait "$server_pid" || true
+      server_pid=""
+      break
+    fi
+    if [[ "$bind_to_vpn" == true && "$probe_rc" == 2 \
+        && "$probe_relaunches" == 0 ]]; then
+      probe_relaunches=1
+      cp "$probe_file" \
+        "$RESULT_DIR/${label}.bind-retry-1.udp-probe.properties" \
+        2>/dev/null || true
+      cp "$host_file" \
+        "$RESULT_DIR/${label}.bind-retry-1.host.properties" \
+        2>/dev/null || true
+      kill "$server_pid" >/dev/null 2>&1 || true
+      wait "$server_pid" >/dev/null 2>&1 || true
+      server_pid=""
+      wait_for_vpn_network "${label}-bind-retry"
+      kv "${label}.vpn_probe_relaunched" true
+      continue
+    fi
+    fail_closed "${label} UDP app probe did not satisfy ${mode}"
+  done
   validate_host_result "$host_file" udp "$mode"
   if [[ "$evaluation" == no_match ]]; then
     status_action=none
@@ -1135,6 +1277,8 @@ kv policy_uid "$app_uid"
 
 start_activity --ez runtimeStop true >/dev/null 2>&1 || true
 wait_for_state stopped || true
+cold_start_control_activity
+kv preflight_cold_start_settled true
 clear_product_policy_files
 
 start_activity --ez runtimeStart true --es runtimeProfile root
@@ -1164,6 +1308,7 @@ stop_profile root root_after_restart
 start_activity --ez runtimeStart true --es runtimeProfile vpn
 runtime_started=1
 wait_for_profile_ready vpn vpn-tun-hev-lwip
+wait_for_vpn_network vpn-start
 capture_bundle_identity vpn
 cmp -s "$RESULT_DIR/root.policy-bundle.properties" \
   "$RESULT_DIR/vpn.policy-bundle.properties" \
@@ -1176,6 +1321,7 @@ stop_profile vpn vpn_after_matrix
 start_activity --ez runtimeStart true --es runtimeProfile vpn
 runtime_started=1
 wait_for_profile_ready vpn vpn-tun-hev-lwip
+wait_for_vpn_network vpn-restart
 run_profile_case vpn true 0 -restart
 compare_status_identity vpn_restart_same_identity \
   "$RESULT_DIR/vpn-ipv4-tcp.matrix-status.properties" \

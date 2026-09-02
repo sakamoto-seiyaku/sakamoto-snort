@@ -21,6 +21,7 @@ public final class RuntimeSnapshot {
     public static final String ADAPTER_ROOT_NFQUEUE = "root-nfqueue";
     public static final String ADAPTER_VPN_TUN_FD_COMPAT = "vpn-tun-fd-compat";
     public static final String ADAPTER_VPN_TUN_HEV_LWIP = "vpn-tun-hev-lwip";
+    private static final String PROTECTION_NOT_RUNNING_TEXT = "Protection: not running";
 
     public final String state;
     public final RuntimeProfile profile;
@@ -34,6 +35,8 @@ public final class RuntimeSnapshot {
     public final String coreHealth;
     /** Explicit bounded Adapter state; never inferred from plugin presence. */
     public final String adapterReadiness;
+    /** Product VPP reports this independently of core health. */
+    public final boolean protectionRunning;
     /** Compatibility aliases; values always mirror the separated fields. */
     @Deprecated public final String adapter;
     @Deprecated public final String health;
@@ -50,13 +53,21 @@ public final class RuntimeSnapshot {
                            long generation, long updatedAtMillis) {
         this(state, profile, protocol, version, artifact, abi, health,
                 adapterForRunningProfile(state, profile), errorCode, errorMessage, mayBeActive,
-                pid, generation, updatedAtMillis);
+                pid, generation, updatedAtMillis, false);
     }
 
     public RuntimeSnapshot(String state, RuntimeProfile profile, String protocol, String version,
                            String artifact, String abi, String health, String adapterReadiness,
                            String errorCode, String errorMessage, boolean mayBeActive, long pid,
                            long generation, long updatedAtMillis) {
+        this(state, profile, protocol, version, artifact, abi, health, adapterReadiness,
+                errorCode, errorMessage, mayBeActive, pid, generation, updatedAtMillis, false);
+    }
+
+    RuntimeSnapshot(String state, RuntimeProfile profile, String protocol, String version,
+                    String artifact, String abi, String health, String adapterReadiness,
+                    String errorCode, String errorMessage, boolean mayBeActive, long pid,
+                    long generation, long updatedAtMillis, boolean protectionRunning) {
         this.state = requireState(state);
         this.profile = profile == null ? RuntimeProfile.ROOT : profile;
         this.protocol = text(protocol);
@@ -67,6 +78,7 @@ public final class RuntimeSnapshot {
         this.coreHealth = text(health);
         String adapterValue = text(adapterReadiness);
         this.adapterReadiness = adapterValue.isEmpty() ? ADAPTER_UNAVAILABLE : adapterValue;
+        this.protectionRunning = protectionRunning;
         this.adapter = this.adapterReadiness;
         this.health = this.coreHealth;
         this.errorCode = text(errorCode);
@@ -151,6 +163,17 @@ public final class RuntimeSnapshot {
                 System.currentTimeMillis());
     }
 
+    /** Running Product VPP state derives adapter/protection only from VAPI status. */
+    public static RuntimeSnapshot runningProduct(RuntimeProfile profile, String protocol,
+                                                 String version, String artifact, String abi,
+                                                 String adapterReadiness,
+                                                 boolean protectionRunning, long pid,
+                                                 long generation) {
+        return new RuntimeSnapshot(STATE_RUNNING, profile, protocol, version, artifact, abi,
+                "ok", adapterReadiness, "", "", true, pid, generation,
+                System.currentTimeMillis(), protectionRunning);
+    }
+
     public static RuntimeSnapshot stopping(RuntimeSnapshot current) {
         return new RuntimeSnapshot(STATE_STOPPING, current.profile, current.protocol,
                 current.version, current.artifact, current.abi, "stopping", "", "", true,
@@ -199,6 +222,7 @@ public final class RuntimeSnapshot {
         values.put("abi", abi);
         values.put("coreHealth", coreHealth);
         values.put("adapterReadiness", adapterReadiness);
+        values.put("protectionRunning", Boolean.toString(protectionRunning));
         // Keep migration aliases in the wire projection for old readers.
         values.put("adapter", adapterReadiness);
         values.put("health", coreHealth);
@@ -216,8 +240,13 @@ public final class RuntimeSnapshot {
         result.append("Runtime: ").append(state)
                 .append("\nProfile: ").append(profile.displayName)
                 .append("\nCore health: ").append(coreHealth.isEmpty() ? "unknown" : coreHealth)
-                .append("\nAdapter: ").append(adapterReadiness)
-                .append("\nProtection: not running")
+                .append("\nAdapter: ").append(adapterReadiness);
+        if (protectionRunning) {
+            result.append("\nProtection: running");
+        } else {
+            result.append('\n').append(PROTECTION_NOT_RUNNING_TEXT);
+        }
+        result
                 .append("\nVersion: ").append(version.isEmpty() ? "unknown" : version)
                 .append("\nABI: ").append(abi.isEmpty() ? "unknown" : abi)
                 .append("\nArtifact: ").append(artifact.isEmpty() ? "unknown" : artifact);

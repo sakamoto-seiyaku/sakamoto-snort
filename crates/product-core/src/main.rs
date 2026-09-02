@@ -17,6 +17,19 @@ fn print_status(label: &str, status: &Status) {
     println!("{label}.artifact_id={}", status.artifact_id);
     println!("{label}.api_identity={}", status.api_identity);
     println!("{label}.vpp_revision={}", status.vpp_revision);
+    println!(
+        "{label}.policy_requested_revision={}",
+        status.policy_requested_revision
+    );
+    println!(
+        "{label}.policy_active_revision={}",
+        status.policy_active_revision
+    );
+    println!("{label}.policy_generation={}", status.policy_generation);
+    println!(
+        "{label}.policy_snapshot_identity={}",
+        status.policy_snapshot_identity
+    );
     println!("{label}.error_detail={}", status.error_detail);
 }
 

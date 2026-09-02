@@ -530,29 +530,63 @@ public final class ProductCoreOwner {
         }
     }
 
+    public static long processPid(int status, String output) {
+        if (processState(status, output) != ProcessState.LIVE) {
+            return UNKNOWN_PID;
+        }
+        String marker = "PRODUCT_OWNER_PID=";
+        int start = output.indexOf(marker);
+        if (start < 0) {
+            return UNKNOWN_PID;
+        }
+        int valueStart = start + marker.length();
+        int valueEnd = valueStart;
+        while (valueEnd < output.length() && Character.isDigit(output.charAt(valueEnd))) {
+            valueEnd++;
+        }
+        if (valueEnd == valueStart) {
+            return UNKNOWN_PID;
+        }
+        try {
+            long pid = Long.parseLong(output.substring(valueStart, valueEnd));
+            return pid > 0L ? pid : UNKNOWN_PID;
+        } catch (NumberFormatException error) {
+            return UNKNOWN_PID;
+        }
+    }
+
     /** Build a bounded app-UID scan for an unregistered exact VPP executable. */
     public static String buildGlobalProcessAuditCommand(String executablePath,
                                                         String expectedUid) {
         String executable = absolutePath(executablePath, "Product Core executable path");
         String uid = safeScalar(expectedUid, "Product Core owner UID");
+        String executableName = new File(executable).getName();
         return "set +e; "
                 + "ps_output=$(ps -A -o PID,UID,args 2>/dev/null); ps_status=$?; "
                 + "if [ \"$ps_status\" -ne 0 ]; then "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=ps; exit 125; fi; "
-                + "count=0; "
+                + "count=0; owner_pid=; "
                 + "for pid in $(printf '%s\\n' \"$ps_output\" | awk -v expected_uid="
                 + shellQuote(uid)
+                + " -v executable=" + shellQuote(executable)
+                + " -v executable_name=" + shellQuote(executableName)
                 + " -v audit_pid=\"$$\" '$1 ~ /^[0-9]+$/ && $1 != audit_pid "
                 + "&& $3 != \"ps\" && (expected_uid == \"*\" || $2 == expected_uid) "
-                + "{print $1}'); do "
+                + "{args=$0; sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+/, \"\", args); "
+                + "if (index(args, executable) > 0 || index(args, executable_name) > 0) print $1}'); do "
                 + "proc=/proc/$pid; "
                 + "exe=$(readlink \"$proc/exe\" 2>/dev/null); exe_status=$?; "
                 + "if [ \"$exe_status\" -ne 0 ]; then "
                 + "if [ ! -e \"$proc\" ]; then continue; fi; "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=exe; exit 125; fi; "
-                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
-                + "count=$((count + 1)); done; "
-                + "echo PRODUCT_OWNER_COUNT=$count; exit 0";
+                + "case \"$exe\" in " + shellQuote(executable) + "|*/"
+                + shellQuote(executableName) + "|*/"
+                + shellQuote(executableName + " (deleted)")
+                + ") ;; *) continue ;; esac; "
+                + "count=$((count + 1)); owner_pid=$pid; done; "
+                + "echo PRODUCT_OWNER_COUNT=$count; "
+                + "if [ \"$count\" -eq 1 ]; then echo PRODUCT_OWNER_PID=$owner_pid; fi; "
+                + "exit 0";
     }
 
     /**
@@ -568,33 +602,47 @@ public final class ProductCoreOwner {
         }
         String executable = absolutePath(executablePath, "Product Core executable path");
         String uid = safeScalar(expectedUid, "Product Core owner UID");
+        String executableName = new File(executable).getName();
         String startup = record.runtimePath.substring(0,
                 record.runtimePath.length() - "/runtime".length()) + "/startup.conf";
+        String startupAlias = androidDataPathAlias(startup);
         String ownerEnv = "SAKAMOTO_VPP_OWNER_TOKEN=" + record.token;
         String generationEnv = "SAKAMOTO_PRODUCT_GENERATION=" + record.generation;
         String runtimeEnv = "SAKAMOTO_VPP_RUNTIME_DIR=" + record.runtimePath;
+        String runtimeAliasEnv = "SAKAMOTO_VPP_RUNTIME_DIR="
+                + androidDataPathAlias(record.runtimePath);
         String profileEnv = "SAKAMOTO_RUNTIME_PROFILE=" + record.profile.wireName;
         String socket = shellQuote(record.apiSocket);
         return "set +e; "
                 + "ps_output=$(ps -A -o PID,UID,args 2>/dev/null); ps_status=$?; "
                 + "if [ \"$ps_status\" -ne 0 ]; then "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=ps; exit 125; fi; "
-                + "count=0; "
+                + "count=0; owner_pid=; "
                 + "for pid in $(printf '%s\\n' \"$ps_output\" | awk -v expected_uid="
                 + shellQuote(uid)
+                + " -v executable=" + shellQuote(executable)
+                + " -v executable_name=" + shellQuote(executableName)
+                + " -v startup=" + shellQuote(startup)
+                + " -v startup_alias=" + shellQuote(startupAlias)
                 + " -v audit_pid=\"$$\" '$1 ~ /^[0-9]+$/ && $1 != audit_pid "
                 + "&& $3 != \"ps\" && (expected_uid == \"*\" || $2 == expected_uid) "
-                + "{print $1}'); do "
+                + "{args=$0; sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+/, \"\", args); "
+                + "if (index(args, executable) > 0 || index(args, startup) > 0 "
+                + "|| index(args, startup_alias) > 0 || index(args, executable_name) > 0) print $1}'); do "
                 + "proc=/proc/$pid; "
                 + "exe=$(readlink \"$proc/exe\" 2>/dev/null); exe_status=$?; "
                 + "if [ \"$exe_status\" -ne 0 ]; then "
                 + "if [ ! -e \"$proc\" ]; then continue; fi; "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=exe; exit 125; fi; "
-                + "[ \"$exe\" = " + shellQuote(executable) + " ] || continue; "
+                + "case \"$exe\" in " + shellQuote(executable) + "|*/"
+                + shellQuote(executableName) + "|*/"
+                + shellQuote(executableName + " (deleted)")
+                + ") ;; *) continue ;; esac; "
                 + "cmd=$(tr '\\0' ' ' <\"$proc/cmdline\" 2>/dev/null); cmd_status=$?; "
                 + "if [ \"$cmd_status\" -ne 0 ]; then "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=cmdline; exit 125; fi; "
-                + "case \"$cmd\" in *" + shellQuote(startup) + "*) ;; *) continue ;; esac; "
+                + "case \"$cmd\" in *" + shellQuote(startup) + "*|*"
+                + shellQuote(startupAlias) + "*) ;; *) continue ;; esac; "
                 + "env=$(tr '\\0' '\\n' <\"$proc/environ\" 2>/dev/null); env_status=$?; "
                 + "if [ \"$env_status\" -ne 0 ]; then "
                 + "echo PRODUCT_OWNER_AUDIT_ERROR=environ; exit 125; fi; "
@@ -602,14 +650,18 @@ public final class ProductCoreOwner {
                 + " >/dev/null || { echo PRODUCT_OWNER_IDENTITY_MISMATCH=token; exit 125; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -x -- " + shellQuote(generationEnv)
                 + " >/dev/null || { echo PRODUCT_OWNER_IDENTITY_MISMATCH=generation; exit 125; }; "
-                + "printf '%s\\n' \"$env\" | grep -F -x -- " + shellQuote(runtimeEnv)
-                + " >/dev/null || { echo PRODUCT_OWNER_IDENTITY_MISMATCH=runtime; exit 125; }; "
+                + "{ printf '%s\\n' \"$env\" | grep -F -x -- " + shellQuote(runtimeEnv)
+                + " >/dev/null || printf '%s\\n' \"$env\" | grep -F -x -- "
+                + shellQuote(runtimeAliasEnv)
+                + " >/dev/null; } || { echo PRODUCT_OWNER_IDENTITY_MISMATCH=runtime; exit 125; }; "
                 + "printf '%s\\n' \"$env\" | grep -F -x -- " + shellQuote(profileEnv)
                 + " >/dev/null || { echo PRODUCT_OWNER_IDENTITY_MISMATCH=profile; exit 125; }; "
-                + "count=$((count + 1)); done; "
+                + "count=$((count + 1)); owner_pid=$pid; done; "
                 + "if [ -e " + socket + " ]; then echo PRODUCT_OWNER_SOCKET=present; "
                 + "else echo PRODUCT_OWNER_SOCKET=absent; fi; "
-                + "echo PRODUCT_OWNER_COUNT=$count; exit 0";
+                + "echo PRODUCT_OWNER_COUNT=$count; "
+                + "if [ \"$count\" -eq 1 ]; then echo PRODUCT_OWNER_PID=$owner_pid; fi; "
+                + "exit 0";
     }
 
     private static String absolutePath(String value, String label) {
@@ -629,6 +681,16 @@ public final class ProductCoreOwner {
                 || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0
                 || value.indexOf('=') >= 0) {
             throw new IllegalArgumentException(label + " is invalid");
+        }
+        return value;
+    }
+
+    private static String androidDataPathAlias(String value) {
+        if (value.startsWith("/data/data/")) {
+            return "/data/user/0/" + value.substring("/data/data/".length());
+        }
+        if (value.startsWith("/data/user/0/")) {
+            return "/data/data/" + value.substring("/data/user/0/".length());
         }
         return value;
     }

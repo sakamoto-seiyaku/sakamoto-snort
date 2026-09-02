@@ -6,6 +6,16 @@ set -euo pipefail
 # while the test calls the real VLIB init function registered by the plugin.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
+grep -Fq 'product_core_gate_rule_from_bundle' "$plugin_source"
+grep -Fq 'if (source->ifindex == 0)' "$plugin_source"
+grep -Fq 'destination->ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY' "$plugin_source"
+grep -Fq 'active_gate_count' "$plugin_source"
+if grep -Fq 'gate_claim_count > 1' "$plugin_source"; then
+  echo "typed GateTable handler must not reject multiple Gate entries" >&2
+  exit 1
+fi
+grep -Fq 'pcm->policy_gate_blocked =' "$plugin_source"
 work_dir="$(mktemp -d /tmp/sakamoto-product-plugin-init.XXXXXX)"
 trap 'rm -rf -- "$work_dir"' EXIT
 mkdir -p "$work_dir/vlib" "$work_dir/vlibapi" "$work_dir/vlibmemory" \
@@ -19,8 +29,11 @@ cat >"$work_dir/vlib/vlib.h" <<'EOF'
 
 typedef uint8_t u8;
 typedef uint16_t u16;
+typedef uint32_t u32;
 typedef uint64_t u64;
+typedef int32_t i32;
 typedef struct { int unused; } vlib_main_t;
+typedef struct { int unused; } vlib_buffer_t;
 typedef struct { const char *message; } clib_error_t;
 extern clib_error_t sakamoto_test_error;
 static inline clib_error_t *
@@ -35,9 +48,44 @@ sakamoto_test_error_return (int ignored, const char *format, ...)
 #define clib_memset memset
 #define clib_memcpy memcpy
 #define clib_host_to_net_u64 value_identity_u64
+#define clib_net_to_host_u64 value_identity_u64
 static inline u64 value_identity_u64 (u64 value) { return value; }
 #define VLIB_INIT_FUNCTION(fn) \
   clib_error_t *(*sakamoto_test_init)(vlib_main_t *) = fn
+#endif
+EOF
+cat >"$work_dir/vlib/threads.h" <<'EOF'
+#ifndef SAKAMOTO_TEST_VLIB_THREADS_H
+#define SAKAMOTO_TEST_VLIB_THREADS_H
+#include "vlib.h"
+
+typedef struct {
+  int cpu_id;
+} vlib_worker_thread_t;
+
+typedef struct {
+  u32 n_vlib_mains;
+  u32 main_lcore;
+} vlib_thread_main_t;
+
+extern vlib_worker_thread_t *vlib_worker_threads;
+extern vlib_thread_main_t vlib_thread_main;
+extern unsigned long sakamoto_test_worker_thread_count;
+
+#define vec_len(v) ((v) == 0 ? 0 : sakamoto_test_worker_thread_count)
+
+static inline u32
+vlib_num_workers (void)
+{
+  return vlib_thread_main.n_vlib_mains == 0 ? 0 : vlib_thread_main.n_vlib_mains - 1U;
+}
+
+static inline u32
+vlib_get_worker_thread_index (u32 worker_index)
+{
+  return worker_index + 1U;
+}
+
 #endif
 EOF
 
@@ -88,6 +136,8 @@ cat >"$work_dir/product_core.api_enum.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
 #define VL_API_PRODUCT_CORE_STATUS_REPLY 1
+#define VL_API_PRODUCT_CORE_POLICY_APPLY_REPLY 2
+#define VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY_REPLY 3
 #endif
 EOF
 cat >"$work_dir/product_core.api_types.h" <<'EOF'
@@ -101,18 +151,232 @@ typedef struct {
   u8 core_ready;
   u8 adapter_available;
   u8 protection_running;
+  uint32_t root_nfqueue_queue_id;
+  uint32_t root_nfqueue_queue_last;
+  uint32_t root_nfqueue_lane_count;
+  uint32_t root_nfqueue_ready_lane_mask;
+  uint64_t root_nfqueue_generation;
+  uint64_t root_nfqueue_verdict_attempts;
+  uint64_t root_nfqueue_internal_settlements;
+  uint64_t root_nfqueue_buffer_returns;
+  uint64_t root_nfqueue_origin_local_completions;
+  uint64_t root_nfqueue_origin_remote_completions;
+  uint64_t root_nfqueue_lane0_verdict_attempts;
+  uint64_t root_nfqueue_lane1_verdict_attempts;
+  uint64_t root_nfqueue_input_packets;
+  uint64_t root_nfqueue_output_packets;
+  uint64_t root_nfqueue_ipv4_packets;
+  uint64_t root_nfqueue_ipv6_packets;
+  uint64_t root_nfqueue_tcp_packets;
+  uint64_t root_nfqueue_udp_packets;
+  uint64_t root_nfqueue_uid_known_packets;
+  uint64_t root_nfqueue_uid_unknown_packets;
+  uint32_t root_nfqueue_last_ip_family;
+  uint32_t root_nfqueue_last_protocol;
+  uint32_t root_nfqueue_last_hook;
+  uint32_t root_nfqueue_last_uid_known;
+  uint32_t root_nfqueue_last_uid;
+  uint32_t root_nfqueue_last_queue_id;
+  uint32_t root_nfqueue_last_packet_id;
+  uint64_t root_nfqueue_verdict_succeeded;
+  uint64_t root_nfqueue_verdict_failed_definite;
+  uint64_t root_nfqueue_verdict_outcome_unknown;
+  uint64_t root_nfqueue_ingress_identity_missing;
+  uint64_t root_nfqueue_graph_submit_fail_opens;
+  uint64_t root_nfqueue_non_owner_bypasses;
+  uint64_t root_nfqueue_duplicate_completion_drops;
+  uint64_t root_nfqueue_stale_completion_drops;
+  uint64_t vpn_tun_fd_attached;
+  uint64_t vpn_direct_udp4_socket_attached;
+  uint64_t vpn_direct_udp4_protect_succeeded;
+  uint64_t vpn_direct_udp4_bind_succeeded;
+  uint64_t vpn_tun_ingress_packets;
+  uint64_t vpn_tun_udp4_tun_origin_packets;
+  uint64_t vpn_flow_stack_admissions;
+  uint64_t vpn_direct_udp4_send_succeeded;
+  uint64_t vpn_direct_udp4_transport_failed;
+  uint64_t vpn_flow_stack_return_packets;
+  uint64_t vpn_flow_stack_return_provenance_packets;
+  uint64_t vpn_tun_write_completions;
+  uint64_t vpn_infrastructure_faults;
+  uint64_t vpn_duplicate_or_stale_drops;
+  uint32_t product_graph_worker_count;
+  uint32_t product_graph_flow_domain;
+  uint64_t product_graph_hash_seed;
+  uint32_t product_graph_handoff_credits;
+  uint32_t product_graph_vpp_worker_count;
+  uint32_t product_graph_vpp_main_core;
+  uint32_t product_graph_vpp_worker0_thread_index;
+  uint32_t product_graph_vpp_worker0_core;
+  uint32_t product_graph_vpp_worker1_thread_index;
+  uint32_t product_graph_vpp_worker1_core;
+  uint32_t product_graph_enabled;
+  uint32_t product_graph_accepting;
+  uint32_t product_graph_worker_layout_ready;
+  uint64_t product_graph_obligation_debt;
+  uint64_t product_graph_buffer_debt;
+  uint64_t product_graph_handoff_debt;
+  uint64_t policy_requested_revision;
+  uint64_t policy_active_revision;
+  uint64_t policy_generation;
+  uint64_t policy_snapshot_hash;
+  uint64_t policy_worker0_revision;
+  uint64_t policy_worker1_revision;
+  uint32_t policy_snapshot_empty;
+  uint32_t policy_default_pass;
+  uint32_t policy_gate_claim_count;
+  uint32_t policy_l4_rule_count;
+  uint32_t policy_last_apply_status_code;
+  uint32_t policy_mixed_revision;
+  uint32_t policy_artifact_match;
+  uint32_t policy_generation_match;
+  uint32_t policy_gate_subject_uid;
+  uint32_t policy_gate_network_context;
+  u8 policy_gate_blocked;
+  uint32_t policy_gate_reason_id;
+  uint64_t policy_gate_rule_id;
+  uint64_t policy_drop_records;
+  uint64_t policy_last_drop_revision;
+  uint64_t policy_last_drop_rule_id;
+  uint64_t policy_last_drop_completion_attempts;
+  uint32_t policy_last_drop_uid;
+  uint32_t policy_last_drop_network_context;
+  uint32_t policy_last_drop_reason_id;
+  uint32_t policy_last_drop_verdict;
+  uint32_t policy_last_drop_winner;
+  u8 policy_last_drop_uid_known;
+  uint32_t policy_last_drop_device_direction;
+  uint64_t policy_l4_active_revision;
+  uint64_t policy_l4_rule_id;
+  uint64_t policy_l4_match_records;
+  uint64_t policy_l4_no_match_records;
+  uint64_t policy_l4_last_match_revision;
+  uint64_t policy_l4_last_match_rule_id;
+  uint32_t policy_l4_subject_uid;
+  uint32_t policy_l4_network_context;
+  uint32_t policy_l4_ip_family;
+  uint32_t policy_l4_ip_protocol;
+  uint32_t policy_l4_direction;
+  uint32_t policy_l4_action;
+  uint32_t policy_l4_priority;
+  uint32_t policy_l4_order;
+  uint32_t policy_l4_reason_id;
+  uint32_t policy_l4_last_match_uid;
+  uint32_t policy_l4_last_match_network_context;
+  uint32_t policy_l4_last_match_reason_id;
+  uint32_t policy_l4_last_match_verdict;
+  uint32_t policy_l4_last_match_winner;
+  uint32_t policy_l4_last_match_uid_known;
+  uint32_t policy_l4_last_match_device_direction;
+  uint32_t policy_l4_last_match_action;
+  uint32_t policy_l4_last_evaluation_result;
+  uint32_t policy_l4_last_evaluation_verdict;
+  uint32_t policy_l4_last_evaluation_device_direction;
+  uint32_t policy_l4_view_active;
+  uint32_t policy_l4_view_rule_count;
+  uint32_t policy_l4_view_max_probes;
+  uint32_t policy_l4_view_last_match_winner_rank;
+  uint32_t policy_l4_view_last_match_probes;
+  uint32_t policy_l4_view_last_match_candidate_count;
+  uint32_t policy_l4_view_last_no_match_reason;
+  u64 policy_l4_typed_match_policy_key;
+  u64 policy_l4_typed_match_probe_key;
+  u64 policy_l4_last_evaluation_probe_key;
   u8 artifact_id[96];
   u8 api_identity[96];
   u8 vpp_revision[48];
+  u8 policy_snapshot_identity[96];
 } vl_api_product_core_status_reply_t;
 typedef struct { int unused; } vl_api_product_core_status_t;
+typedef struct {
+  uint64_t generation;
+  uint64_t requested_revision;
+  uint64_t snapshot_hash;
+  u8 snapshot_empty;
+  u8 default_pass;
+  uint32_t gate_claim_count;
+  uint32_t l4_rule_count;
+  uint32_t gate_subject_uid;
+  uint32_t gate_network_context;
+  u8 gate_blocked;
+  uint32_t gate_reason_id;
+  uint64_t gate_rule_id;
+  uint32_t l4_subject_uid;
+  uint32_t l4_network_context;
+  uint32_t l4_ip_family;
+  uint32_t l4_ip_protocol;
+  uint32_t l4_direction;
+  uint32_t l4_action;
+  uint32_t l4_source_prefix_len;
+  uint32_t l4_destination_prefix_len;
+  uint32_t l4_source_port_first;
+  uint32_t l4_source_port_last;
+  uint32_t l4_destination_port_first;
+  uint32_t l4_destination_port_last;
+  uint32_t l4_priority;
+  uint32_t l4_order;
+  uint32_t l4_reason_id;
+  uint32_t l4_reserved;
+  uint64_t l4_rule_id;
+  u8 l4_source_address[16];
+  u8 l4_destination_address[16];
+  u8 snapshot_identity[96];
+} vl_api_product_core_policy_apply_t;
+typedef struct {
+  int32_t retval;
+} vl_api_product_core_policy_apply_reply_t;
+typedef struct __attribute__ ((packed)) {
+  u32 subject_uid;
+  u32 network_context;
+  u32 ifindex;
+  u32 rule_kind;
+  u32 ip_family;
+  u32 ip_protocol;
+  u32 direction;
+  u32 action;
+  u32 enabled;
+  u32 source_prefix_len;
+  u32 destination_prefix_len;
+  u32 source_port_first;
+  u32 source_port_last;
+  u32 destination_port_first;
+  u32 destination_port_last;
+  u32 priority;
+  u32 order;
+  u32 reason_id;
+  u32 reserved;
+  u64 rule_id;
+  u8 source_address[16];
+  u8 destination_address[16];
+} vl_api_product_policy_rule_entry_t;
+typedef struct {
+  u64 generation;
+  u32 abi_version;
+  u32 struct_size;
+  u64 requested_revision;
+  u64 snapshot_hash;
+  u32 gate_entry_count;
+  u32 l4_rule_count;
+  u32 default_pass;
+  u32 reserved;
+  u8 snapshot_identity[96];
+  vl_api_product_policy_rule_entry_t gate_entries[64];
+  vl_api_product_policy_rule_entry_t l4_entries[64];
+} vl_api_product_core_policy_bundle_apply_t;
+typedef struct {
+  int32_t retval;
+} vl_api_product_core_policy_bundle_apply_reply_t;
 #endif
 EOF
 cat >"$work_dir/product_core_identity.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
+#ifndef SAKAMOTO_PRODUCT_ABI_VERSION
 #define SAKAMOTO_PRODUCT_ABI_VERSION 1
+#endif
+#ifndef SAKAMOTO_PRODUCT_API_VERSION
 #define SAKAMOTO_PRODUCT_API_VERSION 1
+#endif
 #define SAKAMOTO_PRODUCT_ARTIFACT_ID "test-artifact"
 #define SAKAMOTO_PRODUCT_API_IDENTITY "test-api"
 #define SAKAMOTO_PRODUCT_MANIFEST_VPP_REVISION "test-revision"
@@ -124,6 +388,8 @@ static u16
 setup_message_id_table (void)
 {
   (void) vl_api_product_core_status_t_handler;
+  (void) vl_api_product_core_policy_apply_t_handler;
+  (void) vl_api_product_core_policy_bundle_apply_t_handler;
   return sakamoto_test_message_id_base;
 }
 EOF
@@ -133,11 +399,210 @@ cat >"$work_dir/harness.c" <<EOF
 #include <stdio.h>
 #include <string.h>
 #include "vlib/vlib.h"
+#include "vlib/threads.h"
+#include "$repo_root/src/product/vpp/product_packet_graph.h"
 
 clib_error_t sakamoto_test_error;
 u16 sakamoto_test_message_id_base;
+vlib_worker_thread_t sakamoto_test_workers[3] = {{0}, {1}, {2}};
+vlib_worker_thread_t *vlib_worker_threads = sakamoto_test_workers;
+vlib_thread_main_t vlib_thread_main = {
+  .n_vlib_mains = 3U,
+  .main_lcore = 0U,
+};
+unsigned long sakamoto_test_worker_thread_count = 3U;
 
 #define SAKAMOTO_PRODUCT_VPP_REVISION "test-revision"
+int
+product_root_nfqueue_adapter_available (void)
+{
+  return 0;
+}
+
+uint32_t
+product_root_nfqueue_adapter_queue_id (void)
+{
+  return 176U;
+}
+
+uint32_t
+product_root_nfqueue_adapter_queue_last (void)
+{
+  return 177U;
+}
+
+uint32_t
+product_root_nfqueue_adapter_lane_count (void)
+{
+  return 2U;
+}
+
+uint32_t
+product_root_nfqueue_adapter_ready_lane_mask (void)
+{
+  return 3U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_generation (void)
+{
+  return 0U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_verdict_attempts (void)
+{
+  return 0U;
+}
+
+uint64_t product_root_nfqueue_adapter_verdict_succeeded (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_verdict_failed_definite (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_verdict_outcome_unknown (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_ingress_identity_missing (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_graph_submit_fail_opens (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_non_owner_bypasses (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_duplicate_completion_drops (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_stale_completion_drops (void) { return 0U; }
+
+uint64_t
+product_root_nfqueue_adapter_internal_settlements (void)
+{
+  return 0U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_buffer_returns (void)
+{
+  return 0U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_origin_local_completions (void)
+{
+  return 0U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_origin_remote_completions (void)
+{
+  return 0U;
+}
+
+uint64_t
+product_root_nfqueue_adapter_lane_verdict_attempts (uint32_t lane_index)
+{
+  (void) lane_index;
+  return 0U;
+}
+
+uint64_t product_root_nfqueue_adapter_input_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_output_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_ipv4_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_ipv6_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_tcp_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_udp_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_uid_known_packets (void) { return 0U; }
+uint64_t product_root_nfqueue_adapter_uid_unknown_packets (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_ip_family (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_protocol (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_hook (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_uid_known (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_uid (void) { return UINT32_MAX; }
+uint32_t product_root_nfqueue_adapter_last_queue_id (void) { return 0U; }
+uint32_t product_root_nfqueue_adapter_last_packet_id (void) { return 0U; }
+
+int
+product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
+{
+  (void) vm;
+  (void) generation;
+  return 0;
+}
+
+int product_vpn_udp4_adapter_available (void) { return 0; }
+int product_vpn_udp4_adapter_protection_running (void) { return 0; }
+uint64_t product_vpn_udp4_adapter_tun_fd_attached (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_direct_socket_attached (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_direct_protect_succeeded (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_direct_bind_succeeded (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_tun_ingress_packets (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_udp4_tun_origin_packets (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_flow_stack_admissions (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_direct_send_succeeded (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_direct_transport_failed (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_flow_stack_return_packets (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_flow_stack_return_provenance_packets (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_tun_write_completions (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_infrastructure_faults (void) { return 0U; }
+uint64_t product_vpn_udp4_adapter_duplicate_or_stale_drops (void) { return 0U; }
+int product_vpn_udp4_adapter_start (vlib_main_t *vm, uint64_t generation)
+{
+  (void) vm;
+  (void) generation;
+  return 0;
+}
+uint32_t product_packet_graph_worker_count (void) { return 2U; }
+uint32_t product_packet_graph_flow_domain (void) { return 7U; }
+uint64_t product_packet_graph_hash_seed (void) { return 0x6f776e65722d3137ULL; }
+uint32_t product_packet_graph_handoff_credits (void) { return 32U; }
+uint32_t product_packet_graph_enabled (void) { return 1U; }
+uint32_t product_packet_graph_accepting (void) { return 1U; }
+uint64_t product_packet_graph_obligation_debt (void) { return 0U; }
+uint64_t product_packet_graph_buffer_debt (void) { return 0U; }
+uint64_t product_packet_graph_handoff_debt (void) { return 0U; }
+void product_packet_graph_publish_gate_policy (
+  const product_packet_graph_gate_policy_t *policy)
+{
+  (void) policy;
+}
+void product_packet_graph_clear_gate_policy (uint64_t revision,
+                                             uint64_t snapshot_hash)
+{
+  (void) revision;
+  (void) snapshot_hash;
+}
+void product_packet_graph_gate_status (product_packet_graph_gate_status_t *status)
+{
+  if (status != NULL)
+    memset (status, 0, sizeof (*status));
+}
+void product_packet_graph_publish_l4_policy (
+  const product_packet_graph_l4_policy_t *policy)
+{
+  (void) policy;
+}
+void product_packet_graph_clear_l4_policy (uint64_t revision,
+                                           uint64_t snapshot_hash)
+{
+  (void) revision;
+  (void) snapshot_hash;
+}
+void product_packet_graph_l4_status (product_packet_graph_l4_status_t *status)
+{
+  if (status != NULL)
+    memset (status, 0, sizeof (*status));
+}
+void product_l4_policy_init (product_l4_policy_view_t *view)
+{
+  if (view != NULL)
+    memset (view, 0, sizeof (*view));
+}
+product_l4_policy_status_t product_l4_policy_compile (
+  product_l4_policy_view_t *view, const product_l4_policy_rule_t *rules,
+  size_t rule_count)
+{
+  (void) rules;
+  (void) rule_count;
+  product_l4_policy_init (view);
+  return PRODUCT_L4_POLICY_STATUS_OK;
+}
+product_packet_result_t product_packet_graph_apply_policy_bundle (
+  const product_packet_graph_policy_bundle_t *bundle)
+{
+  (void) bundle;
+  return PRODUCT_PACKET_OK;
+}
+
 #include "$repo_root/src/product/vpp/product_core_plugin.c"
 
 int

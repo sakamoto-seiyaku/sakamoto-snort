@@ -17,10 +17,27 @@ public final class RuntimeControlBackend {
     }
 
     public StartResult start(Context context, RuntimeProfile profile) {
+        return start(context, profile, null);
+    }
+
+    public StartResult start(Context context, RuntimeProfile profile,
+                             String rootNfqueueFaultMode) {
+        return start(context, profile, rootNfqueueFaultMode, null);
+    }
+
+    public StartResult start(Context context, RuntimeProfile profile,
+                             String rootNfqueueFaultMode, String vpnFaultMode) {
         if (!RuntimeService.notificationsReady(context)) {
             return StartResult.NOTIFICATION_REQUIRED;
         }
         Intent intent = requestIntent(context, RuntimeControlRequest.start(profile));
+        if (rootNfqueueFaultMode != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_ROOT_NFQUEUE_FAULT_MODE,
+                    rootNfqueueFaultMode);
+        }
+        if (vpnFaultMode != null) {
+            intent.putExtra(RuntimeControlProtocol.EXTRA_VPN_FAULT_MODE, vpnFaultMode);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -126,10 +143,56 @@ public final class RuntimeControlBackend {
         context.startService(intent);
     }
 
+    public void applyEmptyPolicy(Context context) {
+        Intent intent = new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_PRODUCT_APPLY_EMPTY_POLICY)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION,
+                        RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION,
+                        RuntimeControlProtocol.ACTION_PRODUCT_APPLY_EMPTY_POLICY)
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_ID,
+                        java.util.UUID.randomUUID().toString())
+                .putExtra(RuntimeControlProtocol.EXTRA_REQUEST_TIME_MILLIS,
+                        SystemClock.elapsedRealtime());
+        context.startService(intent);
+    }
+
     /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
     public void setCleanupFault(Context context, boolean enabled) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());
         intent.putExtra(RuntimeControlProtocol.EXTRA_CLEANUP_FAULT, enabled);
+        context.startService(intent);
+    }
+
+    /** Debug-only seam used by S179 Root NFQUEUE fault/recovery acceptance. */
+    public void setRootNfqueueFaultMode(Context context, String mode) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra(RuntimeControlProtocol.EXTRA_ROOT_NFQUEUE_FAULT_MODE,
+                mode == null ? "" : mode);
+        context.startService(intent);
+    }
+
+    /** Debug-only seam used by S185 VPN fault/recovery acceptance. */
+    public void setVpnFaultMode(Context context, String mode) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra(RuntimeControlProtocol.EXTRA_VPN_FAULT_MODE,
+                mode == null ? "" : mode);
+        context.startService(intent);
+    }
+
+    /** Debug-only seam used by S185 to enter VPN revoke/TUN-close paths. */
+    public void sendVpnFaultEvent(Context context, String event) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra(RuntimeControlProtocol.EXTRA_VPN_FAULT_EVENT,
+                event == null ? "" : event);
+        context.startService(intent);
+    }
+
+    /** Debug-only one-shot fault for the typed Product policy mutation reply. */
+    public void setPolicyMutationFaultMode(Context context, String mode) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra(RuntimeControlProtocol.EXTRA_POLICY_MUTATION_FAULT_MODE,
+                mode == null ? "" : mode);
         context.startService(intent);
     }
 

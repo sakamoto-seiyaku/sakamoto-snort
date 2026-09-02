@@ -1,6 +1,7 @@
 package com.sakamoto.snort.androidruntime;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -9,6 +10,11 @@ public final class AuthoringPolicyCompiler {
     private AuthoringPolicyCompiler() {}
 
     public static CompileResult compilePacketPolicyApply(AuthoringPolicyBundle bundle) {
+        return compilePacketPolicyApply(bundle, false);
+    }
+
+    private static CompileResult compilePacketPolicyApply(AuthoringPolicyBundle bundle,
+                                                           boolean forceNativeBundle) {
         AuthoringPolicyBundle value = bundle == null ? AuthoringPolicyBundle.empty() : bundle;
         if (value.schemaVersion != AuthoringPolicyBundle.SCHEMA_VERSION) {
             return CompileResult.failure("authoring_policy_bundle_unsupported_schema",
@@ -34,9 +40,7 @@ public final class AuthoringPolicyCompiler {
                 subject = new SubjectPolicy(rule.subjectId);
                 subjects.put(rule.subjectId, subject);
             }
-            if (rule.blocked) {
-                subject.blockedRules.add(rule);
-            }
+            subject.networkGateRules.add(rule);
         }
         for (AuthoringPolicyBundle.L4Rule rule : value.l4Rules) {
             if (rule == null) {
@@ -61,14 +65,15 @@ public final class AuthoringPolicyCompiler {
             }
             out.append("{\"linuxUid\":").append(subject.subjectId.uid)
                     .append(",\"uidKnown\":true");
-            if (!subject.blockedRules.isEmpty()) {
+            if (!subject.networkGateRules.isEmpty()) {
                 out.append(",\"networkGate\":{\"rules\":[");
-                for (int i = 0; i < subject.blockedRules.size(); ++i) {
+                for (int i = 0; i < subject.networkGateRules.size(); ++i) {
                     if (i > 0) {
                         out.append(',');
                     }
-                    AuthoringPolicyBundle.NetworkGateRule rule = subject.blockedRules.get(i);
+                    AuthoringPolicyBundle.NetworkGateRule rule = subject.networkGateRules.get(i);
                     out.append("{\"networkContext\":").append(rule.networkContext.wireId)
+                            .append(",\"blocked\":").append(rule.blocked)
                             .append(",\"reasonId\":").append(rule.reasonId)
                             .append(",\"ruleId\":").append(Long.toUnsignedString(rule.ruleId))
                             .append('}');
@@ -86,8 +91,55 @@ public final class AuthoringPolicyCompiler {
             out.append('}');
             firstSubject = false;
         }
-        out.append("]}");
-        return CompileResult.success(out.toString(), value.revision);
+        byte[] nativeBundlePayload = null;
+        long nativeBundleHash = 0L;
+        if (forceNativeBundle || requiresCompleteNativeBundle(value)) {
+            try {
+                nativeBundlePayload = value.toNativeBundlePayload();
+                nativeBundleHash = value.nativeSnapshotHash();
+            } catch (IllegalArgumentException error) {
+                return CompileResult.failure("authoring_policy_bundle_invalid_native_bundle",
+                        error.getMessage() == null ? "native policy bundle is invalid"
+                                : error.getMessage());
+            }
+        }
+        out.append(']');
+        if (nativeBundlePayload != null) {
+            out.append(",\"bundleAbiVersion\":")
+                    .append(AuthoringPolicyBundle.BUNDLE_ABI_VERSION)
+                    .append(",\"bundleSnapshotHash\":\"")
+                    .append(Long.toUnsignedString(nativeBundleHash))
+                    .append('"')
+                    .append(",\"bundlePayload\":\"")
+                    .append(Base64.getEncoder().encodeToString(nativeBundlePayload))
+                    .append('"');
+        } else {
+            // Scalar applies are retained only as an explicitly tagged S191 fallback.
+            out.append(",\"nativeApply\":\"s191-scalar\"");
+        }
+        out.append('}');
+        return CompileResult.success(out.toString(), value.revision, nativeBundlePayload);
+    }
+
+    private static boolean requiresCompleteNativeBundle(AuthoringPolicyBundle value) {
+        return (value.gateEntryCount > 0 && value.l4RuleCount > 0)
+                || value.gateEntryCount > 1 || value.l4RuleCount > 1;
+    }
+
+    /**
+     * Compile a complete Gate + L4 successor for the typed one-shot native
+     * apply path.  The legacy JSON payload remains available to S191 callers;
+     * this method additionally returns the fixed-size native wire payload.
+     */
+    public static CompileResult compilePolicyBundle(AuthoringPolicyBundle bundle) {
+        AuthoringPolicyBundle value = bundle == null ? AuthoringPolicyBundle.empty() : bundle;
+        if (value.isEmpty() && value.revision <= 0L) {
+            // The initial empty authoring state has no successor yet. Native apply still needs
+            // a positive revision, so materialize the first complete empty successor here.
+            value = AuthoringPolicyBundle.restore(1L, value.source, value.gateMatrix,
+                    value.l4Rules, value.protocolRuleCount);
+        }
+        return compilePacketPolicyApply(value, true);
     }
 
     private static void appendL4Rule(StringBuilder out, AuthoringPolicyBundle.L4Rule rule) {
@@ -130,7 +182,7 @@ public final class AuthoringPolicyCompiler {
 
     private static final class SubjectPolicy {
         final ApplicationSubjectId subjectId;
-        final ArrayList<AuthoringPolicyBundle.NetworkGateRule> blockedRules =
+        final ArrayList<AuthoringPolicyBundle.NetworkGateRule> networkGateRules =
                 new ArrayList<>();
         final ArrayList<AuthoringPolicyBundle.L4Rule> l4Rules = new ArrayList<>();
 
@@ -142,25 +194,38 @@ public final class AuthoringPolicyCompiler {
     public static final class CompileResult {
         public final boolean ok;
         public final String applyPayload;
+        public final byte[] nativeBundlePayload;
         public final long revision;
         public final String errorCode;
         public final String errorMessage;
 
         private CompileResult(boolean ok, String applyPayload, long revision, String errorCode,
-                              String errorMessage) {
+                              String errorMessage, byte[] nativeBundlePayload) {
             this.ok = ok;
             this.applyPayload = applyPayload == null ? "" : applyPayload;
+            this.nativeBundlePayload = nativeBundlePayload == null
+                    ? new byte[0] : nativeBundlePayload.clone();
             this.revision = revision;
             this.errorCode = errorCode == null ? "" : errorCode;
             this.errorMessage = errorMessage == null ? "" : errorMessage;
         }
 
         static CompileResult success(String applyPayload, long revision) {
-            return new CompileResult(true, applyPayload, revision, "", "");
+            return new CompileResult(true, applyPayload, revision, "", "", null);
+        }
+
+        static CompileResult success(String applyPayload, long revision,
+                                     byte[] nativeBundlePayload) {
+            return new CompileResult(true, applyPayload, revision, "", "",
+                    nativeBundlePayload);
         }
 
         static CompileResult failure(String errorCode, String errorMessage) {
-            return new CompileResult(false, "", 0L, errorCode, errorMessage);
+            return new CompileResult(false, "", 0L, errorCode, errorMessage, null);
+        }
+
+        public byte[] nativeBundle() {
+            return nativeBundlePayload.clone();
         }
     }
 }

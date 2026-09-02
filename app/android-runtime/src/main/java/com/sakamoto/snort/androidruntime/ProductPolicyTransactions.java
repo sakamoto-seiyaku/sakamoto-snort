@@ -210,7 +210,7 @@ public final class ProductPolicyTransactions {
                     "commit or discard draft changes before apply");
         }
         AuthoringPolicyCompiler.CompileResult compiled =
-                AuthoringPolicyCompiler.compilePacketPolicyApply(committed);
+                AuthoringPolicyCompiler.compilePolicyBundle(committed);
         if (!compiled.ok) {
             return Result.error(compiled.errorCode, compiled.errorMessage);
         }
@@ -221,10 +221,10 @@ public final class ProductPolicyTransactions {
                     applied == null || applied.errorMessage.isEmpty()
                             ? "runtime policy apply failed" : applied.errorMessage);
         }
-        runtimeRevision = committed.revision;
+        runtimeRevision = compiled.revision;
         runtimeSnapshotState = "applied";
-        selectedCheckpointRevision = committed.revision;
-        checkpoints.add(new Checkpoint(committed.revision, committed, compiled.applyPayload));
+        selectedCheckpointRevision = compiled.revision;
+        checkpoints.add(new Checkpoint(compiled.revision, committed, compiled.applyPayload));
         while (checkpoints.size() > MAX_CHECKPOINTS) {
             checkpoints.remove(0);
         }
@@ -248,7 +248,7 @@ public final class ProductPolicyTransactions {
                     "selected checkpoint is not retained");
         }
         AuthoringPolicyCompiler.CompileResult compiled =
-                AuthoringPolicyCompiler.compilePacketPolicyApply(selected.bundle);
+                AuthoringPolicyCompiler.compilePolicyBundle(selected.bundle);
         if (!compiled.ok) {
             return Result.error(compiled.errorCode, compiled.errorMessage);
         }
@@ -262,9 +262,9 @@ public final class ProductPolicyTransactions {
         draft = selected.bundle;
         committed = selected.bundle;
         draftDirty = false;
-        runtimeRevision = selected.revision;
+        runtimeRevision = compiled.revision;
         runtimeSnapshotState = "applied";
-        selectedCheckpointRevision = selected.revision;
+        selectedCheckpointRevision = compiled.revision;
         return Result.ok(Collections.emptyList());
     }
 
