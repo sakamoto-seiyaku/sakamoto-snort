@@ -736,6 +736,66 @@ _Avoid_: making IPRULES enforcement depend on reverse DNS
 
 ### Product Delivery
 
+**Capability-and-Evidence Equivalence**:
+A recovery condition in which the current authority's behavior, state ownership, failure semantics, and resource closure are implemented by product-candidate code and supported by claim-matched Current-head Product Evidence. It does not require source, class, command, test-count, or historical implementation parity.
+_Avoid_: source parity, test-count parity, historical PASS as current acceptance, requiring every evidence layer for every claim
+
+**Current-head Product Evidence**:
+Reproducible evidence produced directly by a current product-candidate revision and its identified artifacts, with an exact claim, environment, command, raw result, validity, claim boundary, and residue outcome. It remains current until a relevant implementation, artifact, contract, or seam changes; a runnable POC still does not become product evidence.
+_Avoid_: latest-commit-only evidence, undocumented PASS, POC rerun as product acceptance, blanket invalidation after unrelated changes
+
+**Product Evidence Stack**:
+The claim-matched recovery model with three execution layers—Host Semantic, Product VPP Graph, and Android Device—and two cross-cutting obligations—Control/Lifecycle and Resource/Residue. The layers complement rather than substitute for one another, while each slice carries only the obligations relevant to its claim.
+_Avoid_: five interchangeable test tiers, Host proof as Android proof, duplicating every semantic vector on-device, all-layers gate for every slice
+
+**Controlled LAN Network Evidence**:
+Deterministic real-Wi-Fi request/response evidence against a controlled LAN endpoint for IPv4/IPv6 and TCP/UDP, used as the blocking network oracle for Root and VPN recovery. Public IPv4 reachability is a later narrow smoke, while public IPv6 is recorded only when the environment provides it and does not replace or block the controlled dual-stack claim.
+_Avoid_: device loopback as underlay proof, public service as deterministic oracle, public IPv6 as a recovery prerequisite, DNS standing in for UDP dataplane evidence, LAN IPv6 as a public-reachability claim
+
+**Recovery Acceptance Card**:
+The smallest per-slice statement of its exact capability claim, required Product Evidence Stack cells, decisive cases and oracle, and explicit non-claims. A slice is accepted only when every required cell has compatible Current-head Product Evidence marked PASS; FAIL blocks the claim, while INVALID and NOT RUN remain evidence gaps.
+_Avoid_: long test plan, implicit done criteria, Host PASS overriding device FAIL, treating INVALID as PASS, mandatory full-stack evidence for every slice
+
+**Mainline Recovery Slice**:
+An architecture-level product-candidate capability increment used as the unit of recovery planning and native blocking. It may contain many small implementation steps and Device-native Micro-validations, remains in the mainline by default, and closes through one coherent Recovery Acceptance Card without turning every test cell or single-machine scheduling constraint into a separate slice.
+_Avoid_: individual code step, individual protocol/family test cell, device scheduling edge as architecture blocking, disposable POC by default, false readiness, end-of-slice-only device testing
+
+**Recovery Microstep**:
+An ordered, single-claim implementation-and-evidence step inside one Mainline Recovery Slice, with a named seam, minimal input/output, decisive oracle, and explicit next unlock. It is recorded in the recovery specification but becomes a separate implementation ticket only when independently grabbable work or a real blocking edge justifies it.
+_Avoid_: architecture slice, automatic Plane issue, unrecorded coding step, device test without a product claim, artificial blocker for single-device scheduling
+
+**VPP-native Mainline Recovery Baseline**:
+The capability-and-evidence level the product must regain from the last active pre-removal mainline, amended by current accepted decisions and bounded POC findings. Rejected routes, archive-only capabilities, historical PASS results, POC source shapes, and experimental constants do not enter it automatically.
+_Avoid_: C++ source parity, archive feature restoration, direct POC import, treating a scoped POC result as product completion
+
+**VPP Foundation Closure**:
+The blocking recovery layer that proves the pinned VPP product runtime can start, carry real dual-stack traffic, stop, fail, and recover under both Root/NFQUEUE and VPN/TUN Runtime Profiles with fixed worker/core placement, bounded resources, and POC-level engineering guardrails. It precedes restoration of richer policy, flow, control, and observability capabilities and is not release certification.
+_Avoid_: full product recovery, one-shot VPP startup smoke, release performance gate, feature-complete dataplane
+
+**Device-native Micro-validation**:
+A smallest device test that proves one observable product fact through real Android, VPP, TUN or NFQUEUE behavior as soon as that fact becomes runnable, without waiting for a whole Module or milestone. Ordinary unit tests merely executed on a phone do not qualify; Host and device evidence remain complementary.
+_Avoid_: device-hosted unit test, end-of-module device batch, one final integration campaign, POC-only smoke
+
+**Android Runtime Supervisor**:
+The Java platform Module that is the sole authority for the active Runtime Profile and its Android/VPP lifecycle. It serializes start, profile switch, stop, and observation; owns permissions, foreground-service state, TUN and privileged resources, artifact launch, generation-safe readiness, and deterministic cleanup. Rust may request lifecycle changes, but neither Rust nor UI owns the resulting platform state.
+_Avoid_: generic reconciliation framework, parallel active profiles, UI-owned lifecycle, PID-only readiness, per-packet Java bridge
+
+**Rust Product Core**:
+The Tauri-independent Rust Module that owns product intent, the single-writer Product Store, immutable policy revisions, stable product status and errors, and the one persistent serialized VAPI control session. Its recovery interface begins with minimal profile lifecycle commands and snapshots; packet bytes and Android resources never cross it.
+_Avoid_: direct UI-to-VAPI, Android types in product policy, per-command reconnect, automatic replay after outcome-unknown mutation, per-packet Rust FFI
+
+**Shared VPP Packet Runtime**:
+The single VPP-native C product dataplane used by both Root/NFQUEUE and VPN/TUN Runtime Profiles. Profile adapters join one bounded worker-owned graph and retain origin-specific completion; control crosses only coarse versioned VAPI and lifecycle seams.
+_Avoid_: C++ compatibility path, imported POC source shape, parallel dataplanes, shared mutable flow ownership, per-packet cross-language control
+
+**VPN Flow Stack**:
+The VPN-only, owner-local C/VPP transport Module that applies HEV/lwIP TCP and UDP semantics after shared VPP admission. It keeps transport PCB/socket state separate from VPP FlowEntry policy state, uses the Android Socket Broker only at underlay socket setup, and returns packets through VPP VPN completion rather than writing TUN directly.
+_Avoid_: second dataplane, direct TUN write, per-packet protect/bind call, policy authority in the flow stack, unbounded reconnect
+
+**Device Evidence Harness**:
+The test-only automation Module that drives real product controls, artifacts, device traffic, and OS/VPP observations to produce Device-native Micro-validation evidence. It carries no runtime authority or product repair logic; Host tests support but do not replace its Root- and VPN-specific device claims.
+_Avoid_: test-only product backdoor, mock acceptance, runtime logic in the harness, inferring one Runtime Profile from the other
+
 **Android L4 Product Release**:
 The first user-complete Android release: mutually exclusive Root/VPN Runtime Profiles, multi-user App-first Control, Wi-Fi/Mobile/VPN Network Gates, advanced per-app IPv4/IPv6 L4 Traffic Rules, bounded activity/statistics, health, recovery, Product UI, help, and release materials.
 _Avoid_: VPP POC milestone, backend-only L4 completion, Linux release

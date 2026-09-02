@@ -7,10 +7,14 @@ by Plane [SAKAMOTO-171](http://192.168.4.22:2080/work/browse/SAKAMOTO-171) and
 [SAKAMOTO-172](http://192.168.4.22:2080/work/browse/SAKAMOTO-172). It is a
 ticket-local clarification, not a general recovery standard.
 
+Current tracker state: Plane marks SAKAMOTO-171 and SAKAMOTO-172 Done as of
+2026-08-30. This file remains the criterion record for that closure; it is not
+evidence for later Root, VPN, packet, policy, network, or performance claims.
+
 SAKAMOTO-171's committed Host Rust/C ABI/VAPI work is supporting implementation
 and fast semantic evidence. It no longer has a separate real-Host-VPP closure
-gate. SAKAMOTO-172 owns the integrated device run below. SAKAMOTO-171 remains
-open until that run passes; a valid SAKAMOTO-172 PASS closes both tickets.
+gate. SAKAMOTO-172 owned the integrated device run below. A valid
+SAKAMOTO-172 PASS closes both tickets.
 
 ## What counts as PASS
 

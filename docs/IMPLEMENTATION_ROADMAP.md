@@ -1,15 +1,16 @@
 # 当前实现 Roadmap（Tooling + 功能主线）
 
-更新时间：2026-08-12
+更新时间：2026-09-02
 状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
 
 > **2026-08-26 reset:** ADR-0008 removed every Snort C++ implementation,
 > host test, NDK/APK daemon artifact, and archive. Any `[DONE]` item below
 > whose executable evidence depends on `libsucre_snortd.so`, `snort-host-tests`,
 > or the former C++ daemon is historical evidence, not a current-head gate.
-> Do not revive it as a C++ compatibility path. The first new implementation
-> work is a VPP-native C Module specification derived from ADR-0006/0007 and
-> OI1--OI5.
+> Do not revive it as a C++ compatibility path. The VPP-native C Module,
+> Rust control plane, and Java RuntimeService baseline is now represented by
+> S170 and S171-S196. S197 completed the active legacy-reference cleanup on
+> 2026-09-02; later work must not treat it as an open runtime path.
 
 ## 0. 阅读指南
 
@@ -80,11 +81,11 @@ Status 口径（全篇统一）：
   - Flow Telemetry：常态观测原始事实层 MVP；前端 Activity 新需求已暴露 raw facts completeness 缺口。
   - Packet diagnostics / legacy Debug Stream：旧 tracked 调试取证链条是 pre-SNORT-10 历史能力；SNORT-10 packet 侧目标为 session-owned Packet Diagnostics / Diagnostic Focus，DNS stream 暂时冻结。
   - Policy Bundle Checkpoints：固定槽位 policy-only snapshot / atomic restore 是 pre-SNORT-10 历史原语；SNORT-10 Authoring Layer 使用 Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot 模型。
-  - NDK r29 root daemon workflow：当前 daemon build/deploy/debug 基线。
+  - NDK r29 VPP stage workflow：当前 VPP-native stage build/deploy/debug 基线。
 
 ### 1.2 功能（Domain + IP + Flow Telemetry）
 
-- 当前 active executable 是 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；以下 Domain+IP、CT、Telemetry 完成项是 `archive/current-head/` 保留的 pre-SNORT-10 历史实现证据，不是当前 active runtime capability。
+- 当前 active executable 是 VPP-native Product Core / RuntimeService baseline；以下 Domain+IP、CT、Telemetry 完成项是 `archive/current-head/` 保留的 pre-SNORT-10 历史实现证据，不是当前 active runtime capability。
 - pre-SNORT-10 current-head 的 Domain+IP“后端融合”（vNext control 平面 + observability 口径 + datapath 接线）曾完成稳定回归；IPv4/IPv6 双栈、L4 conntrack core、DomainPolicy device-wide 命名收敛、DomainRules per-rule observability 均保留为迁移证据。
 - 目标 VPP runtime 已收敛为 per-worker、per-flow single-owner；Root/NFQUEUE 与 VPN/TUN
   Packet Capture Adapter 必须进入统一 flow steering。旧 SNORT-10 的全局共享 CT A++
@@ -166,11 +167,14 @@ archived runtime 或创建孤立的数据面实现任务。
 - [DONE 2026-04-30] Flow Telemetry MVP 已覆盖常态 records 初始原始事实层；前端 Activity 新需求暴露的 ICMP、方向、L4 状态、END/time/verdict/known flags、L3 observation 等 raw facts completeness 缺口进入 3.4 下一轮。
 - [DONE 2026-04-30] Debug Stream explainability 已覆盖 tracked DNS / packet verdict 的历史自包含取证链条；SNORT-10 packet 侧由 Packet Diagnostics / Diagnostic Focus 取代，DNS stream 暂时冻结。
 - [DONE 2026-04-30] Policy Bundle Checkpoints 已覆盖 pre-SNORT-10 后端固定槽位 checkpoint / rollback 原语；SNORT-10 Authoring Layer 以 latest-five Checkpoint / Runtime Snapshot 模型为新目标。
-- [DONE 2026-04-30] NDK r29 root daemon workflow 已成为当前 daemon build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
+- [DONE 2026-04-30] NDK r29 VPP stage workflow 已成为当前 VPP-native stage build/deploy/debug 基线；后续 APK/RuntimeService 集成不再依赖 Android source / Soong daemon 路径。
 - [NOTE] OpenSpec 工作流已归档；新的产品/工程工作在产品计划稳定后进入 Plane。
-- [NOTE] SNORT-10 mainline reconstruction 是当前代码基线：旧 `src/` 已归档为 `archive/current-head/src/`，新 active `src/` 只保留 pre-SNORT-12 daemon/control/NFQUEUE pass-through base；旧 legacy control 与旧 direct mutation surface 不进入 active build。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
+- [NOTE] SNORT-10 mainline reconstruction 是历史迁移基线：旧 `src/` 与 daemon/control/NFQUEUE pass-through base 仅用于解释 ADR-0008 前的证据；当前 active build 由 `src/product` VPP-native C、`crates/product-core` Rust 与 Android Java supervisor 组成。边界见 `docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md`。
 
 ### 3.2 当前主线：Android L4 Product Release
+
+> 本节中的 S12-S31 条目是 ADR-0008 前的历史证据，保留用于追溯，不是 current-head
+> implementation 或 release gate。当前 S170/S171-S196 状态以 Plane 和 recovery dossier 为准。
 
 - [DONE 2026-07-19] SAKAMOTO-12 APK-native daemon packaging handoff：debug APK 已纳入 `build-output/apk-native/lib/arm64-v8a/libsucre_snortd.so`，并完成真机安装、artifact hash 与进程快照验收；release signing/upgrade/rollback 仍未覆盖。
 - [DONE 2026-07-19] SAKAMOTO-12 RuntimeService root launch：由 `${applicationInfo.nativeLibraryDir}/libsucre_snortd.so` 启动 daemon，校验 `HELLO.daemonBuildId/artifactAbi/capabilities`，并以本地 runtime log、PID 文件和 root TERM/KILL 完成停止清理；KernelSU 授权、foreground service、crash/restart policy 仍待独立 POC。
@@ -346,4 +350,4 @@ archived runtime 或创建孤立的数据面实现任务。
 - **C 不拆独立里程碑**：per-rule stats 是 IP 规则引擎的 v1 必需能力（“从一开始就可解释 + 可量化”）；更合理的拆法是：在 IPRULES v1 change 内按任务拆出 “核心判决链路先跑通 → stats/输出口径补齐 → 验收/回归”。
 - **B 已补齐**：它与 IPRULES 基本解耦，当前已落地；剩余工作主要是把过期设计文档状态修正，避免被误读成“未开始”。
 - **D 独立**：perfmetrics 只承载性能健康指标；它在语义上独立于 A/B/C，可在任意时点推进，不改变当前主线优先级。
-- **A/B/C/D 之后的 daemon 主线已收敛到 Flow Telemetry**：前端常态观测不继续扩充 daemon 聚合 counters，而是由 daemon 导出 bounded records，consumer 负责持久化、查询与派生统计。当前后续重点是 consumer / 前端落地，不是继续扩大 daemon records 范围。
+- **A/B/C/D 之后的历史 daemon 主线曾收敛到 Flow Telemetry**：前端常态观测不继续扩充 daemon 聚合 counters，而是由 daemon 导出 bounded records，consumer 负责持久化、查询与派生统计。该段只保留迁移背景；当前后续重点以 VPP Product Core/Rust status 与 Plane 为准。

@@ -1,9 +1,14 @@
 # SNORT-10 Mainline Reconstruction Baseline
 
-Status: implementation baseline for the `snort10-mainline-reconstruction`
-branch, updated 2026-07-19. The clean-mainline source decision remains active;
-the later Conntrack A++ module order is superseded by
+Status: historical migration baseline for the `snort10-mainline-reconstruction`
+branch, updated 2026-07-19. ADR-0008 supersedes its executable/source-shape
+claims; the later Conntrack A++ module order is superseded by
 `PER_WORKER_FLOW_OWNERSHIP.md` and the Android L4 product plan.
+
+> This document is retained for pre-ADR-0008 decision history. It does not
+> describe the current active product source, build target, or release gate;
+> current implementation is VPP-native C Product Core plus Rust control plane
+> and Java RuntimeService as recorded by S170-S196.
 
 This document records the code-shape decision for rebuilding the daemon
 mainline after the SNORT-10 architecture discussion. It does not replace the

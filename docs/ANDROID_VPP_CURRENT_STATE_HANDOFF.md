@@ -1,6 +1,7 @@
 # Android / VPP 当前现状与架构交接
 
-状态：当前权威交接文档；Android/VPP 基线 2026-07-19，handoff POC 决策更新于
+状态：当前权威交接文档；Android/VPP 历史基线 2026-07-19，current-head 更新于
+2026-09-02；handoff POC 决策更新于
 2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12，VPN Direct Egress
 fixed-spec 与 evidence frontier 更新于 2026-08-14。
 
@@ -8,9 +9,25 @@ fixed-spec 与 evidence frontier 更新于 2026-08-14。
 > entire Snort C++ mainline: active daemon/host sources, host tests, NDK/APK
 > daemon artifact, the C++ Flow Stack facade, and the archived source. The
 > historical S55--S71 results are evidence only and are not current-head
-> runnable. Do not import, translate, or use that code as a reference. Android
-> RuntimeService now rejects launch with `c_vpp_mainline_required` until a real
-> VPP-native C product runtime is specified and supplied.
+> runnable. Do not import, translate, or use that code as a reference.
+>
+> **2026-09-02 current-head status:** S170 and the S171-S196 recovery slices
+> now provide the VPP-native product baseline. RuntimeService launches the
+> staged `libvpp_runtime.so` with `libproduct_core_plugin.so`; Product Core is
+> VPP-native C, its control plane is Rust, and Android lifecycle ownership is
+> Java. Current acceptance evidence is recorded in
+> `docs/testing/SAKAMOTO_195_RECOVERY_ACCEPTANCE_DOSSIER.md`. SAKAMOTO-197 has
+> completed the remaining active legacy-reference cleanup; removed paths must
+> not be treated as runtime alternatives.
+>
+> **Post-closure source-review limit:** the Android Root/VPN adapters currently
+> enter the shared parser/policy helpers through the synchronous
+> `product_packet_graph_submit_external()` seam. Host evidence separately proves
+> the VLIB admit/owner/policy/terminal nodes, but the current device evidence
+> does not prove that Adapter traffic is dispatched through those worker nodes
+> or returned on an origin-lane completion frame. Treat that production
+> worker-dispatch claim as unproven until a dedicated architecture slice closes
+> it; this limit does not erase the retained functional device observations.
 
 范围：Android 优先的产品基础、VPP 引入、root/NFQUEUE 与
 VpnService/TUN 两种运行路径。Linux 的实现和功能验证暂缓，除非后续设计决策明确恢复。
@@ -140,7 +157,7 @@ Linux 验证”的旧顺序，已不再代表下一阶段执行方式。`SAKAMOT
 experimental NFQUEUE plugin audit；后续 `SAKAMOTO-72..81` 已把 live-buffer ownership
 POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4 产品切片。
 
-## 2. 一页结论
+## 2. 历史 POC 一页结论（非 current-head）
 
 已经在 Pixel 6a、Android 16/API 36、arm64-v8a 上证明：
 
@@ -152,8 +169,9 @@ POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4
   同时保住了已测 NFQUEUE 和 TUN/HEV 路径。
 - 普通 app UID 可以执行 Rust -> 薄 C ABI shim -> generated VAPI -> VPP binary API，
   app、VPP、HEV 均不调用 `su`。
-- root RuntimeService 可以打包、校验、启动、监督当前 native daemon，并在已测 Android
-  生命周期故障后清理 daemon、control socket 和双栈 NFQUEUE hook。
+- 历史 root RuntimeService 可以打包、校验、启动、监督 native daemon，并在已测 Android
+  生命周期故障后清理 daemon、control socket 和双栈 NFQUEUE hook；这不是当前 Product Core
+  的实现或验收结论。
 - 实验性 VPP `nfqueue_poc` 插件可以在 Android 上完成基础 IPv4/IPv6
   INPUT/OUTPUT verdict 和 queue teardown。
 
@@ -163,12 +181,13 @@ POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4
 - `vpn-lite` 的 VPP/TUN/HEV 普通 app UID harness；
 - 独立 root VPP 加实验性 `nfqueue_poc` 插件。
 
-当前 APK RuntimeService 启动的是 `libsucre_snortd.so`，不是 9.4 MB 的 VPP runtime。
-`SAKAMOTO-32` 则从 root 临时目录直接启动 VPP，没有经过 RuntimeService。VPN harness
-只是 debug shell，不是 Tauri 产品应用。
+历史 APK RuntimeService 曾启动 `libsucre_snortd.so`，不是当前 head 的运行路径。
+`SAKAMOTO-32` 从 root 临时目录直接启动 VPP，VPN harness 只是 debug shell；这些都是
+迁移证据，不代表当前 Tauri/Android 产品实现。
 
-因此当前发版结论是 **No-Go**。剩余问题已经不是“VPP 能不能跑”，而是如何把三套边界
-收敛成一个具有明确进程、权限、Adapter、控制、生命周期和故障语义的产品架构。
+因此当时的发版结论是 **No-Go**。该结论属于 ADR-0008 前的历史快照；当前
+S171-S196 已收敛出 VPP-native Product Core 的进程、权限、Adapter、控制、生命周期和
+故障语义，发布批准仍由最新 recovery dossier 与 Plane gate 决定。
 
 ## 3. 已经对齐的产品方向
 
@@ -198,9 +217,10 @@ POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4
 
 | 区域 | 当前职责 | 成熟度 |
 | --- | --- | --- |
-| `src/main`、`src/control/vnext`、`src/datapath/nfqueue` | active reconstructed root daemon；负责 shutdown、`HELLO`/`RESETALL`/`QUIT`、原生双栈 NFQUEUE hook/listener 和 pass-through verdict。 | active pre-SNORT-12 基线；不是 VPP。 |
-| `src/core/packet`、`src/core/metrics`、`src/app` | mainline reconstruction 后保留的小型基础 helper。 | active helper；没有 active `PacketFacts`、policy、CT、diagnostics 或 telemetry pipeline。 |
-| `archive/current-head/src/` | 旧 feature-rich daemon。 | 迁移参考；禁止整体恢复。 |
+| `src/product`、`src/product/vpp` | VPP-native C Product Core plugin、Packet I/O Adapter、policy/flow entry。 | 当前 active packet-domain 主线。 |
+| `crates/product-core` | Rust control plane / thin FFI boundary。 | 当前 active control-plane 主线；不拥有逐包 buffer。 |
+| `app/android-runtime/src` | Java RuntimeService、Product Core lifecycle、state/control projection。 | 当前 active Android supervisor。 |
+| `archive/current-head/src/` | 旧 feature-rich daemon。 | 历史迁移参考；禁止整体恢复。 |
 | `experiments/vpp-nfq-poc/overlay/` | Android VPP platform overlay、`tun_poc`、`nfqueue_poc`。 | throwaway POC code。 |
 | `experiments/vpp-nfq-poc/android/vpn-lite/` | 包含 VpnService、VPP/HEV child lifecycle、fd broker、JNI/Rust/VAPI probe 和 root RuntimeService 实验的 debug APK。 | 测试 harness；不是产品 app。 |
 | `experiments/vpp-nfq-poc/scripts/` | 可重复的 Android build、stage、deploy、lifecycle、traffic 和 audit harness。 | 证据工具；后续只能选择性迁移。 |
@@ -209,10 +229,10 @@ POC 收口并返回主设计流，但仍不等同于完成 `SAKAMOTO-68` Gate/L4
 | Plane `SAKAMOTO-32` | VPP experimental NFQUEUE plugin audit/hardening。 | Done；历史 audit 证据。 |
 | Plane `SAKAMOTO-72..81` | VPP-native NFQUEUE live-buffer ownership closure POC。 | Done；返回主设计流的 POC 证据，不是产品实现。 |
 
-active daemon 明确停在 SNORT-12 之前。当前 executable 不包含 bounded packet copy、
-`PacketFacts`、policy cache、Conntrack、Traffic Windows、Packet Diagnostics、IPRULES
-Authoring、PerfMetrics、Flow Telemetry 或 DNS/domain policy。接口规格中对应章节是目标契约，
-不是当前 executable 的能力声明。
+历史 pre-SNORT-12 daemon 明确停在 SNORT-12 之前。当前 Product Core executable 不包含
+旧 daemon 的 packet/control facade；当前产品路径由 VPP-native C Adapter、Product Core
+policy/flow entry、Rust control plane 和 Java supervisor 组成。接口规格中超出 S171-S196
+证据的章节仍是目标契约，不是当前 executable 的能力声明。
 
 ## 5. 按演变顺序整理的技术事实
 
@@ -357,7 +377,7 @@ HOLD 已被后续 POC 关闭：
 
 | 问题 | 首次表现 | 当前结果 |
 | --- | --- | --- |
-| APK-native artifact 与 root launch | RuntimeService 打包 `libsucre_snortd.so`，经 KernelSU 启动，并检查 HELLO ABI/build/capabilities。 | debug POC GO。 |
+| APK-native artifact 与 root launch | 历史 RuntimeService 曾打包 `libsucre_snortd.so`，经 KernelSU 启动并检查 HELLO ABI/build/capabilities。 | 历史 debug POC GO；current-head 由 S171-S196 Product Core evidence 取代。 |
 | app force-stop 后 daemon 孤儿化 | 首版 daemon 被 reparent 到 PID 1 后继续运行。 | parent-death guard 与 reparent monitor 现可使其退出；S13 孤儿问题不是当前 blocker。 |
 | parent-death 后 iptables hook 残留 | process/socket 退出，chain 仍在。 | daemon shutdown 与 supervisor cleanup 现可删除双栈 hook；S14 HOLD 被 S15/S22 关闭。 |
 | SIGKILL 无法执行 destructor | daemon/socket 消失，NFQUEUE hook 残留。 | RuntimeService supervisor 观察非预期退出并执行特权 hook cleanup；S17 原始失败由 S22 收口。 |
@@ -376,7 +396,7 @@ permission denial。
 - 这是显式 KernelSU 授权的 debug harness，不是 release root onboarding/permission UX。
 - release signing lineage/key rotation、OEM process management、长 Doze、crash loop/backoff、
   tombstone、interrupted install、data migration 和更多设备均未覆盖。
-- 最重要的是，被监督的 artifact 是当前 daemon。上述 POC 不自动证明 VPP、VPP plugin、
+- 最重要的是，历史被监督的 artifact 是 daemon。上述 POC 不自动证明 VPP、VPP plugin、
   HEV 以及它们组合后的 cleanup order。
 
 主要证据：`ANDROID_POC_EXECUTION_JOURNAL.md` 与 `POC_STATUS.md` 的
@@ -523,9 +543,9 @@ Tauri/Rust 经版本化 shim/VAPI 控制。
 VPP Runtime/Flow Stack native packaging、Android socket/file、root 与 app-UID packaging，以及一个 APK
 如何提供两种 deployment profile。
 
-### Option B：当前 daemon 拥有 ingress，再把 packet 交给 VPP
+### Option B：历史 daemon 拥有 ingress，再把 packet 交给 VPP
 
-现有 root daemon 保留 NFQUEUE/lifecycle ownership，把 packet work 交给独立 VPP process
+历史 root daemon 保留 NFQUEUE/lifecycle ownership，把 packet work 交给独立 VPP process
 或 embedded graph。
 
 优点是保留更多现有 daemon；代价是 packet handoff、copy/backpressure、两个 health
@@ -534,7 +554,7 @@ privilege/isolation 必要性时才应选择。
 
 ### Option C：保留两套独立 dataplane
 
-当前 daemon 继续负责 root/NFQUEUE，VPP 只负责 VpnService/TUN。
+历史 daemon 继续负责 root/NFQUEUE，VPP 只负责 VpnService/TUN。
 
 短期迁移最少，但会复制 policy、parser、metrics、control 和 correctness 工作，也违背
 “基于 VPP 的 Linux/Android 统一基础”目标。它只能是过渡 fallback，不应是默认架构。
@@ -716,7 +736,7 @@ loss、queue occupancy、power、thermal 和 recovery budget。Plane implementat
 - 基础 NFQUEUE ACCEPT/DROP 不代表 experimental plugin 可作为 production Adapter。
 - 通过重启 single-family queue instance 完成双栈 case，不等于 dual-stack/multi-queue
   runtime 成立。
-- RuntimeService 对当前 daemon 的 cleanup 结论，不会自动覆盖 VPP Runtime 或 VPN Userspace Flow Stack。
+- 历史 RuntimeService 对 daemon 的 cleanup 结论，不会自动覆盖 VPP Runtime 或 VPN Userspace Flow Stack。
 - POC direct owner-policy knob 不定义 compiled policy contract。
 - archived daemon 不是实现计划。
 - Linux/Docker 可以辅助 build 和源码诊断，但不能替代当前 Android 功能证据要求。

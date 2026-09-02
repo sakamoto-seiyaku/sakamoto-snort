@@ -1,9 +1,11 @@
 # Android L4 产品计划与 UI 基线
 
-状态：产品目标基线；2026-08-26 ADR-0008 撤除旧 C++ mainline 后，尚无可运行产品实现。
+状态：产品目标与 current-head contract 基线；S171-S196 已交付 VPP-native Product Core
+实现与当前 APK/device evidence，release gate 仍以独立准入条件为准。
 
-> 当前 Android 产品 runtime、C++ daemon、host model 和 APK daemon artifact 已移除。
-> 本文保留产品目标与架构约束，不得把其中历史实现/验收描述当作 current-head 能力；恢复实现只能从新的 VPP-native C Module 开始。
+> ADR-0008 移除的 Android C++ daemon、host model 和 APK daemon artifact 仍然不得恢复、
+> 移植或作为 compatibility fallback。当前 Android RuntimeService 使用 staged
+> `libvpp_runtime.so` 与 `libproduct_core_plugin.so`；历史实现/验收描述必须按历史证据理解。
 
 范围：第一个 Android L4 产品版、第二阶段 libprotoident 阶段性发版，以及两阶段共同使用的
 产品 UI、内容、帮助、发布和社区反馈体系。
@@ -175,7 +177,7 @@ Qosmos/qDPI，也不使用 MAAT，因此不继承这些数字。RFC/IANA 值只�
 例如 IP protocol number、service/port、ALPN token 或 QUIC version，不拼成一个通用 AppID。
 项目维护一份权威、声明式的 Application Protocol Catalog 源文件；每项同时定义项目全局稳定的
 整数 `ApplicationProtocolId` 和小写符号 `ApplicationProtocolKey`，例如 `http`、`dns`、`quic`，
-不携带 `lpi:` 等 provider 前缀。构建时从该文件生成 C++、Rust 和接口 schema 所需的常量与映射，
+不携带 `lpi:` 等 provider 前缀。构建时从该文件生成 C、Rust 和接口 schema 所需的常量与映射，
 避免多个模块手写重复编号。packet path 和内部 Activity record 可直接比较或保存
 `ApplicationProtocolId`；authoring、导入导出、诊断和产品 API 使用可读的
 `ApplicationProtocolKey`，并在 Apply/ingest 边界解析成相同的全局 ID，不再创建

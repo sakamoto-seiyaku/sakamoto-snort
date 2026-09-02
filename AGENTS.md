@@ -16,6 +16,10 @@ Single-context repo; read root/domain docs plus `docs/decisions/` before archite
 ### Android device operations
 
 Use repo-local `./dev/adb` for all Android device and app operations. Do not call Windows `adb.exe` directly or depend on the sibling `sakamoto-app` checkout. Existing device helpers select this wrapper automatically. See `dev/README.md`.
+For KernelSU root acceptance, remember that uninstall/reinstall can reset the
+app's Superuser grant. Confirm or restore the grant in KernelSU Manager before
+treating `root_authorization_required` as a product failure; use `./dev/adb`
+screenshots and UIAutomator XML for the CLI-guided flow.
 
 ### Product implementation boundary
 

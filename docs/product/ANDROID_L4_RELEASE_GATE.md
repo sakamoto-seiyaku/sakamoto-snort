@@ -1,10 +1,11 @@
 # Android L4 Product Release Gate
 
-> **Superseded execution status (2026-08-26, ADR-0008):** this dossier records
+> **Historical execution status (2026-08-26, ADR-0008):** this dossier records
 > evidence for the removed Snort C++ product runtime. Its release commands,
-> device matrices, APK statements, and “Present” rows are historical only. No
-> current Android L4 release candidate exists until the VPP-native C product
-> mainline and replacement acceptance contract are implemented.
+> device matrices, APK statements, and “Present” rows remain historical only.
+> The VPP-native Product Core baseline now exists through S171-S196, but this
+> document is not its release approval; current acceptance is recorded in the
+> S195 recovery dossier and the Plane S196/S197 records.
 
 Status: draft release-gate dossier for SAKAMOTO-59. This document is not a
 release approval. It records the shared Root/VPN release contract, evidence

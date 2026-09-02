@@ -2,8 +2,12 @@
 
 Date: 2026-08-28
 
-This record covers the Host-only seam in SAKAMOTO-171. It does not claim an
-Android, Root, VPN, packet, or network capability.
+This record covers supporting Host evidence produced while implementing
+SAKAMOTO-171. It did not close SAKAMOTO-171 and does not claim an Android,
+Root, VPN, packet, or network capability. Plane marks SAKAMOTO-171 and
+SAKAMOTO-172 Done as of 2026-08-30 after the installed-device sequence in
+[`SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md`](SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md)
+became the Product Spine acceptance owner.
 
 Scope exception: this is a Host-only pre-adapter control spine. It intentionally
 has no packet adapter, Product VPP graph, or VPN Userspace Flow Stack, so its
@@ -34,9 +38,11 @@ official VPP `build-release` target with `BUILD_VPP_RUNTIME=1`; otherwise
 checkout.
 
 The local backup VPP checkout was intentionally not used as an artifact: its
-revision is different and its worktree is dirty. The real VPP artifact build
-therefore remains `NOT RUN` in this environment; no fixture is counted as a
-Product VPP Graph PASS.
+revision is different and its worktree is dirty. The real Host VPP artifact
+build therefore remains `NOT RUN` in this environment; no fixture is counted
+as a real VPP PASS. The 2026-08-28 acceptance clarification removed this as a
+separate Host closure gate and moved the integrated decision to SAKAMOTO-172's
+installed-device run.
 
 Generated/build output is kept out of source tracking: `/target/`,
 `/build-output/`, and the legacy root `product_core.api.c` generator output are
@@ -56,7 +62,7 @@ silently mixed from different installs.
 | Operational artifact/API identity contract | `bash tests/host/product_query_identity_contract.sh` outside the sandbox | PASS (manifest-matching connect/query output accepted; deliberately mismatched API identity rejected) |
 | Production VAPI callback omission | `bash tests/host/product_vapi_callback_contract.sh` | PASS (stub VAPI returned `VAPI_OK` without callback; bridge returned `QUERY_FAILED`; real pinned VPP still not run) |
 | Real VPP/plugin artifact | `tools/product/build-host-artifact.sh` with the exact pinned clean VPP install | NOT RUN (no matching clean install) |
-| Android/device/network | device tests | NOT RUN (explicit non-goal of this ticket) |
+| Android device | combined SAKAMOTO-171/172 installed-product sequence | CLOSED BY SAKAMOTO-172 (Plane Done 2026-08-30; not claimed by this Host record) |
 
 The socket tests use an explicitly named Host semantic fixture transport. The
 fixture is compiled only for Cargo/CTest semantic verification and is guarded
