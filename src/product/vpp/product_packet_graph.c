@@ -3777,7 +3777,22 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
         }
     }
 
-  if (completed && graph->external_completion != 0)
+  if (!completed)
+    {
+      clib_memset (&lease, 0, sizeof (lease));
+      lease.origin_obligation_id = origin_obligation_id;
+      lease.expected_owner = arrival_worker;
+      lease.hints = ingress.hints;
+      lease.terminal_intent = PRODUCT_PACKET_INTENT_PASS_ADAPTER;
+      lease.terminal_count = 1;
+      lease.settled = 1;
+      terminal_intent = PRODUCT_PACKET_INTENT_PASS_ADAPTER;
+      drop_reason = PRODUCT_PACKET_DROP_NONE;
+      clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
+      clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
+    }
+
+  if (graph->external_completion != 0)
     graph->external_completion (vm, buffer_index, &lease,
                                 origin_obligation_id, terminal_intent,
                                 drop_reason,
@@ -3788,7 +3803,7 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
   clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
   clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
 
-  /* Ownership has transferred even if a defensive internal stage failed. */
+  /* Ownership and one Adapter completion are final even on an internal fault. */
   return 1;
 }
 

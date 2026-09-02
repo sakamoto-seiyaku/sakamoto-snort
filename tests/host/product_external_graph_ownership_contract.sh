@@ -56,6 +56,15 @@ if len(rejects) != 1 or rejects[0] > adopt:
 if "return completed;" in submit:
     raise AssertionError("completion state is still exposed as buffer ownership")
 
+if "if (completed && graph->external_completion" in submit:
+    raise AssertionError("an adopted internal-failure path can skip Adapter completion")
+for token in (
+        "if (!completed)",
+        "PRODUCT_PACKET_INTENT_PASS_ADAPTER",
+        "lease.settled = 1"):
+    if token not in submit:
+        raise AssertionError(f"adopted internal failure is not terminalized: {token}")
+
 callback = submit.find("graph->external_completion (")
 if callback < 0 or callback > release:
     raise AssertionError("external callback must observe the live buffer before release")
