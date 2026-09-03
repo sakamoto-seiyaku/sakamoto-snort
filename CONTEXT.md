@@ -124,7 +124,7 @@ _Avoid_: PackageManager-shaped Linux catalog, UI-owned policy identity, exhausti
 
 **Identity Hints**:
 Normalized packet-local evidence offered to the Application Identity Provider, such as UID, tuple, hook, ingress interface, or socket cookie when available. Hints may be incomplete and are not themselves persisted application identity or policy keys.
-_Avoid_: guaranteed application identity, Canonical Flow Key fields, Adapter-specific handles escaping into policy code
+_Avoid_: guaranteed application identity, Canonical Owner Key or Canonical Flow Key fields, Adapter-specific handles escaping into policy code
 
 **ApplicationSubjectId**:
 The persisted tagged logical-application identity referenced by Authoring Policy Bundle bindings. Android uses an `android_uid` variant carrying the complete Linux UID; Linux uses a `linux_app` variant that may map multiple deterministic Execution Identities to one user-managed application. Shared rules and groups do not imply that bindings are portable between variants: cross-platform binding requires an explicit application mapping. Apply compiles the persisted identity to a platform-optimized runtime representation.
@@ -135,7 +135,7 @@ A platform runtime identity used by Application Identity Provider to attribute o
 _Avoid_: policy binding target, fuzzy process-name grouping, permanent parent-process inheritance, Product UI top-level duplicate for every helper process
 
 **Runtime Subject Handle**:
-The compact runtime identifier returned by the Application Identity Provider and consumed by shared policy, activity, and session modules. Persisted platform application identities compile or resolve to handles; the hot path does not compare package names, executable paths, Flatpak IDs, or systemd units. A Runtime Subject Handle never participates in Canonical Flow Key construction or worker selection.
+The compact runtime identifier returned by the Application Identity Provider and consumed by shared policy, activity, and session modules. Persisted platform application identities compile or resolve to handles; the hot path does not compare package names, executable paths, Flatpak IDs, or systemd units. A Runtime Subject Handle never participates in Canonical Owner Key or Canonical Flow Key construction or worker selection.
 _Avoid_: persistent cross-device application ID, process ID, socket cookie, worker ownership key
 
 **Unknown Application**:
@@ -407,7 +407,7 @@ Packet-local facts derived once by the shared VPP packet parser from the origina
 _Avoid_: Host object, per-module parser state, Domain-IP Association facts, NFQUEUE-only facts
 
 **Platform Packet Facts**:
-Packet-local facts normalized by a Packet capture Adapter from its platform event, including available application identity evidence, Linux interface index, NetworkContextId, Device Packet Direction, and VPN Packet Provenance. Availability is explicit; queue, lane, file descriptor, completion identity, Runtime Profile, and speculative deployment domains are not Platform Packet Facts and never select FlowOwner.
+Packet-local facts normalized by a Packet capture Adapter from its platform event, including available application identity evidence, Linux interface index, NetworkContextId, Device Packet Direction, and VPN Packet Provenance. Availability is explicit; queue, lane, file descriptor, completion identity, Runtime Profile, and speculative deployment domains are not Platform Packet Facts and never select ExecutionOwner or FlowOwner.
 _Avoid_: untyped packet hints, zero means unknown, queue as policy fact, VPP sw_if_index as Linux ifindex, Runtime Profile as packet direction, provenance hidden in interface identity
 
 **VPP Packet Validation Outcome**:
@@ -538,8 +538,20 @@ _Avoid_: DPI-specific CT table, telemetry CT table, duplicate flow tables
 The target VPP runtime rule that one worker privately owns the mutable state of one bidirectional flow. Adapter-specific Initial Execution Placement is not ownership. Primary Software Distribution computes the final owner on the ingress execution context and either continues locally or performs one Primary Handoff before owner-sensitive state; Corrective Handoff remains a separate one-shot fault repair.
 _Avoid_: shared authoritative flow table, queue id as owner, INPUT/OUTPUT thread as correctness
 
+**Canonical Owner Key**:
+The direction-independent key used to select an ExecutionOwner for every valid IPv4/IPv6 packet. Its L3 form contains key kind, IP family, terminal IP protocol, and the canonical address pair; its L4-ports form additionally contains the canonical port pair when typed transport ports are available. Unavailable ports are omitted rather than invented as zero-valued flow identity. Complete TCP/UDP packets use the L4-ports form, while other legal protocols and valid L3 packets with unavailable ports use the L3 form. Platform, deployment, direction, queue, interface, UID, Runtime Profile, provenance, CPU, and network-namespace facts never participate.
+_Avoid_: treating every owner key as a five-tuple, zero-port synthetic flow, protocol-free address hash, CPU-aware packet hash, `flow_domain`
+
+**ExecutionOwner**:
+The VPP logical worker selected once from a Canonical Owner Key and the runtime-start-fixed Worker Layout. Every valid IPv4/IPv6 packet has an ExecutionOwner even when it is not eligible for a FlowEntry. The assignment remains stable for the active runtime generation, drives Primary Handoff and Owner Guard, and does not imply transport support or flow-state creation.
+_Avoid_: arrival worker, VLIB thread index, Linux CPU ID, NFQUEUE lane, FlowEntry eligibility, overload spill target
+
+**FlowOwner**:
+The ExecutionOwner of a packet eligible for one bidirectional FlowEntry, currently a complete TCP/UDP packet using the L4-ports Canonical Owner Key. FlowOwner owns that entry and later protocol/session state; other legal protocols may have an ExecutionOwner without acquiring a FlowOwner or FlowEntry.
+_Avoid_: ownerless ICMP/ESP/GRE execution, every packet creates flow state, separate FlowEntry hash-to-worker decision
+
 **Canonical Flow Key**:
-The direction-independent IPv4/IPv6 five-tuple used by one VPP Runtime to select the owner worker and identify one bidirectional flow: IP protocol plus the canonicalized source/destination address-and-port endpoint pair. Complete Linux UID, ApplicationSubjectId, NetworkContextId, Linux interface index, VPP interface index, queue, lane, Runtime Profile, VPN Packet Provenance, and network namespace never participate in this key or its owner hash. Linux v1 runs only in the network namespace that owns its NFQUEUE Adapter; namespace isolation is a deployment boundary rather than a per-packet discriminator.
+The direction-independent IPv4/IPv6 five-tuple that identifies one bidirectional FlowEntry: IP protocol plus the canonicalized source/destination address-and-port endpoint pair. It is the L4-ports form of the Canonical Owner Key for complete TCP/UDP traffic. Complete Linux UID, ApplicationSubjectId, NetworkContextId, Linux interface index, VPP interface index, queue, lane, Runtime Profile, VPN Packet Provenance, CPU, and network namespace never participate. Linux v1 runs only in the network namespace that owns its NFQUEUE Adapter; namespace isolation is a deployment boundary rather than a per-packet discriminator.
 _Avoid_: UID-aware handoff, directional tuple, four-tuple hash that omits IP protocol, queue affinity as flow identity, network namespace discriminator, `flow_domain`
 
 **Device Packet Direction**:
@@ -559,19 +571,23 @@ The Device Packet Direction of the packet that created the FlowEntry, exported a
 _Avoid_: alias for Flow Direction, current packet direction, canonical endpoint orientation
 
 **Canonical Endpoint Orientation**:
-The internal endpoint A/B order produced only to encode the Canonical Flow Key and select a worker consistently. It has no product, policy, orig/reply, client/server, or libprotoident direction meaning.
+The internal endpoint A/B order produced only to encode a Canonical Owner Key and select a worker consistently. L3 keys compare addresses; L4-ports keys compare address-and-port endpoints. It has no product, policy, orig/reply, client/server, or libprotoident direction meaning.
 _Avoid_: packet direction, flow direction, protocol direction, user-visible source/destination role
 
 **Worker Layout**:
-The runtime-start-fixed worker count, Canonical Flow Key mapping, and bounded worker-private flow/session and cache capacities. It remains immutable while packet processing is active.
-_Avoid_: online worker reshard, policy apply changing flow ownership, queue topology as Worker Layout
+The runtime-start-fixed VPP logical worker count, Canonical Owner Key hash/seed mapping, and bounded worker-private flow/session and cache capacities. All launched packet workers participate equally in owner selection. It remains immutable while packet processing is active.
+_Avoid_: online worker reshard, policy apply changing flow ownership, queue topology as Worker Layout, CPU IDs in the owner hash, weighted software RETA
+
+**Worker Placement**:
+The startup-only mapping from ordered VPP logical workers to distinct online Linux CPU IDs. An experimental product setting may let the user choose contiguous or non-contiguous worker CPU IDs; the product validates and applies the selection but does not classify cores, recommend an optimal big/middle/little mix, weight packet distribution, or migrate workers while running. A change requires a clean VPP runtime restart and does not alter Canonical Owner Key semantics.
+_Avoid_: CPU ID as owner identity, automatic heterogeneous-core optimization, live affinity migration, packet-hash weighting
 
 **Initial Execution Placement**:
 The Adapter-selected VPP execution context on which a native Platform I/O Lane first admits an ingress packet. Root maps independent NFQUEUE lanes across VPP ingress workers without a central fan-in; the initial VPN lane starts from one I/O owner. This placement never establishes Flow owner.
 _Avoid_: queue ID as Flow owner, central NFQUEUE gather thread, VPN single-fd topology imposed on Root, policy semantics
 
 **Primary Software Distribution**:
-The normal in-graph owner selection performed on the packet's Initial Execution Placement using the Canonical Flow Key and fixed Worker Layout. If the selected owner is the current worker, processing continues locally with no enqueue; otherwise exactly one Primary Handoff moves the buffer index and side metadata to that owner before owner-sensitive state. Root and VPN share this OwnerSelector despite different ingress topology.
+The normal in-graph owner selection performed on the packet's Initial Execution Placement using the Canonical Owner Key and fixed Worker Layout. If the ExecutionOwner is the current worker, processing continues locally with no enqueue; otherwise exactly one Primary Handoff moves the buffer index and side metadata to that owner before owner-sensitive state. Root and VPN share this OwnerSelector despite different ingress topology.
 _Avoid_: queue ID as owner, kernel queue-balance as owner selection, central fan-in, packet-byte movement, Corrective Handoff
 
 **Corrective Handoff**:
@@ -579,7 +595,7 @@ The single permitted repair when a packet reaches a worker other than the owner 
 _Avoid_: normal dispatch, repeated redirect loop, Adapter completion routing, fragment owner transition
 
 **Fragment Steering**:
-The exceptional pre-policy path that co-locates all fragments of one IP datagram for bounded reassembly, then delivers the reconstructed packet to the owner selected by its Canonical Flow Key. Fragment identity is temporary reassembly state and never becomes FlowEntry identity. Protocol-required reassembly is an explicit bounded exception to the VPP Packet Byte-Movement Contract and has Packet Byte Mutation Authority; ordinary fragment steering and worker handoff still move buffer indexes rather than copying packet bytes. Malformed, conflict, timeout, or capacity failure follows the inspected VPP reassembly behavior: runtime-drop every retained packet obligation with no Policy Verdict.
+The exceptional pre-policy path that co-locates all fragments of one IP datagram for bounded reassembly, then delivers the reconstructed packet to the ExecutionOwner selected by its Canonical Owner Key. Fragment identity is temporary reassembly state and never becomes FlowEntry identity. Protocol-required reassembly is an explicit bounded exception to the VPP Packet Byte-Movement Contract and has Packet Byte Mutation Authority; ordinary fragment steering and worker handoff still move buffer indexes rather than copying packet bytes. Malformed, conflict, timeout, or capacity failure follows the inspected VPP reassembly behavior: runtime-drop every retained packet obligation with no Policy Verdict.
 _Avoid_: treating non-initial fragments as if they contain ports, UID-based fragment dispatch, fragment-keyed FlowEntry, fail-open fragment bypass, reporting reassembly failure as policy drop
 
 **FlowEntry**:
@@ -599,7 +615,7 @@ The packet parser classification for known L4, legal other terminal protocol, fr
 _Avoid_: overloading `protocol=other` to mean every invalid or unavailable L4 case
 
 **NFQUEUE ingress topology**:
-The Packet capture Adapter's runtime-start-fixed set of NFQUEUE queues and native Platform I/O Lanes. Connection-stable kernel `queue-balance` distributes initial receive work without a central gather point, while each queue remains exclusively owned for receive and verdict by one origin lane. Queue identity selects only Initial Execution Placement; every packet still uses the Canonical Flow Key and Worker Layout to select its FlowOwner. Queue count and lane mapping are measured capacity choices that change only across runtime restart and queue-range reconstruction.
+The Packet capture Adapter's runtime-start-fixed set of NFQUEUE queues and native Platform I/O Lanes. Connection-stable kernel `queue-balance` distributes initial receive work without a central gather point, while each queue remains exclusively owned for receive and verdict by one origin lane. Queue identity selects only Initial Execution Placement; every valid IP packet still uses the Canonical Owner Key and Worker Layout to select its ExecutionOwner. Queue count and lane mapping are measured capacity choices that change only across runtime restart and queue-range reconstruction.
 _Avoid_: direction inferred from lane identity, Rust packet lane, shared NFQUEUE handle, queue ID as Flow owner, queue-balance as a correctness guarantee, fixed POC queue count as product contract
 
 **Adapter I/O Topology**:
@@ -611,7 +627,7 @@ The VPP-native Platform I/O Lane that admitted a packet and exclusively owns its
 _Avoid_: FlowOwner, shared completion handle, queue ID as canonical owner, cross-worker verdict
 
 **Canonical Return**:
-The bounded completion route from a remote canonical FlowOwner back to the Origin Adapter Lane after policy/runtime processing. It carries the original live buffer identity and terminal intent without copying packet bytes and is Adapter completion routing rather than Primary or Corrective Handoff.
+The bounded completion route from a remote ExecutionOwner back to the Origin Adapter Lane after policy/runtime processing. It carries the original live buffer identity and terminal intent without copying packet bytes and is Adapter completion routing rather than Primary or Corrective Handoff.
 _Avoid_: shared-TX, direct remote verdict, second packet buffer, another flow redistribution, unbounded retry
 
 **NFQUEUE fail-open fault policy**:

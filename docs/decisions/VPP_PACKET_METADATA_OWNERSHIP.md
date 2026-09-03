@@ -10,7 +10,7 @@
 metadata ownership 与 parse-once 的设计证据，不构成当前内存布局或容量基线。
 
 未来路由器形态需要独立的部署范围、buffer-pool 内存、cache footprint、接口拓扑与吞吐证据；
-当前实现不为它预留每包字段，也不把假想部署维度加入 Canonical Flow Key。
+当前实现不为它预留每包字段，也不把假想部署维度加入 Canonical Owner Key 或 Canonical Flow Key。
 
 ## Semantic ownership
 
@@ -19,11 +19,12 @@ metadata ownership 与 parse-once 的设计证据，不构成当前内存布局�
 - `PacketFacts`：共享 VPP parser 从完整 L3 packet 一次解析得到的事实；
 - `Platform Packet Facts`：Adapter 从平台事件归一化的 UID evidence、Linux ifindex、
   NetworkContextId、Device Packet Direction 与 VPN Packet Provenance；
-- `FlowAssignment`：Canonical FlowOwner、generation 与 bounded handoff state；
+- `OwnerAssignment`：Canonical Owner Key、ExecutionOwner、generation 与 bounded handoff state；完整
+  TCP/UDP 的 ExecutionOwner 同时是其 FlowOwner；
 - `AdapterObligation`：返回 Origin Adapter Lane 的 opaque completion obligation。
 
 NFQUEUE queue、lane、fd、packet ID 和 queue generation 留在 Adapter completion ownership 中。
-它们不进入 PacketFacts、policy matcher、Canonical Flow Key 或 Owner Selector。Runtime Profile
+它们不进入 PacketFacts、policy matcher、Canonical Owner Key、Canonical Flow Key 或 Owner Selector。Runtime Profile
 不是 packet direction；VPN provenance 不是 flow direction；Linux ifindex 与 VPP `sw_if_index`
 不是同一标识。
 
@@ -42,7 +43,7 @@ Linux ifindex 只来自 `LOCAL_IN` 的 `NFQA_IFINDEX_INDEV` 或 `LOCAL_OUT` 的
   Facts；handoff 只移动 buffer index 和这些 inline facts；
 - 进入 full reassembly 时，VPP 拥有 `vnet_buffer_opaque_t` 的 IP reassembly union。仍需存活的
   Platform Packet Facts 必须先进入 bounded fragment envelope，重组完成后恢复，再进入最终
-  Canonical FlowOwner、Network Gate、L4 policy 与 FlowEntry；
+  ExecutionOwner、Network Gate、L4 policy 与可选 FlowEntry；
 - 任何 node 若使用同一区域的其它 VPP overlay，必须在 wiring review 中被禁止或建立显式
   save/restore transition；静态结构体相等不证明跨 subgraph lifetime 安全；
 - 当前不扩展 `vlib_buffer_t`，不新增 `opaque3`，不使用 packet exdata、每包 heap allocation或

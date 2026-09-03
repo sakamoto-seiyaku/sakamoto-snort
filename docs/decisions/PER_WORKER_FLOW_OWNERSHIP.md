@@ -1,42 +1,57 @@
 # Per-worker single-owner flow runtime
 
-状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04，namespace discriminator 与 metadata 边界更新于 2026-09-04。
+状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04，Canonical Owner Key、namespace discriminator、metadata 与 Worker Placement 边界更新于 2026-09-04。
 
-Sakamoto 的目标 VPP dataplane 使用 per-worker、per-flow single-owner 模型：Root/NFQUEUE
-与 VPN/TUN Packet Capture Adapter 在进入需要 flow state 的 worker graph 前执行稳定分流，
-同一双向 flow 的 `FlowEntry`、后续 protocol identification、Conntrack 和 stream state 由
-一个 worker 私有拥有。选择该模型是为了参考已验证的 VPP/session-manager 架构，避免共享
+Sakamoto 的目标 VPP dataplane 使用 per-worker single-owner execution 与 per-flow single-owner state：
+Root/NFQUEUE 与 VPN/TUN Packet Capture Adapter 对每个合法 IPv4/IPv6 packet 执行稳定分流，
+得到一个 VPP logical `ExecutionOwner`。其中完整 TCP/UDP packet 的 ExecutionOwner 同时是其
+`FlowOwner`；同一双向 flow 的 `FlowEntry`、后续 protocol identification、Conntrack 和 stream
+state 由该 worker 私有拥有。其他合法协议仍有稳定 ExecutionOwner，但不会因此伪造端口或创建
+TCP/UDP FlowEntry。选择该模型是为了参考已验证的 VPP/session-manager 架构，避免共享
 authoritative flow table 的跨 worker update、锁和 cache-line ownership 成为长期基础。
 
-普通 IPv4/IPv6 报文只用 direction-independent Canonical Flow Key 选择 worker：IP protocol
-加 canonicalized source/destination address-and-port endpoint pair，即完整五元组。complete Linux
-UID、Android user/profile、Network Gate、interface、capture queue 和 Root/VPN Runtime Profile
-都不进入 handoff hash，也不进入 FlowEntry identity。
+Owner Selector 只使用 direction-independent Canonical Owner Key：L3 形式包含 key kind、IP
+family、terminal IP protocol 和 canonical address pair；当 typed transport ports 可用时，L4-ports
+形式再包含 canonical port pair。首版完整 TCP/UDP 使用 L4-ports，其他合法协议或 valid L3 with
+unavailable ports 使用 L3。端口不可用是显式 key shape，不能伪造为端口 0 的五元组。Canonical
+Flow Key 是完整 TCP/UDP 使用的 L4-ports Canonical Owner Key，并继续作为 FlowEntry identity。
+complete Linux UID、Android user/profile、Network Gate、interface、capture queue、CPU 和 Root/VPN
+Runtime Profile 都不进入 handoff hash，也不进入 FlowEntry identity。
 
 当前 Android 与 Linux 本地端点的一个 VPP Runtime 只处理其 Adapter 所在网络命名空间可见的
-流量，因此 Canonical Flow Key 和 Owner Selector 不包含额外 numeric `flow_domain`。Linux
+流量，因此 Canonical Owner Key、Canonical Flow Key 和 Owner Selector 不包含额外 numeric
+`flow_domain`。Linux
 network namespace 是内核隔离和部署边界，不是 Root NFQUEUE packet 上需要再次区分的字段；
 未来若产品明确运行多个 namespace，应先确定相应的 runtime/Adapter 拓扑，而不是现在把假想
 namespace、网卡、queue 或 AF_XDP lane 混入五元组或 owner hash。
 
-Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向。Adapter 同时提供设备相对的
+Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向；L3 key 比较 address，L4-ports
+key 比较 address-and-port endpoint。OwnerAssignment 可保留 source 是否为 endpoint A，但该字段
+也不定义语义方向。Adapter 同时提供设备相对的
 `INPUT/OUTPUT`；FlowEntry 创建包独立定义 flow-relative `ORIG`，反向 packet 为 `REPLY`，并保存
 创建包的 device direction 为 `flowOriginDir`。后续 libprotoident 使用 `ORIG/REPLY`，不是设备
 方向或 endpoint 字典序。Gate/L4 之前被丢弃的 packet 没有 FlowEntry，因此没有 flow direction。
 
-Worker Layout 在 runtime 启动、接收流量之前一次性确定：worker 数量、Canonical Flow Key 到
-worker 的映射、每个 worker 的 flow/session pool，以及 worker-private packet/cache 区域的
-容量在运行期保持固定。Policy Apply 不改变 Worker Layout；第一版不支持在线增加 worker、
-修改映射或把存量 FlowEntry reshard 到其他 worker。
+Worker Layout 在 runtime 启动、接收流量之前一次性确定：VPP logical worker 数量、Canonical
+Owner Key hash/seed 到 worker 的等权映射、每个 worker 的 flow/session pool，以及 worker-private
+packet/cache 区域容量在运行期保持固定。Policy Apply 不改变 Worker Layout；第一版不支持在线
+增加 worker、修改 owner mapping 或把存量 FlowEntry reshard 到其他 worker。
+
+Worker Placement 与 Worker Layout 分离。实验性产品设置允许用户在启动前选择每个 VPP worker
+使用的 distinct online Linux CPU ID，CPU 可以连续或不连续；VPP runtime 据此生成并验证
+`corelist-workers`。产品只提供选择、校验、启动和实际 affinity 证据，不自动分类大小核、不推荐
+最优组合、不做加权分流或 live migration。变更 placement 必须 clean restart；CPU ID、CPU 类型与
+placement 顺序不进入 Canonical Owner Key 或 Owner Selector。
 
 Root/NFQUEUE 与 VPN/TUN 都必须经过同一个 Primary Software Distribution，但 Adapter 的
 Initial Execution Placement 可以不同。VPP-native Root Adapter 将多个 NFQUEUE queue lane
 直接分摊到 ingress execution contexts，不先汇聚到 main thread；VPN 受单一 TUN fd 限制，先由
 一个 native Platform I/O Lane 接收。
 该初始位置只提供 receive parallelism，不是 Flow owner。软件分流器在当前 ingress context 上从
-Canonical Flow Key 计算最终 owner：命中当前 worker 时原地继续，否则只移动 buffer index 与
-side metadata，执行一次 Primary Handoff。由于 Canonical Flow Key 与 Worker Layout 都是
-direction-independent 且固定的，同一 flow 的正反包最终进入同一 owner 是正确性保证，不是
+Canonical Owner Key 计算最终 ExecutionOwner：命中当前 worker 时原地继续，否则只移动 buffer
+index 与 side metadata，执行一次 Primary Handoff。由于 Canonical Owner Key 与 Worker Layout
+都是 direction-independent 且固定的，同一 flow 的正反包以及其他协议的对称地址 pair 最终进入
+同一 owner 是正确性保证，不是
 kernel queue affinity 的 best-effort 结果。
 
 每个 owner-sensitive worker graph 在任何 worker-private counter、cache、ActivityAccumulator、
@@ -46,8 +61,9 @@ FlowEntry 或 session state 更新前执行 Owner Guard：
 2. 不一致时只允许一次 Corrective Handoff，直接投递计算出的 owner；
 3. 纠偏后的报文重新校验仍不一致时立即 `DROP`，记录 fault reason/counter，不继续跳转。
 
-Primary Software Distribution 与 Owner Guard 必须使用同一个 Owner Selector、Canonical Flow Key
-编码、hash seed 和 Worker Layout。目标 queue 拥塞时不得改投其他 worker。Corrective Handoff
+Primary Software Distribution 只产生一次 OwnerAssignment；Owner Guard 只验证 current worker 与
+其中的 ExecutionOwner，不重新解析、canonicalize 或 hash。两者共享同一个 Owner Selector、
+Canonical Owner Key 编码、hash seed 和 Worker Layout。目标 queue 拥塞时不得改投其他 worker。Corrective Handoff
 发生在 Primary Handoff 已完成之后，仍应接近零；持续命中表示 parser/canonicalization、worker
 mapping 或投递路径错误，而不是正常负载均衡行为。NFQUEUE verdict 返回与 VPN/TUN/transport fd
 写回属于 Adapter completion routing，不计为 Primary 或 Corrective Handoff。
@@ -83,7 +99,7 @@ Adapter Completion 与 Transport Outcome 是不同事实。本决策不固定 HE
 partition、shard count 或 owner-inline/paired topology；这些由后续真实依赖和 Android POC 选择。
 
 Android Root、Android VPN 与 Linux NFQUEUE 的 PacketLease 继续由 live VPP buffer 与内联固定
-metadata 承载。解析得到的 PacketFacts、Adapter 归一化的 Platform Packet Facts、FlowAssignment、
+metadata 承载。解析得到的 PacketFacts、Adapter 归一化的 Platform Packet Facts、OwnerAssignment、
 VPN Packet Provenance 与 AdapterObligation 是不同语义；queue/lane/completion handle 不进入
 PacketFacts、policy key 或 Owner Selector。Platform Packet Facts 对 UID、Linux ifindex、
 NetworkContextId 等字段使用显式 available/unknown 状态，不能把零值解释为已知事实。VPN 首版
@@ -145,18 +161,19 @@ IP 分片采用 fork VPP handoff 的两阶段结构，但不照抄其 hash 实�
 
 fork 当前 `src/vnet/handoff.c` 的 `symmetric CRC32/Toeplitz` L4 路径实际只混入地址与端口，
 没有把 IP protocol 混入 hash。Sakamoto 不继承这个偏差；正常路径和分片重组后的最终 owner
-选择都必须使用真正的五元组。分片 co-location/reassembly key 只服务临时重组，不得成为
-FlowEntry key。
+选择都必须使用包含 IP protocol 的 Canonical Owner Key。分片 co-location/reassembly key 只服务
+临时重组，不得成为 FlowEntry key；重组后的合法 packet 仍由唯一 Canonical Owner Selector 取得
+ExecutionOwner。
 
 ## Consequences
 
 - queue ID、INPUT/OUTPUT 拆分或 Packet Capture Adapter 拓扑不能代替 flow ownership；
-- Canonical Flow Key 与 Owner Selector 不接受 `flow_domain`、network namespace、interface、
+- Canonical Owner Key、Canonical Flow Key 与 Owner Selector 不接受 `flow_domain`、network namespace、interface、
   provenance 或其它部署拓扑 discriminator；
 - Adapter I/O lane 是按平台测量扩展的实现拓扑，不是共享 policy/runtime 语义；
-- correctness 依赖明确的 Canonical Flow Key、启动时冻结的 Worker Layout、Primary Software
+- correctness 依赖明确的 Canonical Owner Key、启动时冻结的 Worker Layout、Primary Software
   Distribution、Owner Guard、bounded queue、overload 和 teardown 语义；
-- 普通报文只做一次 canonical five-tuple software distribution；正确到达后没有 normal-path
+- 普通报文只做一次 Canonical Owner Key software distribution；正确到达后没有 normal-path
   handoff。最多允许一次 Corrective Handoff，第二次 owner mismatch 直接丢弃；
 - 分片允许 reassembly worker 与最终 flow owner 不同；这是显式 Fragment Steering 阶段转换，
   不属于分流错误，也不消耗 Corrective Handoff 的一次纠偏额度；
