@@ -16,13 +16,16 @@ underlying exactly-once Adapter Completion, generation, bounded-resource, and te
 the native Adapter.
 
 Root uses multiple independently owned NFQUEUE lanes with connection-stable kernel `queue-balance` as
-Initial Execution Placement, not as flow ownership. Each native lane exclusively operates its queue/socket
-for receive and verdict. The shared Canonical Flow Key and fixed Worker Layout select the final FlowOwner:
-owner-local packets continue without enqueue, while mismatches use bounded canonical-owner processing and
-return their terminal intent to the origin lane, which performs the packet's single verdict operation with
-the original queue generation and packet ID. VPN begins with one native TUN Platform I/O Lane and uses the
-same FlowOwner and completion-routing model; ADR-0007 defines the separate post-policy VPN Flow Stack Packet
-Boundary. Normal worker transfer moves VPP buffer indexes and metadata, never copies complete packet bytes.
+Initial Execution Placement, not as packet or flow ownership. Each native lane exclusively operates its
+queue/socket for receive and verdict. The shared Canonical Owner Key and fixed Worker Layout select one
+ExecutionOwner for every valid IPv4/IPv6 packet: complete TCP/UDP uses the L4-ports form and that owner is also
+its FlowOwner, while other legal protocols or unavailable ports use the L3 form without creating a synthetic
+flow. Owner-local packets continue without enqueue, while mismatches use bounded canonical-owner processing
+and return their terminal intent to the origin lane, which performs the packet's single verdict operation
+with the original queue generation and packet ID. VPN begins with one native TUN Platform I/O Lane and uses
+the same ExecutionOwner and completion-routing model; ADR-0007 defines the separate post-policy TCP/UDP VPN
+Flow Stack Packet Boundary. Normal worker transfer moves VPP buffer indexes and metadata, never copies
+complete packet bytes.
 
 This shape is chosen from the Pixel 6a W2/Q2 POC: address-diverse Q2/Q4 kernel placement mismatched the
 project's canonical owner for about half of packets, so queue identity cannot replace software distribution;
@@ -53,7 +56,7 @@ sleep-confirmed latency gates.
 - ADR-0008 removes the former Snort C++ daemon, host model, test suite, NDK artifact, and archive. None may be restored, translated, or used as a compatibility fallback for this Adapter. The active product implementation target remains VPP-native C only.
 - Packet bytes and live VPP buffer ownership do not cross the Rust compatibility boundary.
 - NFQUEUE queue balance supplies receive parallelism and flow stickiness only; it never establishes
-  canonical FlowOwner correctness.
+  canonical ExecutionOwner or FlowOwner correctness.
 - NFQUEUE handles and verdict operations are origin-lane confined; Flow workers never use shared-TX locking
   to bypass completion return.
 - Root and VPN remain interchangeable Packet capture Adapters over one VPP graph and policy runtime rather
