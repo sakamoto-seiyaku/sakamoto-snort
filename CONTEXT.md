@@ -1,6 +1,6 @@
 # Sakamoto Snort
 
-Sakamoto Snort is an Android root daemon project for DNS/domain policy, IP packet policy, and bounded observability. This glossary captures project-specific language used across the current docs so agents do not drift back to legacy or OpenSpec-era terminology.
+Sakamoto Snort is a local-endpoint firewall project for Android and Linux, providing DNS/domain policy, IP packet policy, and bounded observability. This glossary captures project-specific language used across the current docs so agents do not drift back to legacy or OpenSpec-era terminology.
 
 ## Language
 
@@ -123,7 +123,7 @@ The platform-owned product discovery boundary that supplies ApplicationSubjectId
 _Avoid_: PackageManager-shaped Linux catalog, UI-owned policy identity, exhaustive executable scan, mixing display lookup into packet attribution
 
 **Identity Hints**:
-Normalized packet-local evidence offered to the Application Identity Provider, such as UID, tuple, hook, network namespace, or socket cookie when available. Hints may be incomplete and are not themselves persisted application identity or policy keys.
+Normalized packet-local evidence offered to the Application Identity Provider, such as UID, tuple, hook, ingress interface, or socket cookie when available. Hints may be incomplete and are not themselves persisted application identity or policy keys.
 _Avoid_: guaranteed application identity, Canonical Flow Key fields, Adapter-specific handles escaping into policy code
 
 **ApplicationSubjectId**:
@@ -403,15 +403,19 @@ Advanced IP packet rules that use L4 Conntrack state such as `ct.state` or `ct.d
 _Avoid_: ordinary IP rules, baseline packet policy
 
 **PacketFacts**:
-Packet-local facts derived once by the shared VPP packet parser from the original L3 packet plus normalized platform hints, then shared by packet policy and observation consumers. PacketFacts do not contain domain hints, Conntrack state, DPI identification results, or Adapter-specific transport handles.
+Packet-local facts derived once by the shared VPP packet parser from the original L3 packet, then shared by packet policy and observation consumers. PacketFacts do not contain platform ingress facts, domain hints, Conntrack state, DPI identification results, or Adapter-specific transport handles.
 _Avoid_: Host object, per-module parser state, Domain-IP Association facts, NFQUEUE-only facts
+
+**Platform Packet Facts**:
+Packet-local facts normalized by a Packet capture Adapter from its platform event, including available application identity evidence, Linux interface index, NetworkContextId, Device Packet Direction, and VPN Packet Provenance. Availability is explicit; queue, lane, file descriptor, completion identity, Runtime Profile, and speculative deployment domains are not Platform Packet Facts and never select FlowOwner.
+_Avoid_: untyped packet hints, zero means unknown, queue as policy fact, VPP sw_if_index as Linux ifindex, Runtime Profile as packet direction, provenance hidden in interface identity
 
 **VPP Packet Validation Outcome**:
 The pre-policy content-validity result produced by the shared VPP graph using the modified VPP fork's validation semantics. An invalid L3 envelope, including an invalid IP version, header shape, or declared length, is runtime-dropped with no Policy Verdict. A valid L3 packet for which deeper L4 facts are unavailable or unsupported is not invalidated merely for that reason: PacketFacts preserves the parser status and available facts, predicates requiring unavailable facts do not match, and the remaining evaluable stages continue.
 _Avoid_: Adapter-side validation policy, fail-open invalid L3, policy-rule DROP, treating unsupported L4 as malformed L3, inventing ports or a synthetic flow
 
 **Packet capture Adapter**:
-The platform ingress and completion channel that transfers a received L3 packet into the shared VPP graph without interpreting its packet-policy meaning, supplies only platform-owned hints, and later executes the resulting platform completion. Packet parsing, PacketFacts construction, flow ownership, and policy decisions belong to the shared VPP dataplane.
+The platform ingress and completion channel that transfers a received L3 packet into the shared VPP graph without interpreting its packet-policy meaning, supplies Platform Packet Facts, and later executes the resulting platform completion. Packet parsing, PacketFacts construction, flow ownership, and policy decisions belong to the shared VPP dataplane.
 _Avoid_: policy engine, packet parser, PacketFacts builder, verdict pipeline
 
 **Ingress Completion Identity**:
@@ -419,7 +423,7 @@ The Adapter-specific mandatory identity needed to form a PacketLease and later e
 _Avoid_: synthetic packet ID, guessing or scanning for an obligation, anonymous VPP injection, retry, claiming kernel acceptance without a terminal verdict operation
 
 **Complete L3 Packet Ingress**:
-The Android Functional Closure requirement that both Root/NFQUEUE and VPN/TUN transfer the complete received L3 packet into VPP so fragment, IPv6 extension, and future early-flow inspection semantics are established without capture truncation. Bounded-prefix NFQUEUE copy remains a later measured optimization and is not part of the closure contract.
+The current local-endpoint requirement that Android Root/NFQUEUE, Android VPN/TUN, and Linux NFQUEUE transfer the complete received L3 packet into VPP so fragment, IPv6 extension, and future early-flow inspection semantics are established without capture truncation. Bounded-prefix NFQUEUE copy remains a later measured optimization and is not part of the closure contract.
 _Avoid_: 512-byte correctness assumption, Adapter-side truncation baseline, treating original length as available packet bytes
 
 **User-Space Single Materialization**:
@@ -443,7 +447,7 @@ The explicit graph permission required to alter or synthesize packet bytes. Norm
 _Avoid_: implicit header edit, NFQUEUE replacement payload, mutate-then-restore parsing, policy-owned NAT, observation-side packet rewrite, treating writable memory as permission
 
 **Packet capture Adapter Conformance Contract**:
-The shared semantic acceptance contract for Android Root/NFQUEUE and VPN/TUN Adapters. Both must transfer the received L3 packet unchanged under User-Space Single Materialization, provide equivalent normalized direction, identity and network hints, original packet length, Flow Domain, PacketLease exactly-once completion, fault handling, shutdown, recovery, and profile-switch behavior around the same VPP packet runtime. Adapter-specific performance limits and documented platform constraints may differ, but packet parsing, policy semantics, Primary Software Distribution, Owner Guard, and worker-owned state do not.
+The shared semantic acceptance contract for Android Root/NFQUEUE, Android VPN/TUN, and Linux NFQUEUE Adapters. They transfer the received L3 packet unchanged under User-Space Single Materialization, provide equivalent normalized Platform Packet Facts and original packet length, and preserve PacketLease exactly-once completion, fault handling, shutdown, and recovery around the same VPP packet runtime. Adapter-specific performance limits and documented platform constraints may differ, but packet parsing, policy semantics, Primary Software Distribution, Owner Guard, and worker-owned state do not.
 _Avoid_: separate Root/VPN policy behavior, queue- or fd-owned session state, declaring one Runtime Profile complete from pass-through alone
 
 **Adapter Teardown Barrier**:
@@ -534,13 +538,9 @@ _Avoid_: DPI-specific CT table, telemetry CT table, duplicate flow tables
 The target VPP runtime rule that one worker privately owns the mutable state of one bidirectional flow. Adapter-specific Initial Execution Placement is not ownership. Primary Software Distribution computes the final owner on the ingress execution context and either continues locally or performs one Primary Handoff before owner-sensitive state; Corrective Handoff remains a separate one-shot fault repair.
 _Avoid_: shared authoritative flow table, queue id as owner, INPUT/OUTPUT thread as correctness
 
-**Flow Domain**:
-The runtime uniqueness scope within which a Canonical Flow Key identifies one bidirectional flow. Android Root or VPN has one Flow Domain. Linux v1 implements only the initial network namespace as one Flow Domain; future additional network namespaces may receive separate domains without adding namespace identity to policy rules or redefining the five-tuple. Flow/session, fragment, and attribution state never collide across domains.
-_Avoid_: NetworkContextId, policy matcher, container support promised in Linux v1, globally unique five-tuple across network namespaces
-
 **Canonical Flow Key**:
-The direction-independent IPv4/IPv6 five-tuple used within one Flow Domain to select the owner worker and identify one bidirectional flow: IP protocol plus the canonicalized source/destination address-and-port endpoint pair. Complete Linux UID, ApplicationSubjectId, NetworkContextId, interface, queue, and Runtime Profile are policy or capture facts and never participate in this key. An implementation may mix a compact Flow Domain discriminator or domain-specific seed into worker selection while the flow key itself remains the canonical five-tuple.
-_Avoid_: UID-aware handoff, directional tuple, four-tuple hash that omits IP protocol, queue affinity as flow identity, network namespace as a policy field
+The direction-independent IPv4/IPv6 five-tuple used by one VPP Runtime to select the owner worker and identify one bidirectional flow: IP protocol plus the canonicalized source/destination address-and-port endpoint pair. Complete Linux UID, ApplicationSubjectId, NetworkContextId, Linux interface index, VPP interface index, queue, lane, Runtime Profile, VPN Packet Provenance, and network namespace never participate in this key or its owner hash. Linux v1 runs only in the network namespace that owns its NFQUEUE Adapter; namespace isolation is a deployment boundary rather than a per-packet discriminator.
+_Avoid_: UID-aware handoff, directional tuple, four-tuple hash that omits IP protocol, queue affinity as flow identity, network namespace discriminator, `flow_domain`
 
 **Device Packet Direction**:
 The packet-local `INPUT` or `OUTPUT` direction relative to the protected host/device, normalized by each Packet capture Adapter. It is used by stateless L4 direction predicates, platform activity, and interface/network context. It does not define flow orig/reply direction.

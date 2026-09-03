@@ -1,6 +1,6 @@
 # Per-worker single-owner flow runtime
 
-状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04。
+状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04，namespace discriminator 与 metadata 边界更新于 2026-09-04。
 
 Sakamoto 的目标 VPP dataplane 使用 per-worker、per-flow single-owner 模型：Root/NFQUEUE
 与 VPN/TUN Packet Capture Adapter 在进入需要 flow state 的 worker graph 前执行稳定分流，
@@ -12,6 +12,12 @@ authoritative flow table 的跨 worker update、锁和 cache-line ownership 成�
 加 canonicalized source/destination address-and-port endpoint pair，即完整五元组。complete Linux
 UID、Android user/profile、Network Gate、interface、capture queue 和 Root/VPN Runtime Profile
 都不进入 handoff hash，也不进入 FlowEntry identity。
+
+当前 Android 与 Linux 本地端点的一个 VPP Runtime 只处理其 Adapter 所在网络命名空间可见的
+流量，因此 Canonical Flow Key 和 Owner Selector 不包含额外 numeric `flow_domain`。Linux
+network namespace 是内核隔离和部署边界，不是 Root NFQUEUE packet 上需要再次区分的字段；
+未来若产品明确运行多个 namespace，应先确定相应的 runtime/Adapter 拓扑，而不是现在把假想
+namespace、网卡、queue 或 AF_XDP lane 混入五元组或 owner hash。
 
 Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向。Adapter 同时提供设备相对的
 `INPUT/OUTPUT`；FlowEntry 创建包独立定义 flow-relative `ORIG`，反向 packet 为 `REPLY`，并保存
@@ -76,11 +82,23 @@ flow-stack-origin return packet 回到同一 shared graph 后才由 TUN lane 完
 Adapter Completion 与 Transport Outcome 是不同事实。本决策不固定 HEV/lwIP instance 数、state
 partition、shard count 或 owner-inline/paired topology；这些由后续真实依赖和 Android POC 选择。
 
-Root/VPN 的 PacketLease 继续由 live VPP buffer 与内联固定 metadata 承载。公共字段保存 Adapter
-type/generation、Origin Adapter Lane、terminal intent 与 obligation state；Adapter 私有字段保存
-NFQUEUE completion identity 或 VPN completion target。这些字段不使用 packet exdata、动态分配或
-独立 lease table。任何 detached task 都不得保留裸 buffer index；teardown 在关闭 Adapter generation
-前必须 quiesce ingress，并在 completion channel 仍可用时有界排空全部 obligated buffers。
+Android Root、Android VPN 与 Linux NFQUEUE 的 PacketLease 继续由 live VPP buffer 与内联固定
+metadata 承载。解析得到的 PacketFacts、Adapter 归一化的 Platform Packet Facts、FlowAssignment、
+VPN Packet Provenance 与 AdapterObligation 是不同语义；queue/lane/completion handle 不进入
+PacketFacts、policy key 或 Owner Selector。Platform Packet Facts 对 UID、Linux ifindex、
+NetworkContextId 等字段使用显式 available/unknown 状态，不能把零值解释为已知事实。VPN 首版
+Linux ifindex 固定为 unknown；Root/Linux NFQUEUE 只从对应 hook 的 NFQA ifindex attribute 取得
+Linux ifindex，不能用 VPP `sw_if_index`、lane 或 queue 代替。
+
+物理布局遵循 pinned VPP buffer subgraph lifetime，而不是把 `opaque`/`opaque2` 当作永久全局
+property bag。产品可在经过审计的私有 graph 区间使用固定 inline overlay，但进入 full reassembly
+等会复用 VNET opaque union 的节点前，必须保存仍需存活的 Platform Packet Facts，并在重组完成后
+恢复。当前本地端点不引入 packet exdata、动态分配、独立 lease table，也不照搬运营商路由器 fork
+扩大的 `opaque2/opaque3` 布局；未来路由器部署需要新的容量证据和显式架构决定。
+详细字段与 overlay 生命周期见 `VPP_PACKET_METADATA_OWNERSHIP.md`。
+
+任何 detached task 都不得保留裸 buffer index；teardown 在关闭 Adapter generation 前必须
+quiesce ingress，并在 completion channel 仍可用时有界排空全部 obligated buffers。
 
 Rust 不进入 packet hot path、VPP graph、worker handoff 或 Adapter Completion。Rust 仅通过粗粒度、
 non-unwinding compatibility ABI 管理 lifecycle、configuration、immutable policy snapshot、status 与
@@ -133,6 +151,8 @@ FlowEntry key。
 ## Consequences
 
 - queue ID、INPUT/OUTPUT 拆分或 Packet Capture Adapter 拓扑不能代替 flow ownership；
+- Canonical Flow Key 与 Owner Selector 不接受 `flow_domain`、network namespace、interface、
+  provenance 或其它部署拓扑 discriminator；
 - Adapter I/O lane 是按平台测量扩展的实现拓扑，不是共享 policy/runtime 语义；
 - correctness 依赖明确的 Canonical Flow Key、启动时冻结的 Worker Layout、Primary Software
   Distribution、Owner Guard、bounded queue、overload 和 teardown 语义；
