@@ -679,7 +679,12 @@ product_root_nfqueue_complete_from_graph (
   product_root_nfqueue_lane_t *lane;
   product_root_nfqueue_pending_t *pending;
   const char *rejection = 0;
-  u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
+  int capacity_bypass =
+    completion->terminal_intent == PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS
+    && completion->runtime_drop_reason == PRODUCT_PACKET_DROP_NONE
+    && (completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED
+        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED);
+  u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER || capacity_bypass
                   ? NF_ACCEPT : NF_DROP;
 
   if (obligation->queue_generation != nm->generation
@@ -708,7 +713,8 @@ product_root_nfqueue_complete_from_graph (
   if (pending->buffer_index != buffer_index
       || (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)
       || (completion->terminal_intent != PRODUCT_PACKET_INTENT_PASS_ADAPTER
-          && completion->terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME))
+          && completion->terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME
+          && !capacity_bypass))
     { rejection = "stale_carrier_or_intent"; goto stale; }
 
   /* Commit identity consumption before the one native operation attempt. */
@@ -723,6 +729,12 @@ product_root_nfqueue_complete_from_graph (
   lane->buffer_returns++; clib_atomic_fetch_add_relax (&nm->buffer_returns, 1);
   lane->internal_settlements++; clib_atomic_fetch_add_relax (&nm->internal_settlements, 1);
   product_root_nfqueue_record_verdict_attempt (nm, lane, packet_id);
+  if (completion->flags & PRODUCT_COMPLETION_TRACE)
+    fprintf (stderr, "s210 event=origin_completion thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u intent=%u drop_reason=%u bypass_reason=%u verdict=%u\n",
+      vm->thread_index, buffer_index, (unsigned long long) obligation->token,
+      (unsigned long long) obligation->queue_generation, packet_id, lane_index,
+      completion->terminal_intent, completion->runtime_drop_reason,
+      completion->processing_bypass_reason, verdict);
   if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_VERDICT_FAILED_DEFINITE)
     {
       lane->verdict_failed++; clib_atomic_fetch_add_relax (&nm->verdict_failed, 1); clib_atomic_fetch_add_relax (&nm->verdict_failed_definite, 1);

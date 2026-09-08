@@ -91,6 +91,8 @@ add_test(NAME sakamoto-product-flow-entry-contract
 add_test(NAME sakamoto-s209-policy-snapshot-contract
   COMMAND python3
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s209-policy-snapshot-contract.py")
+add_test(NAME sakamoto-s210-capacity-bypass-contract
+  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s210-capacity-bypass-contract.sh")
 add_test(NAME sakamoto-product-l4-policy-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_l4_policy_contract.sh")

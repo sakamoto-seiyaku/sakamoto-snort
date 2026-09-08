@@ -19,7 +19,8 @@ typedef struct
   uint8_t terminal_intent;
   uint8_t runtime_drop_reason;
   uint8_t flags;
-  uint8_t reserved[3];
+  uint8_t processing_bypass_reason;
+  uint8_t reserved[2];
 } product_packet_completion_frame_t;
 
 enum

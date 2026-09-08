@@ -45,7 +45,16 @@ typedef enum
   PRODUCT_PACKET_INTENT_NONE = 0,
   PRODUCT_PACKET_INTENT_PASS_ADAPTER,
   PRODUCT_PACKET_INTENT_DROP_RUNTIME,
+  /* Root pre-policy capacity disposition; never a Policy Verdict. */
+  PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS,
 } product_packet_terminal_intent_t;
+
+typedef enum
+{
+  PRODUCT_PACKET_BYPASS_NONE = 0,
+  PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED,
+  PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED,
+} product_packet_processing_bypass_reason_t;
 
 typedef enum
 {
@@ -226,8 +235,14 @@ typedef struct
   uint8_t terminal_intent;
   uint8_t terminal_count;
   uint8_t runtime_drop_reason;
+  uint8_t processing_bypass_reason;
   uint8_t settled;
 } product_packet_lease_t;
+
+product_packet_result_t
+product_packet_bypass_primary_capacity (
+  product_packet_lease_t *lease,
+  product_packet_processing_bypass_reason_t reason);
 
 product_packet_result_t
 product_packet_admit (const product_worker_layout_t *layout,

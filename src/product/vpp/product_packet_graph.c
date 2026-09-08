@@ -80,7 +80,7 @@ typedef struct
       u64 generation;
       u16 expected_owner;
       u8 primary_handoff_count, corrective_handoff_count;
-      u8 key_kind, query_class, assignment_valid, reserved;
+      u8 key_kind, query_class, assignment_valid, processing_bypass_reason;
     };
   };
   u64 canonical_hash;
@@ -222,6 +222,7 @@ typedef struct
   u32 primary_frame_queue;
   u32 completion_return_frame_queue;
   u32 misroute_next;
+  u32 primary_credit_limit, primary_ring_slots, completion_ring_slots;
   u32 completion_pending_returns;
   u64 primary_published, primary_received, primary_rejected;
   u64 owner_delivery_checks, owner_delivery_failures;
@@ -686,6 +687,7 @@ product_metadata_from_lease (product_buffer_metadata_t *metadata,
   metadata->primary_handoff_count = lease->primary_handoff_count;
   metadata->corrective_handoff_count = lease->corrective_handoff_count;
   metadata->runtime_drop_reason = lease->runtime_drop_reason;
+  metadata->processing_bypass_reason = lease->processing_bypass_reason;
   if (lease->assignment.source_is_a)
     metadata->state_bits |= PRODUCT_META_SOURCE_IS_A;
   product_metadata_set_terminal_intent (metadata, lease->terminal_intent);
@@ -709,6 +711,7 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
   lease->terminal_intent = product_metadata_terminal_intent (metadata);
   lease->terminal_count = lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE;
   lease->runtime_drop_reason = metadata->runtime_drop_reason;
+  lease->processing_bypass_reason = metadata->processing_bypass_reason;
   lease->settled = (metadata->state_bits & PRODUCT_META_SETTLED) != 0;
   /* The retained native span is immutable in this subgraph. No header decode,
    * pointer escape, or access after completion/free is permitted. */
@@ -1042,8 +1045,53 @@ enum
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static int
+product_capacity_ring_empty (u32 queue_index)
+{
+  vlib_frame_queue_main_t *fqm = vec_elt_at_index (
+    vlib_get_thread_main ()->frame_queue_mains, queue_index);
+  for (u32 i = 0; i < vec_len (fqm->vlib_frame_queues); i++)
+    {
+      vlib_frame_queue_t *fq = fqm->vlib_frame_queues[i];
+      if (fq && fq->head != fq->tail) return 0;
+    }
+  return 1;
+}
+
+/* Called only while workers are quiesced and every carrier is settled.
+ * Storage remains the original full-size native allocation. Reduced test
+ * capacities exercise the actual retained backend's ring-full branch. */
+static void
+product_capacity_set_empty_ring (u32 queue_index, u32 slots)
+{
+  vlib_frame_queue_main_t *fqm = vec_elt_at_index (
+    vlib_get_thread_main ()->frame_queue_mains, queue_index);
+  for (u32 i = 0; i < vec_len (fqm->vlib_frame_queues); i++)
+    {
+      vlib_frame_queue_t *fq = fqm->vlib_frame_queues[i];
+      if (!fq) continue;
+      ASSERT (fq->head == fq->tail);
+      fq->head = fq->tail = 0;
+      fq->nelts = slots;
+    }
+}
+
+static void
+product_capacity_configure_empty (product_packet_graph_main_t *graph,
+                                   u32 credits, u32 primary, u32 completion)
+{
+  product_capacity_set_empty_ring (graph->primary_frame_queue, primary);
+  product_capacity_set_empty_ring (graph->completion_return_frame_queue, completion);
+  graph->primary_credit_limit = credits;
+  graph->primary_ring_slots = primary;
+  graph->completion_ring_slots = completion;
+  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+    clib_atomic_store_rel_n (&graph->handoff_credits[i], credits);
+}
+
+static int
 product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
-                          u32 bi, product_buffer_metadata_t *metadata)
+                          u32 bi, product_buffer_metadata_t *metadata,
+                          product_packet_processing_bypass_reason_t *reason)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u16 owner = metadata->expected_owner;
@@ -1051,7 +1099,11 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 failed;
   if (!product_handoff_credit_reserve (graph, owner, PRODUCT_HANDOFF_PRIMARY,
                                        metadata->origin_obligation_id))
-    { clib_atomic_fetch_add_relax (&graph->primary_rejected, 1); return 0; }
+    {
+      *reason = PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED;
+      clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      return 0;
+    }
   if (graph->misroute_next)
     {
       graph->misroute_next = 0;
@@ -1068,6 +1120,8 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
   if (vlib_buffer_enqueue_to_thread_retained (vm, node, graph->primary_frame_queue,
         &bi, &target, 1, &failed) != 1)
     {
+      ASSERT (failed == bi);
+      *reason = PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED;
       metadata->state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
       product_metadata_store (vlib_get_buffer (vm, bi), metadata);
       product_handoff_credit_release (graph, owner);
@@ -1193,15 +1247,26 @@ VLIB_NODE_FN (product_packet_admit_node)
       if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
           && lease.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE)
         {
-          if (product_primary_handoff (vm, node, buffer_index, &metadata))
+          product_packet_processing_bypass_reason_t reason = PRODUCT_PACKET_BYPASS_NONE;
+          if (product_primary_handoff (vm, node, buffer_index, &metadata, &reason))
             continue;
           /* Retained rejection still owns this buffer on arrival worker. */
-          lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
-          lease.terminal_count = 1;
-          lease.runtime_drop_reason = PRODUCT_PACKET_DROP_PRIMARY_HANDOFF_CONGESTION;
+          if (product_packet_bypass_primary_capacity (&lease, reason) != PRODUCT_PACKET_OK)
+            {
+              lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+              lease.terminal_count = 1;
+              lease.runtime_drop_reason = PRODUCT_PACKET_DROP_PRIMARY_HANDOFF_CONGESTION;
+            }
           product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
           metadata.runtime_drop_reason = lease.runtime_drop_reason;
+          metadata.processing_bypass_reason = lease.processing_bypass_reason;
           product_metadata_store (buffer, &metadata);
+          if (metadata.state_bits & PRODUCT_META_TRACE)
+            fprintf (stderr, "s210 event=primary_rejected thread=%u buffer=%u token=%llu generation=%llu owner=%u intent=%u reason=%u retained=1 policy_evaluated=0\n",
+              vm->thread_index, buffer_index,
+              (unsigned long long) metadata.origin_obligation_id,
+              (unsigned long long) metadata.generation, metadata.expected_owner,
+              lease.terminal_intent, reason);
         }
       vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index,
         lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
@@ -1578,6 +1643,12 @@ product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
   ASSERT (queue->count < PRODUCT_COMPLETION_RETURN_CAPACITY);
   queue->buffers[(queue->head + queue->count) % PRODUCT_COMPLETION_RETURN_CAPACITY] = bi;
   queue->count++;
+  if (completion->flags & PRODUCT_COMPLETION_TRACE)
+    fprintf (stderr, "s210 event=completion_deferred thread=%u buffer=%u token=%llu generation=%llu intent=%u drop_reason=%u pending=%u capacity=%u\n",
+      vm->thread_index, bi, (unsigned long long) completion->obligation.token,
+      (unsigned long long) completion->obligation.queue_generation,
+      completion->terminal_intent, completion->runtime_drop_reason,
+      queue->count, PRODUCT_COMPLETION_RETURN_CAPACITY);
   clib_atomic_fetch_add_relax (&graph->completion_pending_returns, 1);
   clib_atomic_fetch_add_relax (&graph->completion_deferred, 1);
   vlib_node_set_state (vm, product_packet_completion_retry_node.index, VLIB_NODE_STATE_POLLING);
@@ -1766,6 +1837,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
         .producer_thread = vm->thread_index,
         .terminal_intent = lease.terminal_intent,
         .runtime_drop_reason = lease.runtime_drop_reason,
+        .processing_bypass_reason = lease.processing_bypass_reason,
         .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
       };
       /* End the packet metadata lifetime. Only this 32-byte value survives
@@ -1946,6 +2018,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   graph->lifecycle_completion_frames = 0;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   graph->misroute_next = 0;
+  product_capacity_configure_empty (graph, PRODUCT_GRAPH_HANDOFF_CREDITS, 64, 128);
   graph->primary_published = graph->primary_received = graph->primary_rejected = 0;
   graph->owner_delivery_checks = graph->owner_delivery_failures = 0;
   graph->completion_returns = graph->completion_deferred = graph->completion_retry_attempts = 0;
@@ -5807,6 +5880,39 @@ VLIB_CLI_COMMAND (product_packet_graph_disable_command, static) = {
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static clib_error_t *
+product_capacity_cli (vlib_main_t *vm, unformat_input_t *input,
+                       vlib_cli_command_t *command)
+{
+  product_packet_graph_main_t *g = &product_packet_graph_main;
+  u32 credits, primary, completion;
+  (void) command;
+  if (unformat (input, "off"))
+    { credits = PRODUCT_GRAPH_HANDOFF_CREDITS; primary = 64; completion = 128; }
+  else if (!unformat (input, "credits %u primary-slots %u completion-slots %u",
+                      &credits, &primary, &completion))
+    return clib_error_return (0, "expected off or credits N primary-slots N completion-slots N");
+  if (unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || credits > PRODUCT_GRAPH_HANDOFF_CREDITS
+      || (primary != 2 && primary != 64)
+      || (completion != 2 && completion != 128))
+    return clib_error_return (0, "unsupported diagnostic capacity");
+  if (!g->accepting || g->lifecycle_obligations || g->lifecycle_buffers
+      || g->lifecycle_handoffs || g->lifecycle_completion_frames
+      || g->completion_pending_returns
+      || !product_capacity_ring_empty (g->primary_frame_queue)
+      || !product_capacity_ring_empty (g->completion_return_frame_queue))
+    return clib_error_return (0, "capacity change requires an active empty graph");
+  product_capacity_configure_empty (g, credits, primary, completion);
+  vlib_cli_output (vm, "capacity.configured generation=%llu credits=%u primary_slots=%u completion_slots=%u",
+    (unsigned long long) g->generation, credits, primary, completion);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_capacity_command, static) = {
+  .path = "product capacity", .function = product_capacity_cli,
+  /* Default CLI barrier protects empty native ring reconfiguration. */
+};
+
+static clib_error_t *
 product_primary_misroute_cli (vlib_main_t *vm, unformat_input_t *input,
                               vlib_cli_command_t *command)
 {
@@ -5829,6 +5935,8 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_packet_graph_main_t *g = &product_packet_graph_main;
   (void) input; (void) command;
+  vlib_cli_output (vm, "capacity.status credits=%u primary_slots=%u completion_slots=%u",
+    g->primary_credit_limit, g->primary_ring_slots, g->completion_ring_slots);
   vlib_cli_output (vm, "primary.status generation=%llu published=%llu received=%llu rejected=%llu owner_checks=%llu owner_failures=%llu returns=%llu deferred=%llu retries=%llu pending_returns=%u handoff_debt=%u credit0=%u credit1=%u flows=%u",
     (unsigned long long) g->generation,
     (unsigned long long) clib_atomic_load_acq_n (&g->primary_published),

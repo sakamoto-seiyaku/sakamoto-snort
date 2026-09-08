@@ -389,11 +389,36 @@ product_packet_result_t
 product_packet_set_terminal (product_packet_lease_t *lease,
                              product_packet_terminal_intent_t intent)
 {
-  if (lease == NULL || intent == PRODUCT_PACKET_INTENT_NONE)
+  if (lease == NULL || (intent != PRODUCT_PACKET_INTENT_PASS_ADAPTER
+                        && intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME))
     return PRODUCT_PACKET_INVALID_ARGUMENT;
   if (!lease->policy_owner_ready || lease->terminal_count != 0 || lease->settled)
     return PRODUCT_PACKET_ORDER_VIOLATION;
   lease->terminal_intent = (uint8_t) intent;
+  lease->terminal_count = 1;
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_bypass_primary_capacity (
+  product_packet_lease_t *lease,
+  product_packet_processing_bypass_reason_t reason)
+{
+  if (lease == NULL
+      || (reason != PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED
+          && reason != PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED))
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE
+      || !lease->assignment.valid
+      || lease->facts.l3_status != PRODUCT_PACKET_L3_COMPLETE
+      || lease->facts.l4_status == PRODUCT_PACKET_L4_FRAGMENT
+      || lease->distribution != PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE
+      || lease->policy_owner_ready || lease->terminal_count || lease->settled
+      || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE
+      || lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE)
+    return PRODUCT_PACKET_ORDER_VIOLATION;
+  lease->terminal_intent = PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  lease->processing_bypass_reason = (uint8_t) reason;
   lease->terminal_count = 1;
   return PRODUCT_PACKET_OK;
 }
@@ -410,7 +435,11 @@ product_packet_settle (product_packet_lease_t *lease)
     return PRODUCT_PACKET_ORDER_VIOLATION;
   if (!lease->policy_owner_ready
       && !(lease->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
-           && lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE))
+           && lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE)
+      && !(lease->terminal_intent == PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS
+           && lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE
+           && (lease->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED
+               || lease->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED)))
     return PRODUCT_PACKET_ORDER_VIOLATION;
   lease->settled = 1;
   return PRODUCT_PACKET_OK;
