@@ -102,9 +102,10 @@ if a.suite == 'main':
     need(len(packets) == 31, 'main matrix population changed')
     need(any(e['originals'] == '6' for e in by_event['native_success']), 'no larger-than-four native bundle')
     need(len(by_event['native_duplicate_retain']) == 1, 'exact duplicate not retained')
-    success = {e['token']: e for e in by_event['native_success']}
-    # Assignment trace is emitted under its explicit stage name; use terminal
-    # as the independent delivered owner witness if admission naming changes.
+    # Consume executes on the native memory owner; success may resume after
+    # native sendout handoff, so its thread is not the memory-owner witness.
+    prepared = {e['token']: e for e in by_event['native_finalize_prepare']}
+    success = {e['token']: prepared[e['token']] for e in by_event['native_success']}
     delivered = {e['token']: e for e in rows(log, 's207 stage=terminal ')}
     pairs = {(int(e['thread'])-1, int(delivered[t]['owner']))
              for t,e in success.items() if t in delivered}

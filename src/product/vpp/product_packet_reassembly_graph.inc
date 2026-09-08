@@ -11,6 +11,7 @@ enum
   PRODUCT_FRAGMENT_PINNED = 1 << 1,
   PRODUCT_FRAGMENT_DUPLICATE = 1 << 2,
   PRODUCT_FRAGMENT_PREPARED = 1 << 3,
+  PRODUCT_FRAGMENT_IPV6 = 1 << 4,
   PRODUCT_FRAGMENT_VALID = 1 << 7,
 };
 
@@ -37,12 +38,36 @@ typedef struct
 static struct
 {
   u32 initialized, accepting, success_next, error_next, native_node;
+  u32 success_next6, error_next6;
   u32 injected, timeout_ms;
   product_fragment_counters_t threads[PRODUCT_GRAPH_WORKERS + 1];
 } product_fragment_main;
 
 extern vlib_node_registration_t product_fragment_success_node;
 extern vlib_node_registration_t product_fragment_error_node;
+
+/* Use the same bounded native extension-header walk as the IPv6 engine. */
+static i32
+product_fragment_ip6_header_offset (vlib_buffer_t *b)
+{
+  if (b->current_length < sizeof (ip6_header_t)) return -1;
+  ip6_header_t *ip = vlib_buffer_get_current (b);
+  ip6_ext_hdr_chain_t chain;
+  int found = ip6_ext_header_walk (b, ip, IP_PROTOCOL_IPV6_FRAGMENTATION, &chain);
+  if (found < 0 || chain.eh[found].protocol != IP_PROTOCOL_IPV6_FRAGMENTATION)
+    return -1;
+  u32 offset = chain.eh[found].offset;
+  if (offset + sizeof (ip6_frag_hdr_t) > b->current_length) return -1;
+  return (i32) offset;
+}
+
+static u32
+product_fragment_contexts (void)
+{
+  if (!product_fragment_main.initialized) return 0;
+  return ip4_full_reass_custom_count (product_fragment_main.error_next)
+    + ip6_full_reass_custom_count (product_fragment_main.error_next6);
+}
 
 static product_fragment_counters_t *
 product_fragment_counters (vlib_main_t *vm)
@@ -125,6 +150,7 @@ product_fragment_consume (vlib_main_t *vm, u32 survivor, u32 consumed,
           if (PREDICT_FALSE (e.flags & PRODUCT_FRAGMENT_PINNED))
             clib_panic ("native range already has a lifetime pin");
           if (e.obligation.kind != first.obligation.kind
+              || ((e.flags ^ first.flags) & PRODUCT_FRAGMENT_IPV6)
               || e.duplicate_count >= PRODUCT_FRAGMENT_MAX_ORIGINALS
               || (b->flags & VLIB_BUFFER_NEXT_PRESENT))
             return IP4_FULL_REASS_CUSTOM_CONSUME_CAPACITY;
@@ -137,7 +163,9 @@ product_fragment_consume (vlib_main_t *vm, u32 survivor, u32 consumed,
           next = vnet_buffer (b)->ip.reass.next_range_bi;
         }
       vlib_buffer_t *head = vlib_get_buffer (vm, survivor);
-      u32 header = ip4_header_bytes (vlib_buffer_get_current (head));
+      u32 header = (first.flags & PRODUCT_FRAGMENT_IPV6)
+        ? vnet_buffer (head)->ip.reass.ip6_frag_hdr_offset
+        : ip4_header_bytes (vlib_buffer_get_current (head));
       if (header + data_end > head->current_length +
                               vlib_buffer_space_left_at_end (vm, head))
         return IP4_FULL_REASS_CUSTOM_CONSUME_CAPACITY;
@@ -169,7 +197,8 @@ product_fragment_consume (vlib_main_t *vm, u32 survivor, u32 consumed,
   product_fragment_envelope_t duplicate = product_fragment_load (vm, consumed);
   if (first.duplicate_count + 2 > PRODUCT_FRAGMENT_MAX_ORIGINALS
       || duplicate.duplicate_count
-      || duplicate.obligation.kind != first.obligation.kind)
+      || duplicate.obligation.kind != first.obligation.kind
+      || ((duplicate.flags ^ first.flags) & PRODUCT_FRAGMENT_IPV6))
     return IP4_FULL_REASS_CUSTOM_CONSUME_CAPACITY;
   product_fragment_pin (vm, consumed, &duplicate);
   duplicate.flags |= PRODUCT_FRAGMENT_DUPLICATE;
@@ -203,6 +232,35 @@ product_fragment_error_hook (vlib_main_t *vm, u32 bi,
   product_fragment_envelope_t e = product_fragment_load (vm, bi);
   e.flags = (e.flags & 255) | ((u16) reason << 8);
   product_fragment_store (vm, bi, &e);
+}
+
+static ip6_full_reass_custom_consume_result_t
+product_fragment_consume6 (vlib_main_t *vm, u32 survivor, u32 consumed, void *opaque)
+{
+  return product_fragment_consume (vm, survivor, consumed, opaque)
+      == IP4_FULL_REASS_CUSTOM_CONSUME_OK
+    ? IP6_FULL_REASS_CUSTOM_CONSUME_OK : IP6_FULL_REASS_CUSTOM_CONSUME_CAPACITY;
+}
+
+static void
+product_fragment_error_hook6 (vlib_main_t *vm, u32 bi,
+                              ip6_full_reass_custom_error_reason_t reason,
+                              void *opaque)
+{
+  static const ip4_full_reass_custom_error_reason_t reasons[] = {
+    IP4_FULL_REASS_CUSTOM_ERROR_NONE, IP4_FULL_REASS_CUSTOM_ERROR_TIMEOUT,
+    IP4_FULL_REASS_CUSTOM_ERROR_DUPLICATE_FRAGMENT,
+    IP4_FULL_REASS_CUSTOM_ERROR_FRAGMENT_CONFLICT,
+    IP4_FULL_REASS_CUSTOM_ERROR_INTERNAL, IP4_FULL_REASS_CUSTOM_ERROR_CAPACITY,
+    IP4_FULL_REASS_CUSTOM_ERROR_BUNDLE_CAPACITY, IP4_FULL_REASS_CUSTOM_ERROR_RESOURCE,
+    IP4_FULL_REASS_CUSTOM_ERROR_HANDOFF, IP4_FULL_REASS_CUSTOM_ERROR_STOP,
+    IP4_FULL_REASS_CUSTOM_ERROR_MALFORMED,
+  };
+  _Static_assert (ARRAY_LEN (reasons) == IP6_FULL_REASS_CUSTOM_ERROR_MALFORMED + 1,
+                  "all native IPv6 custom reasons require a Product disposition");
+  product_fragment_error_hook (vm, bi,
+    reason < ARRAY_LEN (reasons) ? reasons[reason] : IP4_FULL_REASS_CUSTOM_ERROR_INTERNAL,
+    opaque);
 }
 
 static int
@@ -336,17 +394,18 @@ VLIB_NODE_FN (product_fragment_success_node)
       product_metadata_store (b, &metadata);
       product_fragment_counters (vm)->success++;
       if (first.flags & PRODUCT_FRAGMENT_TRACE)
-        fprintf (stderr, "s212 event=native_success thread=%u survivor=%u token=%llu generation=%llu originals=%u bytes=%u uid=%u availability=%u direction=%u provenance=%u\n",
+        fprintf (stderr, "s212 event=native_success thread=%u survivor=%u token=%llu generation=%llu originals=%u bytes=%u uid=%u availability=%u direction=%u provenance=%u family=%u\n",
           vm->thread_index, bi, (unsigned long long) first.obligation.token,
           (unsigned long long) first.obligation.queue_generation, count,
           b->current_length, first.platform.uid, first.platform.availability,
-          first.platform.direction, first.platform.provenance);
+          first.platform.direction, first.platform.provenance,
+          (first.flags & PRODUCT_FRAGMENT_IPV6) ? 6 : 4);
       vlib_buffer_enqueue_to_single_next (vm, node, &bi, 0, 1);
     }
   return frame->n_vectors;
 }
 VLIB_REGISTER_NODE (product_fragment_success_node) = {
-  .name = "product-ip4-reassembly-success", .vector_size = sizeof (u32),
+  .name = "product-reassembly-success", .vector_size = sizeof (u32),
   .type = VLIB_NODE_TYPE_INTERNAL, .n_next_nodes = 1,
   .next_nodes = { [0] = "product-packet-admit" },
 };
@@ -365,7 +424,9 @@ VLIB_NODE_FN (product_fragment_error_node)
       ip4_header_t *ip = vlib_buffer_get_current (b);
       int finalized_handoff = reason == IP4_FULL_REASS_CUSTOM_ERROR_HANDOFF
         && (first.flags & PRODUCT_FRAGMENT_PREPARED)
-        && !ip4_get_fragment_more (ip) && !ip4_get_fragment_offset (ip);
+        && ((first.flags & PRODUCT_FRAGMENT_IPV6)
+              ? product_fragment_ip6_header_offset (b) < 0
+              : !ip4_get_fragment_more (ip) && !ip4_get_fragment_offset (ip));
       u32 member = bi, left = 1 + first.duplicate_count;
       if (finalized_handoff)
         {
@@ -391,7 +452,7 @@ VLIB_NODE_FN (product_fragment_error_node)
   return frame->n_vectors;
 }
 VLIB_REGISTER_NODE (product_fragment_error_node) = {
-  .name = "product-ip4-reassembly-error", .vector_size = sizeof (u32),
+  .name = "product-reassembly-error", .vector_size = sizeof (u32),
   .type = VLIB_NODE_TYPE_INTERNAL,
 };
 
@@ -402,8 +463,15 @@ product_fragment_dispatch (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi,
   if (metadata->fragment_bundle_count) return 0;
   vlib_buffer_t *b = vlib_get_buffer (vm, bi);
   u8 *bytes = vlib_buffer_get_current (b);
-  if (b->current_length < 8 || bytes[0] >> 4 != 4
-      || !(clib_net_to_host_u16 (((ip4_header_t *) bytes)->flags_and_fragment_offset) & 0x3fff))
+  if (b->current_length < 8) return 0;
+  u32 family = bytes[0] >> 4;
+  i32 fragment6 = family == 6 ? product_fragment_ip6_header_offset (b) : -1;
+  if (family == 4)
+    {
+      if (!(clib_net_to_host_u16 (((ip4_header_t *) bytes)->flags_and_fragment_offset) & 0x3fff))
+        return 0;
+    }
+  else if (family != 6 || (fragment6 < 0 && bytes[6] != IP_PROTOCOL_IPV6_FRAGMENTATION))
     return 0;
   product_buffer_platform_metadata_t saved;
   clib_memcpy_fast (&saved, b->opaque, sizeof (saved));
@@ -411,40 +479,58 @@ product_fragment_dispatch (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi,
     .obligation = saved.obligation, .platform = saved.platform,
     .next_range = PRODUCT_FRAGMENT_NONE,
     .duplicate_head = PRODUCT_FRAGMENT_NONE, .duplicate_tail = PRODUCT_FRAGMENT_NONE,
-    .flags = PRODUCT_FRAGMENT_VALID |
+    .flags = PRODUCT_FRAGMENT_VALID | (family == 6 ? PRODUCT_FRAGMENT_IPV6 : 0) |
       ((metadata->state_bits & PRODUCT_META_TRACE) ? PRODUCT_FRAGMENT_TRACE : 0),
   };
   product_fragment_store (vm, bi, &e);
   product_fragment_counters (vm)->ingress++;
-  u32 header = (bytes[0] & 15) * 4, length = b->current_length;
-  u32 declared = clib_net_to_host_u16 (((ip4_header_t *) bytes)->length);
+  u32 length = b->current_length, header, declared, offset = 0, more = 0;
+  if (family == 4)
+    {
+      header = (bytes[0] & 15) * 4;
+      declared = clib_net_to_host_u16 (((ip4_header_t *) bytes)->length);
+      offset = ip4_get_fragment_offset_bytes ((ip4_header_t *) bytes);
+      more = !!ip4_get_fragment_more ((ip4_header_t *) bytes);
+    }
+  else
+    {
+      header = fragment6 >= 0 ? (u32) fragment6 + sizeof (ip6_frag_hdr_t) : 48;
+      declared = sizeof (ip6_header_t) + ((u32) bytes[4] << 8) + bytes[5];
+      if (fragment6 >= 0)
+        {
+          ip6_frag_hdr_t *fragment = (ip6_frag_hdr_t *) (bytes + fragment6);
+          offset = ip6_frag_hdr_offset_bytes (fragment);
+          more = !!ip6_frag_hdr_more (fragment);
+        }
+    }
   if (e.flags & PRODUCT_FRAGMENT_TRACE)
-    fprintf (stderr, "s212 event=fragment_ingress thread=%u buffer=%u token=%llu generation=%llu kind=%u origin_worker=%u lane=%u packet=%u offset=%u more=%u bytes=%u refs=%u uid=%u availability=%u\n",
+    fprintf (stderr, "s212 event=fragment_ingress thread=%u buffer=%u token=%llu generation=%llu kind=%u origin_worker=%u lane=%u packet=%u offset=%u more=%u bytes=%u refs=%u uid=%u availability=%u family=%u\n",
       vm->thread_index, bi, (unsigned long long) e.obligation.token,
       (unsigned long long) e.obligation.queue_generation, e.obligation.kind,
       e.obligation.origin_worker, e.obligation.origin_lane, e.obligation.packet_id,
-      ip4_get_fragment_offset_bytes ((ip4_header_t *) bytes),
-      !!ip4_get_fragment_more ((ip4_header_t *) bytes), length, b->ref_count,
-      e.platform.uid, e.platform.availability);
+      offset, more, length, b->ref_count, e.platform.uid, e.platform.availability, family);
   if (!product_fragment_main.accepting)
     product_fragment_error_emit (vm, node, bi, e, IP4_FULL_REASS_CUSTOM_ERROR_STOP);
-  else if (length < 20 || header < 20 || header > length
-           || declared < header || declared > length)
+  else if (header < (family == 4 ? 20 : 48) || header > length
+           || declared < header || declared > length || (family == 6 && fragment6 < 0))
     product_fragment_error_emit (vm, node, bi, e, IP4_FULL_REASS_CUSTOM_ERROR_MALFORMED);
   else if (b->flags & VLIB_BUFFER_NEXT_PRESENT)
     product_fragment_error_emit (vm, node, bi, e, IP4_FULL_REASS_CUSTOM_ERROR_RESOURCE);
   else
     {
+      u32 next = family == 4 ? PRODUCT_ADMIT_NEXT_REASSEMBLY : PRODUCT_ADMIT_NEXT_REASSEMBLY6;
       clib_memset (b->opaque, 0, sizeof (b->opaque));
-      vnet_buffer (b)->sw_if_index[VLIB_TX] = 0; /* Native FIB context, not Linux ifindex. */
-      vnet_buffer (b)->ip.reass.next_index = product_fragment_main.success_next;
-      vnet_buffer (b)->ip.reass.error_next_index = product_fragment_main.error_next;
+      vnet_buffer (b)->sw_if_index[VLIB_TX] = 0;
+      vnet_buffer (b)->ip.reass.next_index = family == 4
+        ? product_fragment_main.success_next : product_fragment_main.success_next6;
+      vnet_buffer (b)->ip.reass.error_next_index = family == 4
+        ? product_fragment_main.error_next : product_fragment_main.error_next6;
       if ((e.flags & PRODUCT_FRAGMENT_TRACE) && !(b->flags & VLIB_BUFFER_IS_TRACED))
         {
-          int traced = vlib_trace_buffer (vm, node, PRODUCT_ADMIT_NEXT_REASSEMBLY, b, 1);
+          int traced = vlib_trace_buffer (vm, node, next, b, 1);
           (void) traced;
         }
-      vlib_buffer_enqueue_to_single_next (vm, node, &bi, PRODUCT_ADMIT_NEXT_REASSEMBLY, 1);
+      vlib_buffer_enqueue_to_single_next (vm, node, &bi, next, 1);
     }
   return 1;
 }
@@ -510,16 +596,22 @@ product_fragment_start (vlib_main_t *vm)
       product_fragment_main.error_next = ip4_full_reass_custom_register_next_node (product_fragment_error_node.index);
       ip4_full_reass_custom_register_consume_hook (product_fragment_consume, 0);
       ip4_full_reass_custom_register_error_hook (product_fragment_error_hook, 0);
+      product_fragment_main.success_next6 = ip6_full_reass_custom_register_next_node (product_fragment_success_node.index);
+      product_fragment_main.error_next6 = ip6_full_reass_custom_register_next_node (product_fragment_error_node.index);
+      ip6_full_reass_custom_register_consume_hook (product_fragment_consume6, 0);
+      ip6_full_reass_custom_register_error_hook (product_fragment_error_hook6, 0);
       product_fragment_main.initialized = 1;
     }
-  if (ip4_full_reass_custom_count (product_fragment_main.error_next))
+  if (product_fragment_contexts ())
     clib_panic ("native fragments survived generation retirement");
   clib_memset (product_fragment_main.threads, 0, sizeof (product_fragment_main.threads));
   product_fragment_main.injected = 0;
   product_fragment_main.accepting = 1;
   product_fragment_main.timeout_ms = 500;
   if (ip4_full_reass_set (500, PRODUCT_FRAGMENT_MAX_CONTEXTS,
-                          PRODUCT_FRAGMENT_MAX_ORIGINALS, 50))
+                          PRODUCT_FRAGMENT_MAX_ORIGINALS, 50)
+      || ip6_full_reass_set (500, PRODUCT_FRAGMENT_MAX_CONTEXTS,
+                             PRODUCT_FRAGMENT_MAX_ORIGINALS, 50))
     clib_panic ("cannot configure bounded native reassembly");
 }
 
@@ -528,7 +620,10 @@ product_packet_graph_quiesce_reassembly (vlib_main_t *vm)
 {
   product_fragment_main.accepting = 0;
   if (product_fragment_main.initialized)
-    ip4_full_reass_custom_flush (vm, product_fragment_main.error_next);
+    {
+      ip4_full_reass_custom_flush (vm, product_fragment_main.error_next);
+      ip6_full_reass_custom_flush (vm, product_fragment_main.error_next6);
+    }
 }
 
 static clib_error_t *
@@ -551,7 +646,7 @@ product_fragment_status_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "reassembly.status generation=%llu accepting=%u contexts=%u originals=%llu retained=%llu completed=%llu timeout_ms=%u max_originals=%u",
     (unsigned long long) product_packet_graph_main.generation,
     product_fragment_main.accepting,
-    product_fragment_main.initialized ? ip4_full_reass_custom_count (product_fragment_main.error_next) : 0,
+    product_fragment_contexts (),
     (unsigned long long) (ingress - completed), (unsigned long long) (pins - released),
     (unsigned long long) completed, product_fragment_main.timeout_ms, PRODUCT_FRAGMENT_MAX_ORIGINALS);
   return 0;
@@ -574,9 +669,10 @@ product_fragment_config_cli (vlib_main_t *vm, unformat_input_t *input,
   product_packet_graph_main_t *g = &product_packet_graph_main;
   if (!g->accepting || !product_fragment_main.accepting
       || g->lifecycle_buffers || g->lifecycle_obligations
-      || ip4_full_reass_custom_count (product_fragment_main.error_next))
+      || product_fragment_contexts ())
     return clib_error_return (0, "reassembly configuration requires an active empty graph");
-  if (ip4_full_reass_set (timeout, contexts, PRODUCT_FRAGMENT_MAX_ORIGINALS, 50))
+  if (ip4_full_reass_set (timeout, contexts, PRODUCT_FRAGMENT_MAX_ORIGINALS, 50)
+      || ip6_full_reass_set (timeout, contexts, PRODUCT_FRAGMENT_MAX_ORIGINALS, 50))
     return clib_error_return (0, "native configuration rejected");
   product_fragment_main.timeout_ms = timeout;
   vlib_cli_output (vm, "reassembly.configured timeout_ms=%u contexts_per_thread=%u", timeout, contexts);

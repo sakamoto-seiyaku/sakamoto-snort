@@ -1,0 +1,174 @@
+diff --git a/src/vnet/ip/reass/ip6_full_reass.c b/src/vnet/ip/reass/ip6_full_reass.c
+--- a/src/vnet/ip/reass/ip6_full_reass.c
++++ b/src/vnet/ip/reass/ip6_full_reass.c
+@@ -801,7 +801,7 @@
+       vlib_buffer_t *tmp = vlib_get_buffer (vm, tmp_bi);
+       vnet_buffer_opaque_t *vnb = vnet_buffer (tmp);
+       if (vnb->ip.reass.range_first < vnb->ip.reass.fragment_first ||
+-	  vnb->ip.reass.range_last <= vnb->ip.reass.fragment_first)
++	  vnb->ip.reass.range_last < vnb->ip.reass.fragment_first)
+ 	{
+ 	  rv = IP6_FULL_REASS_RC_INTERNAL_ERROR;
+ 	  goto free_buffers_and_return;
+@@ -1152,6 +1152,16 @@
+ 		vm, *bi0, IP6_FULL_REASS_CUSTOM_ERROR_BUNDLE_CAPACITY);
+ 	      return IP6_FULL_REASS_RC_OK;
+ 	    }
++          if (is_custom_app)
++            {
++              /* Retire the engine reference before Product completion. */
++              ++reass->fragments_n;
++              vlib_node_increment_counter (vm, node->node_index,
++                                           IP6_ERROR_REASS_DUPLICATE_FRAGMENT, 1);
++              vlib_buffer_free_one (vm, *bi0);
++              *bi0 = ~0;
++              return IP6_FULL_REASS_RC_OK;
++            }
+ 	  // byte-identical duplicate fragment - ignore
+ 	}
+       else
+@@ -1328,6 +1338,9 @@
+ 	    {
+ 	      vlib_node_increment_counter (vm, node->node_index,
+ 					   IP6_ERROR_REASS_NO_FRAG_HDR, 1);
++          if (is_custom_app)
++            ip6_full_reass_custom_report_error (
++              vm, bi0, IP6_FULL_REASS_CUSTOM_ERROR_MALFORMED);
+ 	      // this is a mangled packet - no fragmentation
+ 	      next0 = is_custom_app ? fvnb->ip.reass.error_next_index :
+ 					    IP6_FULL_REASSEMBLY_NEXT_DROP;
+@@ -1357,6 +1370,9 @@
+ 		{
+ 		  next0 = is_custom_app ? fvnb->ip.reass.error_next_index :
+ 						IP6_FULL_REASSEMBLY_NEXT_ICMP_ERROR;
++                  if (is_custom_app)
++                    ip6_full_reass_custom_report_error (
++                      vm, bi0, IP6_FULL_REASS_CUSTOM_ERROR_MALFORMED);
+ 		  goto skip_reass;
+ 		}
+ 	    }
+@@ -1368,6 +1384,9 @@
+ 	    {
+ 	      next0 = is_custom_app ? fvnb->ip.reass.error_next_index :
+ 					    IP6_FULL_REASSEMBLY_NEXT_ICMP_ERROR;
++              if (is_custom_app)
++                ip6_full_reass_custom_report_error (
++                  vm, bi0, IP6_FULL_REASS_CUSTOM_ERROR_MALFORMED);
+ 	      goto skip_reass;
+ 	    }
+ 
+@@ -1689,6 +1708,60 @@
+   ip6_full_reass_main.custom_error_opaque = opaque;
+ }
+ 
++/* Control-only snapshot/flush. The caller quiesces workers before changing
++ * lifetime state; matching the registered custom error slot leaves unrelated
++ * native feature contexts alone. Native locks own their native context pools. */
++u32
++ip6_full_reass_custom_count (u32 error_next_index)
++{
++  ip6_full_reass_main_t *rm = &ip6_full_reass_main;
++  u32 count = 0;
++  ip6_full_reass_per_thread_t *rt;
++  vec_foreach (rt, rm->per_thread_data)
++    {
++      clib_spinlock_lock (&rt->lock);
++      ip6_full_reass_t *reass;
++      pool_foreach (reass, rt->pool)
++        if (reass->error_next_index == error_next_index) count++;
++      clib_spinlock_unlock (&rt->lock);
++    }
++  return count;
++}
++
++u32
++ip6_full_reass_custom_flush (vlib_main_t *vm, u32 error_next_index)
++{
++  ip6_full_reass_main_t *rm = &ip6_full_reass_main;
++  vlib_node_runtime_t *node = vlib_node_get_runtime (
++    vm, ip6_full_reass_node_custom.index);
++  u32 count = 0;
++  ip6_full_reass_per_thread_t *rt;
++  vec_foreach (rt, rm->per_thread_data)
++    {
++      u32 *indices = 0;
++      uword index;
++      clib_spinlock_lock (&rt->lock);
++      pool_foreach_index (index, rt->pool)
++        {
++          ip6_full_reass_t *reass = pool_elt_at_index (rt->pool, index);
++          if (reass->error_next_index == error_next_index)
++            vec_add1 (indices, (u32) index);
++        }
++      u32 *slot;
++      vec_foreach (slot, indices)
++        {
++          ip6_full_reass_t *reass = pool_elt_at_index (rt->pool, *slot);
++          ip6_full_reass_drop_all (vm, node, reass, IP6_ERROR_REASS_TIMEOUT,
++                                   IP6_FULL_REASS_CUSTOM_ERROR_STOP);
++          ip6_full_reass_free (rm, rt, reass);
++          count++;
++        }
++      vec_free (indices);
++      clib_spinlock_unlock (&rt->lock);
++    }
++  return count;
++}
++
+ static u32
+ ip6_full_reass_get_nbuckets ()
+ {
+@@ -2200,8 +2273,27 @@
+       ti += 1;
+       b += 1;
+     }
+-  n_enq = vlib_buffer_enqueue_to_thread (vm, node, fq_index, from,
+-					 thread_indices, frame->n_vectors, 1);
++  if (CUSTOM == type)
++    {
++      u32 failed[VLIB_FRAME_SIZE];
++      n_enq = vlib_buffer_enqueue_to_thread_retained (
++        vm, node, fq_index, from, thread_indices, frame->n_vectors, failed);
++      for (u32 i = 0; i < frame->n_vectors - n_enq; i++)
++        {
++          u32 bi = failed[i];
++          vlib_buffer_t *retained = vlib_get_buffer (vm, bi);
++          ip6_full_reass_custom_report_error (
++            vm, bi, IP6_FULL_REASS_CUSTOM_ERROR_HANDOFF);
++          u32 error_node = ip6_full_reass_custom_error_node_index (
++            vm, vnet_buffer (retained)->ip.reass.error_next_index);
++          if (PREDICT_FALSE (error_node == ~0))
++            clib_panic ("custom reassembly lost its error continuation");
++          ip6_full_reass_enqueue_direct (vm, error_node, &bi, 1);
++        }
++    }
++  else
++    n_enq = vlib_buffer_enqueue_to_thread (vm, node, fq_index, from,
++                                          thread_indices, frame->n_vectors, 1);
+ 
+   if (n_enq < frame->n_vectors)
+     vlib_node_increment_counter (vm, node->node_index,
+diff --git a/src/vnet/ip/reass/ip6_full_reass.h b/src/vnet/ip/reass/ip6_full_reass.h
+--- a/src/vnet/ip/reass/ip6_full_reass.h
++++ b/src/vnet/ip/reass/ip6_full_reass.h
+@@ -63,6 +63,9 @@
+   IP6_FULL_REASS_CUSTOM_ERROR_CAPACITY,
+   IP6_FULL_REASS_CUSTOM_ERROR_BUNDLE_CAPACITY,
+   IP6_FULL_REASS_CUSTOM_ERROR_RESOURCE,
++  IP6_FULL_REASS_CUSTOM_ERROR_HANDOFF,
++  IP6_FULL_REASS_CUSTOM_ERROR_STOP,
++  IP6_FULL_REASS_CUSTOM_ERROR_MALFORMED,
+ } ip6_full_reass_custom_error_reason_t;
+ 
+ /* Reports Product-specific failure reasons before a fragment is sent to the
+@@ -73,6 +76,10 @@
+ void ip6_full_reass_custom_register_error_hook (
+   ip6_full_reass_custom_error_fn_t fn, void *opaque);
+ 
++/* Control-only: caller holds the VPP worker barrier. */
++u32 ip6_full_reass_custom_count (u32 error_next_index);
++u32 ip6_full_reass_custom_flush (vlib_main_t *vm, u32 error_next_index);
++
+ void ip6_local_full_reass_enable_disable (int enable);
+ int ip6_local_full_reass_enabled ();
+ #endif /* __included_ip6_full_reass_h */

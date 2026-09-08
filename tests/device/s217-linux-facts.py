@@ -18,11 +18,12 @@ parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--artifact', type=Path, required=True)
 parser.add_argument('--vppctl', type=Path, required=True)
 parser.add_argument('--policy-client', type=Path, default=ROOT/'build-output/s230-policy')
+parser.add_argument('--control-dir', type=Path)
 args = parser.parse_args()
 args.output = args.output.resolve()
 args.artifact = args.artifact.resolve()
 args.output.mkdir(parents=True, exist_ok=False)
-env = dict(os.environ, LD_LIBRARY_PATH=str(args.artifact/'lib')+':'+str(ROOT/'build-output/s217-facts/linux-build-d/control'))
+env = dict(os.environ, LD_LIBRARY_PATH=str(args.artifact/'lib')+':'+str(args.control_dir.resolve() if args.control_dir else ROOT/'build-output/s217-facts/linux-build-d/control'))
 
 def command(*argv, check=True):
     if argv[0] in ('iptables','ip6tables'):

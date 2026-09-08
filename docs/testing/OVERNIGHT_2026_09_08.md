@@ -177,3 +177,11 @@ Pixel is stopped901 with Wi-Fi restored; no S228 APK was installed.
 [任务提交索引](TASK_COMMITS_2026_09_08.md)。产品各里程碑按验收源码快照
 逐文件校验，工作区原有内容保持不变，历史制品哈希不作改写。
 S228 尚未验收，相关代码、第五补丁与测试仍单独保留在工作区。
+
+## S228 complete after resumed execution
+
+Current-source acceptance passes 130 real Linux IPv6 originals plus 49 Pixel
+graph originals, 96 IPv4 reassembly originals and 133 ordinary dual-stack
+NFQUEUE packets. Native ownership, policy, original verdict/free and cleanup
+checks pass. See [S228 report](SAKAMOTO_228_NATIVE_IPV6_REASSEMBLY.md).
+S228 is committed separately after verification; Pixel is stopped906.

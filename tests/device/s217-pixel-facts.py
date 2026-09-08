@@ -5,7 +5,7 @@ import argparse, importlib.util, hashlib, os, selectors, json, re, shlex, subpro
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 SERIAL="28201JEGR0XPAJ"; PKG="com.sakamoto.snort.androidruntime"
-a=argparse.ArgumentParser();a.add_argument('--apk',type=Path,required=True);a.add_argument('--reference-run',type=Path);a.add_argument('--suite',choices=['main','errors'],default='main');a.add_argument('--output',type=Path,required=True);args=a.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+a=argparse.ArgumentParser();a.add_argument('--apk',type=Path,required=True);a.add_argument('--reference-run',type=Path);a.add_argument('--policy-helper',type=Path);a.add_argument('--suite',choices=['main','errors'],default='main');a.add_argument('--output',type=Path,required=True);args=a.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 def save(n,t): (args.output/n).write_text(t);return t
 def adb(*p,check=True):
  r=subprocess.run([str(ROOT/'dev/adb'),'-s',SERIAL,*p],text=True,errors="replace",stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
@@ -150,7 +150,7 @@ try:
  assert expected=={Path(l.split()[1]).name:l.split()[0] for l in installed.splitlines()};result['native_sha256']=expected
  assert save('installed-apk-sha256.txt',adb('shell','sha256sum',native.removesuffix('/lib/arm64')+'/base.apk')).split()[0]==result['apk_sha256']
  result['uid']=adb('shell','run-as',PKG,'id','-u').strip()
- helpers={'s217-net':ROOT/'build-output/s231-fragments/pixel-net','s217-policy':ROOT/'build-output/s217-facts/pixel-policy-v3','s217-echo':ROOT/'build-output/s207-owner/echo'}
+ helpers={'s217-net':ROOT/'build-output/s231-fragments/pixel-net','s217-policy':args.policy_helper.resolve() if args.policy_helper else ROOT/'build-output/s217-facts/pixel-policy-v3','s217-echo':ROOT/'build-output/s207-owner/echo'}
  result['helper_sha256']={n:hashlib.sha256(p.read_bytes()).hexdigest() for n,p in helpers.items()}
  for name,path in helpers.items():adb('push',str(path),'/data/local/tmp/'+name);adb('shell','chmod','755','/data/local/tmp/'+name)
  echo_pid=adb('shell','/data/local/tmp/s217-echo 40631 127.0.0.1 ::1 > /data/local/tmp/s217-echo.log 2>&1 & echo $!').strip();assert echo_pid.isdigit()

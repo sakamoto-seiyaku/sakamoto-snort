@@ -1065,6 +1065,7 @@ enum
   PRODUCT_ADMIT_NEXT_TERMINAL,
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_ADMIT_NEXT_REASSEMBLY,
+  PRODUCT_ADMIT_NEXT_REASSEMBLY6,
 #endif
   PRODUCT_ADMIT_N_NEXT,
 };
@@ -1361,6 +1362,7 @@ VLIB_REGISTER_NODE (product_packet_admit_node) = {
     [PRODUCT_ADMIT_NEXT_TERMINAL] = "product-packet-terminal",
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
     [PRODUCT_ADMIT_NEXT_REASSEMBLY] = "ip4-full-reassembly-custom",
+    [PRODUCT_ADMIT_NEXT_REASSEMBLY6] = "ip6-full-reassembly-custom",
 #endif
   },
 };

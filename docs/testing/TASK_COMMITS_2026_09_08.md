@@ -35,7 +35,7 @@ deletions; no working source was checked out or reverted. Each Product task
 tree was checked against its accepted source manifest before committing.
 Unified-diff patch files retain their exact hashed context whitespace.
 
-S228 remains unaccepted work in the working tree. Its fifth core patch,
+At the time of the backlog split, S228 remained unaccepted work in the working tree. Its fifth core patch,
 IPv6 graph changes, related contract changes and collector/report were not
 included in the completed-task commits. It requires its own runtime acceptance
 and subsequent commit.
@@ -43,3 +43,7 @@ and subsequent commit.
 The task reports under this directory retain the original source/artifact and
 device evidence. Committing the work does not retroactively claim that those
 artifacts were built from these newly created Git commit IDs.
+
+S228 subsequently passed its current-source IPv6 and regression matrices; see
+[IPv6 acceptance](SAKAMOTO_228_NATIVE_IPV6_REASSEMBLY.md). Its implementation is
+recorded separately as `feat(s228): close native IPv6 reassembly ownership`.

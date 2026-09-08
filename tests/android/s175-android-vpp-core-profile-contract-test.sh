@@ -36,7 +36,7 @@ require_literal() {
 
 expected_core_count="$(property vpp.core.patch.count)"
 expected_core_sha256="$(property vpp.core.patch.sha256)"
-[[ "$expected_core_count" == 4 ]] || fail "common core patch count must remain 4"
+[[ "$expected_core_count" == 5 ]] || fail "common core patch count must remain 5"
 [[ "$expected_core_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
   fail "common core patch identity is not a SHA-256 digest"
 
