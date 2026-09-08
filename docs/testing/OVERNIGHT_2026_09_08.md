@@ -236,3 +236,15 @@ Completion Frame return. Same-source local TUN regression passes 38 originals,
 Root regressions pass 69 Pixel and 64 Linux originals, and 15 evidence mutations
 are rejected. See [S214 report](SAKAMOTO_214_REMOTE_TUN_COMPLETION.md). Pixel is
 stopped940 with Wi-Fi restored; the task is committed separately.
+
+## S219 complete — first-fragment platform facts
+
+On 2026-09-09, Pixel and Linux each pass 30 controlled native originals,
+14 successful datagrams and two missing-first timeouts. First-field restoration
+is exact across late first arrival, unknown facts, conflicting other fields and
+snapshot changes. Real TUN acceptance adds 32 kernel fragments / 16 datagrams
+plus 14 control packets; real Linux NFQUEUE regressions settle 195 originals.
+Ordinary regressions pass 70 Pixel Root, 64 Linux Root and 38 Pixel TUN originals.
+Eighteen semantic evidence mutations are rejected. See
+[S219 report](SAKAMOTO_219_FIRST_FRAGMENT_PLATFORM_FACTS.md). Pixel is stopped946
+with Wi-Fi restored; the task is committed separately.

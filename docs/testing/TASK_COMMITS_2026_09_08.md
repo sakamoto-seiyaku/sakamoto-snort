@@ -83,3 +83,11 @@ typed native completion, removal of the unused synchronous result seam, and
 real W0→W1→W0 TUN DROP acceptance. It also replaces the stale synchronous
 external-ownership contract and checks final conservation at actual native
 stop. See [S214 report](SAKAMOTO_214_REMOTE_TUN_COMPLETION.md).
+
+## S219 separate accepted commit
+
+`feat(s219): preserve first-fragment facts for native TUN reassembly` records
+TUN obligation support in the existing native envelope, bounded controlled
+platform inputs and complete first-field traces. Independent Pixel/Linux
+matrices and actual TUN/NFQUEUE original ownership are documented in
+[SAKAMOTO_219_FIRST_FRAGMENT_PLATFORM_FACTS.md](SAKAMOTO_219_FIRST_FRAGMENT_PLATFORM_FACTS.md).

@@ -12,6 +12,7 @@
 #include "product_flow_entry.h"
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
+#include "product_network_snapshot.h"
 
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
@@ -6172,6 +6173,9 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u8 *hex = 0;
   u32 case_id = 0, bi, failed, arrival_worker = 0, uid = 21200;
+  u32 fact_ifindex = 0, fact_context = 0, fact_available = 0;
+  u32 fact_direction = 0, fact_provenance = 0;
+  int explicit_facts = 0;
   int fragment_probe = strcmp (command->path, "product reassembly inject") == 0;
   int owner_probe = 0;
   (void) command;
@@ -6179,7 +6183,19 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
       || !graph->accepting || !graph->enabled)
     { vec_free (hex); return clib_error_return (0, "injection rejected"); }
   owner_probe = unformat (input, "worker %u", &arrival_worker);
-  if (fragment_probe) (void) unformat (input, "uid %u", &uid);
+  if (fragment_probe)
+    {
+      (void) unformat (input, "uid %u", &uid);
+      explicit_facts = unformat (input, "facts %u %u %u %u %u %u",
+        &uid, &fact_ifindex, &fact_context, &fact_available,
+        &fact_direction, &fact_provenance);
+      if (explicit_facts && (fact_ifindex > INT32_MAX || fact_available > 7
+          || (fact_context && fact_context != 1 && fact_context != 2
+              && fact_context != 4 && fact_context != 8)
+          || (fact_direction != 0 && fact_direction != 1 && fact_direction != 3)
+          || fact_provenance > PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED))
+        { vec_free (hex); return clib_error_return (0, "invalid controlled platform facts"); }
+    }
   if (arrival_worker >= PRODUCT_GRAPH_WORKERS
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     { vec_free (hex); return clib_error_return (0, "invalid injection worker"); }
@@ -6240,6 +6256,18 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
       extra.platform.availability = PRODUCT_PLATFORM_UID_KNOWN;
       extra.platform.direction = PRODUCT_PACKET_DIRECTION_OUTPUT;
     }
+  if (explicit_facts)
+    extra.platform = (product_platform_packet_facts_t) {
+      .uid = uid, .linux_ifindex = fact_ifindex, .network_context_id = fact_context,
+      .availability = fact_available, .direction = fact_direction, .provenance = fact_provenance,
+    };
+  if (fragment_probe)
+    fprintf (stderr, "s219 event=controlled_fragment case=%u token=%llu generation=%llu arrival_worker=%u snapshot_revision=%llu uid=%u ifindex=%u context=%u availability=%u direction=%u provenance=%u\n",
+      case_id, (unsigned long long) metadata.origin_obligation_id,
+      (unsigned long long) graph->generation, arrival_worker,
+      (unsigned long long) product_network_snapshot_current ()->revision,
+      extra.platform.uid, extra.platform.linux_ifindex, extra.platform.network_context_id,
+      extra.platform.availability, extra.platform.direction, extra.platform.provenance);
   product_metadata_store (buffer, &metadata);
   clib_memcpy_fast (buffer->opaque, &extra, sizeof (extra));
   clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
@@ -6268,7 +6296,7 @@ VLIB_CLI_COMMAND (product_metadata_inject_command, static) = {
 
 VLIB_CLI_COMMAND (product_reassembly_inject_command, static) = {
   .path = "product reassembly inject",
-  .short_help = "product reassembly inject <case 1..32> <hex, max 256 bytes> [worker <0|1>] [uid <uid>]",
+  .short_help = "product reassembly inject <case 1..32> <hex, max 256 bytes> [worker <0|1>] [uid <uid>] [facts <uid> <ifindex> <context> <availability> <direction> <provenance>]",
   .function = product_metadata_inject_cli,
 };
 

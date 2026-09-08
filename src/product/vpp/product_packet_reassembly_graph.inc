@@ -88,7 +88,8 @@ product_fragment_load (vlib_main_t *vm, u32 bi)
       || !envelope.obligation.token || !b->ref_count
       || envelope.obligation.origin_worker >= PRODUCT_GRAPH_WORKERS
       || (envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-          && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED)))
+          && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
+          && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)))
     clib_panic ("invalid fragment ownership envelope");
   return envelope;
 }
@@ -394,12 +395,13 @@ VLIB_NODE_FN (product_fragment_success_node)
       product_metadata_store (b, &metadata);
       product_fragment_counters (vm)->success++;
       if (first.flags & PRODUCT_FRAGMENT_TRACE)
-        fprintf (stderr, "s212 event=native_success thread=%u survivor=%u token=%llu generation=%llu originals=%u bytes=%u uid=%u availability=%u direction=%u provenance=%u family=%u\n",
+        fprintf (stderr, "s212 event=native_success thread=%u survivor=%u token=%llu generation=%llu originals=%u bytes=%u uid=%u availability=%u direction=%u provenance=%u family=%u ifindex=%u context=%u\n",
           vm->thread_index, bi, (unsigned long long) first.obligation.token,
           (unsigned long long) first.obligation.queue_generation, count,
           b->current_length, first.platform.uid, first.platform.availability,
           first.platform.direction, first.platform.provenance,
-          (first.flags & PRODUCT_FRAGMENT_IPV6) ? 6 : 4);
+          (first.flags & PRODUCT_FRAGMENT_IPV6) ? 6 : 4,
+          first.platform.linux_ifindex, first.platform.network_context_id);
       vlib_buffer_enqueue_to_single_next (vm, node, &bi, 0, 1);
     }
   return frame->n_vectors;
@@ -504,11 +506,12 @@ product_fragment_dispatch (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi,
         }
     }
   if (e.flags & PRODUCT_FRAGMENT_TRACE)
-    fprintf (stderr, "s212 event=fragment_ingress thread=%u buffer=%u token=%llu generation=%llu kind=%u origin_worker=%u lane=%u packet=%u offset=%u more=%u bytes=%u refs=%u uid=%u availability=%u family=%u\n",
+    fprintf (stderr, "s212 event=fragment_ingress thread=%u buffer=%u token=%llu generation=%llu kind=%u origin_worker=%u lane=%u packet=%u offset=%u more=%u bytes=%u refs=%u uid=%u availability=%u family=%u ifindex=%u context=%u direction=%u provenance=%u\n",
       vm->thread_index, bi, (unsigned long long) e.obligation.token,
       (unsigned long long) e.obligation.queue_generation, e.obligation.kind,
       e.obligation.origin_worker, e.obligation.origin_lane, e.obligation.packet_id,
-      offset, more, length, b->ref_count, e.platform.uid, e.platform.availability, family);
+      offset, more, length, b->ref_count, e.platform.uid, e.platform.availability, family,
+      e.platform.linux_ifindex, e.platform.network_context_id, e.platform.direction, e.platform.provenance);
   if (!product_fragment_main.accepting)
     product_fragment_error_emit (vm, node, bi, e, IP4_FULL_REASS_CUSTOM_ERROR_STOP);
   else if (header < (family == 4 ? 20 : 48) || header > length
