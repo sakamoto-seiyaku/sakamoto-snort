@@ -184,7 +184,7 @@ check_corrective_handoff (const uint8_t *packet, size_t length)
          "first owner mismatch must request one corrective handoff");
   CHECK (corrected.corrective_handoff_count == 1,
          "first owner mismatch must count exactly one corrective handoff");
-  CHECK (corrected.owner_guarded == 0
+  CHECK (corrected.policy_owner_ready == 0
            && corrected.runtime_drop_reason == PRODUCT_PACKET_DROP_NONE
            && corrected.terminal_intent == PRODUCT_PACKET_INTENT_NONE
            && corrected.terminal_count == 0,
@@ -193,7 +193,7 @@ check_corrective_handoff (const uint8_t *packet, size_t length)
            == PRODUCT_PACKET_OK,
          "corrected packet arriving at expected owner must pass guard");
   CHECK (corrected.corrective_handoff_count == 1
-           && corrected.owner_guarded == 1,
+           && corrected.policy_owner_ready == 1,
          "successful correction must retain one handoff and guarded state");
   CHECK (product_packet_set_terminal (&corrected,
                                       PRODUCT_PACKET_INTENT_PASS_ADAPTER)
@@ -209,7 +209,7 @@ check_corrective_handoff (const uint8_t *packet, size_t length)
          "second wrong worker must become a repeated-owner runtime drop");
   CHECK (repeated.corrective_handoff_count == 1,
          "repeated mismatch must not request a second corrective handoff");
-  CHECK (repeated.owner_guarded == 0
+  CHECK (repeated.policy_owner_ready == 0
            && repeated.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
            && repeated.terminal_count == 1 && repeated.settled == 0,
          "repeated mismatch must create one unsettled runtime-drop terminal");

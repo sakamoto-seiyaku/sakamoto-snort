@@ -23,6 +23,7 @@
 #endif
 
 #include <string.h>
+#include <stdio.h>
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include <unistd.h>
 #endif
@@ -39,7 +40,7 @@ _Static_assert (PRODUCT_GRAPH_HANDOFF_CREDITS < FRAME_QUEUE_MAX_NELTS,
 enum
 {
   PRODUCT_META_ADMITTED = 1 << 0,
-  PRODUCT_META_GUARDED = 1 << 1,
+  PRODUCT_META_POLICY_READY = 1 << 1,
   PRODUCT_META_SETTLED = 1 << 2,
   PRODUCT_META_SOURCE_IS_A = 1 << 3,
   PRODUCT_META_TERMINAL_SHIFT = 4,
@@ -47,6 +48,7 @@ enum
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_META_ADMIT_THREAD_2 = 1 << 6,
 #endif
+  PRODUCT_META_TRACE = 1 << 6,
   PRODUCT_META_HANDOFF_CREDIT = 1 << 7,
 };
 
@@ -140,6 +142,7 @@ typedef struct
   u32 lifecycle_obligations;
   u32 lifecycle_buffers;
   u32 lifecycle_handoffs;
+  u32 trace_packets;
   u32 lifecycle_terminal_intents;
   u32 lifecycle_settlements;
   u32 lifecycle_returns;
@@ -673,8 +676,8 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
   lease->distribution = metadata->primary_handoff_count == 0
                           ? PRODUCT_PACKET_DISTRIBUTION_LOCAL
                           : PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
-  lease->owner_guarded =
-    (metadata->state_bits & PRODUCT_META_GUARDED) != 0;
+  lease->policy_owner_ready =
+    (metadata->state_bits & PRODUCT_META_POLICY_READY) != 0;
   lease->terminal_intent = product_metadata_terminal_intent (metadata);
   lease->terminal_count = lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE
                             ? 0
@@ -843,6 +846,7 @@ VLIB_REGISTER_NODE (product_packet_test_ingress_node) = {
 enum
 {
   PRODUCT_ADMIT_NEXT_FRAGMENT_STEER,
+  PRODUCT_ADMIT_NEXT_POLICY,
   PRODUCT_ADMIT_NEXT_OWNER_GUARD,
   PRODUCT_ADMIT_NEXT_TERMINAL,
   PRODUCT_ADMIT_N_NEXT,
@@ -872,6 +876,7 @@ VLIB_NODE_FN (product_packet_admit_node)
       };
 
       product_metadata_load (buffer, &initial_metadata);
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!clib_atomic_load_acq_n (&graph->accepting))
         {
           vlib_buffer_free (vm, &buffer_index, 1);
@@ -896,6 +901,7 @@ VLIB_NODE_FN (product_packet_admit_node)
 
       clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
+#endif
       clib_memset (&ingress, 0, sizeof (ingress));
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = buffer->current_length;
@@ -906,8 +912,10 @@ VLIB_NODE_FN (product_packet_admit_node)
             buffer, initial_metadata.generation, &ingress.hints))
         product_packet_graph_policy_hints_unknown (&ingress.hints);
       clib_memset (&lease, 0, sizeof (lease));
-      if (product_packet_admit (&layout, &ingress, &lease)
-          != PRODUCT_PACKET_OK)
+      product_packet_result_t admit_result =
+        product_packet_admit (&layout, &ingress, &lease);
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (admit_result != PRODUCT_PACKET_OK)
         {
           PRODUCT_EVIDENCE_ADD (lost_buffers, 1);
           PRODUCT_EVIDENCE_ADD (buffer_returns, 1);
@@ -918,17 +926,49 @@ VLIB_NODE_FN (product_packet_admit_node)
           PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
+#endif
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      /* Only the selected local UDP4 path is open in this slice. */
+      if (admit_result != PRODUCT_PACKET_OK || lease.facts.ip_family != 4
+          || lease.facts.protocol != 17
+          || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE
+          || lease.expected_owner != logical_worker) {
+        lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+        lease.terminal_count = 1;
+        lease.runtime_drop_reason = PRODUCT_PACKET_DROP_UNSUPPORTED_ENVELOPE;
+      } else {
+        lease.policy_owner_ready = 1;
+      }
+#endif
       product_metadata_from_lease (&metadata, &lease,
                                    initial_metadata.generation);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (vm->thread_index == vlib_get_worker_thread_index (1))
         metadata.state_bits |= PRODUCT_META_ADMIT_THREAD_2;
 #endif
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      metadata.state_bits |= initial_metadata.state_bits & PRODUCT_META_TRACE;
+      if (lease.policy_owner_ready)
+        metadata.state_bits |= PRODUCT_META_POLICY_READY;
+      if (admit_result != PRODUCT_PACKET_OK)
+        metadata.state_bits &= ~PRODUCT_META_ADMITTED;
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+      fprintf(stderr, "s203 event=admit source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u parse=1 assignment=1 owner=%u family=%u protocol=%u src_port=%u dst_port=%u intent=%u\n",
+        node->node_index, vm->thread_index, logical_worker, buffer_index,
+        (unsigned long long)metadata.origin_obligation_id, metadata.generation,
+        lease.expected_owner, lease.facts.ip_family, lease.facts.protocol,
+        lease.facts.source_port, lease.facts.destination_port, lease.terminal_intent);
+#endif
       product_metadata_store (buffer, &metadata);
       PRODUCT_EVIDENCE_ADD (admitted, 1);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_ADMIT,
                          metadata.origin_obligation_id);
 
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index,
+        lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
+          ? PRODUCT_ADMIT_NEXT_POLICY : PRODUCT_ADMIT_NEXT_TERMINAL, 1);
+#else
       if (lease.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL)
         {
           PRODUCT_EVIDENCE_ADD (local_packets, 1);
@@ -962,6 +1002,7 @@ VLIB_NODE_FN (product_packet_admit_node)
 #endif
             }
         }
+#endif
     }
   return frame->n_vectors;
 }
@@ -975,6 +1016,7 @@ VLIB_REGISTER_NODE (product_packet_admit_node) = {
   .n_next_nodes = PRODUCT_ADMIT_N_NEXT,
   .next_nodes = {
     [PRODUCT_ADMIT_NEXT_FRAGMENT_STEER] = "product-packet-fragment-steer",
+    [PRODUCT_ADMIT_NEXT_POLICY] = "product-packet-policy",
     [PRODUCT_ADMIT_NEXT_OWNER_GUARD] = "product-packet-owner-guard",
     [PRODUCT_ADMIT_NEXT_TERMINAL] = "product-packet-terminal",
   },
@@ -1081,7 +1123,7 @@ VLIB_NODE_FN (product_packet_owner_guard_node)
           PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
-      metadata.state_bits |= PRODUCT_META_GUARDED;
+      metadata.state_bits |= PRODUCT_META_POLICY_READY;
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_OWNER_GUARD,
                          metadata.origin_obligation_id);
@@ -1153,6 +1195,14 @@ VLIB_NODE_FN (product_packet_policy_node)
               == PRODUCT_PACKET_OK)
             lease.runtime_drop_reason = PRODUCT_PACKET_DROP_INVALID_ENVELOPE;
         }
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+      fprintf(stderr, "s203 event=policy source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u owner=%u stage=%u verdict=%u rule=%llu\n",
+        node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
+        buffer_index, (unsigned long long)metadata.origin_obligation_id, metadata.generation,
+        lease.expected_owner, evaluation.stage, evaluation.verdict,
+        (unsigned long long)evaluation.rule_id);
+#endif
       product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
       metadata.runtime_drop_reason = lease.runtime_drop_reason;
       product_metadata_store (buffer, &metadata);
@@ -1303,12 +1353,30 @@ VLIB_NODE_FN (product_packet_terminal_node)
         }
 #endif
 
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+      fprintf(stderr, "s203 event=terminal source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u intent=%u owner=%u\n",
+        node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
+        buffer_index, (unsigned long long)metadata.origin_obligation_id,
+        metadata.generation, lease.terminal_intent, lease.expected_owner);
+      if (graph->external_completion)
+        graph->external_completion(vm, buffer_index, &lease,
+          metadata.origin_obligation_id, lease.terminal_intent,
+          lease.runtime_drop_reason, graph->external_completion_opaque);
+#endif
       vlib_buffer_free (vm, &buffer_index, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+      fprintf(stderr, "s203 event=buffer_free source=NFQ_CAPTURED thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u\n",
+        vm->thread_index, buffer_index, (unsigned long long)metadata.origin_obligation_id,
+        clib_atomic_load_acq_n(&graph->lifecycle_buffers),
+        clib_atomic_load_acq_n(&graph->lifecycle_obligations));
+#endif
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!lifecycle_fixture_packet)
         {
@@ -1361,6 +1429,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
 
   graph->vlib_main = vm;
   graph->generation = (u16) generation;
+  graph->trace_packets = 0;
   if (!product_packet_graph_flow_pools_reset (graph))
     return 0;
   clib_atomic_store_rel_n (&graph->lifecycle_terminal_intents, 0);
@@ -1743,6 +1812,10 @@ product_packet_graph_flow_observe (
   product_packet_graph_main_t *graph, const product_packet_lease_t *lease,
   const product_packet_graph_policy_evaluation_t *evaluation)
 {
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  (void)graph; (void)lease; (void)evaluation;
+  return;
+#endif
   product_flow_entry_packet_t packet;
   product_flow_entry_observation_t observation;
   product_flow_entry_pool_t *pool;
@@ -3460,7 +3533,7 @@ product_packet_graph_policy_stage (
       product_packet_graph_record_policy_stage (graph, evaluation);
       return PRODUCT_PACKET_OK;
     }
-  if (!lease->owner_guarded)
+  if (!lease->policy_owner_ready)
     return PRODUCT_PACKET_ORDER_VIOLATION;
 
   for (;;)
@@ -3674,136 +3747,38 @@ int
 product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                       const product_packet_hints_t *hints,
                                       u64 origin_obligation_id,
-                                      product_packet_graph_external_result_t
-                                        *external_result)
+                                      product_packet_graph_external_result_t *external_result)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  vlib_buffer_t *buffer;
-  product_packet_ingress_t ingress;
-  product_packet_lease_t lease;
-  product_packet_result_t result;
-  product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS,
-    .hash_seed = PRODUCT_GRAPH_HASH_SEED,
-  };
-  product_packet_terminal_intent_t terminal_intent =
-    PRODUCT_PACKET_INTENT_NONE;
-  product_packet_runtime_drop_reason_t drop_reason =
-    PRODUCT_PACKET_DROP_NONE;
-  u16 arrival_worker = 0;
-  u8 primary_remote = 0;
-  int completed = 0;
-
-  if (external_result != 0)
+  product_buffer_metadata_t metadata = { 0 };
+  vlib_frame_t *frame;
+  u32 *to;
+  if (external_result)
     clib_memset (external_result, 0, sizeof (*external_result));
-
-  if (vm == 0 || origin_obligation_id == 0
+  if (!vm || vm->thread_index != vlib_get_worker_thread_index (0)
+      || !origin_obligation_id || !graph->external_completion
       || !clib_atomic_load_acq_n (&graph->enabled)
-      || !clib_atomic_load_acq_n (&graph->accepting))
+      || !clib_atomic_load_acq_n (&graph->accepting)) {
+    fprintf(stderr, "s203 event=submit_reject thread=%u tls=%u obligation=%llu enabled=%u accepting=%u callback=%u\n",
+      vm ? vm->thread_index : ~0U, vlib_get_thread_index(),
+      (unsigned long long)origin_obligation_id, graph->enabled, graph->accepting,
+      graph->external_completion != 0);
     return 0;
-
-  if (hints != 0)
-    arrival_worker = (u16) (hints->interface_id % PRODUCT_GRAPH_WORKERS);
-
-  buffer = vlib_get_buffer (vm, buffer_index);
+  }
+  if (clib_atomic_fetch_add_relax (&graph->trace_packets, 1) < 64)
+    metadata.state_bits |= PRODUCT_META_TRACE;
+  metadata.origin_obligation_id = origin_obligation_id;
+  metadata.generation = graph->generation;
+  product_metadata_store (vlib_get_buffer (vm, buffer_index), &metadata);
+  product_packet_graph_set_policy_hints (vlib_get_buffer (vm, buffer_index),
+                                         hints, metadata.generation);
   clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
   clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
-
-  clib_memset (&ingress, 0, sizeof (ingress));
-  ingress.data = vlib_buffer_get_current (buffer);
-  ingress.length = buffer->current_length;
-  ingress.current_worker = arrival_worker;
-  ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
-  ingress.origin_obligation_id = origin_obligation_id;
-  product_packet_graph_policy_hints_unknown (&ingress.hints);
-  if (hints != 0)
-    ingress.hints = *hints;
-
-  clib_memset (&lease, 0, sizeof (lease));
-  result = product_packet_admit (&layout, &ingress, &lease);
-  if (result == PRODUCT_PACKET_OK)
-    {
-      if (lease.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE)
-        {
-          primary_remote = 1;
-          if (product_handoff_credit_reserve (
-                graph, lease.expected_owner, PRODUCT_HANDOFF_PRIMARY,
-                origin_obligation_id))
-            {
-              result =
-                product_packet_owner_guard (&lease, lease.expected_owner);
-              product_handoff_credit_release (graph, lease.expected_owner);
-            }
-          else
-            {
-              lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
-              lease.terminal_count = 1;
-              lease.runtime_drop_reason =
-                PRODUCT_PACKET_DROP_PRIMARY_HANDOFF_CONGESTION;
-            }
-        }
-      else
-        result = product_packet_owner_guard (&lease, arrival_worker);
-    }
-
-  if (result == PRODUCT_PACKET_OK)
-    {
-      product_packet_graph_policy_evaluation_t evaluation;
-      result = product_packet_graph_policy_stage (&lease, &evaluation);
-    }
-
-  if (result == PRODUCT_PACKET_OK && lease.terminal_intent == 0)
-    result =
-      product_packet_set_terminal (&lease, PRODUCT_PACKET_INTENT_PASS_ADAPTER);
-
-  if (lease.terminal_count == 1)
-    {
-      result = product_packet_settle (&lease);
-      if (result == PRODUCT_PACKET_OK)
-        {
-          terminal_intent =
-            (product_packet_terminal_intent_t) lease.terminal_intent;
-          drop_reason =
-            (product_packet_runtime_drop_reason_t) lease.runtime_drop_reason;
-          completed = 1;
-          if (external_result != 0)
-            {
-              external_result->arrival_worker = arrival_worker;
-              external_result->owner_worker = lease.expected_owner;
-              external_result->primary_remote = primary_remote;
-            }
-          clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
-          clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
-        }
-    }
-
-  if (!completed)
-    {
-      clib_memset (&lease, 0, sizeof (lease));
-      lease.origin_obligation_id = origin_obligation_id;
-      lease.expected_owner = arrival_worker;
-      lease.hints = ingress.hints;
-      lease.terminal_intent = PRODUCT_PACKET_INTENT_PASS_ADAPTER;
-      lease.terminal_count = 1;
-      lease.settled = 1;
-      terminal_intent = PRODUCT_PACKET_INTENT_PASS_ADAPTER;
-      drop_reason = PRODUCT_PACKET_DROP_NONE;
-      clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
-      clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
-    }
-
-  if (graph->external_completion != 0)
-    graph->external_completion (vm, buffer_index, &lease,
-                                origin_obligation_id, terminal_intent,
-                                drop_reason,
-                                graph->external_completion_opaque);
-
-  vlib_buffer_free (vm, &buffer_index, 1);
-  clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
-  clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
-  clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
-
-  /* Ownership and one Adapter completion are final even on an internal fault. */
+  frame = vlib_get_frame_to_node (vm, product_packet_admit_node.index);
+  to = vlib_frame_vector_args (frame);
+  to[0] = buffer_index;
+  frame->n_vectors = 1;
+  vlib_put_frame_to_node (vm, product_packet_admit_node.index, frame);
   return 1;
 }
 

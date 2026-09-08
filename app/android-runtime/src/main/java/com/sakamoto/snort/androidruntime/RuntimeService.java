@@ -83,8 +83,8 @@ public final class RuntimeService extends VpnService {
     private static final String PRODUCT_MANIFEST_ASSET = "product-stage.properties";
     private static final String PRODUCT_PLUGIN_BINARY = "libproduct_core_plugin.so";
     private static final String PRODUCT_ROOT_NFQUEUE_QUEUE = "176";
-    private static final String PRODUCT_ROOT_NFQUEUE_QUEUE_LAST = "177";
-    private static final String PRODUCT_ROOT_NFQUEUE_LANES = "2";
+    private static final String PRODUCT_ROOT_NFQUEUE_QUEUE_LAST = "176";
+    private static final String PRODUCT_ROOT_NFQUEUE_LANES = "1";
     private static final String PRODUCT_ROOT_NFQUEUE_CHAIN = "SAKAMOTO_PRODUCT_S176_OUTPUT";
     private static final String PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN = "SAKAMOTO_PRODUCT_S178_INPUT";
     private static final int PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS = 3;
@@ -2343,8 +2343,10 @@ public final class RuntimeService extends VpnService {
                 + "\nlane_count=" + status.rootNfqueueLaneCount
                 + "\nready_lane_mask=" + status.rootNfqueueReadyLaneMask
                 + "\nhook=OUTPUT"
-                + "\nhooks=INPUT,OUTPUT"
-                + "\nfamilies=IPv4,IPv6"
+                + "\nhooks=OUTPUT"
+                + "\nfamilies=IPv4"
+                + "\nprotocols=UDP"
+                + "\ngraph_scope=owner-local"
                 + "\nroot_nfqueue_generation=" + status.rootNfqueueGeneration
                 + "\norigin_verdict_attempts=" + status.rootNfqueueVerdictAttempts
                 + "\ninternal_settlements=" + status.rootNfqueueInternalSettlements
@@ -5054,46 +5056,11 @@ public final class RuntimeService extends VpnService {
                 + "set -e; "
                 + "iptables -w -t mangle -N " + outputChain + "; "
                 + "iptables -w -t mangle -A " + outputChain
-                + " -m owner --uid-owner " + uid
-                + " -j NFQUEUE --queue-balance " + queue + ":" + queueLast
-                + " --queue-bypass; "
-                + "iptables -w -t mangle -N " + inputChain + "; "
-                + "iptables -w -t mangle -A " + inputChain
-                + " -j NFQUEUE --queue-balance " + queue + ":" + queueLast
-                + " --queue-bypass; "
+                + " -p udp -m owner --uid-owner " + uid
+                + " -j NFQUEUE --queue-num " + queue + " --queue-bypass; "
                 + "iptables -w -t mangle -I OUTPUT -j " + outputChain + "; "
-                + "iptables -w -t mangle -I INPUT -j " + inputChain + "; "
-                + "ip6tables -w -t mangle -N " + outputChain + "; "
-                + "ip6tables -w -t mangle -A " + outputChain
-                + " -m owner --uid-owner " + uid
-                + " -j NFQUEUE --queue-balance " + queue + ":" + queueLast
-                + " --queue-bypass; "
-                + "ip6tables -w -t mangle -N " + inputChain + "; "
-                + "ip6tables -w -t mangle -A " + inputChain
-                + " -j NFQUEUE --queue-balance " + queue + ":" + queueLast
-                + " --queue-bypass; "
-                + "ip6tables -w -t mangle -I OUTPUT -j " + outputChain + "; "
-                + "ip6tables -w -t mangle -I INPUT -j " + inputChain + "; "
-                + "iptables -w -t mangle -S OUTPUT | grep -F -- '-j " + outputChain
-                + "' >/dev/null; "
-                + "iptables -w -t mangle -S INPUT | grep -F -- '-j " + inputChain
-                + "' >/dev/null; "
-                + "ip6tables -w -t mangle -S OUTPUT | grep -F -- '-j " + outputChain
-                + "' >/dev/null; "
-                + "ip6tables -w -t mangle -S INPUT | grep -F -- '-j " + inputChain
-                + "' >/dev/null; "
                 + "iptables -w -t mangle -S " + outputChain
-                + " | grep -F -- '--queue-balance " + queue + ":" + queueLast
-                + "' >/dev/null; "
-                + "iptables -w -t mangle -S " + inputChain
-                + " | grep -F -- '--queue-balance " + queue + ":" + queueLast
-                + "' >/dev/null; "
-                + "ip6tables -w -t mangle -S " + outputChain
-                + " | grep -F -- '--queue-balance " + queue + ":" + queueLast
-                + "' >/dev/null; "
-                + "ip6tables -w -t mangle -S " + inputChain
-                + " | grep -F -- '--queue-balance " + queue + ":" + queueLast
-                + "' >/dev/null";
+                + " | grep -F -- '--queue-num " + queue + "' >/dev/null";
         for (int attempt = 1; attempt <= PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS;
                 attempt++) {
             if (runRootCommand(command, 5L)) {

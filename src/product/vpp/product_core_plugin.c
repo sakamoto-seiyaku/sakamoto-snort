@@ -1061,14 +1061,53 @@ product_core_init (vlib_main_t *vm)
       return clib_error_return (0,
                                 "product core API message ID table unavailable");
     }
-  pcm->core_ready = 1;
-  if (product_core_profile_is_root ()
-      && !product_root_nfqueue_adapter_start (vm, pcm->generation))
-    pcm->core_ready = 0;
+  pcm->core_ready = product_core_profile_is_root () ? 0 : 1;
   return 0;
 }
 
 VLIB_INIT_FUNCTION (product_core_init);
+
+/* Worker clones initially contain the main epoll fd. Wait until worker init
+ * has created each worker's own file-poll state before assigning an fd. */
+static u32 product_core_worker_ready_mask;
+
+static clib_error_t *
+product_core_worker_ready (vlib_main_t *vm)
+{
+  if (vm->thread_index == 1 || vm->thread_index == 2)
+    clib_atomic_fetch_or (&product_core_worker_ready_mask,
+                          1U << (vm->thread_index - 1));
+  return 0;
+}
+
+VLIB_WORKER_INIT_FUNCTION (product_core_worker_ready);
+
+static uword
+product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
+                             vlib_frame_t *frame)
+{
+  product_core_main_t *pcm = &product_core_main;
+  f64 deadline = vlib_time_now (vm) + 1.0;
+  (void)node; (void)frame;
+  if (!product_core_profile_is_root ())
+    return 0;
+  while (clib_atomic_load_acq_n (&product_core_worker_ready_mask) != 3)
+    {
+      if (vlib_time_now (vm) >= deadline)
+        return 0;
+      vlib_process_wait_for_event_or_clock (vm, 0.001);
+    }
+  vlib_worker_thread_barrier_sync (vm);
+  pcm->core_ready = product_root_nfqueue_adapter_start (vm, pcm->generation);
+  vlib_worker_thread_barrier_release (vm);
+  return 0;
+}
+
+VLIB_REGISTER_NODE (product_core_start_adapters_node) = {
+  .function = product_core_start_adapters,
+  .type = VLIB_NODE_TYPE_PROCESS,
+  .name = "product-adapter-start",
+};
 
 VLIB_PLUGIN_REGISTER () = {
   .version = VPP_BUILD_VER,

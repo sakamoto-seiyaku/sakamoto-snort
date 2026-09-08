@@ -125,7 +125,7 @@ typedef struct
   uint8_t distribution;
   uint8_t primary_handoff_count;
   uint8_t corrective_handoff_count;
-  uint8_t owner_guarded;
+  uint8_t policy_owner_ready;
   uint8_t terminal_intent;
   uint8_t terminal_count;
   uint8_t runtime_drop_reason;

@@ -318,7 +318,7 @@ product_packet_owner_guard (product_packet_lease_t *lease,
         }
       return PRODUCT_PACKET_REPEATED_OWNER_MISMATCH;
     }
-  lease->owner_guarded = 1;
+  lease->policy_owner_ready = 1;
   return PRODUCT_PACKET_OK;
 }
 
@@ -328,7 +328,7 @@ product_packet_set_terminal (product_packet_lease_t *lease,
 {
   if (lease == NULL || intent == PRODUCT_PACKET_INTENT_NONE)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
-  if (!lease->owner_guarded || lease->terminal_count != 0 || lease->settled)
+  if (!lease->policy_owner_ready || lease->terminal_count != 0 || lease->settled)
     return PRODUCT_PACKET_ORDER_VIOLATION;
   lease->terminal_intent = (uint8_t) intent;
   lease->terminal_count = 1;
@@ -345,7 +345,7 @@ product_packet_settle (product_packet_lease_t *lease)
   if (lease->terminal_count != 1
       || lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     return PRODUCT_PACKET_ORDER_VIOLATION;
-  if (!lease->owner_guarded
+  if (!lease->policy_owner_ready
       && !(lease->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
            && lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE))
     return PRODUCT_PACKET_ORDER_VIOLATION;

@@ -24,13 +24,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <vlib/file.h>
 
 #define PRODUCT_ROOT_NFQUEUE_DEFAULT_QUEUE 176
-#define PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES 2
+#define PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES 1
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES 4
 #define PRODUCT_ROOT_NFQUEUE_MAX_NETLINK 8192
 #define PRODUCT_ROOT_NFQUEUE_OBLIGATION_PACKET_MASK UINT64_C (0xffffffff)
@@ -652,9 +653,7 @@ product_root_nfqueue_complete_from_graph (
   u32 verdict = terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
                   ? NF_ACCEPT
                   : NF_DROP;
-  (void) vm;
   (void) buffer_index;
-  (void) lease;
   (void) runtime_drop_reason;
 
   if (!product_root_nfqueue_decode_obligation (origin_obligation_id,
@@ -678,6 +677,15 @@ product_root_nfqueue_complete_from_graph (
       return;
     }
 
+  if (vm->thread_index != vlib_get_worker_thread_index (0))
+    {
+      nm->stale_completion_drops++;
+      return;
+    }
+  lane->origin_local_completions++;
+  nm->origin_local_completions++;
+  lane->buffer_returns++;
+  nm->buffer_returns++;
   lane->internal_settlements++;
   nm->internal_settlements++;
   product_root_nfqueue_record_verdict_attempt (nm, lane, packet_id);
@@ -695,6 +703,11 @@ product_root_nfqueue_complete_from_graph (
       nm->verdict_outcome_unknown++;
       return;
     }
+  if (nm->internal_settlements <= 64)
+  fprintf(stderr, "s203 event=verdict source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u obligation=%llu generation=%llu verdict=%u owner=%u\n",
+    vm->thread_index, lane_index, lane->queue_id, packet_id,
+    (unsigned long long)origin_obligation_id, (unsigned long long)nm->generation,
+    verdict, lease ? lease->expected_owner : UINT16_MAX);
   if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id,
                                     verdict))
     {
@@ -715,12 +728,12 @@ product_root_nfqueue_read_ready (clib_file_t *file)
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   product_root_nfqueue_lane_t *lane =
     uword_to_pointer (file->private_data, product_root_nfqueue_lane_t *);
-  vlib_main_t *vm = nm->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
 
   if (lane == 0 || lane->lane_index >= nm->lane_count)
     return clib_error_return (0, "Root NFQUEUE lane identity missing");
 
-  while (1)
+  for (u32 budget = 0; budget < 64; budget++)
     {
       u32 buffer_index;
       vlib_buffer_t *buffer;
@@ -845,6 +858,11 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           vlib_buffer_free (vm, &buffer_index, 1);
           continue;
         }
+      if (nm->packets_seen <= 64)
+        fprintf(stderr, "s203 event=capture source=NFQ_CAPTURED thread=%u tls=%u polling_thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu\n",
+          vm->thread_index, vlib_get_thread_index(), file->polling_thread_index,
+          lane->lane_index, lane->queue_id, packet.packet_id, buffer_index,
+          (unsigned long long)obligation_id);
       submitted = product_packet_graph_submit_external (
         vm, buffer_index, &hints, obligation_id, &graph_result);
       if (!submitted)
@@ -859,34 +877,15 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       else
         {
           lane->packets_submitted++;
-          lane->buffer_returns++;
           nm->packets_submitted++;
-          nm->buffer_returns++;
-          if (graph_result.primary_remote)
-            {
-              lane->origin_remote_completions++;
-              nm->origin_remote_completions++;
-            }
-          else
-            {
-              lane->origin_local_completions++;
-              nm->origin_local_completions++;
-            }
-          if (nm->fault_mode
-              == PRODUCT_ROOT_NFQUEUE_FAULT_DUPLICATE_COMPLETION)
-            product_root_nfqueue_complete_from_graph (
-              vm, ~0, 0, obligation_id, PRODUCT_PACKET_INTENT_PASS_ADAPTER,
-              PRODUCT_PACKET_DROP_NONE, nm);
-          else if (nm->fault_mode
-                   == PRODUCT_ROOT_NFQUEUE_FAULT_STALE_COMPLETION)
-            product_root_nfqueue_complete_from_graph (
-              vm, ~0, 0,
-              product_root_nfqueue_obligation_id (
-                PRODUCT_ROOT_NFQUEUE_MAX_LANES, packet.packet_id),
-              PRODUCT_PACKET_INTENT_PASS_ADAPTER, PRODUCT_PACKET_DROP_NONE,
-              nm);
+          if (nm->packets_submitted <= 64)
+          fprintf(stderr, "s203 event=frame_accept source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu generation=%llu\n",
+            vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
+            buffer_index, (unsigned long long)obligation_id,
+            (unsigned long long)nm->generation);
         }
     }
+  return 0;
 }
 
 static void
@@ -938,6 +937,7 @@ product_root_nfqueue_open_lane (product_root_nfqueue_main_t *nm,
     }
 
   template.read_function = product_root_nfqueue_read_ready;
+  template.polling_thread_index = vlib_get_worker_thread_index (0);
   template.file_descriptor = (u32) fd;
   template.private_data = pointer_to_uword (lane);
   template.description =
@@ -962,6 +962,8 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
   nm->vlib_main = vm;
   nm->queue_id = product_root_nfqueue_queue_from_env ();
   nm->lane_count = product_root_nfqueue_lanes_from_env ();
+  if (nm->lane_count != 1 || vlib_num_workers () < 2)
+    return 0;
   nm->queue_last = nm->queue_id + nm->lane_count - 1;
   if (!product_root_nfqueue_uid_from_env (&nm->uid_owner))
     {
@@ -970,6 +972,9 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
     }
   nm->generation = generation;
   nm->fault_mode = product_root_nfqueue_fault_mode_from_env ();
+  if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_DUPLICATE_COMPLETION
+      || nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_STALE_COMPLETION)
+    return 0;
   nm->packets_seen = 0;
   nm->packets_submitted = 0;
   nm->verdict_attempts = 0;

@@ -315,9 +315,9 @@ int product_packet_graph_get_policy_hints (const vlib_buffer_t *buffer,
                                            product_packet_hints_t *hints);
 
 /*
- * Returns 1 only after the graph has consumed and returned the buffer.  A zero
- * return leaves the buffer with the Adapter caller.  Completion success is
- * reported through the registered callback and is not the ownership result.
+ * Returns 1 when native frame scheduling accepts buffer ownership. A zero
+ * return leaves ownership with the Adapter caller. Completion runs later on
+ * the origin worker; acceptance does not mean verdict or buffer return.
  */
 int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                           const product_packet_hints_t *hints,
