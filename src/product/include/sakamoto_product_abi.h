@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "sakamoto_product_network.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -400,6 +401,10 @@ uint32_t sakamoto_product_session_apply_policy(
     sakamoto_product_status_t *out_status);
 
 /* One transaction for a complete successor Gate + L4 snapshot. */
+uint32_t sakamoto_product_session_publish_network(
+    sakamoto_product_session_t *session, uint64_t expected_generation,
+    const sakamoto_product_network_snapshot_t *snapshot);
+
 uint32_t sakamoto_product_session_apply_policy_bundle(
     sakamoto_product_session_t *session, uint64_t expected_generation,
     const sakamoto_product_policy_bundle_t *bundle,

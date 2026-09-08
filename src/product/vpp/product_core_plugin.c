@@ -1044,6 +1044,30 @@ vl_api_product_core_policy_apply_t_handler (
                 }));
 }
 
+static void
+vl_api_product_core_network_publish_t_handler (
+  vl_api_product_core_network_publish_t *mp)
+{
+  product_core_main_t *pcm = &product_core_main;
+  vl_api_product_core_network_publish_reply_t *rmp;
+  sakamoto_product_network_snapshot_t snapshot = {0};
+  u64 generation = clib_net_to_host_u64 (mp->generation);
+  snapshot.revision = clib_net_to_host_u64 (mp->revision);
+  snapshot.event_elapsed_ns = clib_net_to_host_u64 (mp->event_elapsed_ns);
+  snapshot.count = ntohl (mp->count);
+  snapshot.reserved = ntohl (mp->reserved);
+  for (u32 i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES; ++i)
+    {
+      snapshot.entries[i].linux_ifindex = ntohl (mp->entries[i].linux_ifindex);
+      snapshot.entries[i].context = ntohl (mp->entries[i].network_context);
+    }
+  int rv = generation == pcm->generation && pcm->core_ready
+    && product_root_nfqueue_network_publish (pcm->vlib_main, generation, &snapshot)
+    ? 0 : -1;
+  REPLY_MACRO2 (VL_API_PRODUCT_CORE_NETWORK_PUBLISH_REPLY,
+               ({ rmp->retval = htonl (rv); }));
+}
+
 #include "product_core.api.c"
 
 static clib_error_t *

@@ -1033,6 +1033,34 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeApplyL4PolicyR
   return status_values (env, &status, 0, 0);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativePublishNetwork (
+    JNIEnv *env, jclass clazz, jlong handle, jlong generation,
+    jlong revision, jlong event_elapsed_ns, jintArray pairs)
+{
+  (void) clazz;
+  if (!handle || generation <= 0 || revision <= 0 || event_elapsed_ns < 0 || !pairs)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  jsize size = (*env)->GetArrayLength (env, pairs);
+  if (size < 0 || size > 64 || size % 2)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  jint values[64] = {0};
+  (*env)->GetIntArrayRegion (env, pairs, 0, size, values);
+  if ((*env)->ExceptionCheck (env)) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  sakamoto_product_network_snapshot_t snapshot = {0};
+  snapshot.revision = (uint64_t) revision;
+  snapshot.event_elapsed_ns = (uint64_t) event_elapsed_ns;
+  snapshot.count = (uint32_t) size / 2;
+  for (uint32_t i = 0; i < snapshot.count; ++i)
+    {
+      snapshot.entries[i].linux_ifindex = (uint32_t) values[i * 2];
+      snapshot.entries[i].context = (uint32_t) values[i * 2 + 1];
+    }
+  return (jint) sakamoto_product_core_publish_network (
+    (sakamoto_product_core_handle_t *) (intptr_t) handle,
+    (uint64_t) generation, &snapshot);
+}
+
 JNIEXPORT jobjectArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeApplyPolicyBundle (
     JNIEnv *env, jclass clazz, jlong handle, jlong generation, jstring files_dir,

@@ -185,3 +185,13 @@ graph originals, 96 IPv4 reassembly originals and 133 ordinary dual-stack
 NFQUEUE packets. Native ownership, policy, original verdict/free and cleanup
 checks pass. See [S228 report](SAKAMOTO_228_NATIVE_IPV6_REASSEMBLY.md).
 S228 is committed separately after verification; Pixel is stopped906.
+
+## S232 complete — Android network event snapshots
+
+S232 passes 40 real Pixel Wi-Fi NFQUEUE packets across dual-stack INPUT/OUTPUT,
+network reconnect, controlled unknown and restored policy, plus 69 Pixel and
+64 Linux ordinary regression packets on the final source. Publication rejection
+cleans generation 911; generation 912 restarts with a fresh snapshot. Seven
+semantic evidence mutations are rejected. The accepted report is
+[S232 network snapshots](SAKAMOTO_232_ANDROID_NETWORK_SNAPSHOT.md).
+Pixel is stopped913 with Wi-Fi restored; the task is committed separately.

@@ -309,7 +309,16 @@ public final class RuntimeControlNative {
 
     private static native int nativeDestroy(long handle);
 
+    private static native int nativePublishNetwork(long handle, long generation,
+            long revision, long eventElapsedNs, int[] interfaceContextPairs);
+
     public static final class Session implements AutoCloseable {
+        public synchronized int publishNetwork(long revision, long eventElapsedNs,
+                                                int[] interfaceContextPairs) {
+            if (nativeHandle == 0 || interfaceContextPairs == null) return -1;
+            return nativePublishNetwork(nativeHandle, generation, revision,
+                    eventElapsedNs, interfaceContextPairs);
+        }
         private long nativeHandle;
         private final long generation;
         private Status lastStatus;

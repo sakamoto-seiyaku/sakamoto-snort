@@ -265,3 +265,24 @@ define product_core_policy_bundle_apply_reply {
     u32 context;
     i32 retval;
 };
+
+typedef product_network_entry {
+    u32 linux_ifindex;
+    u32 network_context;
+};
+
+define product_core_network_publish {
+    u32 client_index;
+    u32 context;
+    u64 generation;
+    u64 revision;
+    u64 event_elapsed_ns;
+    u32 count;
+    u32 reserved;
+    vl_api_product_network_entry_t entries[32];
+};
+
+define product_core_network_publish_reply {
+    u32 context;
+    i32 retval;
+};

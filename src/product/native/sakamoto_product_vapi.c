@@ -57,6 +57,67 @@ typedef struct {
   sakamoto_product_status_t *status;
 } apply_call_t;
 
+typedef struct {
+  bool called;
+  uint32_t code;
+} network_call_t;
+
+static vapi_error_e
+network_publish_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
+                       bool is_last,
+                       vapi_payload_product_core_network_publish_reply *reply)
+{
+  (void) context;
+  (void) is_last;
+  network_call_t *call = opaque;
+  call->called = true;
+  call->code = rv == VAPI_OK && reply && reply->retval == 0
+    ? SAKAMOTO_PRODUCT_OK : SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  return VAPI_OK;
+}
+
+uint32_t
+sakamoto_product_session_publish_network (
+  sakamoto_product_session_t *session, uint64_t generation,
+  const sakamoto_product_network_snapshot_t *snapshot)
+{
+  if (!session || !snapshot || !generation || !snapshot->revision
+      || snapshot->reserved
+      || snapshot->count > SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex) != 0)
+    return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if (!session->connected || session->generation != generation) goto done;
+  code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if (!vapi_is_msg_available (session->context,
+                             vapi_msg_id_product_core_network_publish)
+      || !vapi_is_msg_available (session->context,
+                                vapi_msg_id_product_core_network_publish_reply))
+    goto done;
+  vapi_msg_product_core_network_publish *message =
+    vapi_alloc_product_core_network_publish (session->context);
+  code = SAKAMOTO_PRODUCT_ALLOCATION_FAILED;
+  if (!message) goto done;
+  message->payload.generation = generation;
+  message->payload.revision = snapshot->revision;
+  message->payload.event_elapsed_ns = snapshot->event_elapsed_ns;
+  message->payload.count = snapshot->count;
+  message->payload.reserved = snapshot->reserved;
+  for (uint32_t i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES; ++i)
+    {
+      message->payload.entries[i].linux_ifindex = snapshot->entries[i].linux_ifindex;
+      message->payload.entries[i].network_context = snapshot->entries[i].context;
+    }
+  network_call_t call = { .called = false, .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
+  vapi_error_e rv = vapi_product_core_network_publish (
+    session->context, message, network_publish_reply, &call);
+  code = rv == VAPI_OK && call.called ? call.code : SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+done:
+  (void) pthread_mutex_unlock (&session->mutex);
+  return code;
+}
+
 static bool
 product_core_api_available (vapi_ctx_t context)
 {

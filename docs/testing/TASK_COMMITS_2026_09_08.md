@@ -47,3 +47,10 @@ artifacts were built from these newly created Git commit IDs.
 S228 subsequently passed its current-source IPv6 and regression matrices; see
 [IPv6 acceptance](SAKAMOTO_228_NATIVE_IPV6_REASSEMBLY.md). Its implementation is
 recorded separately as `feat(s228): close native IPv6 reassembly ownership`.
+
+## S232 subsequent task commit
+
+`feat(s232): publish Android network snapshots to Root facts` records the
+accepted event-to-packet implementation, final-artifact tests and
+[S232 report](SAKAMOTO_232_ANDROID_NETWORK_SNAPSHOT.md). Its build snapshots
+retain their actual pre-commit source identities.

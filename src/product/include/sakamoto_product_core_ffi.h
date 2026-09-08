@@ -20,6 +20,10 @@ uint32_t sakamoto_product_core_query(
     sakamoto_product_core_handle_t *handle, uint64_t generation,
     sakamoto_product_status_t *out_status);
 
+uint32_t sakamoto_product_core_publish_network(
+    sakamoto_product_core_handle_t *handle, uint64_t generation,
+    const sakamoto_product_network_snapshot_t *snapshot);
+
 uint32_t sakamoto_product_core_apply_empty_policy(
     sakamoto_product_core_handle_t *handle, uint64_t generation,
     sakamoto_product_bytes_t files_dir,

@@ -164,6 +164,12 @@ public final class RuntimeControlBackend {
         context.startService(intent);
     }
 
+    public void setNetworkSnapshotMissing(Context context, boolean missing) {
+        Intent intent = requestIntent(context, RuntimeControlRequest.query());
+        intent.putExtra("debugNetworkSnapshotMissing", missing);
+        context.startService(intent);
+    }
+
     /** Debug-only seam used by S179 Root NFQUEUE fault/recovery acceptance. */
     public void setRootNfqueueFaultMode(Context context, String mode) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());

@@ -192,6 +192,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private final Object stateLock = new Object();
+    private PlatformNetworkSnapshots platformNetworkSnapshots;
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
                 Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
@@ -537,6 +538,17 @@ public final class RuntimeService extends VpnService {
             return START_STICKY;
         }
         if (hasVpnFaultEvent && ACTION_QUERY.equals(action)) {
+            return START_STICKY;
+        }
+        if (ACTION_QUERY.equals(action) && intent != null
+                && intent.hasExtra("debugNetworkSnapshotMissing")
+                && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            final boolean missing = intent.getBooleanExtra("debugNetworkSnapshotMissing", false);
+            enqueueLifecycle(() -> {
+                if (platformNetworkSnapshots != null) {
+                    platformNetworkSnapshots.setDebugMissing(missing);
+                }
+            });
             return START_STICKY;
         }
         // QUERY is a public health request. It must reconcile the durable
@@ -974,6 +986,19 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             productCoreSession = session;
+            if (selected == RuntimeProfile.ROOT) {
+                final long networkGeneration = generation;
+                platformNetworkSnapshots = new PlatformNetworkSnapshots(
+                        getSystemService(ConnectivityManager.class), session,
+                        code -> enqueueLifecycle(() -> {
+                            if (generation == networkGeneration && productCoreSession == session
+                                    && currentMayBeActive()) {
+                                failProductCoreGeneration("platform_network_publish_failed",
+                                        "Network snapshot publication failed: " + code);
+                            }
+                        }));
+                platformNetworkSnapshots.start();
+            }
             RuntimeControlNative.Status status = session.lastStatus();
             boolean adapterReadinessExact = status != null
                     && status.adapterAvailable == adapter.adapterReadyOnStart;
@@ -4735,6 +4760,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private RuntimeControlNative.Status closeProductCoreSession() {
+        if (platformNetworkSnapshots != null) {
+            platformNetworkSnapshots.close();
+            platformNetworkSnapshots = null;
+        }
         RuntimeControlNative.Session session = productCoreSession;
         if (session != null) {
             return session.closeAndGetStatus();

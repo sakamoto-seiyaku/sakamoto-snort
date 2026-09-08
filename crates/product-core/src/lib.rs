@@ -284,6 +284,11 @@ struct ProductSession {
 }
 
 unsafe extern "C" {
+    fn sakamoto_product_session_publish_network(
+        session: *mut ProductSession,
+        expected_generation: u64,
+        snapshot: *const ProductNetworkSnapshot,
+    ) -> c_uint;
     fn sakamoto_product_abi_version() -> c_uint;
     fn sakamoto_product_api_version() -> c_uint;
     fn sakamoto_product_session_connect(
@@ -319,6 +324,43 @@ unsafe extern "C" {
 }
 
 pub const ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+pub struct ProductNetworkSnapshot {
+    pub revision: u64,
+    pub event_elapsed_ns: u64,
+    pub count: u32,
+    pub reserved: u32,
+    pub entries: [[u32; 2]; 32],
+}
+const _: () = assert!(std::mem::size_of::<ProductNetworkSnapshot>() == 280);
+
+/// Publish control-plane platform facts on the existing serialized session.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_publish_network(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    snapshot: *const ProductNetworkSnapshot,
+) -> c_uint {
+    if handle.is_null() || snapshot.is_null() || generation == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        match core.session {
+            Some(session) => unsafe {
+                sakamoto_product_session_publish_network(session.as_ptr(), generation, snapshot)
+            },
+            None => ErrorCode::StaleHandle.raw(),
+        }
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
 pub const API_VERSION: u32 = 1;
 
 pub fn abi_version() -> u32 {

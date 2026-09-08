@@ -236,6 +236,11 @@ public class DebugControlActivity extends Activity {
             return false;
         }
         boolean handled = false;
+        if (intent.hasExtra("debugNetworkSnapshotMissing")) {
+            backend.setNetworkSnapshotMissing(this,
+                    intent.getBooleanExtra("debugNetworkSnapshotMissing", false));
+            handled = true;
+        }
         if (intent.hasExtra(EXTRA_RUNTIME_CLEANUP_FAULT)) {
             backend.setCleanupFault(this,
                     intent.getBooleanExtra(EXTRA_RUNTIME_CLEANUP_FAULT, false));

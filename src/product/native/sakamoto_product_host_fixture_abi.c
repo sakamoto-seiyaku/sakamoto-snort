@@ -1,6 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "sakamoto_product_abi.h"
+
+/* Fixture transports cannot supply platform event/packet evidence. */
+uint32_t
+sakamoto_product_session_publish_network (
+  sakamoto_product_session_t *session, uint64_t generation,
+  const sakamoto_product_network_snapshot_t *snapshot)
+{
+  (void) session;
+  (void) generation;
+  (void) snapshot;
+  return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+}
 #include "product_wire.h"
 #include "sakamoto_product_status.h"
 
