@@ -259,19 +259,19 @@ The per-app L3/L4 IP rule engine for IPv4 and IPv6 packet policy, per-rule stats
 _Avoid_: IPv4 rules, firewall rules without the IPRULES scope
 
 **NetworkContextId**:
-The bounded platform-provided network category used by Network Gate. Android supplies the built-in Wi-Fi, Mobile, and VPN contexts; Linux supplies its own contexts from platform network facts. Product UI renders the available contexts dynamically, while Apply compiles them to a fixed-capacity bit mask. A concrete interface matcher in an advanced L4 rule remains separate from this category, and Android VPN Runtime Profile does not by itself imply the VPN NetworkContextId.
+The bounded platform-provided network category used by Network Gate: Android supplies Wi-Fi, Mobile, and VPN; Linux supplies Wired, Wi-Fi, Mobile, and VPN from reliable facts about the packet's actual interface, with unavailable classification remaining explicitly unknown. This category is separate from concrete interface matching and Runtime Profile, and the shared Product UI presents the platform's available categories.
 _Avoid_: hard-coding Android columns into shared UI, unbounded user-created hot-path dimensions, ifindex as a persisted cross-reboot identity, Runtime Profile
 
 **Network Context Snapshot**:
-The event-driven Android platform fact normalized directly to the shared NetworkContextId and attached at packet ingress. RuntimeService/VpnService maintains the VPN underlying-network snapshot outside the packet path, while NFQUEUE normalizes its available interface evidence to the same values; VPP does not repeat the platform mapping. VPN traffic over Wi-Fi or Mobile retains that underlying context, while an unresolved context remains explicit rather than being mislabeled as VPN.
-_Avoid_: synchronous per-packet Android query, UI Activity state, VPN Runtime Profile as network context, guessing an unavailable context
+The event-driven platform facts used to associate a packet with a reliable NetworkContextId: Android VPN uses its bound underlying network, while Linux NFQUEUE uses the packet's actual ingress or egress interface. Concurrent networks retain their own classifications; the system default network does not replace a packet's actual network facts, and unavailable classification remains unknown.
+_Avoid_: synchronous per-packet platform query, UI Activity state, VPN Runtime Profile as network context, guessing an unavailable context, treating every virtual interface as VPN
 
 **Unknown Network Context**:
 The explicit absence of a reliable NetworkContextId for the current packet. Network-specific Gate and L4 predicates no-match, while every rule that can be evaluated from the remaining facts continues normally; if no stage drops the packet, the normal default is allow.
 _Avoid_: guessing Wi-Fi/Mobile/VPN, holding the packet for a platform query, skipping all policy, infrastructure bypass
 
 **Network Gate**:
-The per-ApplicationSubjectId and NetworkContextId access control exposed as the common app-level firewall action. It is a dedicated rule family inside the Authoring Policy Bundle and compiles to an early bounded Gate table: blocked returns `DROP`, while open returns `PASS_NEXT` into applicable L4 or later policy. A blocked Network Gate wins over every L4 Traffic Rule for that network. Android retains the optimized three-bit Wi-Fi/Mobile/VPN representation; Linux may compile a different bounded context set.
+The per-ApplicationSubjectId and NetworkContextId access control exposed as the common app-level firewall action, with Android's Wi-Fi/Mobile/VPN categories and Linux's Wired/Wi-Fi/Mobile/VPN categories. It is a dedicated rule family inside the Authoring Policy Bundle: blocked returns `DROP` ahead of L4 rules, while open returns `PASS_NEXT` into applicable later policy.
 _Avoid_: frontend-owned gate database, terminal allow on an open gate, L4 allow exception, Root/VPN mode selector, device-wide firewall mode
 
 **L4 Traffic Rule**:
@@ -351,8 +351,8 @@ The post-policy forwarding result for traffic whose Runtime Disposition permits 
 _Avoid_: policy verdict, runtime disposition, treating allow as proof of delivery
 
 **VPN Flow Stack Packet Boundary**:
-The packet-ownership seam between the shared VPP graph/canonical FlowOwner and the VPN Userspace Flow Stack: TUN-origin packets transfer outbound while flow-stack-origin packets return to the same owner graph. It does not define Adapter Completion, ABI, process/thread topology, buffer representation, or an external HEV descriptor channel.
-_Avoid_: VPN Completion Boundary, HEV descriptor seam, treating Flow Stack acceptance as end-to-end delivery, direct Flow Stack-to-TUN return
+The packet-data handoff between the shared VPP graph/canonical FlowOwner and the VPN Userspace Flow Stack, with independent storage on each side of the accepted input/output copies. It is distinct from Adapter Completion and transport delivery: TUN-origin traffic enters the owner-local Flow Stack, while flow-stack-origin packets return through the shared graph.
+_Avoid_: shared buffer lifetime, asynchronous borrowed input buffer, VPN Completion Boundary, HEV descriptor seam, treating Flow Stack acceptance as end-to-end delivery, direct Flow Stack-to-TUN return
 
 **Platform I/O Lane**:
 A VPP-native, event-driven Packet capture Adapter execution lane that exclusively operates its assigned platform fd or queue set for receive and Adapter Completion. A Root lane owns one NFQUEUE queue/socket; the initial VPN lane owns transferred TUN ingress and terminal TUN-completion authority. It materializes ingress into VPP-owned storage, submits work to the shared graph, regains terminal buffers through bounded Completion Frames, performs platform completion, and returns buffers through the native VPP lifecycle.
@@ -363,7 +363,7 @@ The ownership boundary at which the native origin NFQUEUE lane regains decided p
 _Avoid_: end-to-end delivery claim, retrying an ambiguous netlink result, transport outcome owned by Sakamoto
 
 **Lane-Owned NFQUEUE Completion**:
-The Root threading rule that one native NFQUEUE Platform I/O Lane is the sole caller for receive and verdict operations on its netlink queue/socket. Flow owners never call a shared `nfq_q_handle`; they return terminal intents and original live VPP buffer indexes to the origin lane, which submits the original queue generation and packet IDs and then performs native buffer return. This completion routing is not Primary or Corrective Handoff and never copies packet bytes.
+The Root threading rule that one native NFQUEUE Platform I/O Lane is the sole caller for receive and verdict operations on its netlink queue/socket. Flow owners never call a shared `nfq_q_handle`; they return terminal intents and original live VPP buffer indexes to the origin lane, which submits the original queue generation and packet IDs and then performs native buffer return. This completion routing is not owner distribution and never copies packet bytes.
 _Avoid_: cross-worker `nfq_set_verdict`, `nfq_set_verdict_batch` for mixed or out-of-order decisions, shared socket mutex on the hot path, second completion buffer, wake per packet, freeing a buffer before its lane consumes completion
 
 **Infrastructure Fault**:
@@ -407,8 +407,8 @@ Packet-local facts derived once by the shared VPP packet parser from the origina
 _Avoid_: Host object, per-module parser state, Domain-IP Association facts, NFQUEUE-only facts
 
 **Platform Packet Facts**:
-Packet-local facts normalized by a Packet capture Adapter from its platform event, including available application identity evidence, Linux interface index, NetworkContextId, Device Packet Direction, and VPN Packet Provenance. Availability is explicit; queue, lane, file descriptor, completion identity, Runtime Profile, and speculative deployment domains are not Platform Packet Facts and never select ExecutionOwner or FlowOwner.
-_Avoid_: untyped packet hints, zero means unknown, queue as policy fact, VPP sw_if_index as Linux ifindex, Runtime Profile as packet direction, provenance hidden in interface identity
+Packet-local platform evidence, including available application identity, Linux interface index, NetworkContextId, Device Packet Direction, and VPN Packet Provenance, normalized at capture or restored for a reconstructed packet. Availability is explicit and reassembled datagrams use the offset-zero fragment's facts without filling its unknown fields from other fragments; queue, lane, file descriptor, completion identity, Runtime Profile, and speculative deployment domains are excluded and never select ExecutionOwner or FlowOwner.
+_Avoid_: untyped packet hints, zero means unknown, first-arriving fragment as offset-zero fragment, cross-fragment fact merging, queue as policy fact, VPP sw_if_index as Linux ifindex, Runtime Profile as packet direction, provenance hidden in interface identity
 
 **VPP Packet Validation Outcome**:
 The pre-policy content-validity result produced by the shared VPP graph using the modified VPP fork's validation semantics. An invalid L3 envelope, including an invalid IP version, header shape, or declared length, is runtime-dropped with no Policy Verdict. A valid L3 packet for which deeper L4 facts are unavailable or unsupported is not invalidated merely for that reason: PacketFacts preserves the parser status and available facts, predicates requiring unavailable facts do not match, and the remaining evaluable stages continue.
@@ -431,11 +431,11 @@ The packet-ingress performance contract that, after the unavoidable kernel-to-us
 _Avoid_: shared full-packet scratch buffer, Adapter-to-VPP `memcpy`, absolute zero-copy marketing claim, rejecting VPP buffer chains, unmeasured fallback copy
 
 **VPN Egress Copy Minimization**:
-The performance goal of minimizing payload copies between VPP, the VPN Userspace Flow Stack, Protected Egress Sockets, and the return path while preserving explicit bounded ownership and exactly-once return. Exact adoption and materialization points remain evidence-selected; every full-payload copy needs a named lifetime or protocol reason and measurement, while absolute zero-copy is not promised.
+The performance goal of minimizing payload copies while preserving bounded independent ownership and exactly-once settlement, with the VPP-to-lwIP and lwIP-to-VPP copies accepted as the current baseline. This is neither an absolute zero-copy promise nor a claim that the entire protocol/kernel path performs only two memory movements; additional full-payload copies still need a named reason and measurement.
 _Avoid_: absolute zero-copy contract, copy-free marketing claim, unmeasured copying, async borrowed pointer, unbounded buffer loan, ownership complexity pursued without measured benefit, treating every copy as an architecture violation
 
 **VPP Packet Byte-Movement Contract**:
-The in-graph rule that normal parsing, policy, observation, Primary Software Distribution, owner handoff, and the single Corrective Handoff move only VPP buffer indexes/ownership and side metadata, never copy, clone, or reserialize complete packet bytes between workers or nodes. Explicit protocol-required consumers may perform bounded content movement only when their semantics require it, notably fragment or TCP stream reassembly. The inspected modified VPP `stellar_lpi` baseline is not such an exception: it inspects the current L4 payload in place and retains only small derived per-session features, identifiers, and counters rather than packet copies. Any later recognizer that demonstrably requires selected payload retention owns a named capacity/lifetime budget and measurement; recognition must retain only the minimum required content rather than treating this exception as permission to archive packets.
+The in-graph rule that normal parsing, policy, observation, Primary Software Distribution, and owner handoff move only VPP buffer indexes/ownership and side metadata, never copy, clone, or reserialize complete packet bytes between workers or nodes. Explicit protocol-required consumers may perform bounded content movement only when their semantics require it, notably fragment or TCP stream reassembly. The inspected modified VPP `stellar_lpi` baseline is not such an exception: it inspects the current L4 payload in place and retains only small derived per-session features, identifiers, and counters rather than packet copies. Any later recognizer that demonstrably requires selected payload retention owns a named capacity/lifetime budget and measurement; recognition must retain only the minimum required content rather than treating this exception as permission to archive packets.
 _Avoid_: per-node packet clone, worker-to-worker payload copy, telemetry packet copy, implicit recognizer retention, unbounded payload history, using an exception to bypass User-Space Single Materialization
 
 **Contiguous Parser Envelope**:
@@ -447,7 +447,7 @@ The explicit graph permission required to alter or synthesize packet bytes. Norm
 _Avoid_: implicit header edit, NFQUEUE replacement payload, mutate-then-restore parsing, policy-owned NAT, observation-side packet rewrite, treating writable memory as permission
 
 **Packet capture Adapter Conformance Contract**:
-The shared semantic acceptance contract for Android Root/NFQUEUE, Android VPN/TUN, and Linux NFQUEUE Adapters. They transfer the received L3 packet unchanged under User-Space Single Materialization, provide equivalent normalized Platform Packet Facts and original packet length, and preserve PacketLease exactly-once completion, fault handling, shutdown, and recovery around the same VPP packet runtime. Adapter-specific performance limits and documented platform constraints may differ, but packet parsing, policy semantics, Primary Software Distribution, Owner Guard, and worker-owned state do not.
+The shared semantic acceptance contract for Android Root/NFQUEUE, Android VPN/TUN, and Linux NFQUEUE Adapters. They transfer the received L3 packet unchanged under User-Space Single Materialization, provide equivalent normalized Platform Packet Facts and original packet length, and preserve PacketLease exactly-once completion, fault handling, shutdown, and recovery around the same VPP packet runtime. Adapter-specific performance limits and documented platform constraints may differ, but packet parsing, policy semantics, Primary Software Distribution, and worker-owned state do not.
 _Avoid_: separate Root/VPN policy behavior, queue- or fd-owned session state, declaring one Runtime Profile complete from pass-through alone
 
 **Adapter Teardown Barrier**:
@@ -535,7 +535,7 @@ The single flow/session state record owned by L4 Conntrack for a given observed 
 _Avoid_: DPI-specific CT table, telemetry CT table, duplicate flow tables
 
 **Per-worker flow ownership**:
-The target VPP runtime rule that one worker privately owns the mutable state of one bidirectional flow. Adapter-specific Initial Execution Placement is not ownership. Primary Software Distribution computes the final owner on the ingress execution context and either continues locally or performs one Primary Handoff before owner-sensitive state; Corrective Handoff remains a separate one-shot fault repair.
+The target VPP runtime rule that one worker privately owns the mutable state of one bidirectional flow. Adapter-specific Initial Execution Placement is not ownership. Primary Software Distribution computes the final owner once on the ingress execution context and either continues locally or performs one Primary Handoff before owner-sensitive state. Downstream owner-local nodes use the current VPP worker directly and do not run a second owner calculation or corrective dispatch.
 _Avoid_: shared authoritative flow table, queue id as owner, INPUT/OUTPUT thread as correctness
 
 **Canonical Owner Key**:
@@ -543,7 +543,7 @@ The direction-independent key used to select an ExecutionOwner for every valid I
 _Avoid_: treating every owner key as a five-tuple, zero-port synthetic flow, protocol-free address hash, CPU-aware packet hash, `flow_domain`
 
 **ExecutionOwner**:
-The VPP logical worker selected once from a Canonical Owner Key and the runtime-start-fixed Worker Layout. Every valid IPv4/IPv6 packet has an ExecutionOwner even when it is not eligible for a FlowEntry. The assignment remains stable for the active runtime generation, drives Primary Handoff and Owner Guard, and does not imply transport support or flow-state creation.
+The VPP logical worker selected once from a Canonical Owner Key and the runtime-start-fixed Worker Layout. Every valid IPv4/IPv6 packet has an ExecutionOwner even when it is not eligible for a FlowEntry. The assignment remains stable for the active runtime generation, drives the sole Primary Handoff when the selected worker differs from Initial Execution Placement, and does not imply transport support or flow-state creation.
 _Avoid_: arrival worker, VLIB thread index, Linux CPU ID, NFQUEUE lane, FlowEntry eligibility, overload spill target
 
 **FlowOwner**:
@@ -588,11 +588,7 @@ _Avoid_: queue ID as Flow owner, central NFQUEUE gather thread, VPN single-fd to
 
 **Primary Software Distribution**:
 The normal in-graph owner selection performed on the packet's Initial Execution Placement using the Canonical Owner Key and fixed Worker Layout. If the ExecutionOwner is the current worker, processing continues locally with no enqueue; otherwise exactly one Primary Handoff moves the buffer index and side metadata to that owner before owner-sensitive state. Root and VPN share this OwnerSelector despite different ingress topology.
-_Avoid_: queue ID as owner, kernel queue-balance as owner selection, central fan-in, packet-byte movement, Corrective Handoff
-
-**Corrective Handoff**:
-The single permitted repair when a packet reaches a worker other than the owner selected by Primary Software Distribution. A packet that still reaches the wrong owner after this repair is dropped.
-_Avoid_: normal dispatch, repeated redirect loop, Adapter completion routing, fragment owner transition
+_Avoid_: queue ID as owner, kernel queue-balance as owner selection, central fan-in, packet-byte movement, second owner calculation, corrective dispatch
 
 **Fragment Steering**:
 The exceptional pre-policy path that co-locates all fragments of one IP datagram for bounded reassembly, then delivers the reconstructed packet to the ExecutionOwner selected by its Canonical Owner Key. Fragment identity is temporary reassembly state and never becomes FlowEntry identity. Protocol-required reassembly is an explicit bounded exception to the VPP Packet Byte-Movement Contract and has Packet Byte Mutation Authority; ordinary fragment steering and worker handoff still move buffer indexes rather than copying packet bytes. Malformed, conflict, timeout, or capacity failure follows the inspected VPP reassembly behavior: runtime-drop every retained packet obligation with no Policy Verdict.
@@ -601,6 +597,10 @@ _Avoid_: treating non-initial fragments as if they contain ports, UID-based frag
 **FlowEntry**:
 A bounded worker-owned record created only after early Network Gate/L4 policy returns `PASS_NEXT`. Its creating packet establishes Flow Direction `ORIG`, reversed endpoints are `REPLY`, and it records the creating packet's Device Packet Direction as `flowOriginDir`. It also holds flow identity, attribution, allowed-flow activity, the last evaluated policy revision, decision state, and optional later facts. On revision mismatch it preserves reusable flow facts but discards cached winner/verdict state and lazily re-evaluates on the next packet. The first product version's FlowEntry is not a full Stateful Conntrack promise. Packets dropped before creation have no Flow Direction.
 _Avoid_: accepted-flow ledger, full TCP state machine, separate DPI flow table
+
+**Flow Expiry**:
+The point at which a FlowEntry's protocol deadline makes it logically expired, so a later lookup cannot reuse it as a still-valid flow. Owner-local finalization and resource release may follow with bounded delay; that cleanup delay does not extend the flow's logical lifetime.
+_Avoid_: extending protocol timeout to accommodate cleanup, treating an expired entry as valid until a background sweep, equating logical expiry with immediate memory release
 
 **ActivityAccumulator**:
 A fixed-capacity, worker-private, loss-tolerant coalescing table for product Activity evidence when Network Gate or L4 policy drops before FlowEntry creation. It is keyed by bounded packet attribution such as complete UID, network/direction, five-tuple, winner rule reference, and policy revision, and stores first/last time plus packet/byte totals. Eviction may lose UI detail but never changes verdicts or exact app/rule counters.
@@ -627,12 +627,12 @@ The VPP-native Platform I/O Lane that admitted a packet and exclusively owns its
 _Avoid_: FlowOwner, shared completion handle, queue ID as canonical owner, cross-worker verdict
 
 **Canonical Return**:
-The bounded completion route from a remote ExecutionOwner back to the Origin Adapter Lane after policy/runtime processing. It carries the original live buffer identity and terminal intent without copying packet bytes and is Adapter completion routing rather than Primary or Corrective Handoff.
+The bounded completion route from a remote ExecutionOwner back to the Origin Adapter Lane after policy/runtime processing. It carries the original live buffer identity and terminal intent without copying packet bytes and is Adapter completion routing rather than Primary Handoff.
 _Avoid_: shared-TX, direct remote verdict, second packet buffer, another flow redistribution, unbounded retry
 
 **NFQUEUE fail-open fault policy**:
-The shared Android Root and Linux Host Firewall policy that recoverable NFQUEUE infrastructure or packet-processing faults preserve connectivity whenever an accept verdict can still be completed. Missing listeners use queue bypass; supported kernel queue delivery/overflow paths are configured fail-open; parser-execution and ordinary worker-capacity faults with a valid packet identity return accept and record bounded fault/health evidence. An ingress event without Ingress Completion Identity never enters VPP and cannot be actively recovered by Sakamoto, although kernel fail-open/bypass may independently release it. Content that the shared VPP graph has positively classified as an invalid L3 packet is instead runtime-dropped according to VPP Packet Validation Outcome. A packet that still violates flow ownership after its one Corrective Handoff and every packet retained by failed bounded fragment reassembly are also runtime-dropped with no Policy Verdict.
-_Avoid_: silent unobserved bypass, conflating parser execution failure with an invalid packet, fail-closed overload for recoverable ordinary capacity faults, fail-open invalid L3, injecting a packet without completion identity, fail-open after a repeated owner mismatch, fail-open fragment failure, claiming recovery of an unavailable packet ID, treating a policy-rule DROP as an infrastructure fault
+The shared Android Root and Linux Host Firewall policy that recoverable NFQUEUE infrastructure or packet-processing faults preserve connectivity whenever an accept verdict can still be completed. Missing listeners use queue bypass; supported kernel queue delivery/overflow paths are configured fail-open; parser-execution and ordinary worker-capacity faults with a valid packet identity return accept and record bounded fault/health evidence. An ingress event without Ingress Completion Identity never enters VPP and cannot be actively recovered by Sakamoto, although kernel fail-open/bypass may independently release it. Content that the shared VPP graph has positively classified as an invalid L3 packet is instead runtime-dropped according to VPP Packet Validation Outcome. Every packet retained by failed bounded fragment reassembly is also runtime-dropped with no Policy Verdict.
+_Avoid_: silent unobserved bypass, conflating parser execution failure with an invalid packet, fail-closed overload for recoverable ordinary capacity faults, fail-open invalid L3, injecting a packet without completion identity, fail-open fragment failure, claiming recovery of an unavailable packet ID, treating a policy-rule DROP as an infrastructure fault
 
 ### Multi-User Identity
 

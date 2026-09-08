@@ -14,7 +14,7 @@ public final class ProductPacketAdapterContract {
     public static final String TRANSPORT_OUTCOME_SEPARATE =
             "transport-outcome-separate";
     public static final String ROOT_ADAPTER = "root-nfqueue";
-    public static final String VPN_ADAPTER = RuntimeSnapshot.ADAPTER_VPN_TUN_HEV_LWIP;
+    public static final String VPN_ADAPTER = "vpn-flow-stack";
 
     public final RuntimeProfile profile;
     public final String adapterName;
@@ -65,18 +65,18 @@ public final class ProductPacketAdapterContract {
         RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
         if (selected == RuntimeProfile.VPN) {
             return new ProductPacketAdapterContract(selected, VPN_ADAPTER,
-                    "VpnService TUN fd with fd-compatible Flow Stack handoff",
+                    "VpnService TUN with owner-local HEV/lwIP (not implemented)",
                     "single-writer TUN completion",
                     TRANSPORT_OUTCOME_SEPARATE,
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
                     true,
                     false,
                     false,
+                    false,
                     true,
-                    true,
-                    true,
-                    "vpn_adapter_unavailable",
-                    "");
+                    false,
+                    "vpn_flow_stack_not_ready",
+                    "VPN protection is not available in this build.");
         }
         return new ProductPacketAdapterContract(selected, ROOT_ADAPTER,
                 "Root NFQUEUE lanes",

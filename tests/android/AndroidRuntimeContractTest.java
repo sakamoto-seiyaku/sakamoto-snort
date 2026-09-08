@@ -1224,11 +1224,12 @@ public final class AndroidRuntimeContractTest {
 
         ProductPacketAdapterContract vpn =
                 ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN);
-        check(vpn.productLaunchAllowed,
-                "VPN product Adapter launch requires explicit TUN fd handoff");
+        check(!vpn.productLaunchAllowed && !vpn.adapterReadyOnStart
+                        && !vpn.adapterReadyAfterHandoff,
+                "VPN cannot launch or claim readiness before the real Flow Stack exists");
         check(ProductPacketAdapterContract.VPN_ADAPTER.equals(vpn.adapterName),
                 "VPN Adapter name is stable");
-        check(vpn.platformInterface.contains("VpnService TUN fd"),
+        check(vpn.platformInterface.contains("VpnService TUN"),
                 "VPN contract names the platform TUN fd seam");
         check(vpn.separatesTransportOutcome(),
                 "VPN contract separates transport outcome from policy verdict");
@@ -1237,7 +1238,7 @@ public final class AndroidRuntimeContractTest {
         check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
                         .equals(vpn.uidMissHandling),
                 "VPN UID miss uses Unknown Application without hold/cache/replay");
-        check("vpn_adapter_unavailable".equals(vpn.unavailableErrorCode),
+        check("vpn_flow_stack_not_ready".equals(vpn.unavailableErrorCode),
                 "VPN adapter unavailable has a stable error code");
     }
 

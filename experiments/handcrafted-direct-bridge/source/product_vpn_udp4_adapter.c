@@ -1,3 +1,4 @@
+/* S200: isolated handcrafted Direct bridge POC; no HEV/lwIP; excluded from product builds. */
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
@@ -2457,7 +2458,7 @@ product_vpn_send_status_response (product_vpn_udp4_main_t *nm, int fd)
 
   length = snprintf (
     json, sizeof (json),
-    "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+    "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
     "\"fdAttached\":%s,\"transportFdAttached\":%s,\"ipv6Enabled\":true,"
     "\"policySubjectUid\":%u,"
     "\"policyNetworkContext\":%llu,"
@@ -2616,7 +2617,7 @@ product_vpn_send_tun_fault_response (product_vpn_udp4_main_t *nm, int fd)
     }
   length = snprintf (
     json, sizeof (json),
-    "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+    "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
     "\"fault\":\"tun_abnormal_close\",\"tunReady\":%s,"
     "\"fdAttached\":%s,\"transportFdAttached\":%s,"
     "\"vpnTunFdAttached\":%llu,"
@@ -2919,7 +2920,7 @@ product_vpn_process_control_connection (product_vpn_udp4_main_t *nm, int fd)
         char json[PRODUCT_VPN_CONTROL_BUFFER_BYTES];
         int length = snprintf (
           json, sizeof (json),
-          "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+          "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
           "\"fdAttached\":true,\"transportFdAttached\":false,"
           "\"ipv6Enabled\":true,"
           "\"policySubjectUid\":%u,"
@@ -2968,7 +2969,7 @@ product_vpn_process_control_connection (product_vpn_udp4_main_t *nm, int fd)
         && nm->tcp6_ready;
       product_vpn_send_json_response (
         fd,
-        "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+        "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
         "\"fdAttached\":true,\"transportFdAttached\":true,"
         "\"ipv6Enabled\":true}}");
       return;
@@ -2985,7 +2986,7 @@ product_vpn_process_control_connection (product_vpn_udp4_main_t *nm, int fd)
         && nm->tcp6_ready;
       product_vpn_send_json_response (
         fd,
-        "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+        "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
         "\"fdAttached\":true,\"transportFdAttached\":true,"
         "\"ipv6Enabled\":true}}");
       return;
@@ -3002,7 +3003,7 @@ product_vpn_process_control_connection (product_vpn_udp4_main_t *nm, int fd)
         && nm->tcp6_ready;
       product_vpn_send_json_response (
         fd,
-        "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+        "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
         "\"fdAttached\":true,\"transportFdAttached\":true,"
         "\"ipv6Enabled\":true}}");
       return;
@@ -3019,7 +3020,7 @@ product_vpn_process_control_connection (product_vpn_udp4_main_t *nm, int fd)
         && nm->tcp6_ready;
       product_vpn_send_json_response (
         fd,
-        "{\"ok\":true,\"result\":{\"adapter\":\"vpn-tun-hev-lwip\","
+        "{\"ok\":true,\"result\":{\"adapter\":\"poc-handcrafted-direct-bridge\","
         "\"fdAttached\":true,\"transportFdAttached\":true,"
         "\"ipv6Enabled\":true}}");
       return;

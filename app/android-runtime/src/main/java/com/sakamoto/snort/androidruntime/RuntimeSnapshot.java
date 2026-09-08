@@ -20,7 +20,6 @@ public final class RuntimeSnapshot {
     public static final String ADAPTER_UNAVAILABLE = "unavailable";
     public static final String ADAPTER_ROOT_NFQUEUE = "root-nfqueue";
     public static final String ADAPTER_VPN_TUN_FD_COMPAT = "vpn-tun-fd-compat";
-    public static final String ADAPTER_VPN_TUN_HEV_LWIP = "vpn-tun-hev-lwip";
     private static final String PROTECTION_NOT_RUNNING_TEXT = "Protection: not running";
 
     public final String state;

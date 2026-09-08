@@ -148,9 +148,10 @@ Current debug-evidence rollup:
   `matrix.log`, so it remains an evidence directory rather than a complete
   release rollup. It also uses the historical child/SOCKS fixture and therefore
   does not prove Direct Egress or the target VPN Flow Stack Packet Boundary.
-  Post-S245 main-stack runtime construction no longer treats this historical
-  `packet-adapter-vpn-tun-hev` token as the product contract: fd fallback is
-  `vpn-tun-fd-compat`, and the HEV/lwIP facade path is `vpn-tun-hev-lwip`.
+  S200 also invalidates the later handcrafted bridge's `vpn-tun-hev-lwip`
+  claim: S180–S185 and related S192 VPN evidence did not run HEV/lwIP and cannot
+  satisfy this release gate. The bridge is isolated as a POC; ordinary product
+  VPN reports `vpn_flow_stack_not_ready`. No fd fallback or facade is a product path.
 - Profile lifecycle: `build-output/s70-profile-lifecycle-matrix/20260811-150941/matrix.log`
   records `matrix.result=PASS`, Root start, Root→VPN, VPN→Root, Activity
   recreation, app process death, Protection Pause, binding/policy preservation,

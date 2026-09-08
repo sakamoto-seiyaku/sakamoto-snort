@@ -1,5 +1,7 @@
 # SAKAMOTO-195 Recovery Acceptance Dossier
 
+> **S200 correction, 2026-09-07:** This is a historical dossier, not current product closure. S180–S185 and the VPN portions of S192/S196 ran a handcrafted packet-to-socket bridge with no HEV/lwIP. Their recorded PASS values prove only those narrow POC cases; the `vpn-tun-hev-lwip` identity was incorrect. VPN Foundation and the seven-card/product-release closure are **NOT PROVEN** by these results. Root/shared-policy evidence keeps its documented scope. The implementation and historical test recipes are isolated under `experiments/handcrafted-direct-bridge/`; ordinary product VPN is unavailable until the actual ADR-0007 Flow Stack is implemented and accepted. Raw logs and their hashes remain unchanged. All “current-head” and “Done” statements below describe their original date and are superseded by this correction for product claims.
+
 Date: 2026-09-01
 Scope: provenance, seven-card recovery audit, and the current-head Android
 lifecycle recovery. The stale-service teardown fix is recorded here together
@@ -7,7 +9,7 @@ with its static contract and delegated device evidence.
 
 ## Verdict
 
-SAKAMOTO-195 is **PASS**. All seven Recovery Acceptance Cards have
+The original SAKAMOTO-195 **PASS is insufficient for product closure**. The dated audit claimed all seven Recovery Acceptance Cards had
 claim-matched current-head evidence. The current4 APK, Host artifact, pinned VPP
 revision, API identity, and the final Root -> VPN -> Root closure are recorded
 below. The old APK runs remain explicitly historical and are not used to upgrade
@@ -185,7 +187,7 @@ absent; supporting static/unit results do not change that status.
 | A. Product Spine | Current4 installed APK lifecycle, S186 final closure, Host/VAPI identity and artifact checks | PASS | None |
 | B. Shared VPP Packet Kernel | Current4 Host artifact plus S174/S175 graph, fragment, congestion, lifecycle and S192 graph runtime evidence | PASS | None |
 | C. Root Foundation | Current4 S176-S179 plus S192 Root matrix/restart/residue cells | PASS | None |
-| D. VPN Foundation | Current4 S180-S185 plus S192 VPN matrix/network-handle/restart cells | PASS | None |
+| D. VPN Foundation | Historical S180–S185 and S192 handcrafted bridge POC only | NOT PROVEN for ADR-0007 | Real HEV/lwIP product acceptance |
 | E. VPP Foundation Closure | Current4 S186/S187 and final Root -> VPN -> Root closure | PASS | None |
 | F. Shared Policy/Control Foundation | Current4 S188-S192, Host/Rust/Android contracts, and Root/VPN parity | PASS | None |
 | G. Mainline Recovery Closure | Current4 final closure, provenance, and residue record | PASS | None |

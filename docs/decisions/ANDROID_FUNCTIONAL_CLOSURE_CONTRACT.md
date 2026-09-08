@@ -39,8 +39,8 @@
 - capacity、latency、CPU、power、thermal 与长期 soak 的最终发布阈值；
 - policy/control 的最小内部实现步骤、存储引擎、checkpoint 与迁移方式；
 - Runtime health 的锁存、自动清除、自动 restart/backoff 和最终 Product UI 呈现；
-- VPN Userspace Flow Stack 的真实 instance isolation 形状、VPP↔Flow Stack C Interface、pbuf/buffer adoption 与 copy points；
-- FlowOwner-local egress 的 internal state partition、shard/count 以及 owner-inline 或 paired native-thread execution topology；
+- VPN Userspace Flow Stack 在 ADR-0007 已选独立双 copy 存储下的具体 C Interface、copy/completion/free 调用点及真机所有权证据；不再把是否长期持有对方 buffer 作为待选设计；
+- FlowOwner-local egress 在 OI 已选 owner-inline topology 下的具体 isolation 实现、internal state partition 与 shard/count；
 - release signing、升级/回滚、OEM/Android 版本矩阵和 Activity Store retention。
 
 这些变量可以调整，但调整不得绕过固定不变量或改变已经产生的 packet outcome attribution。
@@ -248,10 +248,13 @@ implementation ticket 必须在评论中记录：source revision、artifact iden
 ## 9. Plane 执行顺序
 
 以下 SAKAMOTO-65..71 顺序记录的是原 Android Functional Closure campaign，不能作为当前 Direct
-Egress frontier。当前 VPN Flow Stack evidence 顺序由 SAKAMOTO-110/111 固定为
+Egress frontier。历史 VPN Flow Stack evidence 顺序曾由 SAKAMOTO-110/111 记录为
 SAKAMOTO-114 → 115 → 116 → 117 → 98 → 99 → 100 → 101 → 102；其中 instance isolation、真实
-VPP↔Flow Stack C boundary、buffer/copy envelope 和 inline/paired topology 都必须等待对应 POC，
-不能从旧 Host model 或 TUN/HEV child evidence 推导。
+VPP↔Flow Stack C boundary、buffer/copy envelope 和 inline/paired topology 当时均待对应 POC，
+不能从旧 Host model 或 TUN/HEV child evidence 推导。后续 OI 证据已选择 owner-inline，
+2026-09-05 共识已确认双 copy 独立存储与最小 session facts；以 ADR-0007 更新为准。
+当前执行状态与依赖只在 Plane：S245–S247 是 S237 接口审视的窄实验输入，不重开已选架构，
+也不代替产品 artifact 的真实流量验收。
 
 - SAKAMOTO-65：本文固定的 Functional Closure Contract 与 Evidence Matrix。
 - SAKAMOTO-66：在本文不变量下收敛共享 Flow/Lease/Adapter 领域语义，并明确旧 SAKAMOTO-47..49 代码的迁移/证据地位。

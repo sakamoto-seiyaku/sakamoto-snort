@@ -211,7 +211,6 @@ add_vpp_plugin(product_core
     product_l4_policy.c
     product_flow_entry.c
     product_root_nfqueue_adapter.c
-    product_vpn_udp4_adapter.c
     ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
     product_core.api

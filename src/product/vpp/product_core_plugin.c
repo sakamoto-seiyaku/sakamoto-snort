@@ -27,7 +27,6 @@
 #include "product_l4_policy.h"
 #include "product_packet_graph.h"
 #include "product_root_nfqueue_adapter.h"
-#include "product_vpn_udp4_adapter.h"
 
 #ifndef SAKAMOTO_PRODUCT_VPP_REVISION
 #error "the product plugin must be compiled with the pinned VPP revision"
@@ -99,19 +98,10 @@ product_core_profile_is_root (void)
 }
 
 static int
-product_core_profile_is_vpn (void)
-{
-  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
-  return profile != 0 && strcmp (profile, "vpn") == 0;
-}
-
-static int
 product_core_adapter_available (void)
 {
   if (product_core_profile_is_root ())
     return product_root_nfqueue_adapter_available ();
-  if (product_core_profile_is_vpn ())
-    return product_vpn_udp4_adapter_available ();
   return 0;
 }
 
@@ -120,8 +110,6 @@ product_core_protection_running (void)
 {
   if (product_core_profile_is_root ())
     return product_root_nfqueue_adapter_available ();
-  if (product_core_profile_is_vpn ())
-    return product_vpn_udp4_adapter_protection_running ();
   return 0;
 }
 
@@ -402,46 +390,46 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                       product_root_nfqueue_adapter_stale_completion_drops ());
                   rmp->vpn_tun_fd_attached =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_tun_fd_attached ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_direct_udp4_socket_attached =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_direct_socket_attached ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_direct_udp4_protect_succeeded =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_direct_protect_succeeded ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_direct_udp4_bind_succeeded =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_direct_bind_succeeded ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_tun_ingress_packets =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_tun_ingress_packets ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_tun_udp4_tun_origin_packets =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_udp4_tun_origin_packets ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_flow_stack_admissions =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_flow_stack_admissions ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_direct_udp4_send_succeeded =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_direct_send_succeeded ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_direct_udp4_transport_failed =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_direct_transport_failed ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_flow_stack_return_packets =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_flow_stack_return_packets ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_flow_stack_return_provenance_packets =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_flow_stack_return_provenance_packets ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_tun_write_completions =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_tun_write_completions ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_infrastructure_faults =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_infrastructure_faults ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_duplicate_or_stale_drops =
                     clib_host_to_net_u64 (
-                      product_vpn_udp4_adapter_duplicate_or_stale_drops ());
+                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->product_graph_worker_count =
                     htonl (product_packet_graph_worker_count ());
                   rmp->product_graph_flow_domain =
@@ -1076,9 +1064,6 @@ product_core_init (vlib_main_t *vm)
   pcm->core_ready = 1;
   if (product_core_profile_is_root ()
       && !product_root_nfqueue_adapter_start (vm, pcm->generation))
-    pcm->core_ready = 0;
-  if (product_core_profile_is_vpn ()
-      && !product_vpn_udp4_adapter_start (vm, pcm->generation))
     pcm->core_ready = 0;
   return 0;
 }

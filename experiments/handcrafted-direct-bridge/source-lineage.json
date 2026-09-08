@@ -1,0 +1,8 @@
+{
+  "source_commit": "9c67175",
+  "original_source_sha256": {
+    "src/product/vpp/product_vpn_udp4_adapter.c": "f776f069081f81468c9eb1d7230b2718faf8ef19662170ea01cc580131987796",
+    "src/product/vpp/product_vpn_udp4_adapter.h": "fc940215a90166fe7550e8a93fc33f052cee94f085f93bcc8f4f934fb3fd13bf"
+  },
+  "identity_change": "vpn-tun-hev-lwip -> poc-handcrafted-direct-bridge"
+}

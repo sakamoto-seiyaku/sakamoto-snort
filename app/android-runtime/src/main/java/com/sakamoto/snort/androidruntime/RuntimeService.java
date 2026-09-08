@@ -812,6 +812,13 @@ public final class RuntimeService extends VpnService {
         initializeProfilePaths(selected);
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(selected);
+        if (!adapter.productLaunchAllowed) {
+            publish(RuntimeSnapshot.error(selected, "", "", "", "",
+                    adapter.unavailableErrorCode, adapter.unavailableMessage, false,
+                    ProductCoreLifecycle.UNKNOWN_PID, generation));
+            stopIfInactive();
+            return;
+        }
         // The Root adapter can create hooks and an NFQUEUE socket only from a
         // privileged Product VPP process. Do not publish a partial START or
         // remove a Root profile when that authority is unavailable.
@@ -2385,7 +2392,7 @@ public final class RuntimeService extends VpnService {
         }
         String text = "product.adapter_available=" + (status.adapterAvailable ? "1" : "0")
                 + "\nadapter=" + ProductPacketAdapterContract.VPN_ADAPTER
-                + "\nadapterReadiness=" + ProductPacketAdapterContract.VPN_ADAPTER
+                + "\nadapterReadiness=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE
                 + "\nprofile=vpn"
                 + "\ngeneration=" + status.generation
                 + "\npolicy_default_pass=1"
@@ -2516,7 +2523,7 @@ public final class RuntimeService extends VpnService {
         long tunWrites = result.optLong("vpnDirectTcp4TunWriteCompletions", 0L);
         String text = "product.adapter_available=" + (status.adapterAvailable ? "1" : "0")
                 + "\nadapter=" + ProductPacketAdapterContract.VPN_ADAPTER
-                + "\nadapterReadiness=" + ProductPacketAdapterContract.VPN_ADAPTER
+                + "\nadapterReadiness=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE
                 + "\nprofile=vpn"
                 + "\ngeneration=" + status.generation
                 + "\npolicy_default_pass=1"
@@ -2578,7 +2585,7 @@ public final class RuntimeService extends VpnService {
         long transportFailed = result.optLong("vpnDirectUdp6TransportFailed", 0L);
         String text = "product.adapter_available=" + (status.adapterAvailable ? "1" : "0")
                 + "\nadapter=" + ProductPacketAdapterContract.VPN_ADAPTER
-                + "\nadapterReadiness=" + ProductPacketAdapterContract.VPN_ADAPTER
+                + "\nadapterReadiness=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE
                 + "\nprofile=vpn"
                 + "\ngeneration=" + status.generation
                 + "\npolicy_default_pass=1"
@@ -2628,7 +2635,7 @@ public final class RuntimeService extends VpnService {
         long transportFailed = result.optLong("vpnDirectTcp6TransportFailed", 0L);
         String text = "product.adapter_available=" + (status.adapterAvailable ? "1" : "0")
                 + "\nadapter=" + ProductPacketAdapterContract.VPN_ADAPTER
-                + "\nadapterReadiness=" + ProductPacketAdapterContract.VPN_ADAPTER
+                + "\nadapterReadiness=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE
                 + "\nprofile=vpn"
                 + "\ngeneration=" + status.generation
                 + "\npolicy_default_pass=1"
@@ -2691,7 +2698,7 @@ public final class RuntimeService extends VpnService {
                 && vpnDirectUdp4NetworkHandle == vpnDirectTcp6NetworkHandle;
         String text = "product.adapter_available=" + (status.adapterAvailable ? "1" : "0")
                 + "\nadapter=" + ProductPacketAdapterContract.VPN_ADAPTER
-                + "\nadapterReadiness=" + ProductPacketAdapterContract.VPN_ADAPTER
+                + "\nadapterReadiness=" + RuntimeSnapshot.ADAPTER_UNAVAILABLE
                 + "\nprofile=vpn"
                 + "\ngeneration=" + status.generation
                 + "\nnetwork_context_snapshot=explicit_underlay_at_socket_creation"
@@ -5619,7 +5626,9 @@ public final class RuntimeService extends VpnService {
         vppProcess = null;
         clearProfileHandles();
         RuntimeProfile selected = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
-        boolean published = publish(RuntimeSnapshot.stopped(selected, generation));
+        boolean published = publish(destroying
+                ? RuntimeSnapshot.stoppedAfter(snapshot)
+                : RuntimeSnapshot.stopped(selected, generation));
         writeS192L4MatrixStatus(null, "stopped", "", "");
         stopRequested = false;
         if (stopService && foregroundStarted && !persistenceGate.isPersistenceUnavailable()) {
