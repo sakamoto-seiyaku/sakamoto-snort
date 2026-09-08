@@ -216,8 +216,10 @@ terminal_body="$(awk '
   in_terminal { print }
   in_terminal && /^}/ { exit }
 ' "$graph_source")"
-printf '%s\n' "$terminal_body" | grep -q 'external_completion' ||
-  fail "S203/S216 terminal must own the adapter completion call"
+if printf '%s\n' "$terminal_body" | grep -q 'graph->external_completion'; then
+  fail "terminal must publish Completion Frame, not call the adapter"
+fi
+grep -q 'VLIB_NODE_FN (product_packet_origin_completion_node)' "$graph_source"
 external_body="$(awk '
   /^product_packet_graph_submit_external \(/ { in_submit = 1 }
   in_submit { print }

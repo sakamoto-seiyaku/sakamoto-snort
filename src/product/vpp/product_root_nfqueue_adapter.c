@@ -34,8 +34,7 @@
 #define PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES 1
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES 4
 #define PRODUCT_ROOT_NFQUEUE_MAX_NETLINK 8192
-#define PRODUCT_ROOT_NFQUEUE_OBLIGATION_PACKET_MASK UINT64_C (0xffffffff)
-#define PRODUCT_ROOT_NFQUEUE_OBLIGATION_LANE_SHIFT 32
+#define PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY 64
 
 typedef enum
 {
@@ -62,6 +61,17 @@ typedef struct
   u32 payload_length;
 } product_root_nfqueue_packet_t;
 
+/* Bounded adapter ledger only: no packet or platform facts. It remembers
+ * completed identities until the slot is reused, preventing non-last replay. */
+typedef struct
+{
+  product_packet_completion_frame_t completion;
+  u32 buffer_index;
+  u8 active;
+} product_root_nfqueue_pending_t;
+
+_Static_assert (sizeof (product_root_nfqueue_pending_t) == 40, "bounded completion identity ledger");
+
 typedef struct
 {
   int fd;
@@ -82,6 +92,7 @@ typedef struct
   u8 verdict_packet_id_known;
   u8 socket_ready;
   u8 listener_ready;
+  product_root_nfqueue_pending_t pending[PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
 } product_root_nfqueue_lane_t;
 
 typedef struct
@@ -92,6 +103,9 @@ typedef struct
   u32 lane_count;
   u32 uid_owner;
   u64 generation;
+  u64 next_obligation_token;
+  u32 pending_count;
+  u32 replay_count;
   u64 packets_seen;
   u64 packets_submitted;
   u64 verdict_attempts;
@@ -217,28 +231,27 @@ product_root_nfqueue_fault_mode_from_env (void)
   return PRODUCT_ROOT_NFQUEUE_FAULT_NONE;
 }
 
-static u64
-product_root_nfqueue_obligation_id (u32 lane_index, u32 packet_id)
+static product_root_nfqueue_pending_t *
+product_root_nfqueue_reserve (product_root_nfqueue_main_t *nm,
+                              product_root_nfqueue_lane_t *lane,
+                              u32 packet_id, u32 buffer_index)
 {
-  return (((u64) lane_index + 1) << PRODUCT_ROOT_NFQUEUE_OBLIGATION_LANE_SHIFT)
-         | ((u64) packet_id & PRODUCT_ROOT_NFQUEUE_OBLIGATION_PACKET_MASK);
-}
-
-static int
-product_root_nfqueue_decode_obligation (u64 obligation_id, u32 *lane_index,
-                                        u32 *packet_id)
-{
-  u64 lane_tag =
-    obligation_id >> PRODUCT_ROOT_NFQUEUE_OBLIGATION_LANE_SHIFT;
-  u32 packet =
-    (u32) (obligation_id & PRODUCT_ROOT_NFQUEUE_OBLIGATION_PACKET_MASK);
-
-  if (lane_index == 0 || packet_id == 0 || lane_tag == 0
-      || lane_tag > PRODUCT_ROOT_NFQUEUE_MAX_LANES || packet == 0)
+  product_root_nfqueue_pending_t *pending =
+    &lane->pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
+  if (pending->active || nm->next_obligation_token == UINT64_MAX)
     return 0;
-  *lane_index = (u32) lane_tag - 1;
-  *packet_id = packet;
-  return 1;
+  clib_memset (pending, 0, sizeof (*pending));
+  pending->completion.obligation = (product_adapter_obligation_t) {
+    .token = ++nm->next_obligation_token,
+    .queue_generation = nm->generation,
+    .packet_id = packet_id,
+    .origin_lane = lane->lane_index,
+    .kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
+  };
+  pending->buffer_index = buffer_index;
+  pending->active = 1;
+  clib_atomic_fetch_add_relax (&nm->pending_count, 1);
+  return pending;
 }
 
 static u16
@@ -654,85 +667,86 @@ product_root_nfqueue_accept_extra_messages (product_root_nfqueue_main_t *nm,
 
 static void
 product_root_nfqueue_complete_from_graph (
-  vlib_main_t *vm, u32 buffer_index, const product_packet_lease_t *lease,
-  u64 origin_obligation_id,
-  product_packet_terminal_intent_t terminal_intent,
-  product_packet_runtime_drop_reason_t runtime_drop_reason, void *opaque)
+  vlib_main_t *vm, u32 buffer_index,
+  const product_packet_completion_frame_t *completion, void *opaque)
 {
   product_root_nfqueue_main_t *nm = opaque;
+  const product_adapter_obligation_t *obligation = &completion->obligation;
+  u32 lane_index = obligation->origin_lane;
+  u32 packet_id = obligation->packet_id;
   product_root_nfqueue_lane_t *lane;
-  u32 lane_index;
-  u32 packet_id;
-  u32 verdict = terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
-                  ? NF_ACCEPT
-                  : NF_DROP;
-  (void) buffer_index;
-  (void) runtime_drop_reason;
+  product_root_nfqueue_pending_t *pending;
+  const char *rejection = 0;
+  u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
+                  ? NF_ACCEPT : NF_DROP;
 
-  if (!product_root_nfqueue_decode_obligation (origin_obligation_id,
-                                               &lane_index, &packet_id)
-      || lane_index >= nm->lane_count)
-    {
-      nm->stale_completion_drops++;
-      return;
-    }
+  if (obligation->queue_generation != nm->generation
+      || lane_index >= nm->lane_count
+      || vm->thread_index != vlib_get_worker_thread_index (0))
+    { rejection = "stale_generation_or_lane"; goto stale; }
   lane = &nm->lanes[lane_index];
   if (!lane->listener_ready || !lane->socket_ready || lane->fd < 0)
-    {
-      nm->stale_completion_drops++;
-      return;
-    }
-  if (lane->verdict_packet_id_known
-      && lane->last_verdict_packet_id == packet_id)
+    { rejection = "closed_lane"; goto stale; }
+  pending = &lane->pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
+  if (pending->completion.obligation.token != obligation->token
+      || pending->completion.obligation.queue_generation != obligation->queue_generation
+      || pending->completion.obligation.packet_id != packet_id)
+    { rejection = "stale_identity"; goto stale; }
+  if (!pending->active)
     {
       lane->duplicate_completion_drops++;
       nm->duplicate_completion_drops++;
-      return;
+      rejection = "duplicate";
+      goto rejected;
     }
+  if (pending->buffer_index != buffer_index
+      || (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)
+      || (completion->terminal_intent != PRODUCT_PACKET_INTENT_PASS_ADAPTER
+          && completion->terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME))
+    { rejection = "stale_carrier_or_intent"; goto stale; }
 
-  if (vm->thread_index != vlib_get_worker_thread_index (0))
-    {
-      nm->stale_completion_drops++;
-      return;
-    }
-  lane->origin_local_completions++;
-  nm->origin_local_completions++;
-  lane->buffer_returns++;
-  nm->buffer_returns++;
-  lane->internal_settlements++;
-  nm->internal_settlements++;
+  /* Commit identity consumption before the one native operation attempt. */
+  pending->active = 0;
+  pending->completion = *completion;
+  clib_atomic_fetch_sub_relax (&nm->pending_count, 1);
+  if (completion->producer_thread == vm->thread_index)
+    { lane->origin_local_completions++; nm->origin_local_completions++; }
+  else
+    { lane->origin_remote_completions++; nm->origin_remote_completions++; }
+  lane->buffer_returns++; nm->buffer_returns++;
+  lane->internal_settlements++; nm->internal_settlements++;
   product_root_nfqueue_record_verdict_attempt (nm, lane, packet_id);
   if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_VERDICT_FAILED_DEFINITE)
     {
-      lane->verdict_failed++;
-      nm->verdict_failed++;
-      nm->verdict_failed_definite++;
+      lane->verdict_failed++; nm->verdict_failed++; nm->verdict_failed_definite++;
       return;
     }
   if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_VERDICT_OUTCOME_UNKNOWN)
     {
-      lane->verdict_failed++;
-      nm->verdict_failed++;
-      nm->verdict_outcome_unknown++;
+      lane->verdict_failed++; nm->verdict_failed++; nm->verdict_outcome_unknown++;
       return;
     }
   if (nm->internal_settlements <= 64)
-  fprintf(stderr, "s203 event=verdict source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u obligation=%llu generation=%llu verdict=%u owner=%u\n",
-    vm->thread_index, lane_index, lane->queue_id, packet_id,
-    (unsigned long long)origin_obligation_id, (unsigned long long)nm->generation,
-    verdict, lease ? lease->expected_owner : UINT16_MAX);
-  if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id,
-                                    verdict))
-    {
-      lane->verdict_succeeded++;
-      nm->verdict_succeeded++;
-    }
+    fprintf (stderr, "s203 event=verdict source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u obligation=%llu generation=%llu verdict=%u owner=%u\n",
+      vm->thread_index, lane_index, lane->queue_id, packet_id,
+      (unsigned long long) obligation->token, (unsigned long long) obligation->queue_generation,
+      verdict, vlib_get_worker_index (completion->producer_thread));
+  if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id, verdict))
+    { lane->verdict_succeeded++; nm->verdict_succeeded++; }
   else
-    {
-      lane->verdict_failed++;
-      nm->verdict_failed++;
-      nm->verdict_failed_definite++;
-    }
+    { lane->verdict_failed++; nm->verdict_failed++; nm->verdict_failed_definite++; }
+  return;
+
+stale:
+  nm->stale_completion_drops++;
+rejected:
+  if (completion->flags & PRODUCT_COMPLETION_TRACE)
+    fprintf (stderr, "s204 event=completion_reject source=%s thread=%u token=%llu generation=%llu packet=%u lane=%u reason=%s duplicate=%llu stale=%llu\n",
+      (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ? "COMPLETION_REPLAY" : "NFQ_CAPTURED",
+      vm->thread_index, (unsigned long long) obligation->token,
+      (unsigned long long) obligation->queue_generation, packet_id, lane_index, rejection,
+      (unsigned long long) nm->duplicate_completion_drops,
+      (unsigned long long) nm->stale_completion_drops);
 }
 
 static clib_error_t *
@@ -755,6 +769,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       ssize_t received;
       product_root_nfqueue_packet_t packet;
       product_platform_packet_facts_t platform;
+      product_root_nfqueue_pending_t *pending;
       product_packet_graph_external_result_t graph_result;
       u64 obligation_id;
       int submitted;
@@ -870,9 +885,6 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       /* No reliable per-interface classification snapshot yet. Context stays
        * unavailable, including for loopback. Never infer it from queue/lane. */
 
-      obligation_id =
-        product_root_nfqueue_obligation_id (lane->lane_index,
-                                            packet.packet_id);
       if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_GRAPH_SUBMIT_FAIL_OPEN)
         {
           product_root_nfqueue_accept_extra_messages (
@@ -883,6 +895,15 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           vlib_buffer_free (vm, &buffer_index, 1);
           continue;
         }
+      pending = product_root_nfqueue_reserve (nm, lane, packet.packet_id, buffer_index);
+      if (!pending)
+        {
+          nm->graph_submit_fail_opens++;
+          product_root_nfqueue_send_counted_verdict (nm, lane, packet.packet_id, NF_ACCEPT);
+          vlib_buffer_free (vm, &buffer_index, 1);
+          continue;
+        }
+      obligation_id = pending->completion.obligation.token;
       if (nm->packets_seen <= 64)
         fprintf(stderr, "s203 event=capture source=NFQ_CAPTURED thread=%u tls=%u polling_thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu\n",
           vm->thread_index, vlib_get_thread_index(), file->polling_thread_index,
@@ -890,13 +911,11 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           (unsigned long long)obligation_id);
       submitted = product_packet_graph_submit_external (
         vm, buffer_index, &platform,
-        &(product_adapter_obligation_t) {
-          .token = obligation_id, .queue_generation = nm->generation,
-          .packet_id = packet.packet_id, .origin_lane = lane->lane_index,
-          .kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
-        }, &graph_result);
+        &pending->completion.obligation, &graph_result);
       if (!submitted)
         {
+          pending->active = 0;
+          clib_atomic_fetch_sub_relax (&nm->pending_count, 1);
           product_root_nfqueue_accept_extra_messages (
             nm, lane, base, (u32) received, packet.packet_id);
           nm->graph_submit_fail_opens++;
@@ -1001,6 +1020,9 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
       return 0;
     }
   nm->generation = generation;
+  nm->next_obligation_token = 0;
+  nm->pending_count = 0;
+  nm->replay_count = 0;
   nm->fault_mode = product_root_nfqueue_fault_mode_from_env ();
   if (nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_DUPLICATE_COMPLETION
       || nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_STALE_COMPLETION)
@@ -1315,6 +1337,72 @@ product_root_nfqueue_adapter_last_packet_id (void)
 {
   return product_root_nfqueue_main.last_packet_id;
 }
+
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static clib_error_t *
+product_completion_replay_cli (vlib_main_t *vm, unformat_input_t *input,
+                               vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 packet_id = 0;
+  u8 *mode = 0;
+  (void) command;
+  if (!unformat (input, "%u %s", &packet_id, &mode) || !packet_id
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || !nm->available || nm->replay_count >= 8)
+    { vec_free (mode); return clib_error_return (0, "completion replay rejected"); }
+  int stale = strcmp ((char *) mode, "stale") == 0;
+  if (!stale && strcmp ((char *) mode, "duplicate") != 0)
+    { vec_free (mode); return clib_error_return (0, "expected duplicate or stale"); }
+  product_root_nfqueue_pending_t *pending =
+    &nm->lanes[0].pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
+  if (pending->active || pending->completion.obligation.packet_id != packet_id
+      || !pending->completion.obligation.token
+      || pending->completion.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+    { vec_free (mode); return clib_error_return (0, "completed identity unavailable"); }
+  product_packet_completion_frame_t completion = pending->completion;
+  completion.flags |= PRODUCT_COMPLETION_REPLAY_PROBE | PRODUCT_COMPLETION_TRACE;
+  if (stale)
+    completion.obligation.queue_generation ^= UINT64_C (0x100000000);
+  if (!product_packet_graph_replay_completion (vm, &completion))
+    { vec_free (mode); return clib_error_return (0, "completion replay enqueue rejected"); }
+  nm->replay_count++;
+  vlib_cli_output (vm, "completion.replay=accepted source=COMPLETION_REPLAY mode=%s token=%llu packet=%u generation=%llu original_generation=%llu",
+    mode, (unsigned long long) completion.obligation.token, packet_id,
+    (unsigned long long) completion.obligation.queue_generation,
+    (unsigned long long) nm->generation);
+  vec_free (mode);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_completion_replay_command, static) = {
+  .path = "product completion replay",
+  .short_help = "product completion replay <completed packet ID> duplicate|stale",
+  .function = product_completion_replay_cli,
+};
+
+static clib_error_t *
+product_completion_status_cli (vlib_main_t *vm, unformat_input_t *input,
+                               vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  (void) input; (void) command;
+  vlib_cli_output (vm, "completion.status generation=%llu pending=%u frames=%llu buffers=%llu obligations=%llu verdicts=%llu duplicate=%llu stale=%llu local=%llu remote=%llu frame_bytes=%u capacity=%u",
+    (unsigned long long) nm->generation, clib_atomic_load_acq_n (&nm->pending_count),
+    (unsigned long long) product_packet_graph_completion_frame_debt (),
+    (unsigned long long) product_packet_graph_buffer_debt (),
+    (unsigned long long) product_packet_graph_obligation_debt (),
+    (unsigned long long) nm->verdict_attempts,
+    (unsigned long long) nm->duplicate_completion_drops,
+    (unsigned long long) nm->stale_completion_drops,
+    (unsigned long long) nm->origin_local_completions,
+    (unsigned long long) nm->origin_remote_completions,
+    (u32) sizeof (product_packet_completion_frame_t), PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_completion_status_command, static) = {
+  .path = "show product completion", .function = product_completion_status_cli,
+};
+#endif
 
 static clib_error_t *
 product_root_nfqueue_exit (vlib_main_t *vm)

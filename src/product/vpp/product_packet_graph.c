@@ -97,6 +97,8 @@ typedef struct
   product_platform_packet_facts_t platform;
 } product_buffer_platform_metadata_t;
 
+_Static_assert (sizeof (product_packet_completion_frame_t) <= sizeof (((vlib_buffer_t *) 0)->opaque2),
+                "completion carrier fits existing opaque2");
 _Static_assert (sizeof (product_owner_assignment_t) == 16, "owner layout");
 _Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
 _Static_assert (sizeof (product_buffer_metadata_t) == 56, "packet layout");
@@ -197,6 +199,7 @@ typedef struct
   u32 lifecycle_terminal_intents;
   u32 lifecycle_settlements;
   u32 lifecycle_returns;
+  u32 lifecycle_completion_frames;
   u32 enabled;
   u32 accepting;
   u32 policy_publish_sequence;
@@ -1285,6 +1288,11 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
   },
 };
 
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+extern vlib_node_registration_t product_packet_origin_completion_node;
+static u32 product_completion_probe_frame_queue;
+#endif
+
 VLIB_NODE_FN (product_packet_terminal_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
@@ -1354,6 +1362,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
           PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (product_packet_settle (&lease) != PRODUCT_PACKET_OK)
         {
           PRODUCT_EVIDENCE_ADD (duplicate_settlements, 1);
@@ -1366,10 +1375,13 @@ VLIB_NODE_FN (product_packet_terminal_node)
           PRODUCT_EVIDENCE_SUB (obligation_debt, 1);
           continue;
         }
+#endif
       product_metadata_set_terminal_intent (&metadata,
                                             lease.terminal_intent);
       metadata.runtime_drop_reason = lease.runtime_drop_reason;
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       metadata.state_bits |= PRODUCT_META_SETTLED;
+#endif
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_TERMINAL,
                          metadata.origin_obligation_id);
@@ -1421,11 +1433,28 @@ VLIB_NODE_FN (product_packet_terminal_node)
         (unsigned long long)metadata.generation, lease.terminal_intent, lease.expected_owner);
       product_buffer_platform_metadata_t completion_metadata;
       clib_memcpy_fast (&completion_metadata, buffer->opaque, sizeof (completion_metadata));
-      if (completion_metadata.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-          && graph->external_completion)
-        graph->external_completion(vm, buffer_index, &lease,
-          metadata.origin_obligation_id, lease.terminal_intent,
-          lease.runtime_drop_reason, graph->external_completion_opaque);
+      product_packet_completion_frame_t completion = {
+        .obligation = completion_metadata.obligation,
+        .producer_thread = vm->thread_index,
+        .terminal_intent = lease.terminal_intent,
+        .runtime_drop_reason = lease.runtime_drop_reason,
+        .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
+      };
+      /* End the packet metadata lifetime. Only this 32-byte value survives
+       * into origin completion; packet bytes remain unchanged and owned. */
+      clib_memcpy_fast (buffer->opaque2, &completion, sizeof (completion));
+      clib_atomic_fetch_add_relax (&graph->lifecycle_completion_frames, 1);
+      clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
+      if (completion.flags & PRODUCT_COMPLETION_TRACE)
+        fprintf (stderr, "s204 event=completion_publish source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u intent=%u frame_bytes=%u frames=%u\n",
+          product_packet_evidence_source (&lease), node->node_index, vm->thread_index,
+          buffer_index, (unsigned long long) completion.obligation.token,
+          (unsigned long long) completion.obligation.queue_generation,
+          completion.obligation.packet_id, completion.obligation.origin_lane,
+          completion.terminal_intent, (u32)sizeof (completion),
+          clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
+      vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index, 0, 1);
+      continue;
 #endif
       vlib_buffer_free (vm, &buffer_index, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
@@ -1433,13 +1462,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
       clib_atomic_fetch_add_relax (&graph->lifecycle_terminal_intents, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
-#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-      if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=buffer_free source=%s thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u\n",
-        product_packet_evidence_source (&lease), vm->thread_index, buffer_index, (unsigned long long)metadata.origin_obligation_id,
-        clib_atomic_load_acq_n(&graph->lifecycle_buffers),
-        clib_atomic_load_acq_n(&graph->lifecycle_obligations));
-#endif
+
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!lifecycle_fixture_packet)
         {
@@ -1466,7 +1489,99 @@ VLIB_REGISTER_NODE (product_packet_terminal_node) = {
   .format_trace = format_product_packet_trace,
   .type = VLIB_NODE_TYPE_INTERNAL,
   .flags = VLIB_NODE_FLAG_TRACE_SUPPORTED,
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  .n_next_nodes = 1,
+  .next_nodes = { [0] = "product-packet-origin-completion" },
+#endif
 };
+
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+VLIB_NODE_FN (product_packet_origin_completion_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u32 *from = vlib_frame_vector_args (frame);
+  for (u32 i = 0; i < frame->n_vectors; i++)
+    {
+      u32 bi = from[i];
+      product_packet_completion_frame_t completion;
+      clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
+      const char *source = (completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE)
+        ? "COMPLETION_REPLAY" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
+        ? "GRAPH_INJECTED" : "NFQ_CAPTURED";
+      if (completion.flags & PRODUCT_COMPLETION_TRACE)
+        fprintf (stderr, "s204 event=completion_consume source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u producer_thread=%u intent=%u\n",
+          source, node->node_index, vm->thread_index, bi,
+          (unsigned long long) completion.obligation.token,
+          (unsigned long long) completion.obligation.queue_generation,
+          completion.obligation.packet_id, completion.obligation.origin_lane,
+          completion.producer_thread, completion.terminal_intent);
+      if (completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+          && graph->external_completion)
+        graph->external_completion (vm, bi, &completion, graph->external_completion_opaque);
+      vlib_buffer_free (vm, &bi, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, 1);
+      if (!(completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE))
+        {
+          clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
+          clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, 1);
+          clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
+        }
+      if (completion.flags & PRODUCT_COMPLETION_TRACE)
+        fprintf (stderr, "s203 event=buffer_free source=%s thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u completion_frames=%u\n",
+          source, vm->thread_index, bi, (unsigned long long) completion.obligation.token,
+          clib_atomic_load_acq_n (&graph->lifecycle_buffers),
+          clib_atomic_load_acq_n (&graph->lifecycle_obligations),
+          clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
+    }
+  return frame->n_vectors;
+}
+VLIB_REGISTER_NODE (product_packet_origin_completion_node) = {
+  .name = "product-packet-origin-completion",
+  .vector_size = sizeof (u32),
+  .type = VLIB_NODE_TYPE_INTERNAL,
+};
+#endif
+
+uint64_t
+product_packet_graph_completion_frame_debt (void)
+{
+  return clib_atomic_load_acq_n (&product_packet_graph_main.lifecycle_completion_frames);
+}
+
+int
+product_packet_graph_replay_completion (vlib_main_t *vm,
+                                        const product_packet_completion_frame_t *completion)
+{
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u32 bi, failed;
+  u16 thread = vlib_get_worker_thread_index (0);
+  if (!vm || !completion || !graph->accepting || !graph->enabled
+      || !(completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)
+      || vlib_buffer_alloc (vm, &bi, 1) != 1)
+    return 0;
+  vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
+  buffer->current_data = 0; buffer->current_length = 0;
+  clib_memcpy_fast (buffer->opaque2, completion, sizeof (*completion));
+  clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
+  clib_atomic_fetch_add_relax (&graph->lifecycle_completion_frames, 1);
+  if (vlib_buffer_enqueue_to_thread_retained (vm,
+        vlib_node_get_runtime (vm, product_packet_origin_completion_node.index),
+        product_completion_probe_frame_queue, &bi, &thread, 1, &failed) != 1)
+    {
+      vlib_buffer_free (vm, &bi, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, 1);
+      return 0;
+    }
+  return 1;
+#else
+  (void) vm; (void) completion;
+  return 0;
+#endif
+}
 
 void
 product_packet_graph_register_external_completion (
@@ -1487,12 +1602,14 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   if (clib_atomic_load_acq_n (&graph->enabled)
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_buffers) != 0
-      || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0)
+      || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0
+      || clib_atomic_load_acq_n (&graph->lifecycle_completion_frames) != 0)
     return 0;
 
   graph->vlib_main = vm;
   graph->generation = generation;
   graph->trace_packets = 0;
+  graph->lifecycle_completion_frames = 0;
   if (!product_packet_graph_flow_pools_reset (graph))
     return 0;
   clib_atomic_store_rel_n (&graph->lifecycle_terminal_intents, 0);
@@ -6043,6 +6160,8 @@ product_packet_graph_init (vlib_main_t *vm)
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_metadata_injection_frame_queue =
     vlib_frame_queue_main_init (product_packet_admit_node.index, 64);
+  product_completion_probe_frame_queue =
+    vlib_frame_queue_main_init (product_packet_origin_completion_node.index, 64);
 #endif
   graph->owner_guard_frame_queue =
     vlib_frame_queue_main_init (product_packet_owner_guard_node.index, 0);

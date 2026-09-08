@@ -4,6 +4,7 @@
 #define SAKAMOTO_PRODUCT_PACKET_GRAPH_H
 
 #include "product_packet.h"
+#include "product_packet_completion.h"
 #include "product_l4_policy.h"
 
 #include <stdint.h>
@@ -35,10 +36,14 @@
 #define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORT UINT32_C (10)
 
 typedef void (*product_packet_graph_completion_fn_t) (
-  vlib_main_t *vm, u32 buffer_index, const product_packet_lease_t *lease,
-  u64 origin_obligation_id,
-  product_packet_terminal_intent_t terminal_intent,
-  product_packet_runtime_drop_reason_t runtime_drop_reason, void *opaque);
+  vlib_main_t *vm, u32 buffer_index,
+  const product_packet_completion_frame_t *completion, void *opaque);
+
+/* Diagnostic replay allocates only a descriptor carrier, never an NFQ packet
+ * obligation. Its rejection must not return or settle the original buffer. */
+int product_packet_graph_replay_completion (
+  vlib_main_t *vm, const product_packet_completion_frame_t *completion);
+uint64_t product_packet_graph_completion_frame_debt (void);
 
 typedef struct
 {
