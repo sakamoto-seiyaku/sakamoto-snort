@@ -15,8 +15,8 @@ bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_build_name="product_core_plugin.so"
 plugin_name="libproduct_core_plugin.so"
-expected_vpp_patch_series_count=17
-expected_vpp_patch_series_sha256=4ab50bbeccb5563e405a174c8f00be8c33a84be255e6fe008d4e734363686ac4
+expected_vpp_patch_series_count=18
+expected_vpp_patch_series_sha256=2f2b87b011cc131cada294ae31e6ebfb618ccdf3f303b303ff4b7f00b562af74
 expected_vpp_core_patch_series_count="$(
   sed -n 's/^vpp.core.patch.count=//p' "$product_source_manifest"
 )"

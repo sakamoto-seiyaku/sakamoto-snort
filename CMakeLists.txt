@@ -56,6 +56,7 @@ target_compile_options(sakamoto_product_flow_entry PRIVATE -Wall -Wextra -Werror
 
 add_executable(sakamoto-product-flow-entry-test
   tests/host/product_flow_entry_test.c
+  src/product/vpp/product_packet.c
 )
 target_include_directories(sakamoto-product-flow-entry-test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"

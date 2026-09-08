@@ -6,12 +6,13 @@
 /*
  * This is the small stateful seam for the first Product flow release.  It is
  * deliberately independent of VPP, Android, Rust, and the policy ABI.  A
- * caller owns one pool per worker and invokes it only after the early policy
- * stages have returned PASS_NEXT.
+ * caller owns one pool per worker. Early DROP only records rejection;
+ * PASS_NEXT performs the bounded owner-local lookup/create.
  */
 
 #include <stddef.h>
 #include <stdint.h>
+#include "product_packet.h"
 
 #define PRODUCT_FLOW_ENTRY_MAX_ENTRIES UINT32_C (64)
 #define PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)
@@ -53,51 +54,39 @@ typedef enum
   PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION,
 } product_flow_entry_status_t;
 
-/* Packet facts retained by the worker-owned flow table. */
+/* Attribution and counters accompany the already assigned typed identity. */
 typedef struct
 {
   uint32_t uid;
   uint32_t network_context;
   uint32_t packet_bytes;
-  uint8_t family;
-  uint8_t protocol;
   uint8_t device_direction;
-  uint8_t reserved;
-  uint16_t source_port;
-  uint16_t destination_port;
+  uint8_t reserved[3];
   uint64_t timestamp;
-  uint8_t source_address[PRODUCT_FLOW_ENTRY_ADDRESS_BYTES];
-  uint8_t destination_address[PRODUCT_FLOW_ENTRY_ADDRESS_BYTES];
 } product_flow_entry_packet_t;
 
-/*
- * Mutable state is owned by exactly one worker.  UID/context are attribution
- * facts and are intentionally not part of the canonical identity below.
- */
+/* Only the current worker may mutate this state during packet processing. */
 typedef struct
 {
+  product_canonical_owner_key_t key;
+  uint64_t canonical_hash;
   uint8_t in_use;
-  uint8_t family;
-  uint8_t protocol;
   uint8_t origin_is_endpoint_a;
   uint8_t flow_origin_device_direction;
   uint8_t last_device_direction;
   uint8_t last_flow_direction;
   uint8_t decision;
+  uint16_t reserved;
   uint32_t uid;
   uint32_t network_context;
-  uint16_t endpoint_a_port;
-  uint16_t endpoint_b_port;
-  uint8_t endpoint_a_address[PRODUCT_FLOW_ENTRY_ADDRESS_BYTES];
-  uint8_t endpoint_b_address[PRODUCT_FLOW_ENTRY_ADDRESS_BYTES];
   uint64_t first_seen;
   uint64_t last_seen;
   uint64_t packets;
   uint64_t bytes;
   uint64_t policy_revision;
+  uint64_t policy_snapshot_hash;
   uint64_t winner_rule_id;
   uint32_t reason_id;
-  uint32_t reserved;
 } product_flow_entry_t;
 
 typedef struct
@@ -115,7 +104,7 @@ typedef struct
   uint16_t worker_index;
   uint16_t worker_count;
   uint32_t active_entries;
-  uint64_t hash_seed;
+  uint64_t active_snapshot_hash;
   uint64_t active_policy_revision;
   uint64_t allocation_count;
   uint64_t reuse_count;
@@ -130,41 +119,25 @@ typedef struct
 /* Initialize one fixed-capacity pool for one canonical flow owner. */
 product_flow_entry_status_t
 product_flow_entry_pool_init (product_flow_entry_pool_t *pool,
-                              uint16_t worker_index, uint16_t worker_count,
-                              uint64_t hash_seed);
+                              uint16_t worker_index, uint16_t worker_count);
 
-/* Publish a successor revision without scanning or mutating existing entries. */
+/* Publish a revision/hash epoch without scanning or mutating existing entries. */
 product_flow_entry_status_t
 product_flow_entry_publish_revision (product_flow_entry_pool_t *pool,
-                                     uint64_t policy_revision);
-
-/* Select the canonical owner from the direction-independent five-tuple. */
-product_flow_entry_status_t
-product_flow_entry_owner_for_packet (uint16_t worker_count, uint64_t hash_seed,
-                                     const product_flow_entry_packet_t *packet,
-                                     uint16_t *owner_worker);
+                                     uint64_t policy_revision,
+                                     uint64_t snapshot_hash);
 
 /*
- * Observe one packet after early policy.  DROP returns EARLY_DROP before any
- * lookup/allocation.  PASS_NEXT performs bounded lookup/create on this pool.
+ * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment
+ * on the caller's current-worker pool; there is no owner selector or remote
+ * pool accessor here. L4_PORTS is the bounded S208 eligibility scope.
  */
 product_flow_entry_status_t
 product_flow_entry_observe (product_flow_entry_pool_t *pool,
+                            const product_owner_assignment_t *assignment,
                             const product_flow_entry_packet_t *packet,
                             uint8_t stage_verdict,
                             product_flow_entry_observation_t *observation);
-
-/*
- * Observe after a caller has already run the product Owner Selector and Owner
- * Guard.  The supplied owner is checked against this pool, but is not
- * recomputed: the graph's Canonical Flow Key includes its flow-domain input,
- * while this standalone module intentionally has no graph-domain dependency.
- */
-product_flow_entry_status_t
-product_flow_entry_observe_on_owner (
-  product_flow_entry_pool_t *pool, const product_flow_entry_packet_t *packet,
-  uint8_t stage_verdict, uint16_t owner_worker,
-  product_flow_entry_observation_t *observation);
 
 /* Cache the result of a later stage for the current active revision. */
 product_flow_entry_status_t

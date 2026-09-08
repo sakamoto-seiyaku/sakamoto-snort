@@ -15,8 +15,8 @@ python_path="${SAKAMOTO_S172_VPP_PYTHONPATH:-/home/js/android/lineage/external/p
 cmake_bin="${SAKAMOTO_S172_CMAKE:-cmake}"
 build_jobs="${SAKAMOTO_S172_BUILD_JOBS:-2}"
 stage_marker_value="sakamoto-android-vpp-stage/v1"
-expected_patch_series_count=17
-expected_patch_series_sha256=4ab50bbeccb5563e405a174c8f00be8c33a84be255e6fe008d4e734363686ac4
+expected_patch_series_count=18
+expected_patch_series_sha256=2f2b87b011cc131cada294ae31e6ebfb618ccdf3f303b303ff4b7f00b562af74
 expected_core_patch_series_count="$(
   sed -n 's/^vpp.core.patch.count=//p' "$identity_file"
 )"

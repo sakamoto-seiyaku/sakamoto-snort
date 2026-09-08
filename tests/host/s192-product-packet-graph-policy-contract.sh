@@ -78,7 +78,7 @@ grep -q '#include "product_flow_entry.h"' "$graph_source" ||
 grep -q 'flow_pools\[PRODUCT_GRAPH_WORKERS\]' "$graph_source" ||
   fail "graph does not own one fixed FlowEntry pool per worker"
 for flow_symbol in product_flow_entry_pool_init \
-  product_flow_entry_publish_revision product_flow_entry_observe_on_owner \
+  product_flow_entry_publish_revision product_flow_entry_observe \
   product_flow_entry_set_decision product_flow_entry_pool_flush \
   product_packet_graph_flow_status; do
   grep -q "$flow_symbol" "$graph_source" "$graph_header" ||

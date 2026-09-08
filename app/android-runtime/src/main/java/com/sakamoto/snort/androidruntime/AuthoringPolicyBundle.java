@@ -545,8 +545,9 @@ public final class AuthoringPolicyBundle {
             }
         }
         for (L4Rule rule : l4Rules) {
-            if (rule == null || rule.subjectId == null || rule.networkContext == null
-                    || rule.networkContext.wireId <= 0 || rule.ifIndex < 0
+            if (rule == null || rule.subjectId == null
+                    || (rule.networkContext != null && rule.networkContext.wireId <= 0)
+                    || rule.ifIndex < 0
                     || rule.family == null || rule.direction == null || rule.action == null
                     || rule.ruleId <= 0L || rule.reasonId <= 0
                     || !ruleIds.add(rule.ruleId)) {
@@ -644,7 +645,7 @@ public final class AuthoringPolicyBundle {
 
     private static void putL4Entry(ByteBuffer wire, L4Rule rule) {
         wire.putInt(rule.subjectId.uid);
-        wire.putInt(rule.networkContext.wireId);
+        wire.putInt(rule.networkContext == null ? -1 : rule.networkContext.wireId);
         wire.putInt(wireIfIndex(rule.ifIndex));
         wire.putInt(RULE_KIND_L4);
         wire.putInt(rule.family == IpFamily.IPV4 ? IP_FAMILY_IPV4 : IP_FAMILY_IPV6);
@@ -763,7 +764,8 @@ public final class AuthoringPolicyBundle {
         }
         for (L4Rule rule : l4Rules) {
             hash = mixStableRuleHash(hash, rule.subjectId.uid);
-            hash = mixStableRuleHash(hash, rule.networkContext.wireId);
+            hash = mixStableRuleHash(hash,
+                    rule.networkContext == null ? -1 : rule.networkContext.wireId);
             hash = mixStableRuleHash(hash, wireIfIndex(rule.ifIndex));
             hash = mixStableRuleHash(hash, rule.family == IpFamily.IPV4 ? IP_FAMILY_IPV4
                     : IP_FAMILY_IPV6);

@@ -13,6 +13,7 @@ public final class S192PolicyBundleContractTest {
     public static void main(String[] args) {
         completeBundleUsesOneFixedPayload();
         capacityAndTypedValuesFailClosed();
+        unspecifiedL4ContextUsesNativeWildcard();
         System.out.println("s192 Java policy bundle contract: PASS");
     }
 
@@ -124,6 +125,25 @@ public final class S192PolicyBundleContractTest {
                                 .order(ByteOrder.LITTLE_ENDIAN)
                                 .getInt(l4Offset + 8) == -1,
                 "legacy authoring interface default maps to matcher wildcard");
+    }
+
+    private static void unspecifiedL4ContextUsesNativeWildcard() {
+        AuthoringPolicyBundle.L4Rule rule = AuthoringPolicyBundle.L4Rule.create(
+                ApplicationSubjectId.fromUid(12632), AuthoringPolicyBundle.IpFamily.IPV4,
+                "0.0.0.0/0", "0.0.0.0/0", null,
+                AuthoringPolicyBundle.PortRange.exact(40608), 17,
+                AuthoringPolicyBundle.PacketDirection.OUTPUT, null,
+                AuthoringPolicyBundle.L4Action.DROP, 0, 0, 0, true);
+        AuthoringPolicyBundle bundle = AuthoringPolicyBundle.restore(45L, "test",
+                Collections.emptyList(), Collections.singletonList(rule), 0);
+        AuthoringPolicyCompiler.CompileResult result =
+                AuthoringPolicyCompiler.compilePolicyBundle(bundle);
+        check(result.ok, "L4 with unspecified context compiles without crashing runtime");
+        int offset = AuthoringPolicyBundle.BUNDLE_HEADER_BYTES
+                + AuthoringPolicyBundle.MAX_GATE_ENTRIES * AuthoringPolicyBundle.RULE_ENTRY_BYTES;
+        ByteBuffer wire = ByteBuffer.wrap(result.nativeBundlePayload).order(ByteOrder.LITTLE_ENDIAN);
+        check(wire.getInt(offset + 4) == -1 && wire.getLong(16) != 0,
+                "unspecified L4 context has native ANY predicate and snapshot identity");
     }
 
     private static void capacityAndTypedValuesFailClosed() {

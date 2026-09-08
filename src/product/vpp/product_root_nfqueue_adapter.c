@@ -1400,6 +1400,31 @@ VLIB_CLI_COMMAND (product_root_lane_close_command, static) = {
   .short_help = "product root lane close <global lane index>; retry if draining",
 };
 
+/* A nonblocking stop under the normal CLI worker barrier. Quiesce first;
+ * retained obligations keep their origin descriptors until a later retry. */
+static clib_error_t *
+product_root_stop_cli (vlib_main_t *vm, unformat_input_t *input,
+                       vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  (void) input; (void) command;
+  for (u32 i = 0; i < nm->lane_count; i++) nm->lanes[i].draining = 1;
+  if (nm->pending_count || product_packet_graph_buffer_debt ()
+      || product_packet_graph_obligation_debt () || product_packet_graph_handoff_debt ()
+      || product_packet_graph_completion_frame_debt ())
+    {
+      vlib_cli_output (vm, "root.stop=draining pending=%u", nm->pending_count);
+      return 0;
+    }
+  product_root_nfqueue_adapter_stop (vm);
+  vlib_cli_output (vm, "root.stop=ok queues=0 buffers=0 obligations=0");
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_stop_command, static) = {
+  .path = "product root stop", .function = product_root_stop_cli,
+  .short_help = "product root stop; retry if draining",
+};
+
 static clib_error_t *
 product_root_lanes_cli (vlib_main_t *vm, unformat_input_t *input,
                         vlib_cli_command_t *command)

@@ -1,421 +1,112 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-
 #include "product_flow_entry.h"
-
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
-static int failures;
-
-#define CHECK(condition, message)                                             \
-  do                                                                          \
-    {                                                                         \
-      if (!(condition))                                                        \
-        {                                                                     \
-          fprintf (stderr, "FAIL: %s\n", (message));                         \
-          failures++;                                                         \
-        }                                                                     \
-    }                                                                         \
-  while (0)
-
-#define CHECK_STATUS(actual, expected, message)                               \
-  CHECK ((actual) == (expected), (message))
-
-static product_flow_entry_packet_t
-packet_template (uint8_t family, uint8_t protocol)
-{
-  product_flow_entry_packet_t packet = {0};
-  packet.uid = 10001U;
-  packet.network_context = 7U;
-  packet.packet_bytes = 120U;
-  packet.family = family;
-  packet.protocol = protocol;
-  packet.device_direction = PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT;
-  packet.source_port = 40000U;
-  packet.destination_port = 443U;
-  packet.timestamp = 10U;
-  if (family == PRODUCT_FLOW_ENTRY_FAMILY_IPV4)
-    {
-      packet.source_address[0] = 10U;
-      packet.source_address[1] = 0U;
-      packet.source_address[2] = 0U;
-      packet.source_address[3] = 1U;
-      packet.destination_address[0] = 192U;
-      packet.destination_address[1] = 0U;
-      packet.destination_address[2] = 2U;
-      packet.destination_address[3] = 10U;
-    }
-  else
-    {
-      packet.source_address[0] = 0x20U;
-      packet.source_address[1] = 0x01U;
-      packet.source_address[2] = 0x0dU;
-      packet.source_address[3] = 0xb8U;
-      packet.source_address[15] = 1U;
-      packet.destination_address[0] = 0x20U;
-      packet.destination_address[1] = 0x01U;
-      packet.destination_address[2] = 0x0dU;
-      packet.destination_address[3] = 0xb8U;
-      packet.destination_address[15] = 2U;
-    }
-  return packet;
+static const product_worker_layout_t layout={2,UINT64_C(0x6f776e65722d3137)};
+static product_packet_facts_t facts(unsigned family,unsigned protocol,unsigned port) {
+  product_packet_facts_t f={0};
+  f.l3_status=PRODUCT_PACKET_L3_COMPLETE;f.l4_status=PRODUCT_PACKET_L4_COMPLETE;
+  f.ip_family=family;f.protocol=protocol;f.source_port=port;f.destination_port=443;
+  f.source_address[15]=1;f.destination_address[15]=2;
+  if(family==6)f.source_address[0]=f.destination_address[0]=0x20;
+  return f;
 }
-
-static void
-reverse_packet (product_flow_entry_packet_t *packet)
-{
-  uint8_t address[PRODUCT_FLOW_ENTRY_ADDRESS_BYTES];
-  uint16_t port;
-  memcpy (address, packet->source_address, sizeof (address));
-  memcpy (packet->source_address, packet->destination_address, sizeof (address));
-  memcpy (packet->destination_address, address, sizeof (address));
-  port = packet->source_port;
-  packet->source_port = packet->destination_port;
-  packet->destination_port = port;
+static product_owner_assignment_t assign(product_packet_facts_t f) {
+  product_owner_assignment_t a;
+  assert(product_owner_assign(&layout,&f,&a)==PRODUCT_PACKET_OK);return a;
 }
-
-static void
-test_drop_and_pass_next (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV4, PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  product_flow_entry_observation_t observation;
-  product_flow_entry_t *entry;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 1U, 0x11U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "one-worker pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "first policy revision publishes");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_DROP, &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP,
-                "early DROP returns before FlowEntry lookup");
-  CHECK (observation.entry == NULL && pool.active_entries == 0U
-           && pool.allocation_count == 0U && pool.early_drop_count == 1U,
-         "early DROP creates no FlowEntry or allocation");
-
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "PASS_NEXT creates a FlowEntry");
-  CHECK (observation.created && !observation.reused
-           && observation.flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG,
-         "first PASS_NEXT packet is one ORIG allocation");
-  entry = observation.entry;
-  CHECK (entry != NULL && entry->uid == packet.uid
-           && entry->network_context == packet.network_context
-           && entry->policy_revision == 1U && entry->packets == 1U
-           && entry->bytes == packet.packet_bytes,
-         "entry stores bounded facts, counters, and active revision");
-  CHECK_STATUS (product_flow_entry_set_decision (
-                  &pool, entry, PRODUCT_FLOW_ENTRY_DECISION_DROP, 9001U, 77U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "later stage decision can be cached");
-  CHECK (entry->decision == PRODUCT_FLOW_ENTRY_DECISION_DROP
-           && entry->winner_rule_id == 9001U && entry->reason_id == 77U,
-         "decision cache stores winner attribution");
+static product_owner_assignment_t reverse(product_packet_facts_t f) {
+  unsigned char tmp[16];memcpy(tmp,f.source_address,16);
+  memcpy(f.source_address,f.destination_address,16);memcpy(f.destination_address,tmp,16);
+  unsigned port=f.source_port;f.source_port=f.destination_port;f.destination_port=port;
+  return assign(f);
 }
-
-static void
-test_reverse_reuse_and_identity_exclusions (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV4, PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  product_flow_entry_packet_t reverse = packet;
-  product_flow_entry_observation_t first;
-  product_flow_entry_observation_t second;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 1U, 0x22U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "reverse test pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "reverse test revision publishes");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT, &first),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "forward packet creates entry");
-  reverse_packet (&reverse);
-  reverse.uid = 20002U;
-  reverse.network_context = 99U;
-  reverse.device_direction = PRODUCT_FLOW_ENTRY_DIRECTION_INPUT;
-  reverse.timestamp = 11U;
-  reverse.packet_bytes = 80U;
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &reverse, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT, &second),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "reverse packet finds canonical entry");
-  CHECK (second.reused && !second.created
-           && second.entry == first.entry
-           && second.flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY,
-         "reverse packet reuses one canonical entry as REPLY");
-  CHECK (pool.active_entries == 1U && pool.allocation_count == 1U
-           && pool.reuse_count == 1U && second.entry->packets == 2U
-           && second.entry->bytes == 200U,
-         "reverse reuse does not allocate a second entry");
-  CHECK (second.entry->uid == packet.uid
-           && second.entry->network_context == packet.network_context
-           && second.entry->flow_origin_device_direction
-                == packet.device_direction,
-         "UID/context/device origin are facts, not canonical identity");
+static product_flow_entry_packet_t packet(unsigned direction,unsigned bytes,unsigned time) {
+  return (product_flow_entry_packet_t){.uid=10001,.network_context=7,.packet_bytes=bytes,.device_direction=direction,.timestamp=time};
 }
-
-static void
-test_lazy_revision_invalidation (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV4, PRODUCT_FLOW_ENTRY_PROTOCOL_UDP);
-  product_flow_entry_observation_t observation;
-  product_flow_entry_t *entry;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 1U, 0x33U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "revision test pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 10U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "revision ten publishes");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "revision ten creates entry");
-  entry = observation.entry;
-  CHECK_STATUS (product_flow_entry_set_decision (
-                  &pool, entry, PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT, 123U, 45U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "revision ten decision caches");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 11U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "successor revision publishes without a table walk");
-  CHECK (entry->policy_revision == 10U
-           && entry->decision == PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT
-           && pool.revision_invalidation_count == 0U,
-         "publish leaves existing entry untouched until its next packet");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "next packet lazily revisits existing entry");
-  CHECK (observation.reused && observation.revision_invalidated
-           && entry->policy_revision == 11U
-           && entry->decision == PRODUCT_FLOW_ENTRY_DECISION_NONE
-           && entry->winner_rule_id == 0U && entry->reason_id == 0U
-           && pool.revision_invalidation_count == 1U,
-         "revision mismatch clears only decision cache and preserves entry");
-  CHECK_STATUS (product_flow_entry_set_decision (
-                  &pool, entry, PRODUCT_FLOW_ENTRY_DECISION_NONE, 1U, 0U),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION,
-                "empty decision cannot carry stale attribution");
-  CHECK_STATUS (product_flow_entry_set_decision (
-                  &pool, entry, PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT, 124U, 46U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "new packet can cache a decision for the successor revision");
+static void observe(product_flow_entry_pool_t *pool,const product_owner_assignment_t *a,
+                    product_flow_entry_packet_t p,product_flow_entry_observation_t *o) {
+  assert(product_flow_entry_observe(pool,a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
 }
-
-static void
-make_unique_packet (product_flow_entry_packet_t *packet, uint32_t index)
-{
-  *packet = packet_template (PRODUCT_FLOW_ENTRY_FAMILY_IPV4,
-                             PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  packet->source_address[3] = (uint8_t) (index + 1U);
-  packet->destination_address[3] = (uint8_t) (index + 101U);
-  packet->source_port = (uint16_t) (1000U + index);
-  packet->destination_port = (uint16_t) (2000U + index);
-  packet->timestamp = index + 1U;
-}
-
-static void
-test_capacity_and_flush (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet;
-  product_flow_entry_observation_t observation;
-  product_flow_entry_t *first;
-  uint32_t index;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 1U, 0x44U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "capacity test pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "capacity test revision publishes");
-  for (index = 0U; index < PRODUCT_FLOW_ENTRY_MAX_ENTRIES; ++index)
-    {
-      make_unique_packet (&packet, index);
-      CHECK_STATUS (product_flow_entry_observe (
-                      &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                      &observation),
-                    PRODUCT_FLOW_ENTRY_STATUS_OK,
-                    "bounded pool admits each slot");
-    }
-  first = pool.entries;
-  CHECK (pool.active_entries == PRODUCT_FLOW_ENTRY_MAX_ENTRIES
-           && pool.allocation_count == PRODUCT_FLOW_ENTRY_MAX_ENTRIES,
-         "pool reaches its fixed capacity without growing");
-  make_unique_packet (&packet, PRODUCT_FLOW_ENTRY_MAX_ENTRIES + 1U);
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED,
-                "full pool rejects a new entry");
-  CHECK (pool.active_entries == PRODUCT_FLOW_ENTRY_MAX_ENTRIES
-           && pool.allocation_count == PRODUCT_FLOW_ENTRY_MAX_ENTRIES
-           && pool.capacity_rejection_count == 1U && first->in_use,
-         "capacity rejection neither evicts nor spills existing entries");
-
-  product_flow_entry_pool_flush (&pool);
-  CHECK (product_flow_entry_pool_active_count (&pool) == 0U
-           && pool.entries[0].in_use == 0U && pool.flush_count == 1U,
-         "flush clears every worker-local slot and leaves no residue");
-}
-
-static void
-test_owner_symmetry_and_ipv6 (void)
-{
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV6, PRODUCT_FLOW_ENTRY_PROTOCOL_UDP);
-  product_flow_entry_packet_t reverse = packet;
-  product_flow_entry_pool_t owner_pool;
-  product_flow_entry_pool_t wrong_pool;
-  product_flow_entry_observation_t observation;
-  uint16_t owner;
-  uint16_t reverse_owner;
-  uint16_t wrong_owner;
-
-  CHECK_STATUS (product_flow_entry_owner_for_packet (4U, 0x55U, &packet, &owner),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "IPv6 packet selects an owner");
-  reverse_packet (&reverse);
-  CHECK_STATUS (product_flow_entry_owner_for_packet (
-                  4U, 0x55U, &reverse, &reverse_owner),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "reverse IPv6 packet selects an owner");
-  CHECK (owner == reverse_owner,
-         "canonical owner is symmetric for forward and reverse packets");
-  CHECK_STATUS (product_flow_entry_pool_init (&owner_pool, owner, 4U, 0x55U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "canonical owner pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&owner_pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "IPv6 owner revision publishes");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &owner_pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "IPv6 UDP PASS_NEXT enters its owner pool");
-  wrong_owner = (uint16_t) ((owner + 1U) % 4U);
-  CHECK_STATUS (product_flow_entry_pool_init (
-                  &wrong_pool, wrong_owner, 4U, 0x55U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "non-owner pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&wrong_pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "non-owner revision publishes");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &wrong_pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER,
-                "packet is rejected before state update on wrong owner");
-  CHECK (wrong_pool.active_entries == 0U && wrong_pool.allocation_count == 0U
-           && wrong_pool.wrong_owner_count == 1U,
-         "wrong owner cannot create cross-worker mutable state");
-}
-
-static void
-test_invalid_inputs (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV4, PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  product_flow_entry_observation_t observation;
-  uint16_t owner = 0U;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 0U, 0U),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT,
-                "zero worker count is invalid");
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 2U, 2U, 0U),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT,
-                "worker index outside layout is invalid");
-  CHECK_STATUS (product_flow_entry_owner_for_packet (0U, 0U, &packet, &owner),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT,
-                "zero owner layout is invalid");
-  packet.family = 5U;
-  CHECK_STATUS (product_flow_entry_owner_for_packet (1U, 0U, &packet, &owner),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET,
-                "unsupported family is rejected");
-  packet = packet_template (PRODUCT_FLOW_ENTRY_FAMILY_IPV4,
-                            PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  packet.source_address[15] = 1U;
-  CHECK_STATUS (product_flow_entry_owner_for_packet (1U, 0U, &packet, &owner),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET,
-                "noncanonical IPv4 padding is rejected");
-  packet = packet_template (PRODUCT_FLOW_ENTRY_FAMILY_IPV4,
-                            PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 0U, 1U, 0U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "invalid input test pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 0U),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_REVISION,
-                "zero policy revision is rejected");
-  CHECK_STATUS (product_flow_entry_observe (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT,
-         "observe requires an active revision");
-}
-
-static void
-test_owner_override (void)
-{
-  product_flow_entry_pool_t pool;
-  product_flow_entry_packet_t packet = packet_template (
-    PRODUCT_FLOW_ENTRY_FAMILY_IPV4, PRODUCT_FLOW_ENTRY_PROTOCOL_TCP);
-  product_flow_entry_observation_t observation;
-
-  CHECK_STATUS (product_flow_entry_pool_init (&pool, 1U, 2U, 0x66U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "graph owner pool initializes");
-  CHECK_STATUS (product_flow_entry_publish_revision (&pool, 1U),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "graph owner revision publishes");
-  CHECK_STATUS (product_flow_entry_observe_on_owner (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT, 1U,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_OK,
-                "already guarded owner can enter its worker pool");
-  CHECK (observation.created && observation.owner_worker == 1U
-           && pool.active_entries == 1U,
-         "graph owner override creates only in the guarded worker pool");
-  CHECK_STATUS (product_flow_entry_observe_on_owner (
-                  &pool, &packet, PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT, 0U,
-                  &observation),
-                PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER,
-                "a mismatched guarded owner cannot cross worker pools");
-  CHECK (pool.active_entries == 1U && pool.allocation_count == 1U
-           && pool.wrong_owner_count == 1U,
-         "owner mismatch leaves graph pool state bounded");
-}
-
-int
-main (void)
-{
-  CHECK (PRODUCT_FLOW_ENTRY_MAX_ENTRIES == 64U,
-         "S193 pool capacity is a fixed bounded value");
-  test_drop_and_pass_next ();
-  test_reverse_reuse_and_identity_exclusions ();
-  test_lazy_revision_invalidation ();
-  test_capacity_and_flush ();
-  test_owner_symmetry_and_ipv6 ();
-  test_invalid_inputs ();
-  test_owner_override ();
-  if (failures != 0)
-    return 1;
-  puts ("sakamoto Product bounded FlowEntry semantic vectors: PASS");
+int main(void) {
+  for(unsigned family=4;family<=6;family+=2)for(unsigned protocol=6;protocol<=17;protocol+=11) {
+    product_packet_facts_t f=facts(family,protocol,40000);
+    product_owner_assignment_t a=assign(f),reply=reverse(f);
+    product_flow_entry_pool_t pool;
+    product_flow_entry_observation_t o;
+    assert(product_flow_entry_pool_init(&pool,a.execution_owner,2)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    product_flow_entry_packet_t p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,120,10);
+    assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_DROP,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
+    assert(!o.entry && !pool.active_entries && !pool.allocation_count);
+    /* A reverse/midstream packet, not the earlier dropped packet, defines ORIG. */
+    p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_INPUT,80,11);observe(&pool,&reply,p,&o);
+    product_flow_entry_t *entry=o.entry;
+    assert(o.created && o.flow_direction==PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG);
+    assert(entry->origin_is_endpoint_a==reply.source_is_a && entry->flow_origin_device_direction==1);
+    assert(entry->policy_revision==0 && entry->decision==PRODUCT_FLOW_ENTRY_DECISION_NONE);
+    assert(product_flow_entry_publish_revision(&pool,1,101)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,120,12);p.uid=20002;p.network_context=99;
+    observe(&pool,&a,p,&o);
+    assert(o.reused && o.entry==entry && o.flow_direction==PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY && o.revision_invalidated);
+    assert(entry->uid==10001 && entry->network_context==7 && entry->packets==2 && entry->bytes==200);
+    assert(product_flow_entry_set_decision(&pool,entry,PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,9001,77)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    product_flow_entry_t before=*entry;
+    assert(product_flow_entry_publish_revision(&pool,2,202)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    assert(memcmp(&before,entry,sizeof(before))==0);
+    observe(&pool,&reply,packet(3,100,13),&o);
+    assert(o.revision_invalidated && o.entry==entry && entry->decision==PRODUCT_FLOW_ENTRY_DECISION_NONE);
+    assert(entry->packets==3 && entry->bytes==300 && entry->first_seen==11 && entry->flow_origin_device_direction==1);
+    assert(entry->origin_is_endpoint_a==reply.source_is_a && o.flow_direction==1);
+    before=*entry;
+    assert(product_flow_entry_publish_revision(&pool,2,303)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    assert(memcmp(&before,entry,sizeof(before))==0);
+    observe(&pool,&a,packet(0,90,14),&o);
+    assert(o.revision_invalidated && entry->policy_snapshot_hash==303 && entry->packets==4 && entry->bytes==390);
+    assert(product_flow_entry_publish_revision(&pool,2,303)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    observe(&pool,&a,packet(1,90,15),&o);assert(!o.revision_invalidated && entry->packets==5);
+    assert(product_flow_entry_publish_revision(&pool,1,101)==PRODUCT_FLOW_ENTRY_STATUS_REVISION_NOT_ADVANCING);
+    before=*entry;
+    assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_DROP,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
+    assert(memcmp(&before,entry,sizeof(before))==0);
+    product_flow_entry_pool_t wrong;
+    assert(product_flow_entry_pool_init(&wrong,a.execution_owner^1,2)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    assert(product_flow_entry_observe(&wrong,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER);
+    assert(!wrong.active_entries && wrong.wrong_owner_count==1);
+    assert(product_flow_entry_set_decision(&wrong,entry,PRODUCT_FLOW_ENTRY_DECISION_DROP,1,1)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT);
+    assert(memcmp(&before,entry,sizeof(before))==0);
+    product_flow_entry_pool_flush(&pool);assert(!pool.active_entries && !entry->in_use);
+  }
+  /* Fully equal endpoints stay ORIG even when device direction changes. */
+  product_packet_facts_t f=facts(4,17,443);memcpy(f.destination_address,f.source_address,16);
+  product_owner_assignment_t a=assign(f),r=reverse(f);
+  assert(a.source_is_a==r.source_is_a);
+  product_flow_entry_pool_t pool;product_flow_entry_observation_t o;
+  assert(product_flow_entry_pool_init(&pool,a.execution_owner,2)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  observe(&pool,&a,packet(1,28,1),&o);product_flow_entry_t *same=o.entry;
+  observe(&pool,&r,packet(3,28,2),&o);assert(o.entry==same && o.flow_direction==1 && same->flow_origin_device_direction==1);
+  /* A hash collision still compares the complete typed key. */
+  product_packet_facts_t other=facts(6,17,40001);product_owner_assignment_t collision=assign(other);
+  while(collision.execution_owner!=a.execution_owner){other.source_port++;collision=assign(other);}
+  collision.canonical_hash=a.canonical_hash;
+  observe(&pool,&collision,packet(3,48,3),&o);
+  assert(o.created && o.entry!=same && pool.active_entries==2);
+  observe(&pool,&a,packet(3,28,4),&o);assert(o.entry==same && same->packets==3);
+  product_flow_entry_pool_flush(&pool);
+  /* Fixed capacity rejects the new identity without replacing existing state. */
+  unsigned port=10000;
+  for(unsigned i=0;i<PRODUCT_FLOW_ENTRY_MAX_ENTRIES;i++) {
+    do {f=facts(4,6,port++);a=assign(f);}while(a.execution_owner!=pool.worker_index);
+    observe(&pool,&a,packet(3,40,i),&o);assert(o.created);
+  }
+  product_flow_entry_t first=pool.entries[0];
+  do {f=facts(4,6,port++);a=assign(f);}while(a.execution_owner!=pool.worker_index);
+  product_flow_entry_packet_t p=packet(3,40,100);
+  assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED);
+  assert(pool.active_entries==64 && memcmp(&first,&pool.entries[0],sizeof(first))==0);
+  a.valid=0;assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);
+  product_flow_entry_pool_flush(&pool);assert(product_flow_entry_pool_active_count(&pool)==0);
+  puts("S208 owner-local typed FlowEntry mutation properties: PASS");
   return 0;
 }
