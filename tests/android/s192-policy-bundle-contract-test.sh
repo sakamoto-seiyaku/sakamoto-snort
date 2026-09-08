@@ -264,7 +264,7 @@ grep -Fq 'policyL4TypedMatchPolicyKey' "$native_java"
 grep -Fq 'policyL4TypedMatchProbeKey' "$native_java"
 grep -Fq 'policyL4LastEvaluationProbeKey' "$native_java"
 grep -Fq 'STATUS_VIEW_VALUE_COUNT = 7' "$native_java"
-grep -Fq 'parseIntAt(values, offset + 142' "$native_java"
+grep -Fq 'parseIntAt(values, offset + 141' "$native_java"
 
 # The API source and generated-artifact identity are kept in lockstep by the
 # pinned VPP generator; generated output is verified by the host build gate.
@@ -273,7 +273,7 @@ grep -Fq 'define product_core_policy_bundle_apply' "$api"
 grep -Fq 'vl_api_product_policy_rule_entry_t gate_entries[64]' "$api"
 grep -Fq 'vl_api_product_policy_rule_entry_t l4_entries[64]' "$api"
 grep -Fq 'product_core_policy_bundle_apply_reply' "$api"
-grep -Fq 'product_core.api/1.0.0@aa3af3cd' "$artifact"
+grep -Fq 'product_core.api/1.0.0@76115fdc' "$artifact"
 
 plugin="$repo_root/src/product/vpp/product_core_plugin.c"
 grep -Fq 'vl_api_product_core_policy_bundle_apply_t_handler' "$plugin"

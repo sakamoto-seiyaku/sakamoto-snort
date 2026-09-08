@@ -14,7 +14,7 @@ enum
 {
   /* Keep the S191 prefix count named for source-compatible contracts; the
    * appended S192 view values are part of the wire count below. */
-  STATUS_VALUE_COUNT = 136,
+  STATUS_VALUE_COUNT = 135,
   STATUS_VIEW_VALUE_COUNT = 7,
   STATUS_ASSOCIATION_VALUE_COUNT = 3,
   STATUS_WIRE_VALUE_COUNT = STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
@@ -116,7 +116,6 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   char vpn_infrastructure_faults[32];
   char vpn_duplicate_or_stale_drops[32];
   char product_graph_worker_count[32];
-  char product_graph_flow_domain[32];
   char product_graph_hash_seed[32];
   char product_graph_handoff_credits[32];
   char product_graph_vpp_worker_count[32];
@@ -331,8 +330,6 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
             status->vpn_duplicate_or_stale_drops);
   snprintf (product_graph_worker_count, sizeof (product_graph_worker_count),
             "%" PRIu32, status->product_graph_worker_count);
-  snprintf (product_graph_flow_domain, sizeof (product_graph_flow_domain),
-            "%" PRIu32, status->product_graph_flow_domain);
   snprintf (product_graph_hash_seed, sizeof (product_graph_hash_seed),
             "%" PRIu64, status->product_graph_hash_seed);
   snprintf (product_graph_handoff_credits,
@@ -603,7 +600,6 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   fields[index++] = vpn_infrastructure_faults;
   fields[index++] = vpn_duplicate_or_stale_drops;
   fields[index++] = product_graph_worker_count;
-  fields[index++] = product_graph_flow_domain;
   fields[index++] = product_graph_hash_seed;
   fields[index++] = product_graph_handoff_credits;
   fields[index++] = product_graph_vpp_worker_count;

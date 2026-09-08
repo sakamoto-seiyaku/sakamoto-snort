@@ -223,7 +223,7 @@ product_fragment_initial_owner (vlib_main_t *vm, vlib_buffer_t *buffer,
                                 u16 *owner)
 {
   product_packet_facts_t facts;
-  product_canonical_flow_key_t canonical_key;
+  product_owner_assignment_t assignment;
   product_worker_layout_t layout = {
     .worker_count = PRODUCT_GRAPH_WORKERS,
     .hash_seed = PRODUCT_GRAPH_HASH_SEED,
@@ -246,9 +246,10 @@ product_fragment_initial_owner (vlib_main_t *vm, vlib_buffer_t *buffer,
   facts.destination_port =
     (u16) (((u16) packet[fragment->transport_offset + 2] << 8)
            | packet[fragment->transport_offset + 3]);
-  return product_packet_owner_from_facts (
-           &layout, PRODUCT_GRAPH_FLOW_DOMAIN, &facts, &canonical_key, owner)
-         == PRODUCT_PACKET_OK;
+  if (product_owner_assign (&layout, &facts, &assignment) != PRODUCT_PACKET_OK)
+    return 0;
+  *owner = assignment.execution_owner;
+  return 1;
 }
 
 static int
@@ -656,7 +657,6 @@ VLIB_NODE_FN (product_packet_fragment_reassembled_node)
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = vlib_buffer_length_in_chain (vm, buffer);
       ingress.current_worker = current_worker;
-      ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
       ingress.origin_obligation_id = metadata.obligation_ids[0];
       if (!product_fragment_metadata_valid (&metadata)
           || !(metadata.flags & PRODUCT_FRAGMENT_META_INITIAL)
@@ -664,7 +664,7 @@ VLIB_NODE_FN (product_packet_fragment_reassembled_node)
           || metadata.final_owner == PRODUCT_FRAGMENT_FINAL_OWNER_UNKNOWN
           || product_packet_admit (&layout, &ingress, &lease)
                != PRODUCT_PACKET_OK
-          || lease.expected_owner != metadata.final_owner)
+          || lease.assignment.execution_owner != metadata.final_owner)
         {
           product_fragment_inline_settle (
             vm, buffer_index, &metadata, current_worker,
@@ -1062,7 +1062,7 @@ product_fragment_fixture_port (u8 family, u32 identification)
 {
   product_fragment_key_t key;
   product_packet_facts_t facts;
-  product_canonical_flow_key_t canonical;
+  product_owner_assignment_t assignment;
   product_worker_layout_t layout = {
     .worker_count = PRODUCT_GRAPH_WORKERS,
     .hash_seed = PRODUCT_GRAPH_HASH_SEED,
@@ -1102,12 +1102,9 @@ product_fragment_fixture_port (u8 family, u32 identification)
   fragment_worker = product_fragment_select_worker (&key);
   for (port = 40000; port < 40100; port++)
     {
-      u16 owner;
       facts.destination_port = port;
-      if (product_packet_owner_from_facts (
-            &layout, PRODUCT_GRAPH_FLOW_DOMAIN, &facts, &canonical, &owner)
-            == PRODUCT_PACKET_OK
-          && owner != fragment_worker)
+      if (product_owner_assign (&layout, &facts, &assignment) == PRODUCT_PACKET_OK
+          && assignment.execution_owner != fragment_worker)
         return port;
     }
   return 0;

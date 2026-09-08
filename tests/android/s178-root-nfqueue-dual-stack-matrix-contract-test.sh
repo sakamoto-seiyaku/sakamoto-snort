@@ -148,8 +148,8 @@ do
 done
 
 grep -Fq 'sizeof(sakamoto_product_status_t) == 1304U' "$abi"
-grep -Fq 'STATUS_VALUE_COUNT = 136' "$native_status"
-grep -Fq 'STATUS_VALUE_COUNT = 136' "$jni"
+grep -Fq 'STATUS_VALUE_COUNT = 135' "$native_status"
+grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
 grep -Fq 'Long.parseLong(value)' "$native_status"
 grep -Fq 'parsed > 0xffffffffL' "$native_status"
 

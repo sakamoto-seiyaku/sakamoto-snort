@@ -1299,7 +1299,7 @@ public final class AndroidRuntimeContractTest {
                 "4294967295", "177", "99", "12", "13", "14", "15", "16",
                 "17", "18", "19", "20", "21", "22", "23", "24", "25",
                 "26", "27", "28", "29", "30", "31", "32", "33",
-                "2", "7", "8032009842424885559", "32", "2", "0", "1", "1",
+                "2", "8032009842424885559", "32", "2", "0", "1", "1",
                 "2", "2", "1", "1", "1", "34", "35", "36"
                 , "88", "88", "41", "18446744073709551600", "88", "88",
                 "0", "1", "1", "0", "0", "0", "1", "1",
@@ -1390,7 +1390,6 @@ public final class AndroidRuntimeContractTest {
                         && status.vpnDuplicateOrStaleDrops == 33L,
                 "native VPN UDP4 Direct Egress counters preserve their order");
         check(status.productGraphWorkerCount == 2
-                        && status.productGraphFlowDomain == 7
                         && status.productGraphHashSeed == 8032009842424885559L
                         && status.productGraphHandoffCredits == 32,
                 "native Product graph worker layout fields preserve their order");
@@ -1468,7 +1467,7 @@ public final class AndroidRuntimeContractTest {
                 "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
                 "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
                 "0", "0", "0", "0", "0", "0", "0", "0", "0",
-                "2", "7", "8032009842424885559", "32", "2", "0", "1", "1",
+                "2", "8032009842424885559", "32", "2", "0", "1", "1",
                 "2", "2", "1", "1", "1", "0", "0", "0",
                 "0", "0", "0", "0", "0", "0", "0", "0",
                 "0", "0", "0", "0", "0", "0", "",
@@ -1639,7 +1638,7 @@ public final class AndroidRuntimeContractTest {
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, 0L, 0L, 0L,
-                1, 0, 0L, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0L, 0L, 0L,
+                1, 0L, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0L, 0L, 0L,
                 0L, 0L, generation, 0L, 0L, 0L,
                 false, false, 0, 0, 0, false, false, false, "",
                 0, 0, false, 0, 0L, 0L, 0L, 0L, 0L,

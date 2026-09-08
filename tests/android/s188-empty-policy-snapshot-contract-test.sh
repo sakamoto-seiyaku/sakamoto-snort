@@ -136,8 +136,8 @@ if "EXTRA_DEBUG_APPLY_EMPTY_POLICY" in interactive:
     raise AssertionError("S188 debug apply must stay headless for device automation")
 PY
 
-grep -Fq 'private static final int STATUS_VALUE_COUNT = 136' "$native_status"
-grep -Fq 'STATUS_VALUE_COUNT = 136' "$jni"
+grep -Fq 'private static final int STATUS_VALUE_COUNT = 135' "$native_status"
+grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
 for token in \
   'nativeApplyEmptyPolicy' \
   'nativeReconcileEmptyPolicy' \

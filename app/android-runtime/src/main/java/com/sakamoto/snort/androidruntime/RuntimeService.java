@@ -2964,7 +2964,6 @@ public final class RuntimeService extends VpnService {
                 + "\nruntime_resize=false"
                 + "\nruntime_reshard=false"
                 + "\nproduct_graph_worker_count=" + status.productGraphWorkerCount
-                + "\nproduct_graph_flow_domain=" + status.productGraphFlowDomain
                 + "\nproduct_graph_hash_seed=" + status.productGraphHashSeed
                 + "\nproduct_graph_handoff_credits=" + status.productGraphHandoffCredits
                 + "\nproduct_graph_enabled=" + status.productGraphEnabled
@@ -5075,23 +5074,33 @@ public final class RuntimeService extends VpnService {
         return false;
     }
 
-    /** This stage opens ordinary UDP only. Each family's INPUT and OUTPUT
-     * share its Q2 range; queue balance is platform placement, never flow owner. */
+    /** Each family's TCP/UDP/Echo INPUT and OUTPUT share Q2. Kernel queue
+     * placement is independent of the one canonical owner assignment. */
     private static String productRootFamilyHooks(String tool, String outputChain,
             String inputChain, String uid, String range) {
-        return tool + " -w -t mangle -N " + outputChain + "; "
-                + tool + " -w -t mangle -N " + inputChain + "; "
-                + tool + " -w -t mangle -A " + outputChain
-                + " -p udp -m owner --uid-owner " + uid
-                + " -j NFQUEUE --queue-balance " + range + " --queue-bypass; "
-                + tool + " -w -t mangle -A " + inputChain
-                + " -p udp -j NFQUEUE --queue-balance " + range + " --queue-bypass; "
-                + tool + " -w -t mangle -I OUTPUT -j " + outputChain + "; "
-                + tool + " -w -t mangle -I INPUT -j " + inputChain + "; "
-                + tool + " -w -t mangle -S " + outputChain
-                + " | grep -F -- '--queue-balance " + range + "' >/dev/null; "
-                + tool + " -w -t mangle -S " + inputChain
-                + " | grep -F -- '--queue-balance " + range + "' >/dev/null; ";
+        StringBuilder commands = new StringBuilder(tool + " -w -t mangle -N "
+                + outputChain + "; " + tool + " -w -t mangle -N " + inputChain + "; ");
+        String icmp = "ip6tables".equals(tool) ? "ipv6-icmp" : "icmp";
+        String typeOption = "ip6tables".equals(tool) ? " --icmpv6-type " : " --icmp-type ";
+        for (String protocol : new String[] {"udp", "tcp", icmp}) {
+            String[] types = protocol.equals(icmp)
+                    ? new String[] {"echo-request", "echo-reply"} : new String[] {""};
+            for (String type : types) {
+                String match = " -p " + protocol + (type.isEmpty() ? "" : typeOption + type);
+                commands.append(tool).append(" -w -t mangle -A ").append(outputChain)
+                        .append(match).append(" -m owner --uid-owner ").append(uid)
+                        .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+                commands.append(tool).append(" -w -t mangle -A ").append(inputChain)
+                        .append(match).append(" -j NFQUEUE --queue-balance ").append(range)
+                        .append(" --queue-bypass; ");
+            }
+        }
+        return commands.append(tool).append(" -w -t mangle -I OUTPUT -j ").append(outputChain)
+                .append("; ").append(tool).append(" -w -t mangle -I INPUT -j ").append(inputChain)
+                .append("; ").append(tool).append(" -w -t mangle -S ").append(outputChain)
+                .append(" | grep -F -- '--queue-balance ").append(range).append("' >/dev/null; ")
+                .append(tool).append(" -w -t mangle -S ").append(inputChain)
+                .append(" | grep -F -- '--queue-balance ").append(range).append("' >/dev/null; ").toString();
     }
 
     /** Delete generation contents first; owner.properties is the final authority removed. */

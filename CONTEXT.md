@@ -539,19 +539,23 @@ The target VPP runtime rule that one worker privately owns the mutable state of 
 _Avoid_: shared authoritative flow table, queue id as owner, INPUT/OUTPUT thread as correctness
 
 **Canonical Owner Key**:
-The direction-independent key used to select an ExecutionOwner for every valid IPv4/IPv6 packet. Its L3 form contains key kind, IP family, terminal IP protocol, and the canonical address pair; its L4-ports form additionally contains the canonical port pair when typed transport ports are available. Unavailable ports are omitted rather than invented as zero-valued flow identity. Complete TCP/UDP packets use the L4-ports form, while other legal protocols and valid L3 packets with unavailable ports use the L3 form. Platform, deployment, direction, queue, interface, UID, Runtime Profile, provenance, CPU, and network-namespace facts never participate.
+The direction-independent key used to select an ExecutionOwner for every valid IPv4/IPv6 packet. All three explicit shapes contain key kind, IP family, terminal IP protocol, and the canonical address pair. `L4_PORTS` adds canonical typed ports for complete TCP/UDP; `ICMP_QUERY` adds a normalized Echo query class and identifier for supported ICMPv4/v6 request/reply pairs. Echo sequence is only a packet fact. Other legal protocols and valid L3 packets with unavailable transport identity use `L3`, without invented zero ports. Platform, deployment, direction, queue, interface, UID, Runtime Profile, provenance, CPU, and network-namespace facts never participate.
 _Avoid_: treating every owner key as a five-tuple, zero-port synthetic flow, protocol-free address hash, CPU-aware packet hash, `flow_domain`
+
+**OwnerAssignment**:
+The one immutable result of canonicalizing shared PacketFacts and selecting an equally participating logical worker from the startup-fixed Worker Layout. It contains the typed key, canonical hash, ExecutionOwner and a source-side projection; downstream nodes consume the saved result without parsing, endpoint comparison, rehashing or corrective dispatch. Invalid L3 has no valid assignment and is runtime-dropped in its current execution context.
+_Avoid_: platform-specific selectors, packet sequence as session identity, recomputing owner at each node
 
 **ExecutionOwner**:
 The VPP logical worker selected once from a Canonical Owner Key and the runtime-start-fixed Worker Layout. Every valid IPv4/IPv6 packet has an ExecutionOwner even when it is not eligible for a FlowEntry. The assignment remains stable for the active runtime generation, drives the sole Primary Handoff when the selected worker differs from Initial Execution Placement, and does not imply transport support or flow-state creation.
 _Avoid_: arrival worker, VLIB thread index, Linux CPU ID, NFQUEUE lane, FlowEntry eligibility, overload spill target
 
 **FlowOwner**:
-The ExecutionOwner of a packet eligible for one bidirectional FlowEntry, currently a complete TCP/UDP packet using the L4-ports Canonical Owner Key. FlowOwner owns that entry and later protocol/session state; other legal protocols may have an ExecutionOwner without acquiring a FlowOwner or FlowEntry.
+The ExecutionOwner associated with a typed bidirectional session identity: complete TCP/UDP uses `L4_PORTS`, and supported ICMP Echo uses `ICMP_QUERY`. This identity can feed the later FlowEntry/tracker; an assignment does not itself create an entry or implement an ICMP tracker. L3-only fallback has an ExecutionOwner without synthetic flow state.
 _Avoid_: ownerless ICMP/ESP/GRE execution, every packet creates flow state, separate FlowEntry hash-to-worker decision
 
 **Canonical Flow Key**:
-The direction-independent IPv4/IPv6 five-tuple that identifies one bidirectional FlowEntry: IP protocol plus the canonicalized source/destination address-and-port endpoint pair. It is the L4-ports form of the Canonical Owner Key for complete TCP/UDP traffic. Complete Linux UID, ApplicationSubjectId, NetworkContextId, Linux interface index, VPP interface index, queue, lane, Runtime Profile, VPN Packet Provenance, CPU, and network namespace never participate. Linux v1 runs only in the network namespace that owns its NFQUEUE Adapter; namespace isolation is a deployment boundary rather than a per-packet discriminator.
+The typed direction-independent session identity supplied by OwnerAssignment: `L4_PORTS` for complete TCP/UDP or `ICMP_QUERY` for supported Echo query/reply traffic. Both explicitly retain family and terminal protocol; Echo identity includes its normalized query class and identifier, never sequence or fake transport ports. L3 fallback is not a FlowEntry key. Complete Linux UID, ApplicationSubjectId, NetworkContextId, Linux interface index, VPP interface index, queue, lane, Runtime Profile, VPN Packet Provenance, CPU, and network namespace never participate. Linux v1 runs only in the network namespace that owns its NFQUEUE Adapter; namespace isolation is a deployment boundary rather than a per-packet discriminator.
 _Avoid_: UID-aware handoff, directional tuple, four-tuple hash that omits IP protocol, queue affinity as flow identity, network namespace discriminator, `flow_domain`
 
 **Device Packet Direction**:

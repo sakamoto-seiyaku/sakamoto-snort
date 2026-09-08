@@ -322,8 +322,6 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
     reply->vpn_duplicate_or_stale_drops;
   call->status->product_graph_worker_count =
     reply->product_graph_worker_count;
-  call->status->product_graph_flow_domain =
-    reply->product_graph_flow_domain;
   call->status->product_graph_hash_seed =
     reply->product_graph_hash_seed;
   call->status->product_graph_handoff_credits =

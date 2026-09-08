@@ -255,7 +255,6 @@ int product_packet_graph_start_external (vlib_main_t *vm, u64 generation);
 void product_packet_graph_stop_external (vlib_main_t *vm);
 
 uint32_t product_packet_graph_worker_count (void);
-uint32_t product_packet_graph_flow_domain (void);
 uint64_t product_packet_graph_hash_seed (void);
 uint32_t product_packet_graph_handoff_credits (void);
 uint32_t product_packet_graph_enabled (void);

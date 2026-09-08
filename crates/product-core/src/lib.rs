@@ -195,7 +195,6 @@ pub struct ProductStatus {
     pub vpn_infrastructure_faults: u64,
     pub vpn_duplicate_or_stale_drops: u64,
     pub product_graph_worker_count: u32,
-    pub product_graph_flow_domain: u32,
     pub product_graph_hash_seed: u64,
     pub product_graph_handoff_credits: u32,
     pub product_graph_vpp_worker_count: u32,
@@ -463,7 +462,6 @@ pub struct Status {
     pub vpn_infrastructure_faults: u64,
     pub vpn_duplicate_or_stale_drops: u64,
     pub product_graph_worker_count: u32,
-    pub product_graph_flow_domain: u32,
     pub product_graph_hash_seed: u64,
     pub product_graph_handoff_credits: u32,
     pub product_graph_vpp_worker_count: u32,
@@ -615,7 +613,6 @@ impl Status {
             vpn_infrastructure_faults: value.vpn_infrastructure_faults,
             vpn_duplicate_or_stale_drops: value.vpn_duplicate_or_stale_drops,
             product_graph_worker_count: value.product_graph_worker_count,
-            product_graph_flow_domain: value.product_graph_flow_domain,
             product_graph_hash_seed: value.product_graph_hash_seed,
             product_graph_handoff_credits: value.product_graph_handoff_credits,
             product_graph_vpp_worker_count: value.product_graph_vpp_worker_count,
@@ -3529,7 +3526,6 @@ fn status_to_ffi(status: &Status) -> ProductStatus {
     value.vpn_infrastructure_faults = status.vpn_infrastructure_faults;
     value.vpn_duplicate_or_stale_drops = status.vpn_duplicate_or_stale_drops;
     value.product_graph_worker_count = status.product_graph_worker_count;
-    value.product_graph_flow_domain = status.product_graph_flow_domain;
     value.product_graph_hash_seed = status.product_graph_hash_seed;
     value.product_graph_handoff_credits = status.product_graph_handoff_credits;
     value.product_graph_vpp_worker_count = status.product_graph_vpp_worker_count;
@@ -4574,7 +4570,6 @@ impl Status {
             vpn_infrastructure_faults: 0,
             vpn_duplicate_or_stale_drops: 0,
             product_graph_worker_count: 0,
-            product_graph_flow_domain: 0,
             product_graph_hash_seed: 0,
             product_graph_handoff_credits: 0,
             product_graph_vpp_worker_count: 0,

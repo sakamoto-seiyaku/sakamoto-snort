@@ -7,7 +7,7 @@ public final class RuntimeControlNative {
     public static final int POLICY_MUTATION_FAULT_OMIT_CALLBACK = 1;
     public static final int POLICY_MUTATION_FAULT_PRE_SUBMIT_NOT_SENT = 2;
     // Preserve the S191 prefix name while making the S192 tail explicit.
-    private static final int STATUS_VALUE_COUNT = 136;
+    private static final int STATUS_VALUE_COUNT = 135;
     private static final int STATUS_VIEW_VALUE_COUNT = 7;
     private static final int STATUS_ASSOCIATION_VALUE_COUNT = 3;
     private static final int STATUS_WIRE_VALUE_COUNT =
@@ -83,9 +83,9 @@ public final class RuntimeControlNative {
                     values[offset + 10],
                     values[offset + 11],
                     "", "",
+                    parseLongAt(values, offset + 142, 0L),
                     parseLongAt(values, offset + 143, 0L),
                     parseLongAt(values, offset + 144, 0L),
-                    parseLongAt(values, offset + 145, 0L),
                     parseInt(values[offset + 14], 0),
                     parseInt(values[offset + 15], 0),
                     parseInt(values[offset + 16], 0),
@@ -136,18 +136,18 @@ public final class RuntimeControlNative {
                     parseLong(values[offset + 61], 0L),
                     parseLong(values[offset + 62], 0L),
                     parseInt(values[offset + 63], 0),
-                    parseInt(values[offset + 64], 0),
-                    parseLong(values[offset + 65], 0L),
+                    parseLong(values[offset + 64], 0L),
+                    parseInt(values[offset + 65], 0),
                     parseInt(values[offset + 66], 0),
-                    parseInt(values[offset + 67], 0),
+                    parseInt(values[offset + 67], -1),
                     parseInt(values[offset + 68], -1),
                     parseInt(values[offset + 69], -1),
                     parseInt(values[offset + 70], -1),
                     parseInt(values[offset + 71], -1),
-                    parseInt(values[offset + 72], -1),
+                    parseInt(values[offset + 72], 0),
                     parseInt(values[offset + 73], 0),
                     parseInt(values[offset + 74], 0),
-                    parseInt(values[offset + 75], 0),
+                    parseLong(values[offset + 75], 0L),
                     parseLong(values[offset + 76], 0L),
                     parseLong(values[offset + 77], 0L),
                     parseLong(values[offset + 78], 0L),
@@ -156,38 +156,38 @@ public final class RuntimeControlNative {
                     parseLong(values[offset + 81], 0L),
                     parseLong(values[offset + 82], 0L),
                     parseLong(values[offset + 83], 0L),
-                    parseLong(values[offset + 84], 0L),
+                    parseBoolean(values[offset + 84]),
                     parseBoolean(values[offset + 85]),
-                    parseBoolean(values[offset + 86]),
+                    parseInt(values[offset + 86], 0),
                     parseInt(values[offset + 87], 0),
                     parseInt(values[offset + 88], 0),
-                    parseInt(values[offset + 89], 0),
+                    parseBoolean(values[offset + 89]),
                     parseBoolean(values[offset + 90]),
                     parseBoolean(values[offset + 91]),
-                    parseBoolean(values[offset + 92]),
-                    values[offset + 93],
+                    values[offset + 92],
+                    parseInt(values[offset + 93], 0),
                     parseInt(values[offset + 94], 0),
-                    parseInt(values[offset + 95], 0),
-                    parseBoolean(values[offset + 96]),
-                    parseInt(values[offset + 97], 0),
+                    parseBoolean(values[offset + 95]),
+                    parseInt(values[offset + 96], 0),
+                    parseLong(values[offset + 97], 0L),
                     parseLong(values[offset + 98], 0L),
                     parseLong(values[offset + 99], 0L),
                     parseLong(values[offset + 100], 0L),
                     parseLong(values[offset + 101], 0L),
-                    parseLong(values[offset + 102], 0L),
+                    parseInt(values[offset + 102], 0),
                     parseInt(values[offset + 103], 0),
                     parseInt(values[offset + 104], 0),
                     parseInt(values[offset + 105], 0),
                     parseInt(values[offset + 106], 0),
-                    parseInt(values[offset + 107], 0),
-                    parseBoolean(values[offset + 108]),
-                    parseInt(values[offset + 109], 0),
+                    parseBoolean(values[offset + 107]),
+                    parseInt(values[offset + 108], 0),
+                    parseLong(values[offset + 109], 0L),
                     parseLong(values[offset + 110], 0L),
                     parseLong(values[offset + 111], 0L),
                     parseLong(values[offset + 112], 0L),
                     parseLong(values[offset + 113], 0L),
                     parseLong(values[offset + 114], 0L),
-                    parseLong(values[offset + 115], 0L),
+                    parseInt(values[offset + 115], 0),
                     parseInt(values[offset + 116], 0),
                     parseInt(values[offset + 117], 0),
                     parseInt(values[offset + 118], 0),
@@ -207,14 +207,13 @@ public final class RuntimeControlNative {
                     parseInt(values[offset + 132], 0),
                     parseInt(values[offset + 133], 0),
                     parseInt(values[offset + 134], 0),
-                    parseInt(values[offset + 135], 0),
+                    parseIntAt(values, offset + 135, 0),
                     parseIntAt(values, offset + 136, 0),
                     parseIntAt(values, offset + 137, 0),
                     parseIntAt(values, offset + 138, 0),
                     parseIntAt(values, offset + 139, 0),
                     parseIntAt(values, offset + 140, 0),
-                    parseIntAt(values, offset + 141, 0),
-                    parseIntAt(values, offset + 142, 0));
+                    parseIntAt(values, offset + 141, 0));
         } catch (RuntimeException error) {
             return Status.unavailable();
         }
@@ -699,7 +698,6 @@ public final class RuntimeControlNative {
         public final long vpnInfrastructureFaults;
         public final long vpnDuplicateOrStaleDrops;
         public final int productGraphWorkerCount;
-        public final int productGraphFlowDomain;
         public final long productGraphHashSeed;
         public final int productGraphHandoffCredits;
         public final int productGraphVppWorkerCount;
@@ -811,7 +809,7 @@ public final class RuntimeControlNative {
                     0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                     0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                     0L, 0L, 0L, 0L, 0L, 0L,
-                    0, 0, 0L, 0, 0, -1, -1, -1, -1, -1,
+                    0, 0L, 0, 0, -1, -1, -1, -1, -1,
                     0, 0, 0, 0L, 0L, 0L,
                     0L, 0L, 0L, 0L, 0L, 0L,
                     false, false, 0, 0, 0, false, false, false, "",
@@ -879,7 +877,6 @@ public final class RuntimeControlNative {
                        long vpnInfrastructureFaults,
                        long vpnDuplicateOrStaleDrops,
                        int productGraphWorkerCount,
-                       int productGraphFlowDomain,
                        long productGraphHashSeed,
                        int productGraphHandoffCredits,
                        int productGraphVppWorkerCount,
@@ -1017,7 +1014,6 @@ public final class RuntimeControlNative {
             this.vpnInfrastructureFaults = vpnInfrastructureFaults;
             this.vpnDuplicateOrStaleDrops = vpnDuplicateOrStaleDrops;
             this.productGraphWorkerCount = productGraphWorkerCount;
-            this.productGraphFlowDomain = productGraphFlowDomain;
             this.productGraphHashSeed = productGraphHashSeed;
             this.productGraphHandoffCredits = productGraphHandoffCredits;
             this.productGraphVppWorkerCount = productGraphVppWorkerCount;
@@ -1187,7 +1183,6 @@ public final class RuntimeControlNative {
                     base.vpnInfrastructureFaults,
                     base.vpnDuplicateOrStaleDrops,
                     base.productGraphWorkerCount,
-                    base.productGraphFlowDomain,
                     base.productGraphHashSeed,
                     base.productGraphHandoffCredits,
                     base.productGraphVppWorkerCount,

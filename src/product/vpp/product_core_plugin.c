@@ -432,8 +432,6 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                       0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->product_graph_worker_count =
                     htonl (product_packet_graph_worker_count ());
-                  rmp->product_graph_flow_domain =
-                    htonl (product_packet_graph_flow_domain ());
                   rmp->product_graph_hash_seed =
                     clib_host_to_net_u64 (product_packet_graph_hash_seed ());
                   rmp->product_graph_handoff_credits =

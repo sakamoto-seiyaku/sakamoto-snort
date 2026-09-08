@@ -40,7 +40,6 @@ check_rejected_envelope (const rejected_envelope_vector_t *vector)
     .data = vector->packet,
     .length = vector->length,
     .current_worker = 0,
-    .flow_domain = 9,
     .origin_obligation_id = vector->obligation_id,
     .platform = { 0 },
   };
@@ -90,7 +89,6 @@ check_l3_only_packet (const l3_only_vector_t *vector)
     .data = vector->packet,
     .length = vector->length,
     .current_worker = 0,
-    .flow_domain = 9,
     .origin_obligation_id = vector->obligation_id,
     .platform = { 0 },
   };
@@ -125,7 +123,7 @@ check_l3_only_packet (const l3_only_vector_t *vector)
            && lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
            && lease.terminal_count == 0 && lease.settled == 0,
          "admitted L3-only packet must not fabricate a runtime drop");
-  CHECK (product_packet_owner_guard (&lease, lease.expected_owner)
+  CHECK (product_packet_owner_guard (&lease, lease.assignment.execution_owner)
            == PRODUCT_PACKET_OK,
          "admitted L3-only packet must reach its normal owner");
   CHECK (product_packet_set_terminal (&lease,
@@ -150,7 +148,6 @@ admit_for_corrective_handoff (const uint8_t *packet, size_t length,
     .data = packet,
     .length = length,
     .current_worker = 0,
-    .flow_domain = 9,
     .origin_obligation_id = obligation_id,
     .platform = { 0 },
   };
@@ -170,13 +167,13 @@ check_corrective_handoff (const uint8_t *packet, size_t length)
   product_packet_lease_t repeated =
     admit_for_corrective_handoff (packet, length, UINT64_C (175022));
   uint16_t first_wrong_worker =
-    (uint16_t) ((corrected.expected_owner + 1U) % 3U);
+    (uint16_t) ((corrected.assignment.execution_owner + 1U) % 3U);
   uint16_t second_wrong_worker =
-    (uint16_t) ((corrected.expected_owner + 2U) % 3U);
+    (uint16_t) ((corrected.assignment.execution_owner + 2U) % 3U);
 
-  CHECK (memcmp (&corrected.canonical_key, &repeated.canonical_key,
-                 sizeof (corrected.canonical_key)) == 0
-           && corrected.expected_owner == repeated.expected_owner,
+  CHECK (memcmp (&corrected.assignment.key, &repeated.assignment.key,
+                 sizeof (corrected.assignment.key)) == 0
+           && corrected.assignment.execution_owner == repeated.assignment.execution_owner,
          "same key, selector, and layout must retain one expected owner");
 
   CHECK (product_packet_owner_guard (&corrected, first_wrong_worker)
@@ -189,7 +186,7 @@ check_corrective_handoff (const uint8_t *packet, size_t length)
            && corrected.terminal_intent == PRODUCT_PACKET_INTENT_NONE
            && corrected.terminal_count == 0,
          "corrective handoff must not fabricate guard success or terminal");
-  CHECK (product_packet_owner_guard (&corrected, corrected.expected_owner)
+  CHECK (product_packet_owner_guard (&corrected, corrected.assignment.execution_owner)
            == PRODUCT_PACKET_OK,
          "corrected packet arriving at expected owner must pass guard");
   CHECK (corrected.corrective_handoff_count == 1

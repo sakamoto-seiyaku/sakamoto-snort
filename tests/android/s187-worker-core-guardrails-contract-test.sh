@@ -96,7 +96,6 @@ for token in (
         "runtime_resize=false",
         "runtime_reshard=false",
         "product_graph_worker_count=",
-        "product_graph_flow_domain=",
         "product_graph_hash_seed=",
         "product_graph_handoff_credits=",
         "product_graph_enabled=",
@@ -121,7 +120,7 @@ if "writeS186ProfileSwitchBarrierStatus(next)" not in publish:
 if "writeS187WorkerCoreGuardrailsStatus" in publish:
     raise AssertionError("S187 status must be running-product evidence, not generic snapshot evidence")
 
-if "private static final int STATUS_VALUE_COUNT = 136" not in native_status:
+if "private static final int STATUS_VALUE_COUNT = 135" not in native_status:
     raise AssertionError("S187 Product Core JNI status vector must include graph guardrail fields")
 for token in (
         "public final int productGraphWorkerCount",

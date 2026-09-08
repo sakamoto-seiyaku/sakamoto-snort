@@ -224,6 +224,10 @@ target_include_directories(product_core_plugin PRIVATE
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
+if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
+  target_compile_definitions(product_core_plugin PRIVATE
+    SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)
+endif()
 if(ANDROID)
   # Keep these as direct NEEDED entries. bionic must load the VPP libraries
   # before resolving the plugin's vlibapi TLS symbol (my_api_main).

@@ -129,7 +129,6 @@ typedef struct
   const uint8_t *data;
   size_t length;
   uint16_t current_worker;
-  uint32_t flow_domain;
   uint64_t origin_obligation_id;
   product_platform_packet_facts_t platform;
 } product_packet_ingress_t;
@@ -169,22 +168,55 @@ typedef struct
   uint16_t port;
 } product_packet_endpoint_t;
 
+typedef enum
+{
+  PRODUCT_OWNER_KEY_NONE = 0,
+  PRODUCT_OWNER_KEY_L3,
+  PRODUCT_OWNER_KEY_L4_PORTS,
+  PRODUCT_OWNER_KEY_ICMP_QUERY,
+} product_owner_key_kind_t;
+
+enum { PRODUCT_ICMP_QUERY_ECHO = 1, PRODUCT_EXECUTION_OWNER_UNKNOWN = UINT16_MAX };
+
 typedef struct
 {
+  uint8_t kind; /* product_owner_key_kind_t */
   uint8_t ip_family;
   uint8_t protocol;
-  uint16_t reserved;
-  product_packet_endpoint_t endpoint_a;
-  product_packet_endpoint_t endpoint_b;
-} product_canonical_flow_key_t;
+  uint8_t query_class; /* only ICMP_QUERY; request/reply share one class */
+  uint8_t address_a[16];
+  uint8_t address_b[16];
+  union
+  {
+    struct { uint16_t a, b; } ports;
+    struct { uint16_t identifier, reserved; } query;
+  } transport;
+} product_canonical_owner_key_t;
+
+typedef struct
+{
+  product_canonical_owner_key_t key;
+  uint64_t canonical_hash;
+  uint16_t execution_owner;
+  uint8_t source_is_a; /* projection only; not semantic packet/flow direction */
+  uint8_t valid;
+} product_owner_assignment_t;
+
+_Static_assert (sizeof (product_canonical_owner_key_t) == 40, "typed owner key");
+
+/* The sole assignment interface consumes already parsed facts, never bytes or
+ * platform/completion identity. A successful result is immutable downstream. */
+product_packet_result_t
+product_owner_assign (const product_worker_layout_t *layout,
+                      const product_packet_facts_t *facts,
+                      product_owner_assignment_t *assignment);
 
 typedef struct
 {
   product_packet_facts_t facts;
-  product_canonical_flow_key_t canonical_key;
+  product_owner_assignment_t assignment;
   product_platform_packet_facts_t platform;
   uint64_t origin_obligation_id;
-  uint16_t expected_owner;
   uint8_t distribution;
   uint8_t primary_handoff_count;
   uint8_t corrective_handoff_count;
@@ -200,16 +232,11 @@ product_packet_admit (const product_worker_layout_t *layout,
                       const product_packet_ingress_t *ingress,
                       product_packet_lease_t *lease);
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 product_packet_result_t
 product_packet_owner_guard (product_packet_lease_t *lease,
                             uint16_t current_worker);
-
-product_packet_result_t
-product_packet_owner_from_facts (const product_worker_layout_t *layout,
-                                 uint32_t flow_domain,
-                                 const product_packet_facts_t *facts,
-                                 product_canonical_flow_key_t *key,
-                                 uint16_t *owner);
+#endif
 
 product_packet_result_t
 product_packet_set_terminal (product_packet_lease_t *lease,

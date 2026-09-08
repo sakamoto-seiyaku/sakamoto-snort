@@ -233,7 +233,6 @@ typedef struct {
   uint64_t vpn_infrastructure_faults;
   uint64_t vpn_duplicate_or_stale_drops;
   uint32_t product_graph_worker_count;
-  uint32_t product_graph_flow_domain;
   uint64_t product_graph_hash_seed;
   uint32_t product_graph_handoff_credits;
   uint32_t product_graph_vpp_worker_count;

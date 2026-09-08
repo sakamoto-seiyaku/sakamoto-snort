@@ -7,6 +7,8 @@ def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 base=module('s206',ROOT/'tests/device/verify-s206-root-lanes.py')
 oracle=base.oracle;chain=base.chain;rows=base.rows;records=base.records;digest=base.digest
+assignment_oracle=module('owner_oracle',ROOT/'tests/device/s207-owner-oracle.py')
+oracle.owner=assignment_oracle.owner
 
 def verify(directory,build):
  out=Path(directory);errors=[];coverage=set();latency=[];packet_count=0

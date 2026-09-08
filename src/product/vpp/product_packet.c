@@ -36,36 +36,6 @@ endpoint_compare (const product_packet_endpoint_t *left,
   return left->port > right->port;
 }
 
-static void
-make_canonical_key (const product_packet_facts_t *facts,
-                    product_canonical_flow_key_t *key)
-{
-  product_packet_endpoint_t source;
-  product_packet_endpoint_t destination;
-
-  memset (key, 0, sizeof (*key));
-  memset (&source, 0, sizeof (source));
-  memset (&destination, 0, sizeof (destination));
-  memcpy (source.address, facts->source_address, sizeof (source.address));
-  memcpy (destination.address, facts->destination_address,
-          sizeof (destination.address));
-  source.port = facts->source_port;
-  destination.port = facts->destination_port;
-
-  key->ip_family = facts->ip_family;
-  key->protocol = facts->protocol;
-  if (endpoint_compare (&source, &destination) <= 0)
-    {
-      key->endpoint_a = source;
-      key->endpoint_b = destination;
-    }
-  else
-    {
-      key->endpoint_a = destination;
-      key->endpoint_b = source;
-    }
-}
-
 static uint64_t
 hash_byte (uint64_t hash, uint8_t value)
 {
@@ -75,55 +45,87 @@ hash_byte (uint64_t hash, uint8_t value)
 static uint64_t
 hash_bytes (uint64_t hash, const uint8_t *value, size_t length)
 {
-  size_t index;
-  for (index = 0; index < length; index++)
+  for (size_t index = 0; index < length; index++)
     hash = hash_byte (hash, value[index]);
   return hash;
 }
 
-static uint16_t
-select_owner (const product_worker_layout_t *layout, uint32_t flow_domain,
-              const product_canonical_flow_key_t *key)
+static uint64_t
+hash_u16 (uint64_t hash, uint16_t value)
 {
-  uint64_t hash = UINT64_C (14695981039346656037) ^ layout->hash_seed;
-  uint8_t domain[4] = {
-    (uint8_t) (flow_domain >> 24),
-    (uint8_t) (flow_domain >> 16),
-    (uint8_t) (flow_domain >> 8),
-    (uint8_t) flow_domain,
-  };
-  uint8_t port[2];
-
-  hash = hash_bytes (hash, domain, sizeof (domain));
-  hash = hash_byte (hash, key->ip_family);
-  hash = hash_byte (hash, key->protocol);
-  hash = hash_bytes (hash, key->endpoint_a.address,
-                     sizeof (key->endpoint_a.address));
-  port[0] = (uint8_t) (key->endpoint_a.port >> 8);
-  port[1] = (uint8_t) key->endpoint_a.port;
-  hash = hash_bytes (hash, port, sizeof (port));
-  hash = hash_bytes (hash, key->endpoint_b.address,
-                     sizeof (key->endpoint_b.address));
-  port[0] = (uint8_t) (key->endpoint_b.port >> 8);
-  port[1] = (uint8_t) key->endpoint_b.port;
-  hash = hash_bytes (hash, port, sizeof (port));
-  return (uint16_t) (hash % layout->worker_count);
+  return hash_byte (hash_byte (hash, (uint8_t) (value >> 8)), (uint8_t) value);
 }
 
 product_packet_result_t
-product_packet_owner_from_facts (const product_worker_layout_t *layout,
-                                 uint32_t flow_domain,
-                                 const product_packet_facts_t *facts,
-                                 product_canonical_flow_key_t *key,
-                                 uint16_t *owner)
+product_owner_assign (const product_worker_layout_t *layout,
+                      const product_packet_facts_t *facts,
+                      product_owner_assignment_t *assignment)
 {
-  if (layout == NULL || facts == NULL || key == NULL || owner == NULL
-      || layout->worker_count == 0
-      || facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
-      || facts->l4_status != PRODUCT_PACKET_L4_COMPLETE)
+  if (assignment == NULL)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
-  make_canonical_key (facts, key);
-  *owner = select_owner (layout, flow_domain, key);
+  memset (assignment, 0, sizeof (*assignment));
+  assignment->execution_owner = PRODUCT_EXECUTION_OWNER_UNKNOWN;
+  if (layout == NULL || facts == NULL || layout->worker_count == 0)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
+      || (facts->ip_family != 4 && facts->ip_family != 6))
+    return PRODUCT_PACKET_INVALID_L3;
+
+  product_canonical_owner_key_t *key = &assignment->key;
+  product_packet_endpoint_t source = {0}, destination = {0};
+  key->kind = PRODUCT_OWNER_KEY_L3;
+  key->ip_family = facts->ip_family;
+  key->protocol = facts->protocol;
+  if (facts->l4_status == PRODUCT_PACKET_L4_COMPLETE
+      && (facts->protocol == PRODUCT_IP_PROTOCOL_TCP
+          || facts->protocol == PRODUCT_IP_PROTOCOL_UDP))
+    {
+      key->kind = PRODUCT_OWNER_KEY_L4_PORTS;
+      source.port = facts->source_port;
+      destination.port = facts->destination_port;
+    }
+  else if (facts->icmp_identity_known && facts->icmp_code == 0
+           && ((facts->ip_family == 4 && facts->protocol == 1
+                && (facts->icmp_type == 8 || facts->icmp_type == 0))
+               || (facts->ip_family == 6 && facts->protocol == 58
+                   && (facts->icmp_type == 128 || facts->icmp_type == 129))))
+    {
+      key->kind = PRODUCT_OWNER_KEY_ICMP_QUERY;
+      key->query_class = PRODUCT_ICMP_QUERY_ECHO;
+      key->transport.query.identifier = facts->icmp_identifier;
+    }
+  memcpy (source.address, facts->source_address, 16);
+  memcpy (destination.address, facts->destination_address, 16);
+  assignment->source_is_a = endpoint_compare (&source, &destination) <= 0;
+  const product_packet_endpoint_t *a = assignment->source_is_a ? &source : &destination;
+  const product_packet_endpoint_t *b = assignment->source_is_a ? &destination : &source;
+  memcpy (key->address_a, a->address, 16);
+  memcpy (key->address_b, b->address, 16);
+  if (key->kind == PRODUCT_OWNER_KEY_L4_PORTS)
+    {
+      key->transport.ports.a = a->port;
+      key->transport.ports.b = b->port;
+    }
+
+  uint64_t hash = UINT64_C (14695981039346656037) ^ layout->hash_seed;
+  hash = hash_byte (hash, key->kind);
+  hash = hash_byte (hash, key->ip_family);
+  hash = hash_byte (hash, key->protocol);
+  hash = hash_bytes (hash, key->address_a, 16);
+  hash = hash_bytes (hash, key->address_b, 16);
+  if (key->kind == PRODUCT_OWNER_KEY_L4_PORTS)
+    {
+      hash = hash_u16 (hash, key->transport.ports.a);
+      hash = hash_u16 (hash, key->transport.ports.b);
+    }
+  else if (key->kind == PRODUCT_OWNER_KEY_ICMP_QUERY)
+    {
+      hash = hash_byte (hash, key->query_class);
+      hash = hash_u16 (hash, key->transport.query.identifier);
+    }
+  assignment->canonical_hash = hash;
+  assignment->execution_owner = (uint16_t) (hash % layout->worker_count);
+  assignment->valid = 1;
   return PRODUCT_PACKET_OK;
 }
 
@@ -307,6 +309,7 @@ product_packet_admit (const product_worker_layout_t *layout,
   memset (lease, 0, sizeof (*lease));
   lease->origin_obligation_id = ingress->origin_obligation_id;
   lease->platform = ingress->platform;
+  lease->assignment.execution_owner = PRODUCT_EXECUTION_OWNER_UNKNOWN;
   if (ingress->length == 0)
     result = PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   else
@@ -326,7 +329,6 @@ product_packet_admit (const product_worker_layout_t *layout,
           || result == PRODUCT_PACKET_UNSUPPORTED_ENVELOPE)
         {
           memset (&lease->facts, 0, sizeof (lease->facts));
-          lease->expected_owner = ingress->current_worker;
           lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
           lease->terminal_count = 1;
           if (result == PRODUCT_PACKET_INVALID_L3)
@@ -342,10 +344,10 @@ product_packet_admit (const product_worker_layout_t *layout,
       return result;
     }
 
-  make_canonical_key (&lease->facts, &lease->canonical_key);
-  lease->expected_owner = select_owner (layout, ingress->flow_domain,
-                                        &lease->canonical_key);
-  if (lease->expected_owner == ingress->current_worker)
+  result = product_owner_assign (layout, &lease->facts, &lease->assignment);
+  if (result != PRODUCT_PACKET_OK)
+    return result;
+  if (lease->assignment.execution_owner == ingress->current_worker)
     lease->distribution = PRODUCT_PACKET_DISTRIBUTION_LOCAL;
   else
     {
@@ -355,13 +357,14 @@ product_packet_admit (const product_worker_layout_t *layout,
   return PRODUCT_PACKET_OK;
 }
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 product_packet_result_t
 product_packet_owner_guard (product_packet_lease_t *lease,
                             uint16_t current_worker)
 {
   if (lease == NULL)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
-  if (current_worker != lease->expected_owner)
+  if (current_worker != lease->assignment.execution_owner)
     {
       if (lease->corrective_handoff_count == 0)
         {
@@ -380,6 +383,7 @@ product_packet_owner_guard (product_packet_lease_t *lease,
   lease->policy_owner_ready = 1;
   return PRODUCT_PACKET_OK;
 }
+#endif
 
 product_packet_result_t
 product_packet_set_terminal (product_packet_lease_t *lease,

@@ -92,7 +92,6 @@ admit (const uint8_t *packet, size_t length, uint16_t current_worker,
     .data = packet,
     .length = length,
     .current_worker = current_worker,
-    .flow_domain = 7,
     .origin_obligation_id = obligation_id,
     .platform = platform,
   };
@@ -132,19 +131,19 @@ check_pair (const uint8_t *forward, size_t forward_length,
          "source port must match vector");
   CHECK (a.facts.destination_port == destination_port,
          "destination port must match vector");
-  CHECK (memcmp (&a.canonical_key, &b.canonical_key,
-                 sizeof (a.canonical_key)) == 0,
+  CHECK (memcmp (&a.assignment.key, &b.assignment.key,
+                 sizeof (a.assignment.key)) == 0,
          "forward and reverse must have one canonical key");
-  CHECK (a.expected_owner == b.expected_owner,
+  CHECK (a.assignment.execution_owner == b.assignment.execution_owner,
          "forward and reverse must have one owner");
 
   memset (&platform, 0, sizeof (platform));
   product_packet_lease_t changed =
     admit (forward, forward_length, 0, platform, obligation_base + 2);
-  CHECK (memcmp (&a.canonical_key, &changed.canonical_key,
-                 sizeof (a.canonical_key)) == 0,
+  CHECK (memcmp (&a.assignment.key, &changed.assignment.key,
+                 sizeof (a.assignment.key)) == 0,
          "platform facts must not alter canonical key");
-  CHECK (a.expected_owner == changed.expected_owner,
+  CHECK (a.assignment.execution_owner == changed.assignment.execution_owner,
          "platform facts must not alter owner");
 }
 
@@ -154,13 +153,13 @@ check_distribution_and_ledger (const uint8_t *packet, size_t length)
   product_platform_packet_facts_t platform = { 0 };
   product_packet_lease_t probe = admit (packet, length, 0, platform, 91);
   product_packet_lease_t local =
-    admit (packet, length, probe.expected_owner, platform, 92);
+    admit (packet, length, probe.assignment.execution_owner, platform, 92);
   CHECK (local.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL,
          "owner-local path must stay local");
   CHECK (local.primary_handoff_count == 0,
          "owner-local path must not enqueue");
 
-  uint16_t remote_worker = (uint16_t) ((probe.expected_owner + 1U) % 4U);
+  uint16_t remote_worker = (uint16_t) ((probe.assignment.execution_owner + 1U) % 4U);
   product_packet_lease_t remote =
     admit (packet, length, remote_worker, platform, 93);
   CHECK (remote.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE,
@@ -172,7 +171,7 @@ check_distribution_and_ledger (const uint8_t *packet, size_t length)
                                       PRODUCT_PACKET_INTENT_PASS_ADAPTER)
            == PRODUCT_PACKET_ORDER_VIOLATION,
          "terminal mutation before Owner Guard must fail");
-  CHECK (product_packet_owner_guard (&remote, remote.expected_owner)
+  CHECK (product_packet_owner_guard (&remote, remote.assignment.execution_owner)
            == PRODUCT_PACKET_OK,
          "packet arriving at expected owner must pass Owner Guard");
   CHECK (product_packet_set_terminal (&remote,
@@ -218,8 +217,8 @@ main (void)
   product_platform_packet_facts_t platform = { 0 };
   product_packet_lease_t tcp = admit (a, alen, 0, platform, 50);
   product_packet_lease_t udp = admit (b, blen, 0, platform, 51);
-  CHECK (memcmp (&tcp.canonical_key, &udp.canonical_key,
-                 sizeof (tcp.canonical_key)) != 0,
+  CHECK (memcmp (&tcp.assignment.key, &udp.assignment.key,
+                 sizeof (tcp.assignment.key)) != 0,
          "IP protocol must participate in canonical key");
   check_distribution_and_ledger (a, alen);
 

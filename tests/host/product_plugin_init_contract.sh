@@ -32,7 +32,21 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef int32_t i32;
-typedef struct { int unused; } vlib_main_t;
+typedef struct { u32 thread_index; } vlib_main_t;
+typedef double f64;
+typedef unsigned long uword;
+typedef struct { int unused; } vlib_node_runtime_t;
+typedef struct { int unused; } vlib_frame_t;
+typedef struct { uword (*function)(vlib_main_t *, vlib_node_runtime_t *, vlib_frame_t *); int type; const char *name; } test_node_t;
+#define VLIB_NODE_TYPE_PROCESS 1
+#define VLIB_REGISTER_NODE(name) test_node_t name
+#define VLIB_WORKER_INIT_FUNCTION(fn) clib_error_t *(*test_worker_init)(vlib_main_t *) = fn
+#define clib_atomic_fetch_or(p, v) __atomic_fetch_or(p, v, __ATOMIC_RELAXED)
+#define clib_atomic_load_acq_n(p) __atomic_load_n(p, __ATOMIC_ACQUIRE)
+static inline f64 vlib_time_now(vlib_main_t *vm) { (void)vm; return 0; }
+static inline void vlib_process_wait_for_event_or_clock(vlib_main_t *vm, f64 t) { (void)vm; (void)t; }
+static inline void vlib_worker_thread_barrier_sync(vlib_main_t *vm) { (void)vm; }
+static inline void vlib_worker_thread_barrier_release(vlib_main_t *vm) { (void)vm; }
 typedef struct { int unused; } vlib_buffer_t;
 typedef struct { const char *message; } clib_error_t;
 extern clib_error_t sakamoto_test_error;
@@ -201,7 +215,6 @@ typedef struct {
   uint64_t vpn_infrastructure_faults;
   uint64_t vpn_duplicate_or_stale_drops;
   uint32_t product_graph_worker_count;
-  uint32_t product_graph_flow_domain;
   uint64_t product_graph_hash_seed;
   uint32_t product_graph_handoff_credits;
   uint32_t product_graph_vpp_worker_count;
@@ -542,7 +555,6 @@ int product_vpn_udp4_adapter_start (vlib_main_t *vm, uint64_t generation)
   return 0;
 }
 uint32_t product_packet_graph_worker_count (void) { return 2U; }
-uint32_t product_packet_graph_flow_domain (void) { return 7U; }
 uint64_t product_packet_graph_hash_seed (void) { return 0x6f776e65722d3137ULL; }
 uint32_t product_packet_graph_handoff_credits (void) { return 32U; }
 uint32_t product_packet_graph_enabled (void) { return 1U; }

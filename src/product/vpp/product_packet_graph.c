@@ -32,7 +32,6 @@
 
 #define PRODUCT_GRAPH_VECTOR_COUNT 8
 #define PRODUCT_GRAPH_WORKERS 2
-#define PRODUCT_GRAPH_FLOW_DOMAIN 7
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 
@@ -61,7 +60,8 @@ typedef struct
   u16 expected_owner;
   u8 primary_handoff_count;
   u8 corrective_handoff_count;
-} product_owner_assignment_t;
+  u8 key_kind, query_class, assignment_valid, reserved;
+} product_compact_owner_assignment_t;
 
 typedef union
 {
@@ -74,15 +74,16 @@ typedef struct
   /* Aliases keep bounded transition code explicit while naming its owner. */
   union
   {
-    product_owner_assignment_t owner;
+    product_compact_owner_assignment_t owner;
     struct
     {
       u64 generation;
       u16 expected_owner;
       u8 primary_handoff_count, corrective_handoff_count;
+      u8 key_kind, query_class, assignment_valid, reserved;
     };
   };
-  u64 origin_obligation_id;
+  u64 canonical_hash;
   product_transport_metadata_t transport;
   u32 packet_length;
   u16 source_port, destination_port;
@@ -91,7 +92,11 @@ typedef struct
   u8 l3_header_length, l4_header_length;
   u8 ip_family, protocol, l3_status, l4_status;
   u8 state_bits, runtime_drop_reason;
+  /* Stack projection of the one token in opaque; not serialized into opaque2. */
+  u64 origin_obligation_id;
 } product_buffer_metadata_t;
+
+#define PRODUCT_PACKET_METADATA_BYTES offsetof (product_buffer_metadata_t, origin_obligation_id)
 
 typedef struct
 {
@@ -101,15 +106,15 @@ typedef struct
 
 _Static_assert (sizeof (product_packet_completion_frame_t) <= sizeof (((vlib_buffer_t *) 0)->opaque2),
                 "completion carrier fits existing opaque2");
-_Static_assert (sizeof (product_owner_assignment_t) == 16, "owner layout");
+_Static_assert (sizeof (product_compact_owner_assignment_t) == 16, "owner layout");
 _Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
-_Static_assert (sizeof (product_buffer_metadata_t) == 56, "packet layout");
-_Static_assert (sizeof (product_buffer_metadata_t) ==
+_Static_assert (PRODUCT_PACKET_METADATA_BYTES == 56, "packet layout");
+_Static_assert (PRODUCT_PACKET_METADATA_BYTES ==
                   sizeof (((vlib_buffer_t *) 0)->opaque2), "opaque2 capacity");
 _Static_assert (sizeof (product_buffer_platform_metadata_t) ==
                   sizeof (((vlib_buffer_t *) 0)->opaque), "opaque capacity");
-_Static_assert (offsetof (product_buffer_metadata_t, origin_obligation_id) == 16,
-                "obligation token offset");
+_Static_assert (offsetof (product_buffer_metadata_t, canonical_hash) == 16,
+                "canonical hash offset");
 _Static_assert (offsetof (product_buffer_metadata_t, transport) == 24,
                 "transport offset");
 _Static_assert (offsetof (product_buffer_metadata_t, packet_length) == 36,
@@ -142,7 +147,7 @@ typedef struct
 
 typedef struct
 {
-  product_canonical_flow_key_t canonical_key;
+  product_canonical_owner_key_t canonical_key;
   u32 ingress_buffer_index;
   u32 terminal_buffer_index;
   u32 ingress_current_data;
@@ -499,14 +504,16 @@ static void
 product_metadata_load (const vlib_buffer_t *buffer,
                        product_buffer_metadata_t *metadata)
 {
-  clib_memcpy_fast (metadata, buffer->opaque2, sizeof (*metadata));
+  clib_memcpy_fast (metadata, buffer->opaque2, PRODUCT_PACKET_METADATA_BYTES);
+  clib_memcpy_fast (&metadata->origin_obligation_id, buffer->opaque, sizeof (u64));
 }
 
 static void
 product_metadata_store (vlib_buffer_t *buffer,
                         const product_buffer_metadata_t *metadata)
 {
-  clib_memcpy_fast (buffer->opaque2, metadata, sizeof (*metadata));
+  clib_memcpy_fast (buffer->opaque2, metadata, PRODUCT_PACKET_METADATA_BYTES);
+  clib_memcpy_fast (buffer->opaque, &metadata->origin_obligation_id, sizeof (u64));
 }
 
 /* Own all opaque only along product admit -> policy -> terminal. */
@@ -576,8 +583,12 @@ product_metadata_from_lease (product_buffer_metadata_t *metadata,
   const product_packet_facts_t *facts = &lease->facts;
   clib_memset (metadata, 0, sizeof (*metadata));
   metadata->origin_obligation_id = lease->origin_obligation_id;
-  metadata->expected_owner = lease->expected_owner;
+  metadata->expected_owner = lease->assignment.execution_owner;
   metadata->generation = generation;
+  metadata->canonical_hash = lease->assignment.canonical_hash;
+  metadata->key_kind = lease->assignment.key.kind;
+  metadata->query_class = lease->assignment.key.query_class;
+  metadata->assignment_valid = lease->assignment.valid;
   metadata->l3_header_length = facts->l3_header_length;
   metadata->l4_header_length = facts->l4_header_length;
   metadata->ip_family = facts->ip_family;
@@ -610,8 +621,7 @@ product_metadata_from_lease (product_buffer_metadata_t *metadata,
   metadata->primary_handoff_count = lease->primary_handoff_count;
   metadata->corrective_handoff_count = lease->corrective_handoff_count;
   metadata->runtime_drop_reason = lease->runtime_drop_reason;
-  if (memcmp (facts->source_address, lease->canonical_key.endpoint_a.address, 16) == 0
-      && facts->source_port == lease->canonical_key.endpoint_a.port)
+  if (lease->assignment.source_is_a)
     metadata->state_bits |= PRODUCT_META_SOURCE_IS_A;
   product_metadata_set_terminal_intent (metadata, lease->terminal_intent);
 }
@@ -624,7 +634,7 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
   clib_memset (lease, 0, sizeof (*lease));
   facts = &lease->facts;
   lease->origin_obligation_id = metadata->origin_obligation_id;
-  lease->expected_owner = metadata->expected_owner;
+  lease->assignment.execution_owner = metadata->expected_owner;
   lease->primary_handoff_count = metadata->primary_handoff_count;
   lease->corrective_handoff_count = metadata->corrective_handoff_count;
   lease->distribution = metadata->primary_handoff_count == 0
@@ -684,16 +694,27 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
       facts->icmp_code = metadata->transport.icmp.code;
       facts->icmp_identity_known = metadata->transport.icmp.identity_known;
     }
-  lease->canonical_key.ip_family = facts->ip_family;
-  lease->canonical_key.protocol = facts->protocol;
-  product_packet_endpoint_t *source = (metadata->state_bits & PRODUCT_META_SOURCE_IS_A)
-    ? &lease->canonical_key.endpoint_a : &lease->canonical_key.endpoint_b;
-  product_packet_endpoint_t *destination = (metadata->state_bits & PRODUCT_META_SOURCE_IS_A)
-    ? &lease->canonical_key.endpoint_b : &lease->canonical_key.endpoint_a;
-  clib_memcpy_fast (source->address, facts->source_address, 16);
-  clib_memcpy_fast (destination->address, facts->destination_address, 16);
-  source->port = facts->source_port;
-  destination->port = facts->destination_port;
+  /* Restore a typed key by the saved projection. No compare, canonicalization,
+   * hash or owner selection occurs after admission. */
+  product_owner_assignment_t *assignment = &lease->assignment;
+  assignment->canonical_hash = metadata->canonical_hash;
+  assignment->valid = metadata->assignment_valid;
+  assignment->source_is_a = !!(metadata->state_bits & PRODUCT_META_SOURCE_IS_A);
+  assignment->key.kind = metadata->key_kind;
+  assignment->key.ip_family = facts->ip_family;
+  assignment->key.protocol = facts->protocol;
+  assignment->key.query_class = metadata->query_class;
+  u8 *source = assignment->source_is_a ? assignment->key.address_a : assignment->key.address_b;
+  u8 *destination = assignment->source_is_a ? assignment->key.address_b : assignment->key.address_a;
+  clib_memcpy_fast (source, facts->source_address, 16);
+  clib_memcpy_fast (destination, facts->destination_address, 16);
+  if (assignment->key.kind == PRODUCT_OWNER_KEY_L4_PORTS)
+    {
+      assignment->key.transport.ports.a = assignment->source_is_a ? facts->source_port : facts->destination_port;
+      assignment->key.transport.ports.b = assignment->source_is_a ? facts->destination_port : facts->source_port;
+    }
+  else if (assignment->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY)
+    assignment->key.transport.query.identifier = facts->icmp_identifier;
   product_packet_graph_get_platform_facts (buffer, metadata->generation, &lease->platform);
   return 1;
 
@@ -741,7 +762,7 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
     stage, product_packet_evidence_source (lease), node->node_index,
     vm->thread_index, vlib_get_worker_index (vm->thread_index), buffer_index,
     (unsigned long long) metadata->generation,
-    (unsigned long long) metadata->origin_obligation_id, lease->expected_owner,
+    (unsigned long long) metadata->origin_obligation_id, lease->assignment.execution_owner,
     f->l3_status, f->l4_status, f->ip_family, f->protocol, f->packet_length,
     f->l3_header_length, f->l4_header_length, f->transport_offset,
     f->transport_length, f->source_port, f->destination_port,
@@ -763,6 +784,20 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
         fprintf (stderr, "%02x", packet[i]);
     }
   fprintf (stderr, " mono_ns=%llu\n", (unsigned long long) entered_ns);
+  const product_owner_assignment_t *a = &lease->assignment;
+  fprintf (stderr, "s207 stage=%s token=%llu generation=%llu thread=%u valid=%u owner=%u hash=%llu source_is_a=%u key_kind=%u key_family=%u key_protocol=%u query_class=%u query_id=%u port_a=%u port_b=%u key_a=",
+    stage, (unsigned long long) metadata->origin_obligation_id,
+    (unsigned long long) metadata->generation, vm->thread_index,
+    a->valid, a->execution_owner, (unsigned long long) a->canonical_hash,
+    a->source_is_a, a->key.kind, a->key.ip_family, a->key.protocol,
+    a->key.query_class,
+    a->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY ? a->key.transport.query.identifier : 0,
+    a->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? a->key.transport.ports.a : 0,
+    a->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? a->key.transport.ports.b : 0);
+  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", a->key.address_a[i]);
+  fprintf (stderr, " key_b=");
+  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", a->key.address_b[i]);
+  fprintf (stderr, "\n");
   funlockfile (stderr);
 }
 #endif
@@ -1038,7 +1073,6 @@ VLIB_NODE_FN (product_packet_admit_node)
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = buffer->current_length;
       ingress.current_worker = logical_worker;
-      ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
       ingress.origin_obligation_id = initial_metadata.origin_obligation_id;
       if (!product_packet_graph_get_platform_facts (
             buffer, initial_metadata.generation, &ingress.platform))
@@ -1060,18 +1094,10 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-      /* Ordinary dual-stack TCP/UDP wire packets are open; owner may be remote. */
-      if (admit_result != PRODUCT_PACKET_OK
-          || (lease.platform.provenance != PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
-              && ((lease.facts.ip_family != 4 && lease.facts.ip_family != 6)
-                  || (lease.facts.protocol != 17 && lease.facts.protocol != 6)
-                  || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))) {
-        lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
-        lease.terminal_count = 1;
-        lease.runtime_drop_reason = PRODUCT_PACKET_DROP_UNSUPPORTED_ENVELOPE;
-      } else {
+      /* Every successfully parsed L3 packet uses the same assignment. Missing
+       * typed transport facts remain unavailable to policy predicates. */
+      if (admit_result == PRODUCT_PACKET_OK)
         lease.policy_owner_ready = lease.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL;
-      }
 #endif
       product_metadata_from_lease (&metadata, &lease,
                                    initial_metadata.generation, buffer);
@@ -1087,10 +1113,10 @@ VLIB_NODE_FN (product_packet_admit_node)
         metadata.state_bits &= ~PRODUCT_META_ADMITTED;
       product_metadata_trace (vm, node, buffer, buffer_index, &metadata, &lease, "admit");
       if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=admit source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu parse=1 assignment=1 owner=%u family=%u protocol=%u src_port=%u dst_port=%u intent=%u\n",
+      fprintf(stderr, "s203 event=admit source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu parse=1 assignment=%u owner=%u family=%u protocol=%u src_port=%u dst_port=%u intent=%u\n",
         product_packet_evidence_source (&lease), node->node_index, vm->thread_index, logical_worker, buffer_index,
         (unsigned long long)metadata.origin_obligation_id, (unsigned long long)metadata.generation,
-        lease.expected_owner, lease.facts.ip_family, lease.facts.protocol,
+        lease.assignment.valid, lease.assignment.execution_owner, lease.facts.ip_family, lease.facts.protocol,
         lease.facts.source_port, lease.facts.destination_port, lease.terminal_intent);
 #endif
       product_metadata_store (buffer, &metadata);
@@ -1127,7 +1153,7 @@ VLIB_NODE_FN (product_packet_admit_node)
           PRODUCT_EVIDENCE_ADD (remote_packets, 1);
           if (!product_handoff_enqueue (
                 vm, node, graph, buffer_index, &metadata,
-                lease.expected_owner, PRODUCT_HANDOFF_PRIMARY))
+                lease.assignment.execution_owner, PRODUCT_HANDOFF_PRIMARY))
             {
               product_mark_handoff_rejected (
                 graph, vm, buffer_index, &metadata, &lease,
@@ -1239,7 +1265,7 @@ VLIB_NODE_FN (product_packet_owner_guard_node)
             lease.corrective_handoff_count;
           if (!product_handoff_enqueue (
                 vm, node, graph, buffer_index, &metadata,
-                lease.expected_owner, PRODUCT_HANDOFF_CORRECTIVE))
+                lease.assignment.execution_owner, PRODUCT_HANDOFF_CORRECTIVE))
             {
               product_mark_handoff_rejected (
                 graph, vm, buffer_index, &metadata, &lease,
@@ -1402,7 +1428,7 @@ VLIB_NODE_FN (product_packet_policy_node)
       fprintf(stderr, "s203 event=policy source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu owner=%u stage=%u verdict=%u rule=%llu\n",
         product_packet_evidence_source (&lease), node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
         buffer_index, (unsigned long long)metadata.origin_obligation_id, (unsigned long long)metadata.generation,
-        lease.expected_owner, evaluation.stage, evaluation.verdict,
+        lease.assignment.execution_owner, evaluation.stage, evaluation.verdict,
         (unsigned long long)evaluation.rule_id);
 #endif
       product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
@@ -1631,13 +1657,13 @@ VLIB_NODE_FN (product_packet_terminal_node)
       clib_memcpy_fast (completed_result.ingress_digest,
                         ingress_evidence->digest, 32);
       completed_result.arrival_worker = ingress_evidence->arrival_worker;
-      completed_result.canonical_key = lease.canonical_key;
+      completed_result.canonical_key = lease.assignment.key;
       completed_result.terminal_buffer_index = buffer_index;
       completed_result.terminal_current_data = (u32) buffer->current_data;
       completed_result.terminal_length = buffer->current_length;
       clib_sha256 (vlib_buffer_get_current (buffer), buffer->current_length,
                    completed_result.terminal_digest);
-      completed_result.expected_owner = lease.expected_owner;
+      completed_result.expected_owner = lease.assignment.execution_owner;
       completed_result.family = lease.facts.ip_family;
       completed_result.protocol = lease.facts.protocol;
       completed_result.l3_status = lease.facts.l3_status;
@@ -1663,7 +1689,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
       fprintf(stderr, "s203 event=terminal source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu intent=%u owner=%u\n",
         product_packet_evidence_source (&lease), node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
         buffer_index, (unsigned long long)metadata.origin_obligation_id,
-        (unsigned long long)metadata.generation, lease.terminal_intent, lease.expected_owner);
+        (unsigned long long)metadata.generation, lease.terminal_intent, lease.assignment.execution_owner);
       product_buffer_platform_metadata_t completion_metadata;
       clib_memcpy_fast (&completion_metadata, buffer->opaque, sizeof (completion_metadata));
       product_packet_completion_frame_t completion = {
@@ -1880,12 +1906,6 @@ uint32_t
 product_packet_graph_worker_count (void)
 {
   return PRODUCT_GRAPH_WORKERS;
-}
-
-uint32_t
-product_packet_graph_flow_domain (void)
-{
-  return PRODUCT_GRAPH_FLOW_DOMAIN;
 }
 
 uint64_t
@@ -2262,12 +2282,12 @@ product_packet_graph_flow_observe (
       clib_atomic_fetch_add_relax (&graph->flow_unavailable_count, 1);
       return;
     }
-  if (lease->expected_owner >= PRODUCT_GRAPH_WORKERS)
+  if (lease->assignment.execution_owner >= PRODUCT_GRAPH_WORKERS)
     {
       clib_atomic_fetch_add_relax (&graph->flow_wrong_owner_count, 1);
       return;
     }
-  owner = lease->expected_owner;
+  owner = lease->assignment.execution_owner;
   pool = &graph->flow_pools[owner];
   /* Serialize lookup/update with publication so the cache and evaluator
    * cannot observe different active revisions or snapshot hashes. */
@@ -4797,11 +4817,11 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
                        name, result->canonical_key.ip_family,
                        result->canonical_key.protocol,
                        format_hex_bytes_no_wrap,
-                       result->canonical_key.endpoint_a.address, 16,
-                       result->canonical_key.endpoint_a.port,
+                       result->canonical_key.address_a, 16,
+                       result->canonical_key.transport.ports.a,
                        format_hex_bytes_no_wrap,
-                       result->canonical_key.endpoint_b.address, 16,
-                       result->canonical_key.endpoint_b.port);
+                       result->canonical_key.address_b, 16,
+                       result->canonical_key.transport.ports.b);
       vlib_cli_output (vm, "vector.%s.expected_owner=%u", name,
                        result->expected_owner);
       vlib_cli_output (vm, "vector.%s.origin_obligation_id=%llu", name,
@@ -4944,7 +4964,6 @@ product_packet_graph_run_congestion_fixture_cli (
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = packet_length;
       ingress.current_worker = 0;
-      ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
       ingress.origin_obligation_id = UINT64_C (174001) + index;
       if (product_packet_admit (&layout, &ingress, &lease)
           != PRODUCT_PACKET_OK)
@@ -4952,8 +4971,8 @@ product_packet_graph_run_congestion_fixture_cli (
           vlib_buffer_free (vm, buffer_indices, 2);
           return clib_error_return (0, "congestion vector admission failed");
         }
-      arrival_worker = index == 0 ? (u16) (lease.expected_owner ^ 1)
-                                  : lease.expected_owner;
+      arrival_worker = index == 0 ? (u16) (lease.assignment.execution_owner ^ 1)
+                                  : lease.assignment.execution_owner;
 
       clib_memset (&metadata, 0, sizeof (metadata));
       metadata.origin_obligation_id = UINT64_C (174001) + index;
@@ -5100,13 +5119,12 @@ product_lifecycle_enqueue_two_outstanding (vlib_main_t *vm)
           ingress.data = vlib_buffer_get_current (buffer);
           ingress.length = buffer->current_length;
           ingress.current_worker = 0;
-          ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
           ingress.origin_obligation_id = metadata.origin_obligation_id;
           if (product_packet_admit (&layout, &ingress, &lease)
               != PRODUCT_PACKET_OK)
             return 0;
           threads[index] = (u16) vlib_get_worker_thread_index (
-            (u16) (lease.expected_owner ^ 1));
+            (u16) (lease.assignment.execution_owner ^ 1));
         }
     }
   return vlib_buffer_enqueue_to_thread (
@@ -5143,7 +5161,6 @@ product_lifecycle_enqueue_stale_events (vlib_main_t *vm, u16 generation)
     ingress.data = vlib_buffer_get_current (buffer);
     ingress.length = buffer->current_length;
     ingress.current_worker = 0;
-    ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
     ingress.origin_obligation_id = UINT64_C (1759001);
     if (product_packet_admit (&layout, &ingress, &lease)
         != PRODUCT_PACKET_OK)
@@ -5593,13 +5610,12 @@ product_packet_graph_association_prepare_lease (
   ingress.data = packet;
   ingress.length = packet_length;
   ingress.current_worker = 0;
-  ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
   ingress.origin_obligation_id = origin_obligation_id;
   ingress.platform = *platform;
   result = product_packet_admit (&layout, &ingress, lease);
   if (result != PRODUCT_PACKET_OK)
     return result;
-  return product_packet_owner_guard (lease, lease->expected_owner);
+  return product_packet_owner_guard (lease, lease->assignment.execution_owner);
 }
 
 static clib_error_t *
@@ -6265,7 +6281,7 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_packet_graph_main_t *g = &product_packet_graph_main;
   (void) input; (void) command;
-  vlib_cli_output (vm, "primary.status generation=%llu published=%llu received=%llu rejected=%llu owner_checks=%llu owner_failures=%llu returns=%llu deferred=%llu retries=%llu pending_returns=%u handoff_debt=%u credit0=%u credit1=%u",
+  vlib_cli_output (vm, "primary.status generation=%llu published=%llu received=%llu rejected=%llu owner_checks=%llu owner_failures=%llu returns=%llu deferred=%llu retries=%llu pending_returns=%u handoff_debt=%u credit0=%u credit1=%u flows=%u",
     (unsigned long long) g->generation,
     (unsigned long long) clib_atomic_load_acq_n (&g->primary_published),
     (unsigned long long) clib_atomic_load_acq_n (&g->primary_received),
@@ -6278,7 +6294,8 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
     clib_atomic_load_acq_n (&g->completion_pending_returns),
     clib_atomic_load_acq_n (&g->lifecycle_handoffs),
     clib_atomic_load_acq_n (&g->handoff_credits[0]),
-    clib_atomic_load_acq_n (&g->handoff_credits[1]));
+    clib_atomic_load_acq_n (&g->handoff_credits[1]),
+    g->flow_pools[0].active_entries + g->flow_pools[1].active_entries);
   return 0;
 }
 VLIB_CLI_COMMAND (product_primary_status_command, static) = {
@@ -6297,13 +6314,17 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u8 *hex = 0;
-  u32 case_id = 0, bi, failed;
-  u16 thread = vlib_get_worker_thread_index (0);
+  u32 case_id = 0, bi, failed, arrival_worker = 0;
+  int owner_probe = 0;
   (void) command;
   if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > PRODUCT_GRAPH_INJECTION_CAPACITY
-      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
       || !graph->accepting || !graph->enabled)
     { vec_free (hex); return clib_error_return (0, "injection rejected"); }
+  owner_probe = unformat (input, "worker %u", &arrival_worker);
+  if (arrival_worker >= PRODUCT_GRAPH_WORKERS
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    { vec_free (hex); return clib_error_return (0, "invalid injection worker"); }
+  u16 thread = vlib_get_worker_thread_index (arrival_worker);
   u32 length = strlen ((char *) hex);
   if (!length || (length & 1) || length > 512)
     { vec_free (hex); return clib_error_return (0, "invalid bounded hex span"); }
@@ -6337,11 +6358,20 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
   product_buffer_platform_metadata_t extra = {
     .obligation = { .token = metadata.origin_obligation_id,
       .queue_generation = graph->generation, .packet_id = case_id,
-      .kind = PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED },
+      .kind = PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED,
+      .origin_worker = arrival_worker, .origin_lane = arrival_worker },
     .platform = { .availability = (case_id & 1) ? 7 : 0,
       .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
       .provenance = PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED },
   };
+  if (owner_probe)
+    {
+      extra.platform.uid = case_id * 10000;
+      extra.platform.linux_ifindex = case_id + 10;
+      extra.platform.network_context_id = case_id + 100;
+      extra.platform.direction = (case_id & 1)
+        ? PRODUCT_PACKET_DIRECTION_OUTPUT : PRODUCT_PACKET_DIRECTION_INPUT;
+    }
   product_metadata_store (buffer, &metadata);
   clib_memcpy_fast (buffer->opaque, &extra, sizeof (extra));
   clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
@@ -6363,7 +6393,7 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
 
 VLIB_CLI_COMMAND (product_metadata_inject_command, static) = {
   .path = "product metadata inject",
-  .short_help = "product metadata inject <case 1..32> <hex, max 256 bytes>",
+  .short_help = "product metadata inject <case 1..32> <hex, max 256 bytes> [worker <0|1>]",
   .function = product_metadata_inject_cli,
 };
 
@@ -6386,8 +6416,7 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
   bytes[34] = 0xff; bytes[35] = 0xfe;
   bytes[40] = 3; bytes[41] = 3; bytes[42] = 7;
   product_worker_layout_t layout = { .worker_count = 2, .hash_seed = PRODUCT_GRAPH_HASH_SEED };
-  product_packet_ingress_t ingress = { .data = bytes, .length = 44,
-    .flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN, .origin_obligation_id = 216,
+  product_packet_ingress_t ingress = { .data = bytes, .length = 44, .origin_obligation_id = 216,
     .platform = { .availability = 7, .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
       .provenance = PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED } };
   product_packet_lease_t before, after;
@@ -6402,7 +6431,7 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
   ok &= product_lease_from_metadata (&metadata, buffer, &after)
     && memcmp (&before.facts, &after.facts, sizeof (before.facts)) == 0
     && memcmp (&before.platform, &after.platform, sizeof (before.platform)) == 0
-    && memcmp (&before.canonical_key, &after.canonical_key, sizeof (before.canonical_key)) == 0;
+    && memcmp (&before.assignment, &after.assignment, sizeof (before.assignment)) == 0;
   buffer->current_data++;
   int data_guard = !product_lease_from_metadata (&metadata, buffer, &after);
   buffer->current_data--; buffer->current_length--;
@@ -6414,7 +6443,7 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_buffer_free (vm, &bi, 1);
   vlib_cli_output (vm, "metadata.layout opaque=%u opaque2=%u owner=%u transport=%u platform=%u obligation=%u alignment=%u platform_offset=%u transport_offset=%u span_offset=%u",
     (u32)sizeof (buffer->opaque), (u32)sizeof (buffer->opaque2),
-    (u32)sizeof (product_owner_assignment_t), (u32)sizeof (product_transport_metadata_t),
+    (u32)sizeof (product_compact_owner_assignment_t), (u32)sizeof (product_transport_metadata_t),
     (u32)sizeof (product_platform_packet_facts_t), (u32)sizeof (product_adapter_obligation_t),
     (u32)_Alignof (product_buffer_metadata_t),
     (u32)offsetof (product_buffer_platform_metadata_t, platform),

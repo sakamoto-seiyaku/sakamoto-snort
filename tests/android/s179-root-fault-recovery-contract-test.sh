@@ -73,8 +73,8 @@ for field in \
   grep -Fq "$field" "$native_status"
 done
 
-grep -Fq 'STATUS_VALUE_COUNT = 136' "$native_status"
-grep -Fq 'STATUS_VALUE_COUNT = 136' "$jni"
+grep -Fq 'STATUS_VALUE_COUNT = 135' "$native_status"
+grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
 grep -Fq 'sizeof(sakamoto_product_status_t) == 1304U' "$abi"
 grep -Fq 'size_of::<ProductStatus>(), 1304' "$rust"
 

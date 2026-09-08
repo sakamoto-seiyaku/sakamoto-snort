@@ -76,7 +76,6 @@ define product_core_status_reply {
     u64 vpn_infrastructure_faults;
     u64 vpn_duplicate_or_stale_drops;
     u32 product_graph_worker_count;
-    u32 product_graph_flow_domain;
     u64 product_graph_hash_seed;
     u32 product_graph_handoff_credits;
     u32 product_graph_vpp_worker_count;
