@@ -1,0 +1,397 @@
+{
+  "accepted": [
+    {
+      "run": "s245-s246-20260907-195540-mode0",
+      "status": "PASS",
+      "mode": 0,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-195657-mode1",
+      "status": "PASS",
+      "mode": 1,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-195742-mode2",
+      "status": "PASS",
+      "mode": 2,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 2,
+        "4": 4
+      },
+      "pool_free": {
+        "5": 2,
+        "4": 4,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 84,
+      "output_copy_bytes": 84
+    },
+    {
+      "run": "s245-s246-20260907-195829-mode3",
+      "status": "PASS",
+      "mode": 3,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 2,
+        "4": 4
+      },
+      "pool_free": {
+        "5": 2,
+        "4": 4,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 84,
+      "output_copy_bytes": 84
+    },
+    {
+      "run": "s245-s246-20260907-195954-mode4",
+      "status": "PASS",
+      "mode": 4,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 4
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 4,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 84,
+      "output_copy_bytes": 84
+    },
+    {
+      "run": "s245-s246-20260907-200322-mode5",
+      "status": "PASS",
+      "mode": 5,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-200731-mode6",
+      "status": "PASS",
+      "mode": 6,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 84
+    },
+    {
+      "run": "s245-s246-20260907-200816-mode7",
+      "status": "PASS",
+      "mode": 7,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-200925-mode8",
+      "status": "PASS",
+      "mode": 8,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-201011-mode9",
+      "status": "PASS",
+      "mode": 9,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 7
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 7,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 3
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    },
+    {
+      "run": "s245-s246-20260907-201054-mode10",
+      "status": "PASS",
+      "mode": 10,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 8
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 8,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 2,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 163
+    },
+    {
+      "run": "s245-s246-20260907-201221-mode0",
+      "status": "PASS",
+      "mode": 0,
+      "errors": [],
+      "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+      "pool_alloc": {
+        "3": 1,
+        "5": 3,
+        "4": 6
+      },
+      "pool_free": {
+        "5": 3,
+        "4": 6,
+        "3": 1
+      },
+      "pool_peak": {
+        "3": 1,
+        "5": 1,
+        "4": 2
+      },
+      "native_input_peak": 1,
+      "native_output_peak": 1,
+      "max_consecutive_zero_quanta": 0,
+      "input_copy_bytes": 126,
+      "output_copy_bytes": 126
+    }
+  ],
+  "retained_failure": {
+    "run": "s245-s246-20260907-200500-mode6",
+    "status": "HOLD",
+    "mode": 6,
+    "errors": [
+      "application seq=3 expected EXACT",
+      "real lwIP output count",
+      "lwip_output_enter seq=3: expected one, got 0",
+      "callback_enter seq=3: expected one, got 0",
+      "callback_return seq=3: expected one, got 0",
+      "lwip_output_return seq=3: expected one, got 0",
+      "callback borrow interval seq=3",
+      "callback rc seq=3",
+      "frame_accept seq=3: expected one, got 0",
+      "graph_enter seq=3: expected one, got 0",
+      "native frame deferred scheduling seq=3",
+      "independent graph bytes/owner seq=3",
+      "lwIP output pbuf released/poisoned before independent graph seq=3",
+      "tun_completion seq=3: expected one, got 0",
+      "readable-socket no-progress wake loop"
+    ],
+    "verifier_sha256": "4cee6a65224e707392751d11565b684b2a36a78aaed8e80babb48ba1ba1f8801",
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 4
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 4,
+      "3": 1
+    },
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_input_peak": 1,
+    "native_output_peak": 1,
+    "max_consecutive_zero_quanta": 392,
+    "input_copy_bytes": 126,
+    "output_copy_bytes": 42
+  },
+  "checker_mutation_checks": [
+    {
+      "mutation": "duplicate-free",
+      "result": "HOLD",
+      "first_errors": [
+        "unowned/double pool free ('0xb400006fc289d340', '5', '0xb400006fc294d5c0')",
+        "all pool objects must settle exactly once"
+      ]
+    },
+    {
+      "mutation": "missing-free",
+      "result": "HOLD",
+      "first_errors": [
+        "duplicate live pool allocation ('0xb400006fc289d340', '5', '0xb400006fc294d5c0')",
+        "all pool objects must settle exactly once"
+      ]
+    },
+    {
+      "mutation": "graph-before-callback-return",
+      "result": "HOLD",
+      "first_errors": [
+        "native frame deferred scheduling seq=1",
+        "lwIP output pbuf released/poisoned before independent graph seq=1"
+      ]
+    }
+  ]
+}
