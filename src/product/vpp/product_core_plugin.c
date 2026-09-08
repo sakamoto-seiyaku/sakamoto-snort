@@ -27,6 +27,7 @@
 #include "product_l4_policy.h"
 #include "product_packet_graph.h"
 #include "product_root_nfqueue_adapter.h"
+#include "product_network_snapshot.h"
 #include "product_vpn_tun_adapter.h"
 
 #ifndef SAKAMOTO_PRODUCT_VPP_REVISION
@@ -1063,7 +1064,7 @@ vl_api_product_core_network_publish_t_handler (
       snapshot.entries[i].context = ntohl (mp->entries[i].network_context);
     }
   int rv = generation == pcm->generation && pcm->core_ready
-    && product_root_nfqueue_network_publish (pcm->vlib_main, generation, &snapshot)
+    && product_network_snapshot_publish (pcm->vlib_main, generation, &snapshot)
     ? 0 : -1;
   REPLY_MACRO2 (VL_API_PRODUCT_CORE_NETWORK_PUBLISH_REPLY,
                ({ rmp->retval = htonl (rv); }));

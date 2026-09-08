@@ -67,3 +67,11 @@ DROP evidence. See the [S213 report](SAKAMOTO_213_NATIVE_TUN_GRAPH.md).
 records the accepted protocol increment and its real-device matrix. See the
 [S198 report](SAKAMOTO_198_TUN_PROTOCOL_MATRIX.md), including its explicit
 unconfirmed startup observation and scope limits.
+
+## S218 separate accepted commit
+
+`feat(s218): share Android network snapshots with native TUN facts` records the
+shared native snapshot store, TUN attachment-to-event projection and ordered
+subscription/TUN cleanup, with real-device acceptance tools. Final-source
+builds and independent verification are documented in
+[SAKAMOTO_218_TUN_NETWORK_FACTS.md](SAKAMOTO_218_TUN_NETWORK_FACTS.md).

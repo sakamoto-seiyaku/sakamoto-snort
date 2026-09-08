@@ -9,9 +9,6 @@
 #include <vlib/vlib.h>
 
 int product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation);
-int product_root_nfqueue_network_publish (
-  vlib_main_t *vm, u64 generation,
-  const sakamoto_product_network_snapshot_t *snapshot);
 void product_root_nfqueue_adapter_stop (vlib_main_t *vm);
 int product_root_nfqueue_adapter_available (void);
 uint32_t product_root_nfqueue_adapter_queue_id (void);

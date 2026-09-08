@@ -1001,7 +1001,7 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             productCoreSession = session;
-            if (selected == RuntimeProfile.ROOT) {
+            if (selected == RuntimeProfile.ROOT || vpnGraphValidation) {
                 final long networkGeneration = generation;
                 platformNetworkSnapshots = new PlatformNetworkSnapshots(
                         getSystemService(ConnectivityManager.class), session,
@@ -4797,15 +4797,16 @@ public final class RuntimeService extends VpnService {
 
     private RuntimeControlNative.Status closeProductCoreSession() {
         boolean tunClosed = true;
+        if (platformNetworkSnapshots != null) {
+            platformNetworkSnapshots.close();
+            platformNetworkSnapshots = null;
+        }
+
         if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation
                 && processAlive(vppProcess) && productCoreSession != null
                 && productCoreSession.isConnected()) {
             tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
             appendLog("s213 native_tun_drain=" + tunClosed);
-        }
-        if (platformNetworkSnapshots != null) {
-            platformNetworkSnapshots.close();
-            platformNetworkSnapshots = null;
         }
         RuntimeControlNative.Session session = productCoreSession;
         if (session != null) {

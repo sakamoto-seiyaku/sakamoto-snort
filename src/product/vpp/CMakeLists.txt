@@ -212,6 +212,7 @@ add_vpp_plugin(product_core
     product_flow_entry.c
     product_root_nfqueue_adapter.c
     product_vpn_tun_adapter.c
+    product_network_snapshot.c
     ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
     product_core.api

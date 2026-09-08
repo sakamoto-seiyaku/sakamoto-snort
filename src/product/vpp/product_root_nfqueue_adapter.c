@@ -9,6 +9,7 @@
  */
 
 #include "product_root_nfqueue_adapter.h"
+#include "product_network_snapshot.h"
 
 #include "product_packet_graph.h"
 
@@ -151,10 +152,6 @@ typedef struct
 } product_root_nfqueue_main_t;
 
 static __thread int product_root_nfqueue_last_errno;
-
-/* Replaced on the control thread under the VLIB worker barrier. Readers
- * neither retain pointers nor acquire locks; packet facts are copied values. */
-static sakamoto_product_network_snapshot_t product_network_snapshot;
 
 static product_root_nfqueue_main_t product_root_nfqueue_main = {
   .queue_id = PRODUCT_ROOT_NFQUEUE_DEFAULT_QUEUE,
@@ -821,6 +818,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       ssize_t received;
       product_root_nfqueue_packet_t packet;
       product_platform_packet_facts_t platform;
+      const sakamoto_product_network_snapshot_t *network = product_network_snapshot_current ();
       product_root_nfqueue_pending_t *pending;
       product_packet_graph_external_result_t graph_result;
       u64 obligation_id;
@@ -951,12 +949,12 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           platform.availability |= PRODUCT_PLATFORM_IFINDEX_KNOWN;
         }
       if (platform.availability & PRODUCT_PLATFORM_IFINDEX_KNOWN)
-        for (u32 i = 0; i < product_network_snapshot.count; ++i)
-          if (product_network_snapshot.entries[i].linux_ifindex
+        for (u32 i = 0; i < network->count; ++i)
+          if (network->entries[i].linux_ifindex
               == platform.linux_ifindex)
             {
               platform.network_context_id =
-                product_network_snapshot.entries[i].context;
+                network->entries[i].context;
               platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
               break;
             }
@@ -984,8 +982,8 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         {
         fprintf (stderr, "s232 event=packet_snapshot generation=%llu token=%llu revision=%llu event_elapsed_ns=%llu ifindex=%u context=%u availability=%u\n",
           (unsigned long long) nm->generation, (unsigned long long) obligation_id,
-          (unsigned long long) product_network_snapshot.revision,
-          (unsigned long long) product_network_snapshot.event_elapsed_ns,
+          (unsigned long long) network->revision,
+          (unsigned long long) network->event_elapsed_ns,
           platform.linux_ifindex, platform.network_context_id, platform.availability);
         fprintf (stderr, "s217 event=nfq_facts source=NFQ_CAPTURED thread=%u lane=%u token=%llu generation=%llu packet=%u fault=%u raw_hook=%u raw_uid_present=%u raw_uid=%u raw_indev_present=%u raw_indev=%u raw_outdev_present=%u raw_outdev=%u hook=%u uid_present=%u uid=%u indev_present=%u indev=%u outdev_present=%u outdev=%u normalized_uid=%u normalized_ifindex=%u availability=%u direction=%u context=%u provenance=%u\n",
           vm->thread_index, lane->lane_index, (unsigned long long) obligation_id,
@@ -1139,7 +1137,7 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
       return 0;
     }
   nm->generation = generation;
-  clib_memset (&product_network_snapshot, 0, sizeof (product_network_snapshot));
+  product_network_snapshot_start (generation);
   nm->last_lane = 0;
   nm->facts_fault = 0;
   nm->pending_count = 0;
@@ -1236,46 +1234,7 @@ product_root_nfqueue_adapter_stop (vlib_main_t *vm)
       lane->socket_ready = 0;
     }
   nm->ready_lane_mask = 0;
-  clib_memset (&product_network_snapshot, 0, sizeof (product_network_snapshot));
-}
-
-int
-product_root_nfqueue_network_publish (
-  vlib_main_t *vm, u64 generation,
-  const sakamoto_product_network_snapshot_t *snapshot)
-{
-  if (!vm || vm->thread_index != 0 || !snapshot
-      || !product_root_nfqueue_main.available
-      || generation != product_root_nfqueue_main.generation
-      || !snapshot->revision || snapshot->reserved
-      || snapshot->revision <= product_network_snapshot.revision
-      || snapshot->count > SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES)
-    return 0;
-  for (u32 i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES; ++i)
-    {
-      u32 iface = snapshot->entries[i].linux_ifindex;
-      u32 context = snapshot->entries[i].context;
-      if (i >= snapshot->count)
-        {
-          if (iface || context) return 0;
-          continue;
-        }
-      if (!iface || iface > INT32_MAX
-          || (context != SAKAMOTO_PRODUCT_NETWORK_WIFI
-              && context != SAKAMOTO_PRODUCT_NETWORK_MOBILE
-              && context != SAKAMOTO_PRODUCT_NETWORK_VPN
-              && context != SAKAMOTO_PRODUCT_NETWORK_WIRED))
-        return 0;
-      for (u32 j = 0; j < i; ++j)
-        if (snapshot->entries[j].linux_ifindex == iface) return 0;
-    }
-  vlib_worker_thread_barrier_sync (vm);
-  product_network_snapshot = *snapshot;
-  vlib_worker_thread_barrier_release (vm);
-  fprintf (stderr, "s232 event=snapshot_publish generation=%llu revision=%llu event_elapsed_ns=%llu count=%u\n",
-    (unsigned long long) generation, (unsigned long long) snapshot->revision,
-    (unsigned long long) snapshot->event_elapsed_ns, snapshot->count);
-  return 1;
+  product_network_snapshot_stop ();
 }
 
 int

@@ -216,3 +216,13 @@ pass 69 Pixel + 64 Linux packets. Eight evidence mutations are rejected. See
 [S198 protocol report](SAKAMOTO_198_TUN_PROTOCOL_MATRIX.md). A safely reported but
 unconfirmed startup-readiness checkpoint is recorded in S243 and excluded from
 acceptance; no startup robustness is claimed. Pixel is stopped927, Wi-Fi restored.
+
+## S218 complete — shared event snapshots for TUN facts
+
+On 2026-09-09, final-source acceptance passes 38 real TUN originals in
+generations 932/933 (24 target cases), 40 Pixel Root network-event originals,
+67 Pixel and 64 Linux ordinary Root originals. Android event maps independently
+bind packet context; VPN packet ifindex remains unknown. Normal Service Stop
+closes the subscription before TUN drain. Twelve evidence mutations are rejected.
+See [S218 TUN facts report](SAKAMOTO_218_TUN_NETWORK_FACTS.md). Pixel is stopped935
+and Wi-Fi is restored; the task is committed separately.

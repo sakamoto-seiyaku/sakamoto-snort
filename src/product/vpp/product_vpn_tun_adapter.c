@@ -5,6 +5,7 @@
 #endif
 #include "product_vpn_tun_adapter.h"
 #include "product_packet_graph.h"
+#include "product_network_snapshot.h"
 #include <vlib/file.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -33,7 +34,7 @@ static struct {
   u64 policy_drops, runtime_drops, transport_unavailable, errors, rejected;
   u64 transport_unsupported;
   u64 pregraph_returns, local, remote;
-  u32 pending, test_uid, tun_file, listener_file;
+  u32 pending, test_uid, tun_file, listener_file, snapshot_interface;
   int tun_fd, listener_fd;
   u8 enabled, draining;
   char path[sizeof (((struct sockaddr_un *)0)->sun_path)];
@@ -127,11 +128,21 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
       .provenance = PRODUCT_PACKET_PROVENANCE_VPN_TUN,
     };
+    /* The fd attachment identifies our interface outside the packet path.
+     * Its event classification is independent of packet Linux ifindex, which
+     * remains explicitly unavailable for VPN v1. No profile/TUN guess. */
+    platform.network_context_id = product_network_snapshot_context (tun.snapshot_interface);
+    if (platform.network_context_id) platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
     product_adapter_obligation_t obligation = {
       .token = token, .queue_generation = tun.generation,
       .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN, .origin_worker = 0, .origin_lane = 0,
     };
     if (tun.captured <= product_packet_graph_trace_limit ()) {
+      const sakamoto_product_network_snapshot_t *snapshot = product_network_snapshot_current ();
+      fprintf (stderr, "s218 event=packet_snapshot generation=%llu token=%llu revision=%llu event_elapsed_ns=%llu attachment_interface=%u ifindex=0 context=%u availability=%u\n",
+        (unsigned long long) tun.generation, (unsigned long long) token,
+        (unsigned long long) snapshot->revision, (unsigned long long) snapshot->event_elapsed_ns,
+        tun.snapshot_interface, platform.network_context_id, platform.availability);
       flockfile (stderr);
       fprintf (stderr, "s213 event=capture source=TUN_CAPTURED generation=%llu token=%llu buffer=%u thread=%u tls=%u lane=0 bytes=%zd uid_source=CONTROLLED_TEST_PROVIDER uid=%u raw=",
         (unsigned long long) tun.generation, (unsigned long long) token, bi,
@@ -157,6 +168,7 @@ static int tun_attach (int fd, u32 uid) {
   int flags = fcntl (fd, F_GETFL);
   if (flags < 0 || fcntl (fd, F_SETFL, flags | O_NONBLOCK) < 0
       || fcntl (fd, F_SETFD, FD_CLOEXEC) < 0) return 0;
+  tun.snapshot_interface = if_nametoindex (interface.ifr_name);
   tun.test_uid = uid;
   tun.tun_fd = fd;
   clib_file_t file = {0};
@@ -179,6 +191,8 @@ static int tun_stop (void) {
       || product_packet_graph_completion_frame_debt ()) return 1;
   if (tun.tun_file != ~0U) clib_file_del_by_index (&file_main, tun.tun_file);
   tun.tun_file = ~0U; tun.tun_fd = -1;
+  product_network_snapshot_stop ();
+  tun.snapshot_interface = 0;
   product_packet_graph_stop_external (tun.vm);
   product_packet_graph_register_external_completion (0, 0);
   fprintf (stderr, "s213 event=stop generation=%llu pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1 captured=%llu completed=%llu pregraph_returns=%llu\n",
@@ -267,6 +281,7 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   if (!product_packet_graph_start_external (vm, generation)) {
     close (fd); unlink (tun.path); return 0;
   }
+  product_network_snapshot_start (generation);
   tun.vm = vm; tun.generation = generation; tun.enabled = 1; tun.listener_fd = fd;
   for (u32 i = 0; i < TUN_CONTROL_SLOTS; ++i) tun.controls[i] = (tun_control_t){ .file = ~0U, .fd = -1 };
   product_packet_graph_register_external_completion (tun_complete, 0);
