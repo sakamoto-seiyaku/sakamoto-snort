@@ -144,6 +144,7 @@ typedef struct
   u64 stale_completion_drops;
   u32 ready_lane_mask;
   product_root_nfqueue_fault_mode_t fault_mode;
+  u32 facts_fault; /* Explicit CLI-only attribute fault; reset per generation. */
   u8 hook_ready;
   u8 available;
   product_root_nfqueue_lane_t lanes[PRODUCT_ROOT_NFQUEUE_MAX_LANES];
@@ -412,10 +413,12 @@ product_nfqueue_send_copy_packet (int fd, u32 queue_id)
   union
   {
     u8 bytes[NLMSG_SPACE (sizeof (struct nfgenmsg)) +
-             NFA_SPACE (sizeof (struct nfqnl_msg_config_params))];
+             NFA_SPACE (sizeof (struct nfqnl_msg_config_params)) +
+             2 * NFA_SPACE (sizeof (u32))];
     struct nlmsghdr nlh;
   } request;
   struct nfqnl_msg_config_params params;
+  u32 uid_flags = htonl (NFQA_CFG_F_UID_GID);
 
   product_nfnl_fill_header (&request.nlh, sizeof (request),
                             NFQNL_MSG_CONFIG, queue_id);
@@ -424,6 +427,11 @@ product_nfqueue_send_copy_packet (int fd, u32 queue_id)
   params.copy_mode = NFQNL_COPY_PACKET;
   if (!product_nfnl_addattr (&request.nlh, sizeof (request),
                              NFQA_CFG_PARAMS, &params, sizeof (params)))
+    return 0;
+  if (!product_nfnl_addattr (&request.nlh, sizeof (request), NFQA_CFG_MASK,
+                             &uid_flags, sizeof (uid_flags))
+      || !product_nfnl_addattr (&request.nlh, sizeof (request), NFQA_CFG_FLAGS,
+                                &uid_flags, sizeof (uid_flags)))
     return 0;
   if (!product_nfnl_send (fd, &request.nlh))
     return 0;
@@ -871,20 +879,26 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         }
       lane->packets_seen++;
       clib_atomic_fetch_add_relax (&nm->packets_seen, 1);
-      /* OUTPUT reaches this queue only through the supervisor's uid-owner rule. */
-      if (packet.hook == NF_INET_LOCAL_OUT && !packet.uid_present)
+      product_root_nfqueue_packet_t observed = packet;
+      /* Capture scope belongs to the supervisor's kernel rules. A configured
+       * subject is not a packet identity, including across user namespaces.
+       * Faults alter only parsed attribute evidence after real ingress.
+       * Packet bytes and NFQUEUE completion identity are real.
+       * They never run unless explicitly selected by the diagnostic CLI. */
+      switch (nm->facts_fault)
         {
-          packet.uid = nm->uid_owner;
-          packet.uid_present = 1;
-        }
-      if (packet.hook == NF_INET_LOCAL_OUT && packet.uid_present
-          && packet.uid != nm->uid_owner)
-        {
-          clib_atomic_fetch_add_relax (&nm->non_owner_bypasses, 1);
-          product_root_nfqueue_send_counted_verdict (
-            nm, lane, packet.packet_id, NF_ACCEPT);
-          vlib_buffer_free (vm, &buffer_index, 1);
-          continue;
+        case 1: packet.uid_present = 0; packet.uid = 0; break;
+        case 2: packet.uid_present = 1; packet.uid = 0; break;
+        case 3: packet.indev_present = packet.outdev_present = 0; break;
+        case 4: packet.indev = packet.outdev = 0; break;
+        case 5:
+          if (packet.hook == NF_INET_LOCAL_OUT)
+            { packet.indev_present = 1; packet.indev = 33333; }
+          else if (packet.hook == NF_INET_LOCAL_IN)
+            { packet.outdev_present = 1; packet.outdev = 33334; }
+          break;
+        case 6: packet.hook = UINT8_MAX; break;
+        default: break;
         }
       if (packet.hook == NF_INET_LOCAL_IN)
         clib_atomic_fetch_add_relax (&nm->input_packets, 1);
@@ -914,18 +928,20 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         (i16) (buffer->current_data + (packet.payload - base));
       buffer->current_length = (u16) packet.payload_length;
       clib_memset (&platform, 0, sizeof (platform));
-      platform.uid = packet.uid;
+      platform.uid = packet.uid_present ? packet.uid : 0;
       platform.availability = packet.uid_present ? PRODUCT_PLATFORM_UID_KNOWN : 0;
       platform.provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE;
       platform.direction = packet.hook == NF_INET_LOCAL_OUT
         ? PRODUCT_PACKET_DIRECTION_OUTPUT : packet.hook == NF_INET_LOCAL_IN
         ? PRODUCT_PACKET_DIRECTION_INPUT : PRODUCT_PACKET_DIRECTION_UNKNOWN;
-      if (packet.hook == NF_INET_LOCAL_OUT && packet.outdev_present)
+      if (packet.hook == NF_INET_LOCAL_OUT && packet.outdev_present
+          && packet.outdev && packet.outdev <= INT32_MAX)
         {
           platform.linux_ifindex = packet.outdev;
           platform.availability |= PRODUCT_PLATFORM_IFINDEX_KNOWN;
         }
-      else if (packet.hook == NF_INET_LOCAL_IN && packet.indev_present)
+      else if (packet.hook == NF_INET_LOCAL_IN && packet.indev_present
+               && packet.indev && packet.indev <= INT32_MAX)
         {
           platform.linux_ifindex = packet.indev;
           platform.availability |= PRODUCT_PLATFORM_IFINDEX_KNOWN;
@@ -954,6 +970,15 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       obligation_id = pending->completion.obligation.token;
       if (lane->packets_seen <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
         {
+        fprintf (stderr, "s217 event=nfq_facts source=NFQ_CAPTURED thread=%u lane=%u token=%llu generation=%llu packet=%u fault=%u raw_hook=%u raw_uid_present=%u raw_uid=%u raw_indev_present=%u raw_indev=%u raw_outdev_present=%u raw_outdev=%u hook=%u uid_present=%u uid=%u indev_present=%u indev=%u outdev_present=%u outdev=%u normalized_uid=%u normalized_ifindex=%u availability=%u direction=%u context=%u provenance=%u\n",
+          vm->thread_index, lane->lane_index, (unsigned long long) obligation_id,
+          (unsigned long long) nm->generation, packet.packet_id, nm->facts_fault,
+          observed.hook, observed.uid_present, observed.uid,
+          observed.indev_present, observed.indev, observed.outdev_present, observed.outdev,
+          packet.hook, packet.uid_present, packet.uid, packet.indev_present, packet.indev,
+          packet.outdev_present, packet.outdev, platform.uid, platform.linux_ifindex,
+          platform.availability, platform.direction, platform.network_context_id,
+          platform.provenance);
         fprintf(stderr, "s203 event=capture source=NFQ_CAPTURED thread=%u tls=%u polling_thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu\n",
           vm->thread_index, vlib_get_thread_index(), file->polling_thread_index,
           lane->lane_index, lane->queue_id, packet.packet_id, buffer_index,
@@ -961,6 +986,12 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         /* Adapter observation only: preserve absent NFQA attributes as unknown.
          * Neither these fields nor this bounded wire trace classify packets. */
         flockfile (stderr);
+        fprintf (stderr, "s217 event=netlink_message source=NFQ_CAPTURED thread=%u token=%llu generation=%llu bytes=%u raw=",
+          vm->thread_index, (unsigned long long) obligation_id,
+          (unsigned long long) nm->generation, (u32) received);
+        for (u32 octet = 0; octet < (u32) received; octet++)
+          fprintf (stderr, "%02x", base[octet]);
+        fprintf (stderr, "\n");
         fprintf (stderr, "s231 event=nfq_payload source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u token=%llu generation=%llu hook=%u family=%u payload_bytes=%u cap_len_known=%u cap_len=%u skb_info_known=%u skb_info=%u raw=",
           vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
           buffer_index, (unsigned long long) obligation_id,
@@ -1092,6 +1123,7 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
     }
   nm->generation = generation;
   nm->last_lane = 0;
+  nm->facts_fault = 0;
   nm->pending_count = 0;
   nm->replay_count = 0;
   nm->fault_mode = product_root_nfqueue_fault_mode_from_env ();
@@ -1406,6 +1438,29 @@ product_root_nfqueue_adapter_last_packet_id (void)
 }
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static clib_error_t *
+product_root_facts_fault_cli (vlib_main_t *vm, unformat_input_t *input,
+                             vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 mode;
+  (void) command;
+  if (!unformat (input, "%u", &mode) || mode > 6
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || !nm->available || nm->pending_count
+      || product_packet_graph_buffer_debt ())
+    return clib_error_return (0, "expected mode 0..6 on an active empty graph");
+  nm->facts_fault = mode;
+  vlib_cli_output (vm, "root.facts_fault=%u generation=%llu", mode,
+                    (unsigned long long) nm->generation);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_facts_fault_command, static) = {
+  .path = "product root facts-fault",
+  .short_help = "product root facts-fault <0 off|1 missing-uid|2 uid-zero|3 missing-ifindex|4 zero-ifindex|5 opposite-ifindex|6 unknown-hook>",
+  .function = product_root_facts_fault_cli,
+};
+
 /* Default CLI execution holds the VPP worker barrier. First request quiesces
  * ingress; the same lane keeps its fd until every admitted identity returns.
  * A busy response requires retry after workers resume, never a wait under the
