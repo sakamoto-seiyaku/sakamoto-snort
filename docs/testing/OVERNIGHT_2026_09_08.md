@@ -226,3 +226,13 @@ bind packet context; VPN packet ifindex remains unknown. Normal Service Stop
 closes the subscription before TUN drain. Twelve evidence mutations are rejected.
 See [S218 TUN facts report](SAKAMOTO_218_TUN_NETWORK_FACTS.md). Pixel is stopped935
 and Wi-Fi is restored; the task is committed separately.
+
+## S214 complete — remote TUN DROP and typed origin settlement
+
+On 2026-09-09, generations 936/937 pass 32 actual remote-owner UDP targets
+among 48 real TUN originals. Immutable obligation-kind dispatch replaces the
+mutable global callback; every target performs one Primary Handoff and one
+Completion Frame return. Same-source local TUN regression passes 38 originals,
+Root regressions pass 69 Pixel and 64 Linux originals, and 15 evidence mutations
+are rejected. See [S214 report](SAKAMOTO_214_REMOTE_TUN_COMPLETION.md). Pixel is
+stopped940 with Wi-Fi restored; the task is committed separately.

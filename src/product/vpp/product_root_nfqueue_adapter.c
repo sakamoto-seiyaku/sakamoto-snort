@@ -690,12 +690,12 @@ product_root_nfqueue_accept_extra_messages (product_root_nfqueue_main_t *nm,
     }
 }
 
-static void
+void
 product_root_nfqueue_complete_from_graph (
   vlib_main_t *vm, u32 buffer_index,
-  const product_packet_completion_frame_t *completion, void *opaque)
+  const product_packet_completion_frame_t *completion)
 {
-  product_root_nfqueue_main_t *nm = opaque;
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   const product_adapter_obligation_t *obligation = &completion->obligation;
   u32 lane_index = obligation->origin_lane;
   u32 packet_id = obligation->packet_id;
@@ -711,7 +711,8 @@ product_root_nfqueue_complete_from_graph (
   u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER || capacity_bypass
                   ? NF_ACCEPT : NF_DROP;
 
-  if (obligation->queue_generation != nm->generation
+  if (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+      || obligation->queue_generation != nm->generation
       || lane_index >= nm->lane_count
       || obligation->origin_worker >= product_packet_graph_worker_count ())
     { rejection = "stale_generation_or_lane"; goto stale; }
@@ -820,7 +821,6 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       product_platform_packet_facts_t platform;
       const sakamoto_product_network_snapshot_t *network = product_network_snapshot_current ();
       product_root_nfqueue_pending_t *pending;
-      product_packet_graph_external_result_t graph_result;
       u64 obligation_id;
       int submitted;
 
@@ -1020,7 +1020,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         }
       submitted = product_packet_graph_submit_external (
         vm, buffer_index, &platform,
-        &pending->completion.obligation, &graph_result);
+        &pending->completion.obligation);
       if (!submitted)
         {
           pending->active = 0;
@@ -1186,8 +1186,6 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
       product_root_nfqueue_adapter_stop (vm);
       return 0;
     }
-  product_packet_graph_register_external_completion (
-    product_root_nfqueue_complete_from_graph, nm);
 
   for (index = 0; index < nm->lane_count; index++)
     if (!product_root_nfqueue_open_lane (nm, &nm->lanes[index]))
@@ -1216,7 +1214,6 @@ product_root_nfqueue_adapter_stop (vlib_main_t *vm)
   nm->available = 0;
   nm->hook_ready = 0;
   product_packet_graph_stop_external (nm->vlib_main);
-  product_packet_graph_register_external_completion (0, 0);
   for (u32 index = 0; index < PRODUCT_ROOT_NFQUEUE_MAX_LANES; index++)
     {
       product_root_nfqueue_lane_t *lane = &nm->lanes[index];

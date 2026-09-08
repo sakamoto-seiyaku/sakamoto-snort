@@ -10,6 +10,8 @@
 #include "product_packet.h"
 #include "product_packet_graph.h"
 #include "product_flow_entry.h"
+#include "product_root_nfqueue_adapter.h"
+#include "product_vpn_tun_adapter.h"
 
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
@@ -347,8 +349,6 @@ typedef struct
   u32 policy_last_drop_winner;
   u32 policy_last_drop_uid_known;
   u32 policy_last_drop_device_direction;
-  product_packet_graph_completion_fn_t external_completion;
-  void *external_completion_opaque;
   u64 generation;
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u32 ingress_frame_queue;
@@ -1977,10 +1977,19 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
           completion.obligation.packet_id, completion.obligation.origin_lane,
           completion.producer_thread, completion.terminal_intent,
           (unsigned long long) product_packet_event_clock_ns ());
-      if ((completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-           || completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
-          && graph->external_completion)
-        graph->external_completion (vm, bi, &completion, graph->external_completion_opaque);
+      /* Immutable AdapterObligation selects its native endpoint. No mutable
+       * process-wide callback can redirect another adapter's completion. */
+      switch (completion.obligation.kind)
+        {
+        case PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE:
+          product_root_nfqueue_complete_from_graph (vm, bi, &completion);
+          break;
+        case PRODUCT_ADAPTER_OBLIGATION_VPN_TUN:
+          product_vpn_tun_complete_from_graph (vm, bi, &completion);
+          break;
+        default:
+          break; /* GRAPH_INJECTED owns no native adapter operation. */
+        }
       product_fragment_origin_check (vm, bi, &completion);
       vlib_buffer_free (vm, &bi, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
@@ -2044,15 +2053,6 @@ product_packet_graph_replay_completion (vlib_main_t *vm,
   (void) vm; (void) completion;
   return 0;
 #endif
-}
-
-void
-product_packet_graph_register_external_completion (
-  product_packet_graph_completion_fn_t completion, void *opaque)
-{
-  product_packet_graph_main_t *graph = &product_packet_graph_main;
-  graph->external_completion = completion;
-  graph->external_completion_opaque = opaque;
 }
 
 int
@@ -3872,26 +3872,24 @@ product_packet_graph_policy_on_owner (
 int
 product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                       const product_platform_packet_facts_t *platform,
-                                      const product_adapter_obligation_t *obligation,
-                                      product_packet_graph_external_result_t *external_result)
+                                      const product_adapter_obligation_t *obligation)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_buffer_metadata_t metadata = { 0 };
   u64 origin_obligation_id = obligation ? obligation->token : 0;
   vlib_frame_t *frame;
   u32 *to;
-  if (external_result)
-    clib_memset (external_result, 0, sizeof (*external_result));
   if (!vm || !obligation || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS
       || vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker)
       || !origin_obligation_id || obligation->queue_generation != graph->generation
-      || !graph->external_completion
+      || (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+          && obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
       || !clib_atomic_load_acq_n (&graph->enabled)
       || !clib_atomic_load_acq_n (&graph->accepting)) {
-    fprintf(stderr, "s203 event=submit_reject thread=%u tls=%u obligation=%llu enabled=%u accepting=%u callback=%u\n",
+    fprintf(stderr, "s203 event=submit_reject thread=%u tls=%u obligation=%llu enabled=%u accepting=%u kind=%u\n",
       vm ? vm->thread_index : ~0U, vlib_get_thread_index(),
       (unsigned long long)origin_obligation_id, graph->enabled, graph->accepting,
-      graph->external_completion != 0);
+      obligation ? obligation->kind : PRODUCT_ADAPTER_OBLIGATION_NONE);
     return 0;
   }
   if (clib_atomic_fetch_add_relax (&graph->trace_packets, 1) < graph->trace_limit)

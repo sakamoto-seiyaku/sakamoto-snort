@@ -51,9 +51,8 @@ int product_vpn_tun_validation_enabled (void) {
 u64 product_vpn_tun_attached (void) { return tun.tun_fd >= 0; }
 u64 product_vpn_tun_captured (void) { return tun.captured; }
 
-static void tun_complete (vlib_main_t *vm, u32 bi,
-                          const product_packet_completion_frame_t *frame, void *opaque) {
-  (void) opaque;
+void product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
+                          const product_packet_completion_frame_t *frame) {
   const product_adapter_obligation_t *o = &frame->obligation;
   tun_pending_t *pending = &tun.obligations[o->token % TUN_PENDING];
   if (o->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
@@ -150,7 +149,7 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       for (ssize_t i = 0; i < length; ++i) fprintf (stderr, "%02x", data[i]);
       fprintf (stderr, "\n"); funlockfile (stderr);
     }
-    if (!product_packet_graph_submit_external (vm, bi, &platform, &obligation, 0)) {
+    if (!product_packet_graph_submit_external (vm, bi, &platform, &obligation)) {
       pending->active = 0; tun.pending--; tun.pregraph_returns++;
       tun.transport_unavailable++;
       vlib_buffer_free (vm, &bi, 1);
@@ -194,7 +193,6 @@ static int tun_stop (void) {
   product_network_snapshot_stop ();
   tun.snapshot_interface = 0;
   product_packet_graph_stop_external (tun.vm);
-  product_packet_graph_register_external_completion (0, 0);
   fprintf (stderr, "s213 event=stop generation=%llu pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1 captured=%llu completed=%llu pregraph_returns=%llu\n",
     (unsigned long long) tun.generation, (unsigned long long) tun.captured,
     (unsigned long long) tun.completed, (unsigned long long) tun.pregraph_returns);
@@ -284,7 +282,6 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   product_network_snapshot_start (generation);
   tun.vm = vm; tun.generation = generation; tun.enabled = 1; tun.listener_fd = fd;
   for (u32 i = 0; i < TUN_CONTROL_SLOTS; ++i) tun.controls[i] = (tun_control_t){ .file = ~0U, .fd = -1 };
-  product_packet_graph_register_external_completion (tun_complete, 0);
   clib_file_t entry = {0};
   entry.read_function = tun_control_accept;
   entry.polling_thread_index = 0; entry.file_descriptor = fd;

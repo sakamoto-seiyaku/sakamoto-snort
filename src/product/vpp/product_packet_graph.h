@@ -35,10 +35,6 @@
 #define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE UINT32_C (9)
 #define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORT UINT32_C (10)
 
-typedef void (*product_packet_graph_completion_fn_t) (
-  vlib_main_t *vm, u32 buffer_index,
-  const product_packet_completion_frame_t *completion, void *opaque);
-
 /* Diagnostic replay allocates only a descriptor carrier, never an NFQ packet
  * obligation. Its rejection must not return or settle the original buffer. */
 int product_packet_graph_replay_completion (
@@ -46,13 +42,6 @@ int product_packet_graph_replay_completion (
 uint64_t product_packet_graph_completion_frame_debt (void);
 /* Control-only: quiesce native fragment contexts while origin lanes stay open. */
 void product_packet_graph_quiesce_reassembly (vlib_main_t *vm);
-
-typedef struct
-{
-  u16 arrival_worker;
-  u16 owner_worker;
-  u8 primary_remote;
-} product_packet_graph_external_result_t;
 
 typedef struct
 {
@@ -267,9 +256,6 @@ uint64_t product_packet_graph_obligation_debt (void);
 uint64_t product_packet_graph_buffer_debt (void);
 uint64_t product_packet_graph_handoff_debt (void);
 
-void product_packet_graph_register_external_completion (
-  product_packet_graph_completion_fn_t completion, void *opaque);
-
 void product_packet_graph_publish_gate_policy (
   const product_packet_graph_gate_policy_t *policy);
 void product_packet_graph_clear_gate_policy (uint64_t revision,
@@ -314,8 +300,6 @@ int product_packet_graph_get_platform_facts (const vlib_buffer_t *buffer,
  */
 int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                           const product_platform_packet_facts_t *platform,
-                                          const product_adapter_obligation_t *obligation,
-                                          product_packet_graph_external_result_t
-                                            *external_result);
+                                          const product_adapter_obligation_t *obligation);
 
 #endif

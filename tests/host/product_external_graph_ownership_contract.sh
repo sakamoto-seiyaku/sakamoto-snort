@@ -1,77 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-graph="$repo_root/src/product/vpp/product_packet_graph.c"
-header="$repo_root/src/product/vpp/product_packet_graph.h"
-root_adapter="$repo_root/src/product/vpp/product_root_nfqueue_adapter.c"
-vpn_adapter="$repo_root/src/product/vpp/product_vpn_udp4_adapter.c"
-
-python3 - "$graph" "$header" "$root_adapter" "$vpn_adapter" <<'PY'
+python3 - "$repo_root" <<'CHECK'
 from pathlib import Path
 import sys
+root = Path(sys.argv[1]) / "src/product/vpp"
+graph = (root / "product_packet_graph.c").read_text()
+header = (root / "product_packet_graph.h").read_text()
+nfq = (root / "product_root_nfqueue_adapter.c").read_text()
+tun = (root / "product_vpn_tun_adapter.c").read_text()
 
-graph = Path(sys.argv[1]).read_text(encoding="utf-8")
-header = Path(sys.argv[2]).read_text(encoding="utf-8")
-root = Path(sys.argv[3]).read_text(encoding="utf-8")
-vpn = Path(sys.argv[4]).read_text(encoding="utf-8")
-
-
-def body(source: str, signature: str) -> str:
+def body(source, signature):
     start = source.index(signature)
     brace = source.index("{", start)
     depth = 0
     for index in range(brace, len(source)):
-        if source[index] == "{":
-            depth += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start:index + 1]
-    raise AssertionError(f"unclosed function: {signature}")
-
+        depth += (source[index] == "{") - (source[index] == "}")
+        if depth == 0:
+            return source[start:index + 1]
+    raise AssertionError("unclosed function: " + signature)
 
 submit = body(graph, "product_packet_graph_submit_external (")
+assert "Returns 1 when native frame scheduling accepts buffer ownership" in header
+assert "Completion runs later" in header
+assert submit.count("return 0;") == 1
+assert submit.index("return 0;") < submit.index("product_buffer_platform_metadata_t")
+assert submit.index("lifecycle_obligations, 1") < submit.index("vlib_put_frame_to_node") < submit.index("return 1;")
+for forbidden in ("vlib_buffer_free", "product_owner_assign", "expected_owner", "external_result", "product_packet_graph_policy_on_owner"):
+    assert forbidden not in submit, forbidden
+for source in (graph, header, nfq, tun):
+    assert "external_completion" not in source
+assert "product_packet_graph_external_result_t" not in header
 
-if "Returns 1 only after the graph has consumed and returned the buffer" not in header:
-    raise AssertionError("external submit ownership contract is undocumented")
-
-adopt = submit.find("buffer = vlib_get_buffer")
-release = submit.find("vlib_buffer_free (")
-ownership_return = submit.rfind("return 1;")
-if adopt < 0 or release < adopt or ownership_return < release:
-    raise AssertionError("external submit does not retain ownership through one buffer return")
-
-rejects = []
-offset = 0
-while True:
-    index = submit.find("return 0;", offset)
-    if index < 0:
-        break
-    rejects.append(index)
-    offset = index + 1
-if len(rejects) != 1 or rejects[0] > adopt:
-    raise AssertionError("external submit rejects after adopting the caller buffer")
-
-if "return completed;" in submit:
-    raise AssertionError("completion state is still exposed as buffer ownership")
-
-if "if (completed && graph->external_completion" in submit:
-    raise AssertionError("an adopted internal-failure path can skip Adapter completion")
-for token in (
-        "if (!completed)",
-        "PRODUCT_PACKET_INTENT_PASS_ADAPTER",
-        "lease.settled = 1"):
-    if token not in submit:
-        raise AssertionError(f"adopted internal failure is not terminalized: {token}")
-
-callback = submit.find("graph->external_completion (")
-if callback < 0 or callback > release:
-    raise AssertionError("external callback must observe the live buffer before release")
-
-for source, name in ((root, "Root"), (vpn, "VPN")):
-    if "product_packet_graph_submit_external" not in source:
-        raise AssertionError(f"{name} adapter does not use shared external graph ingress")
-
-print("external graph ownership contract: PASS")
-PY
+origin = body(graph, "VLIB_NODE_FN (product_packet_origin_completion_node)")
+assert "switch (completion.obligation.kind)" in origin
+assert origin.count("vlib_buffer_free (vm, &bi, 1)") == 1
+for endpoint in ("product_root_nfqueue_complete_from_graph", "product_vpn_tun_complete_from_graph"):
+    assert origin.count(endpoint + " (vm, bi, &completion)") == 1
+    assert origin.index(endpoint) < origin.index("vlib_buffer_free")
+for forbidden in ("product_packet_parse", "product_owner_assign", "product_packet_graph_policy_on_owner"):
+    assert forbidden not in origin, forbidden
+for source, endpoint in ((nfq, "product_root_nfqueue_complete_from_graph"), (tun, "product_vpn_tun_complete_from_graph")):
+    complete = body(source, endpoint + " (")
+    assert "void *opaque" not in complete
+    assert complete.index("queue_generation") < complete.index("pending->active = 0")
+    assert "vlib_buffer_free" not in complete
+    assert "product_packet_graph_submit_external" in source
+print("native asynchronous ingress and immutable adapter completion ownership: PASS")
+CHECK

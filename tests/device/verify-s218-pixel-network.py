@@ -120,11 +120,11 @@ for index,epoch in enumerate(r['generations']):
  need('event=subscription_stopped thread_alive=false' in android,'snapshot subscription residue '+label)
  final=rows((a.run/(label+'-final.txt')).read_text(),'tun.status ');need(len(final)==1,'native status '+label)
  if final:
-  f=final[0];need(f['generation']==generation and f['captured']==f['submitted']==f['completed']==str(len(captured)),'native conservation counters '+label)
+  f=final[0];need(f['generation']==generation and f['captured']==f['submitted']==f['completed'] and int(f['completed'])<=len(captured),'native conservation counters '+label)
   need(all(f[k]=='0' for k in ('pending','frames','buffers','obligations','errors','rejected','pregraph_returns','tun_writes','nfq_verdicts','flow_stack_admissions','direct_egress_ready')),'native residue '+label)
   need(f['attached']=='1' and int(f['fd'])>=0,'pre-stop TUN identity '+label)
   stopped_native=rows(log,'s213 event=stop ')
-  need(bool(stopped_native) and all(e.get('generation')==generation and all(e.get(k)=='0' for k in ('pending','buffers','frames','obligations')) and e.get('tun_fd')=='-1' for e in stopped_native),'native stop settlement '+label)
+  need(bool(stopped_native) and all(e.get('generation')==generation and all(e.get(k)=='0' for k in ('pending','buffers','frames','obligations')) and e.get('tun_fd')=='-1' and e.get('captured')==e.get('completed')==str(len(captured)) and e.get('pregraph_returns')=='0' for e in stopped_native),'native stop settlement '+label)
  stopped=props((a.run/(label+'-stopped.properties')).read_text())
  need(stopped.get('state')=='stopped' and stopped.get('mayBeActive')=='false' and stopped.get('errorCode')=='','service cleanup '+label)
  before=(a.run/(label+'-processes-before.txt')).read_text()

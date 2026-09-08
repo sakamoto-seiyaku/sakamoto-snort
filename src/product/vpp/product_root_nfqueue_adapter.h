@@ -7,6 +7,7 @@
 #include "sakamoto_product_network.h"
 
 #include <vlib/vlib.h>
+#include "product_packet_completion.h"
 
 int product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation);
 void product_root_nfqueue_adapter_stop (vlib_main_t *vm);
@@ -46,5 +47,9 @@ uint32_t product_root_nfqueue_adapter_last_uid_known (void);
 uint32_t product_root_nfqueue_adapter_last_uid (void);
 uint32_t product_root_nfqueue_adapter_last_queue_id (void);
 uint32_t product_root_nfqueue_adapter_last_packet_id (void);
+
+/* Invoked by the shared completion node on this obligation's origin worker. */
+void product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
+  const product_packet_completion_frame_t *completion);
 
 #endif

@@ -75,3 +75,11 @@ shared native snapshot store, TUN attachment-to-event projection and ordered
 subscription/TUN cleanup, with real-device acceptance tools. Final-source
 builds and independent verification are documented in
 [SAKAMOTO_218_TUN_NETWORK_FACTS.md](SAKAMOTO_218_TUN_NETWORK_FACTS.md).
+
+## S214 separate accepted commit
+
+`feat(s214): dispatch remote TUN completion by immutable adapter kind` records
+typed native completion, removal of the unused synchronous result seam, and
+real W0→W1→W0 TUN DROP acceptance. It also replaces the stale synchronous
+external-ownership contract and checks final conservation at actual native
+stop. See [S214 report](SAKAMOTO_214_REMOTE_TUN_COMPLETION.md).
