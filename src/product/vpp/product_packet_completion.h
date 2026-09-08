@@ -6,6 +6,7 @@
 
 /* Current bounded configuration; capacity qualification remains separate. */
 #define PRODUCT_ROOT_COMPLETION_CAPACITY 64
+#define PRODUCT_ROOT_COMPLETION_MAX_LANES 4
 #define PRODUCT_GRAPH_INJECTION_CAPACITY 32
 
 /* After terminal, this value replaces PacketFacts in opaque2. The native

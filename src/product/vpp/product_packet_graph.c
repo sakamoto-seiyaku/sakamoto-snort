@@ -1060,10 +1060,10 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-      /* Only ordinary UDP4 wire packets are open; owner may be remote. */
+      /* Ordinary dual-stack UDP wire packets are open; owner may be remote. */
       if (admit_result != PRODUCT_PACKET_OK
           || (lease.platform.provenance != PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
-              && (lease.facts.ip_family != 4 || lease.facts.protocol != 17
+              && ((lease.facts.ip_family != 4 && lease.facts.ip_family != 6) || lease.facts.protocol != 17
                   || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))) {
         lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
         lease.terminal_count = 1;
@@ -1428,9 +1428,10 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-#define PRODUCT_COMPLETION_RETURN_CAPACITY 128
+#define PRODUCT_COMPLETION_RETURN_CAPACITY 512
 _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
-                  PRODUCT_ROOT_COMPLETION_CAPACITY + PRODUCT_GRAPH_INJECTION_CAPACITY,
+                  PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_CAPACITY
+                  + PRODUCT_GRAPH_INJECTION_CAPACITY,
                 "return backlog covers every current admitted carrier");
 extern vlib_node_registration_t product_packet_completion_retry_node;
 typedef struct
@@ -1446,7 +1447,7 @@ product_completion_return_try (vlib_main_t *vm, vlib_node_runtime_t *node,
                                 int retry)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  u16 target = vlib_get_worker_thread_index (completion->obligation.origin_lane);
+  u16 target = vlib_get_worker_thread_index (completion->obligation.origin_worker);
   u32 failed;
   if (completion->flags & PRODUCT_COMPLETION_TRACE)
     fprintf (stderr, "s205 event=%s thread=%u buffer=%u token=%llu generation=%llu target_thread=%u producer_thread=%u\n",
@@ -1476,7 +1477,7 @@ product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 worker = vlib_get_worker_index (vm->thread_index);
   ASSERT (worker < PRODUCT_GRAPH_WORKERS);
   product_completion_return_queue_t *queue = &product_completion_returns[worker];
-  /* Root has one 64-credit lane and injection at most 32 buffers/generation.
+  /* Root has at most four 64-credit lanes and 32 injection buffers/generation.
    * This queue owns indices only, within that existing admitted population. */
   ASSERT (queue->count < PRODUCT_COMPLETION_RETURN_CAPACITY);
   queue->buffers[(queue->head + queue->count) % PRODUCT_COMPLETION_RETURN_CAPACITY] = bi;
@@ -1684,7 +1685,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
           completion.obligation.packet_id, completion.obligation.origin_lane,
           completion.terminal_intent, (u32)sizeof (completion),
           clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
-      if (vm->thread_index == vlib_get_worker_thread_index (completion.obligation.origin_lane))
+      if (vm->thread_index == vlib_get_worker_thread_index (completion.obligation.origin_worker))
         vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index, 0, 1);
       else
         product_completion_return (vm, node, buffer_index, &completion);
@@ -4177,7 +4178,8 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
   u32 *to;
   if (external_result)
     clib_memset (external_result, 0, sizeof (*external_result));
-  if (!vm || vm->thread_index != vlib_get_worker_thread_index (0)
+  if (!vm || !obligation || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS
+      || vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker)
       || !origin_obligation_id || obligation->queue_generation != graph->generation
       || !graph->external_completion
       || !clib_atomic_load_acq_n (&graph->enabled)
@@ -4188,7 +4190,7 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
       graph->external_completion != 0);
     return 0;
   }
-  if (clib_atomic_fetch_add_relax (&graph->trace_packets, 1) < 64)
+  if (clib_atomic_fetch_add_relax (&graph->trace_packets, 1) < 256)
     metadata.state_bits |= PRODUCT_META_TRACE;
   metadata.origin_obligation_id = origin_obligation_id;
   metadata.generation = graph->generation;

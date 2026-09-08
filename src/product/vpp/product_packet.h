@@ -110,7 +110,7 @@ typedef struct
   uint32_t packet_id;
   uint16_t origin_lane;
   uint8_t kind;
-  uint8_t reserved;
+  uint8_t origin_worker; /* frozen Adapter placement; never an owner key */
 } product_adapter_obligation_t;
 
 _Static_assert (sizeof (product_platform_packet_facts_t) == 16,

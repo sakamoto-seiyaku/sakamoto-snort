@@ -83,8 +83,8 @@ public final class RuntimeService extends VpnService {
     private static final String PRODUCT_MANIFEST_ASSET = "product-stage.properties";
     private static final String PRODUCT_PLUGIN_BINARY = "libproduct_core_plugin.so";
     private static final String PRODUCT_ROOT_NFQUEUE_QUEUE = "176";
-    private static final String PRODUCT_ROOT_NFQUEUE_QUEUE_LAST = "176";
-    private static final String PRODUCT_ROOT_NFQUEUE_LANES = "1";
+    private static final String PRODUCT_ROOT_NFQUEUE_QUEUE_LAST = "179";
+    private static final String PRODUCT_ROOT_NFQUEUE_LANES = "4";
     private static final String PRODUCT_ROOT_NFQUEUE_CHAIN = "SAKAMOTO_PRODUCT_S176_OUTPUT";
     private static final String PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN = "SAKAMOTO_PRODUCT_S178_INPUT";
     private static final int PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS = 3;
@@ -5033,8 +5033,6 @@ public final class RuntimeService extends VpnService {
         }
         String outputChain = PRODUCT_ROOT_NFQUEUE_CHAIN;
         String inputChain = PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN;
-        String queue = PRODUCT_ROOT_NFQUEUE_QUEUE;
-        String queueLast = PRODUCT_ROOT_NFQUEUE_QUEUE_LAST;
         String uid = Integer.toString(getApplicationInfo().uid);
         String command = "set +e; "
                 + "while iptables -w -t mangle -D OUTPUT -j " + outputChain
@@ -5054,13 +5052,8 @@ public final class RuntimeService extends VpnService {
                 + "ip6tables -w -t mangle -F " + inputChain + " >/dev/null 2>&1; "
                 + "ip6tables -w -t mangle -X " + inputChain + " >/dev/null 2>&1; "
                 + "set -e; "
-                + "iptables -w -t mangle -N " + outputChain + "; "
-                + "iptables -w -t mangle -A " + outputChain
-                + " -p udp -m owner --uid-owner " + uid
-                + " -j NFQUEUE --queue-num " + queue + " --queue-bypass; "
-                + "iptables -w -t mangle -I OUTPUT -j " + outputChain + "; "
-                + "iptables -w -t mangle -S " + outputChain
-                + " | grep -F -- '--queue-num " + queue + "' >/dev/null";
+                + productRootFamilyHooks("iptables", outputChain, inputChain, uid, "176:177")
+                + productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179");
         for (int attempt = 1; attempt <= PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS;
                 attempt++) {
             if (runRootCommand(command, 5L)) {
@@ -5080,6 +5073,25 @@ public final class RuntimeService extends VpnService {
         }
         appendLog("product_root_nfqueue_hook_install=failed");
         return false;
+    }
+
+    /** This stage opens ordinary UDP only. Each family's INPUT and OUTPUT
+     * share its Q2 range; queue balance is platform placement, never flow owner. */
+    private static String productRootFamilyHooks(String tool, String outputChain,
+            String inputChain, String uid, String range) {
+        return tool + " -w -t mangle -N " + outputChain + "; "
+                + tool + " -w -t mangle -N " + inputChain + "; "
+                + tool + " -w -t mangle -A " + outputChain
+                + " -p udp -m owner --uid-owner " + uid
+                + " -j NFQUEUE --queue-balance " + range + " --queue-bypass; "
+                + tool + " -w -t mangle -A " + inputChain
+                + " -p udp -j NFQUEUE --queue-balance " + range + " --queue-bypass; "
+                + tool + " -w -t mangle -I OUTPUT -j " + outputChain + "; "
+                + tool + " -w -t mangle -I INPUT -j " + inputChain + "; "
+                + tool + " -w -t mangle -S " + outputChain
+                + " | grep -F -- '--queue-balance " + range + "' >/dev/null; "
+                + tool + " -w -t mangle -S " + inputChain
+                + " | grep -F -- '--queue-balance " + range + "' >/dev/null; ";
     }
 
     /** Delete generation contents first; owner.properties is the final authority removed. */

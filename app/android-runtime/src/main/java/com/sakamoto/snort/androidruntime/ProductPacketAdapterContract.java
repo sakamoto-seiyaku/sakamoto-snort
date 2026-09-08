@@ -13,7 +13,7 @@ public final class ProductPacketAdapterContract {
             "unknown-application-no-hold";
     public static final String TRANSPORT_OUTCOME_SEPARATE =
             "transport-outcome-separate";
-    public static final String ROOT_ADAPTER = "root-nfqueue-udp4-owner-directed";
+    public static final String ROOT_ADAPTER = "root-nfqueue-udp-dualstack-q2w2";
     public static final String VPN_ADAPTER = "vpn-flow-stack";
 
     public final RuntimeProfile profile;
