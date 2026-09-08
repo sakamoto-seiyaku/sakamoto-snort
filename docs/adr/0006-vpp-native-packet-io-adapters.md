@@ -18,9 +18,10 @@ the native Adapter.
 Root uses multiple independently owned NFQUEUE lanes with connection-stable kernel `queue-balance` as
 Initial Execution Placement, not as packet or flow ownership. Each native lane exclusively operates its
 queue/socket for receive and verdict. The shared Canonical Owner Key and fixed Worker Layout select one
-ExecutionOwner for every valid IPv4/IPv6 packet: complete TCP/UDP uses the L4-ports form and that owner is also
-its FlowOwner, while other legal protocols or unavailable ports use the L3 form without creating a synthetic
-flow. Owner-local packets continue without enqueue, while mismatches use bounded canonical-owner processing
+ExecutionOwner for every valid IPv4/IPv6 packet: complete TCP/UDP uses `L4_PORTS`, and supported ICMP Echo
+request/reply uses `ICMP_QUERY` with a normalized query class and identifier, excluding sequence. Both supply
+a FlowOwner/session identity for later tracking; other legal protocols or unavailable transport identity use
+`L3` without creating a synthetic flow. This typed-key clarification follows S207 and does not add an ICMP tracker. Owner-local packets continue without enqueue, while mismatches use bounded canonical-owner processing
 and return their terminal intent to the origin lane, which performs the packet's single verdict operation
 with the original queue generation and packet ID. VPN begins with one native TUN Platform I/O Lane and uses
 the same ExecutionOwner and completion-routing model; ADR-0007 defines the separate post-policy TCP/UDP VPN

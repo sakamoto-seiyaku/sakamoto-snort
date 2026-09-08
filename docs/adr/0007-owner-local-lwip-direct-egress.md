@@ -73,9 +73,9 @@ candidate.
 This is a revisable POC evidence selection, not production completion.  An
 ordinary harness or implementation-seam correction does not reopen the
 topology decision; contradictory higher-fidelity evidence or a material new
-platform constraint may.  Worker/shard counts, capacity, timer budgets, copy
-and pbuf adoption points, performance tuning, and release lifecycle remain
-evidence-selected implementation questions.
+platform constraint may. Worker/shard counts, capacity, timer budgets, exact
+copy/release call sites, performance tuning, and release lifecycle remain
+evidence-selected implementation questions within the copy-based contract below.
 
 VPP workers never wait for socket I/O, socket protection, timers, name resolution, or capacity. Owner-inline
 work is nonblocking and budgeted. Exhausted flow capacity rejects new PCB/session/socket creation without
@@ -87,12 +87,78 @@ is explicit Runtime-health evidence.
 
 Zero-copy is a performance goal, not an absolute product claim. The VPN Flow Stack Packet Boundary must have
 bounded, exactly-once ownership settlement, and an asynchronous consumer never retains an unprotected borrowed
-pointer. The real VPP/lwIP POCs select the concrete buffer and pbuf adoption points, return-storage shape, and
-materialization count.
+pointer. The 2026-09-05 decision below selects independent copy-based storage; real VPP/lwIP experiments
+verify its concrete call sites, ownership settlement, and capacity rather than reopening that selection.
 
 Every full-payload copy requires a named lifetime or protocol reason and measurement. Removing a copy never
 takes priority over buffer conservation, generation safety, bounded credits, or teardown correctness; this
-ADR neither mandates custom pbuf adoption nor promises VPP-compatible return allocation before evidence.
+ADR does not require custom pbuf adoption or lwIP allocating output directly from VPP-owned storage.
+
+### 2026-09-05 KISS copy and ownership contract
+
+Keep the two ownership-interface copies: VPP input buffer to lwIP-owned storage, and lwIP output to a new
+VPP-owned buffer. S121/S122 establish the bounded two-direction copy evidence; S125's final stage decision
+retains that path without starting zero-copy or lwIP memory-model redesign. Its formal investment campaign
+remains `INCONCLUSIVE`; the engineering direction is accepted, not a claim of completed production performance
+validation. The two copies do not count all movement inside lwIP or the kernel.
+
+- Input: the Flow Stack may read the original VPP buffer during the input call, but retains no asynchronous
+  reference to that buffer or its metadata after the copied handoff. VPP retains responsibility for its buffer
+  through the existing Adapter Completion and native free lifecycle; it does not wait for a network reply.
+  A completed `memcpy` alone does not authorize freeing storage still used by the call or its completion.
+- Output: the original pbuf follows the pinned lwIP callback's ownership and lifetime rules; VPP does not
+  arbitrarily free it or retain a borrowed pointer for later graph work. After copying, the new VPP buffer
+  has an independent lifetime. Its current holder settles failures before graph acceptance; after acceptance,
+  the graph owns its completion/free path. VPP processing does not extend the original pbuf's borrowed lifetime.
+- Rejection and partial allocation failure settle each side's own resources exactly once. Flow Stack
+  acceptance means data handoff, not delivery; failure does not rewrite Policy Verdict. Do not add shared
+  buffer ownership, cross-module reference counting, a generic packet map, or an asynchronous input-return
+  protocol to support this copy-based interface.
+
+SAKAMOTO-245, SAKAMOTO-246 and SAKAMOTO-247 respectively verify input settlement, output settlement and
+simultaneous resource occupancy on Pixel using real pinned HEV/lwIP and the current experiment artifact.
+They are evidence inputs to SAKAMOTO-237, not prerequisites that require S237 itself to be complete, and
+not substitutes for its product-artifact acceptance. Experimental pbuf/credit counts are not product defaults.
+Contradictory evidence pauses the affected path for review; it does not silently authorize shared storage.
+
+### 2026-09-05 Output callback and graph scheduling
+
+The lwIP output callback copies the packet into a new VPP-owned buffer, fills the minimal return facts,
+and submits that buffer to normal VPP graph scheduling on the same canonical owner, then returns.
+The callback does not recursively execute the return parser/policy/completion graph or wait for a TUN write.
+This ordering also applies when lwIP produces output synchronously before an input call has returned.
+Prefer native VPP frame scheduling; this decision does not introduce a separate output queue or dispatcher.
+
+The callback result reports only whether this output submission succeeded. A later graph Policy DROP or
+TUN completion failure is recorded at its own stage and is not retroactively reported as lwIP submission
+failure. Allocation or submission rejection is settled by the current holder before graph acceptance;
+after acceptance, the graph owns the new buffer's completion/free path. The original pbuf retains its
+pinned lwIP lifetime independently of that graph work.
+
+SAKAMOTO-246 verifies the actual submit/accept point, callback return-value mapping, failure settlement,
+and callback-return-before-graph-execution trace; SAKAMOTO-237 consumes that evidence for the product
+Interface. No exact C signature or lwIP error code is frozen before this verification.
+
+### 2026-09-05 Minimal return facts and lifecycle
+
+The existing transport session carries only the necessary reliable application identity and its explicit
+known/unknown state. Return packets receive these small facts by value, not references to an input buffer,
+its metadata, or a VPP FlowEntry. Missing identity remains unknown without waiting or guessing; the UID of
+Sakamoto's Direct socket is not the original application's identity. Do not introduce an identity mapping
+manager, subscription, broadcast or background synchronization system for this interface.
+
+Network facts reuse the transport flow's existing underlay binding and epoch record. Do not create another
+snapshot system or replace an existing flow's binding with the system's newly selected network. Unavailable
+binding facts remain unknown; invalidated epochs still follow the lifecycle rules below. A new return packet
+is `FLOW_STACK_RETURN` with Device Packet Direction `INPUT`; the shared graph derives its own PacketFacts
+and Policy Verdict rather than inheriting those of an input packet.
+
+Reuse the existing owner and Adapter generation. Only the owner executes mutable callbacks; stale events
+cannot operate on a new session, but must still settle any resources they carry. The existing
+quiesce/drain/close sequence remains authoritative: no new per-packet token table or reclamation queue is
+introduced here. SAKAMOTO-243 retains the full lifecycle acceptance scope; each experiment still cleans up
+its own resources. Additional identity cases require a concrete scenario and minimal review, not speculative
+synchronization machinery.
 
 ## Android socket and lifecycle boundary
 
@@ -132,9 +198,9 @@ transaction must be at most 110%, subject to a small absolute latency tolerance;
 most 8 MiB; and repeated connections/restarts must show no increasing RSS, thread, or fd trend. Production
 still requires absolute Android release-budget evidence. Passing only one level is insufficient.
 
-The exact inline-versus-paired-thread topology, shard and credit counts, pbuf adoption points, remaining copy
-count, timer scheduling, and production capacity sizes remain evidence-selected implementation decisions.
-They are not fixed here, and this ADR does not decompose the required prototypes.
+Owner-inline execution and independent copy-based storage are the selected baselines above. Exact call sites,
+shard and credit counts, timer scheduling, and production capacity remain evidence-selected implementation
+details; neither historical POC constants nor this decision establish production completion.
 
 ## Consequences
 

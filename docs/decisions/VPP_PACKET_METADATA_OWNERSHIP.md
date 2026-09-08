@@ -1,6 +1,6 @@
 # VPP packet metadata ownership
 
-状态：accepted working decision，2026-09-04。
+状态：accepted working decision，2026-09-04；首片事实、VPN 返回事实与 Linux 网络分类按 2026-09-05 KISS 共识更新。
 
 ## Scope
 
@@ -20,7 +20,8 @@ metadata ownership 与 parse-once 的设计证据，不构成当前内存布局�
 - `Platform Packet Facts`：Adapter 从平台事件归一化的 UID evidence、Linux ifindex、
   NetworkContextId、Device Packet Direction 与 VPN Packet Provenance；
 - `OwnerAssignment`：Canonical Owner Key、ExecutionOwner、generation 与 bounded handoff state；完整
-  TCP/UDP 的 ExecutionOwner 同时是其 FlowOwner；
+  TCP/UDP 使用 `L4_PORTS`、受支持 ICMP Echo 使用 `ICMP_QUERY`，其 ExecutionOwner 同时提供
+  FlowOwner/session identity；Echo sequence 不进入 identity，assignment 不代表已创建 ICMP FlowEntry；
 - `AdapterObligation`：返回 Origin Adapter Lane 的 opaque completion obligation。
 
 NFQUEUE queue、lane、fd、packet ID 和 queue generation 留在 Adapter completion ownership 中。
@@ -32,6 +33,25 @@ NFQUEUE queue、lane、fd、packet ID 和 queue generation 留在 Adapter comple
 数值时不能同时代表 unknown。VPN v1 的 Linux ifindex 明确为 unknown；Root/Linux NFQUEUE 的
 Linux ifindex 只来自 `LOCAL_IN` 的 `NFQA_IFINDEX_INDEV` 或 `LOCAL_OUT` 的
 `NFQA_IFINDEX_OUTDEV`，attribute 缺失时保持 unknown。
+
+## Linux network context — 2026-09-05 KISS rule
+
+Linux NetworkContextId 使用四个有界类别：有线网络（Wired）、Wi-Fi、移动网络（Mobile）和
+VPN。类别来自平台可可靠确认的接入或 VPN 事实；unknown 表示事实不可用，不是第五个可配置
+类别，也不以“有线”或“其他”兜底。具体接口匹配与网络类别保持分离。
+
+每个 NFQUEUE packet 按其实际接口归类：`LOCAL_IN` 使用 `NFQA_IFINDEX_INDEV`，
+`LOCAL_OUT` 使用 `NFQA_IFINDEX_OUTDEV`，再投影已有平台事件快照。多网络并存时分别使用
+各接口的可靠分类，不拿当前默认网络覆盖所有包。接口事实或可靠分类缺失时保持 unknown；
+虚拟接口本身不证明 VPN，不能将所有 TUN/TAP、bridge、veth 等接口直接归为 VPN。
+
+unknown 沿用现有规则：依赖 NetworkContextId 的 Gate/L4 条件 no-match，其他可求值策略继续，
+没有 stage DROP 时按正常默认放行。平台事件采集与归一化在 packet path 外完成，worker 读取
+稳定快照，不逐包 RPC、等待分类或重新做平台探测；ifindex/context 不进入 canonical key。
+共享 UI 按平台类别呈现，Apply 仍编译为有界 bit mask；本决策不冻结数值 ID 或新增 UI 工作。
+
+SAKAMOTO-235 定义对应 Linux 真机验收。分类选择已收口；具体事件来源可复用可用的平台网络
+管理信息，但不因本决策强制依赖 NetworkManager，也不新增通用 metadata service。
 
 ## Physical ownership
 
@@ -49,6 +69,39 @@ Linux ifindex 只来自 `LOCAL_IN` 的 `NFQA_IFINDEX_INDEV` 或 `LOCAL_OUT` 的
 - 当前不扩展 `vlib_buffer_t`，不新增 `opaque3`，不使用 packet exdata、每包 heap allocation或
   通用 side table。若固定 inline envelope 无法容纳必要的当前事实，应先去除重复状态并重新审视
   stage transition；不能用未来路由器需求为当前常驻成本辩护。
+
+## Reassembled platform facts — 2026-09-05 KISS rule
+
+重组后的 Platform Packet Facts 以 **fragment offset=0 首片**为准，不是最先到达片。
+保存并恢复该片的 UID、Linux ifindex、NetworkContextId、Device Packet Direction、VPN Packet
+Provenance 及对应 availability；首片缺失的字段保持 unknown，不从其他片拼补，不做投票、
+最后到达覆盖、snapshot 合并或通用 metadata 冲突仲裁。乱序到达不改变这个基准。
+
+该规则不覆盖 AdapterObligation：若 NFQUEUE 入口实际收到独立排队的分片，每片的
+queue/generation/packet ID 都须独立保留并按适用终态分别结清，不能用首片身份代替其他片。
+已有重组合法性检查与 Adapter generation 约束保持有效；其他片的缺失值或 snapshot revision
+变化本身不通过整块 metadata 比较被误报为 malformed。没有 offset=0 首片不能产生成功重组结果。
+
+参考 fork `stellar_ip_reassembly_node.c` 的 `FIRST_FRAG_IDX`、
+`ip_reassembly_table_update_queue()` 和 `ip_fragment_queue_reassemble()`：其首片选取与必要
+metadata 恢复提供设计依据，但没有替本产品证明 Android UID/availability 语义。此处只继承
+首片基准，不把当前 native reassembly 改为 stellar 的自建重组器，不引入通用合并模块。
+
+SAKAMOTO-219 的双栈真机矩阵核对首片晚到、首片 known/其他片 unknown、首片 unknown/其他片
+known、其他片取值不同及 snapshot revision 变化，输出始终按首片恢复且缺失不拼补。真实 NFQ
+原片不可达时明确使用真机 graph injection，不把注入的 UID/network facts 当作平台采集证明。
+具体真机反例若要求改变该规则，先作最小修正审视，不提前扩展设计。
+
+## VPN return facts — 2026-09-05 KISS rule
+
+按 ADR-0007，copy 后两体系独立管理存储。已有 transport session 只携带必要的可靠应用身份与
+known/unknown 状态，网络信息复用已有 underlay 绑定/epoch；不持有原输入 buffer、metadata
+或 VPP FlowEntry 指针，不新增身份映射/订阅/广播/同步管理体系。缺失保持 unknown，不把
+Direct socket 的 Sakamoto UID 误作原应用，也不拿当前全局网络覆盖旧 flow 的实际绑定。
+
+返回时将少量平台事实按值填入新 VPP buffer，明确 `FLOW_STACK_RETURN` 与 `INPUT`；共享图为
+新包生成 PacketFacts 并执行策略，不继承输入包的解析结果或 verdict。回调与清理复用现有
+owner/generation；详细内存约定及实验边界见 ADR-0007 与 SAKAMOTO-237、245–247。
 
 ## Reference-fork boundary
 

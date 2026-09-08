@@ -4,17 +4,19 @@
 
 Sakamoto 的目标 VPP dataplane 使用 per-worker single-owner execution 与 per-flow single-owner state：
 Root/NFQUEUE 与 VPN/TUN Packet Capture Adapter 对每个合法 IPv4/IPv6 packet 执行稳定分流，
-得到一个 VPP logical `ExecutionOwner`。其中完整 TCP/UDP packet 的 ExecutionOwner 同时是其
-`FlowOwner`；同一双向 flow 的 `FlowEntry`、后续 protocol identification、Conntrack 和 stream
+得到一个 VPP logical `ExecutionOwner`。其中完整 TCP/UDP 和受支持 ICMP Echo query 的 ExecutionOwner 同时提供其
+`FlowOwner` identity；同一双向 flow 的 `FlowEntry`、后续 protocol identification、Conntrack 和 stream
 state 由该 worker 私有拥有。其他合法协议仍有稳定 ExecutionOwner，但不会因此伪造端口或创建
 TCP/UDP FlowEntry。选择该模型是为了参考已验证的 VPP/session-manager 架构，避免共享
 authoritative flow table 的跨 worker update、锁和 cache-line ownership 成为长期基础。
 
-Owner Selector 只使用 direction-independent Canonical Owner Key：L3 形式包含 key kind、IP
-family、terminal IP protocol 和 canonical address pair；当 typed transport ports 可用时，L4-ports
-形式再包含 canonical port pair。首版完整 TCP/UDP 使用 L4-ports，其他合法协议或 valid L3 with
-unavailable ports 使用 L3。端口不可用是显式 key shape，不能伪造为端口 0 的五元组。Canonical
-Flow Key 是完整 TCP/UDP 使用的 L4-ports Canonical Owner Key，并继续作为 FlowEntry identity。
+Owner Selector 只使用 direction-independent typed Canonical Owner Key。三种显式 shape 都包含
+key kind、IP family、terminal IP protocol 和 canonical address pair：`L4_PORTS` 在完整 TCP/UDP
+具备 typed ports 时包含 canonical port pair；`ICMP_QUERY` 包含归一化 Echo query class 与
+identifier，request/reply 共用 identity，sequence 只属于 PacketFacts/trace；其他合法协议或
+valid L3 with unavailable transport identity 使用 `L3`。缺失端口不能伪造为零端口五元组。
+Canonical Flow Key 是可供后续 FlowEntry/tracker 消费的 `L4_PORTS` 或 `ICMP_QUERY` identity；
+本轮 assignment 不代表 ICMP tracker 或 entry 创建已经实现。
 complete Linux UID、Android user/profile、Network Gate、interface、capture queue、CPU 和 Root/VPN
 Runtime Profile 都不进入 handoff hash，也不进入 FlowEntry identity。
 
@@ -25,8 +27,8 @@ network namespace 是内核隔离和部署边界，不是 Root NFQUEUE packet �
 未来若产品明确运行多个 namespace，应先确定相应的 runtime/Adapter 拓扑，而不是现在把假想
 namespace、网卡、queue 或 AF_XDP lane 混入五元组或 owner hash。
 
-Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向；L3 key 比较 address，L4-ports
-key 比较 address-and-port endpoint。OwnerAssignment 可保留 source 是否为 endpoint A，但该字段
+Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向；`L3`/`ICMP_QUERY` 比较 address，`L4_PORTS`
+比较 address-and-port endpoint。OwnerAssignment 可保留 source 是否为 endpoint A，但该字段
 也不定义语义方向。Adapter 同时提供设备相对的
 `INPUT/OUTPUT`；FlowEntry 创建包独立定义 flow-relative `ORIG`，反向 packet 为 `REPLY`，并保存
 创建包的 device direction 为 `flowOriginDir`。后续 libprotoident 使用 `ORIG/REPLY`，不是设备
@@ -54,19 +56,13 @@ index 与 side metadata，执行一次 Primary Handoff。由于 Canonical Owner 
 同一 owner 是正确性保证，不是
 kernel queue affinity 的 best-effort 结果。
 
-每个 owner-sensitive worker graph 在任何 worker-private counter、cache、ActivityAccumulator、
-FlowEntry 或 session state 更新前执行 Owner Guard：
-
-1. 当前 worker 与计算出的 owner 一致时走 local fast path，不发生 worker-to-worker enqueue；
-2. 不一致时只允许一次 Corrective Handoff，直接投递计算出的 owner；
-3. 纠偏后的报文重新校验仍不一致时立即 `DROP`，记录 fault reason/counter，不继续跳转。
-
-Primary Software Distribution 只产生一次 OwnerAssignment；Owner Guard 只验证 current worker 与
-其中的 ExecutionOwner，不重新解析、canonicalize 或 hash。两者共享同一个 Owner Selector、
-Canonical Owner Key 编码、hash seed 和 Worker Layout。目标 queue 拥塞时不得改投其他 worker。Corrective Handoff
-发生在 Primary Handoff 已完成之后，仍应接近零；持续命中表示 parser/canonicalization、worker
-mapping 或投递路径错误，而不是正常负载均衡行为。NFQUEUE verdict 返回与 VPN/TUN/transport fd
-写回属于 Adapter completion routing，不计为 Primary 或 Corrective Handoff。
+Primary Software Distribution 只产生一次 OwnerAssignment，并以该结果决定 local continuation 或唯一
+一次 Primary Handoff。handoff 后的 owner-sensitive graph 直接使用当前 VPP worker 的私有 counter、
+cache、ActivityAccumulator、FlowEntry 与 session runtime；不再运行二次 owner guard、重新解析、
+canonicalize、hash、owner 改写或 corrective dispatch。fault/evidence build 可以断言实际接收 worker
+等于已选 ExecutionOwner；不一致属于实现错误并确定性 runtime-drop，不能通过第二次分流掩盖。
+目标 queue 拥塞时不得改投其他 worker。NFQUEUE verdict 返回与 VPN/TUN/transport fd 写回属于
+Adapter completion routing，不计为 Primary Handoff。
 
 Root completion 采用 native origin-lane ownership：每条 NFQUEUE Platform I/O Lane 独占其
 netlink queue/socket 的 receive 与 verdict operation，并与一个 VPP ingress execution context
@@ -95,12 +91,15 @@ VpnService TUN、执行 `protect()` 所需的受控 broker 操作，并把平台
 运行中的 TUN packet I/O、Adapter Completion 和 native buffer return 留在 C-only Adapter plugin。
 允许的 TUN-origin packet 在 canonical FlowOwner 进入独立的 VPN Flow Stack Packet Boundary，
 flow-stack-origin return packet 回到同一 shared graph 后才由 TUN lane 完成。Flow Stack admission、
-Adapter Completion 与 Transport Outcome 是不同事实。本决策不固定 HEV/lwIP instance 数、state
-partition、shard count 或 owner-inline/paired topology；这些由后续真实依赖和 Android POC 选择。
+Adapter Completion 与 Transport Outcome 是不同事实。ADR-0007 的 OI 证据已选择 owner-inline
+topology；2026-09-05 共识保留双 copy 与独立存储，transport session 不持有原 VPP buffer 或
+FlowEntry 指针。回调、停止和旧事件清理复用既有 owner/generation，不新增同步管理体系；具体
+instance/shard 数量、容量和调用时序仍须真实依赖与真机证据。
 
 Android Root、Android VPN 与 Linux NFQUEUE 的 PacketLease 继续由 live VPP buffer 与内联固定
-metadata 承载。解析得到的 PacketFacts、Adapter 归一化的 Platform Packet Facts、OwnerAssignment、
-VPN Packet Provenance 与 AdapterObligation 是不同语义；queue/lane/completion handle 不进入
+metadata 承载。解析得到的 PacketFacts、Adapter 归一化的 Platform Packet Facts、OwnerAssignment
+与 AdapterObligation 是不同语义；VPN Packet Provenance 是 Platform Packet Facts 内的强类型字段。
+queue/lane/completion handle 不进入
 PacketFacts、policy key 或 Owner Selector。Platform Packet Facts 对 UID、Linux ifindex、
 NetworkContextId 等字段使用显式 available/unknown 状态，不能把零值解释为已知事实。VPN 首版
 Linux ifindex 固定为 unknown；Root/Linux NFQUEUE 只从对应 hook 的 NFQA ifindex attribute 取得
@@ -111,7 +110,9 @@ property bag。产品可在经过审计的私有 graph 区间使用固定 inline
 等会复用 VNET opaque union 的节点前，必须保存仍需存活的 Platform Packet Facts，并在重组完成后
 恢复。当前本地端点不引入 packet exdata、动态分配、独立 lease table，也不照搬运营商路由器 fork
 扩大的 `opaque2/opaque3` 布局；未来路由器部署需要新的容量证据和显式架构决定。
-详细字段与 overlay 生命周期见 `VPP_PACKET_METADATA_OWNERSHIP.md`。
+重组后的平台事实以 offset=0 首片为准，首片缺失保持 unknown，不做跨片拼补；这不合并或
+替代每片独立的 NFQUEUE completion identity。详细规则与 overlay 生命周期见
+`VPP_PACKET_METADATA_OWNERSHIP.md`。
 
 任何 detached task 都不得保留裸 buffer index；teardown 在关闭 Adapter generation 前必须
 quiesce ingress，并在 completion channel 仍可用时有界排空全部 obligated buffers。
@@ -165,18 +166,38 @@ fork 当前 `src/vnet/handoff.c` 的 `symmetric CRC32/Toeplitz` L4 路径实际�
 临时重组，不得成为 FlowEntry key；重组后的合法 packet 仍由唯一 Canonical Owner Selector 取得
 ExecutionOwner。
 
+## Flow expiry timing — 2026-09-05 experiment target
+
+Flow 的协议 deadline 与实际清理完成时间分开：deadline 到期即逻辑过期，后续 lookup 不得把
+尚未清理的旧 entry 当作有效 flow 复用；owner 后续通过 FlowEnd 完成结算与释放。协议 timeout
+秒数继续使用同一 pinned OVS 默认表，不为容纳清理延迟而延长。
+
+SAKAMOTO-226 第一轮 A/B 接受正常负载下到期后 **约 1 秒内完成实际清理**作为实验目标。
+这是秒级清理尺度，不是已证明的硬实时上限或正式发版承诺。运行前仍须固定正常负载定义、
+计时端点、统计口径、容差与 GO/NO-GO 阈值；不能把“约 1 秒”在运行后解释为任意延迟。
+实际清理完成须覆盖 FlowEnd 结算和 entry 释放，不能只记录 timeout node 被调用。
+
+同批大量到期单独评估 backlog、oldest overdue 和全部清空时间，不把单 flow 的正常负载目标
+直接当作任意批量的保证。screen-off/Doze 仍按任务矩阵独立记录证据，不推导设备休眠时的
+硬实时保证。两臂保持相同协议 timeout、flow set、清理 budget 与 FlowEnd consumer graph。
+
+指定 VPP fork 的 timeout input node 常驻 polling，但以清理周期控制到期处理；查阅时默认
+`expire_period_ms=1000`、`expire_batch_max=100`，只作为实验参考，不冻结产品参数。polling 与
+nearest-deadline/interrupt wake 的选择仍由 S226 真机 A/B 决定，S227 消费其结果；本目标不重开
+全局 packet conditional-wake 决策。
+
 ## Consequences
 
 - queue ID、INPUT/OUTPUT 拆分或 Packet Capture Adapter 拓扑不能代替 flow ownership；
 - Canonical Owner Key、Canonical Flow Key 与 Owner Selector 不接受 `flow_domain`、network namespace、interface、
   provenance 或其它部署拓扑 discriminator；
 - Adapter I/O lane 是按平台测量扩展的实现拓扑，不是共享 policy/runtime 语义；
-- correctness 依赖明确的 Canonical Owner Key、启动时冻结的 Worker Layout、Primary Software
-  Distribution、Owner Guard、bounded queue、overload 和 teardown 语义；
-- 普通报文只做一次 Canonical Owner Key software distribution；正确到达后没有 normal-path
-  handoff。最多允许一次 Corrective Handoff，第二次 owner mismatch 直接丢弃；
+- correctness 依赖明确的 Canonical Owner Key、启动时冻结的 Worker Layout、唯一一次 Primary
+  Software Distribution、bounded queue、overload 和 teardown 语义；
+- 普通报文只做一次 Canonical Owner Key software distribution；正确到达后没有第二次 owner
+  计算或 corrective dispatch；
 - 分片允许 reassembly worker 与最终 flow owner 不同；这是显式 Fragment Steering 阶段转换，
-  不属于分流错误，也不消耗 Corrective Handoff 的一次纠偏额度；
+  不属于普通报文的第二次分流；
 - Network Gate 与 port-aware L4 classifier 只评估 policy-ready packet；非初始分片不得以
   ports unavailable 的降级事实绕过端口规则；
 - immutable policy snapshot、配置 epoch 和只读产品字典可以跨 worker 共享；flow/session
@@ -197,3 +218,12 @@ ExecutionOwner。
 `NFQUEUE_DATAPATH_MODULE_BOUNDARIES.md` 中把全局共享 A++ CT table 作为未来 runtime
 baseline、把 owner/handoff 仅作为性能实验的结论。两份旧文档中的 PacketFacts、consumer-
 driven facts、policy stage、bounded observability 和 stateful semantics 仍然有效。
+
+## S207 assignment storage — 2026-09-08
+
+唯一 `product_owner_assign` Interface 只接受已解析 PacketFacts 与冻结 Worker Layout。生成的
+typed key、64-bit canonical hash、ExecutionOwner 和 source-side projection 在下游不再计算。
+固定 opaque2 保存 key kind、query class、validity、hash 和 projection；地址由不可变 native
+span 按已保存的 source-side projection 还原，不重新比较端点。去掉 opaque2 中重复的 obligation
+token 后仍为 56 bytes，唯一 token 保留在 opaque 的 AdapterObligation。invalid L3 assignment
+保持 invalid/owner unknown/hash zero，在当前 execution context runtime-drop 并结清原 obligation。
