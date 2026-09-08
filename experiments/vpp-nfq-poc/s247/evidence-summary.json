@@ -1,0 +1,1181 @@
+[
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-233710-single-p4-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:37:10+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-233915-single-p1-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 1,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:39:15+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 1,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "TIMEOUT",
+      "2": "TIMEOUT",
+      "3": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 1,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 1
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 0,
+    "output_copy_bytes": 0,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 3
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 3,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 3,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234158-single-p2-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 2,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:41:58+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 2,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234306-sync-p1-c4",
+    "manifest": {
+      "pattern": "sync",
+      "pbuf_limit": 1,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:43:06+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "sync",
+    "pbuf_limit": 1,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "TIMEOUT",
+      "2": "TIMEOUT",
+      "3": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 1,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 1
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 0,
+    "output_copy_bytes": 0,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 3
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 3,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 4,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234328-sync-p2-c4",
+    "manifest": {
+      "pattern": "sync",
+      "pbuf_limit": 2,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:43:28+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "sync",
+    "pbuf_limit": 2,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 2,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 7
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 7,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 1,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234339-sync-p4-c4",
+    "manifest": {
+      "pattern": "sync",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:43:39+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "sync",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 2,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 4,
+    "output_copy_bytes": 163,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 8
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 8,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234419-burst-p4-c1",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 4,
+      "credit_limit": 1,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:44:19+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 4,
+    "credit_limit": 1,
+    "accepted_input_sequences": [
+      1,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      4
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "TIMEOUT",
+      "3": "TIMEOUT",
+      "4": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 2,
+    "input_copy_bytes": 84,
+    "output_copy_calls": 2,
+    "output_copy_bytes": 84,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 2,
+      "4": 4
+    },
+    "pool_free": {
+      "5": 2,
+      "4": 4,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "2",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234433-burst-p4-c2",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 4,
+      "credit_limit": 2,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:44:33+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 4,
+    "credit_limit": 2,
+    "accepted_input_sequences": [
+      1,
+      2,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      4
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "TIMEOUT",
+      "4": "EXACT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 2,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "2",
+    "pbuf_credit_rejects": "1",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234446-burst-p4-c4",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:44:46+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT",
+      "4": "EXACT"
+    },
+    "pbuf_joint_peak": 4,
+    "input_output_overlap_peak": 4,
+    "pool_peak": {
+      "3": 1,
+      "5": 3,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 4,
+    "input_copy_bytes": 168,
+    "output_copy_calls": 4,
+    "output_copy_bytes": 168,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 4,
+      "4": 8
+    },
+    "pool_free": {
+      "5": 4,
+      "4": 8,
+      "3": 1
+    },
+    "pbuf_credit_peak": "3",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234537-burst-p1-c1",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 1,
+      "credit_limit": 1,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:45:37+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 1,
+    "credit_limit": 1,
+    "accepted_input_sequences": [
+      1,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      4
+    ],
+    "app_results": {
+      "1": "TIMEOUT",
+      "2": "TIMEOUT",
+      "3": "TIMEOUT",
+      "4": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 1,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 1
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 2,
+    "input_copy_bytes": 84,
+    "output_copy_calls": 0,
+    "output_copy_bytes": 0,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 2,
+      "4": 2
+    },
+    "pool_free": {
+      "5": 2,
+      "4": 2,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "2",
+    "allocator_rejects": 2,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234555-burst-p2-c2",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 2,
+      "credit_limit": 2,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:45:55+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 2,
+    "credit_limit": 2,
+    "accepted_input_sequences": [
+      1,
+      2,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      4
+    ],
+    "app_results": {
+      "1": "TIMEOUT",
+      "2": "EXACT",
+      "3": "TIMEOUT",
+      "4": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 2,
+    "pool_peak": {
+      "3": 1,
+      "5": 2,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 2,
+    "output_copy_bytes": 84,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 5
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 5,
+      "3": 1
+    },
+    "pbuf_credit_peak": "2",
+    "pbuf_credit_rejects": "1",
+    "allocator_rejects": 1,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234608-delay-p4-c4",
+    "manifest": {
+      "pattern": "delay",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:46:08+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "delay",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234620-stop-p4-c4",
+    "manifest": {
+      "pattern": "stop",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 1,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:46:20+0800",
+      "apk_sha256": "850eaca57a59e947879c79222bd14ba09ef7117b56319cd1b756f37fea1e46f6",
+      "source_manifest_sha256": "f72fb2c7996f0c715558b20b9ef65f208f4a7f36e57f6d7d44a8db3bb53c5b7e"
+    },
+    "status": "HOLD",
+    "errors": [
+      "native allocation/free totals",
+      "overlap stop must settle queued input without sending it",
+      "bounded cleanup with no error"
+    ],
+    "pattern": "stop",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2
+    ],
+    "endpoint_sequences": [
+      1,
+      2
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 2,
+    "input_copy_calls": 2,
+    "input_copy_bytes": 84,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 121,
+    "stop_overlap_pbufs": 3,
+    "pool_alloc": {
+      "3": 1,
+      "5": 2,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 2,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234925-stop-p4-c4",
+    "manifest": {
+      "pattern": "stop",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 1,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:49:25+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "stop",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2
+    ],
+    "endpoint_sequences": [
+      1
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 2,
+    "input_copy_calls": 2,
+    "input_copy_bytes": 84,
+    "output_copy_calls": 2,
+    "output_copy_bytes": 79,
+    "stop_overlap_pbufs": 3,
+    "pool_alloc": {
+      "3": 1,
+      "5": 2,
+      "4": 4
+    },
+    "pool_free": {
+      "5": 2,
+      "4": 4,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-234958-single-p1-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 1,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:49:58+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 1,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "TIMEOUT",
+      "2": "TIMEOUT",
+      "3": "TIMEOUT"
+    },
+    "pbuf_joint_peak": 1,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 1
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 0,
+    "output_copy_bytes": 0,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 3
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 3,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 3,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-235042-single-p2-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 2,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:50:42+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 2,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-235053-single-p4-c4",
+    "manifest": {
+      "pattern": "single",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:50:53+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "single",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 2,
+    "input_output_overlap_peak": 0,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-235104-sync-p4-c4",
+    "manifest": {
+      "pattern": "sync",
+      "pbuf_limit": 4,
+      "credit_limit": 4,
+      "burst": 1,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:51:04+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "sync",
+    "pbuf_limit": 4,
+    "credit_limit": 4,
+    "accepted_input_sequences": [
+      1,
+      2,
+      3
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      3
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "EXACT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 1,
+      "4": 2
+    },
+    "native_boundary_peak": 2,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 4,
+    "output_copy_bytes": 163,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 8
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 8,
+      "3": 1
+    },
+    "pbuf_credit_peak": "1",
+    "pbuf_credit_rejects": "0",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  },
+  {
+    "evidence": "experiments/vpp-nfq-poc/evidence/s247-20260907-235115-burst-p4-c2",
+    "manifest": {
+      "pattern": "burst",
+      "pbuf_limit": 4,
+      "credit_limit": 2,
+      "burst": 3,
+      "stop_overlap": 0,
+      "serial": "28201JEGR0XPAJ",
+      "started_at": "2026-09-07T23:51:15+0800",
+      "apk_sha256": "53c612ec6e65a0d0b0519e2f4fa9e4d60f607ef32c60d0812506173e7bce662b",
+      "source_manifest_sha256": "8dbbf70261e15c276618aea4d188861e0f8a45330677370d0105333402d3a0b5"
+    },
+    "status": "PASS",
+    "errors": [],
+    "pattern": "burst",
+    "pbuf_limit": 4,
+    "credit_limit": 2,
+    "accepted_input_sequences": [
+      1,
+      2,
+      4
+    ],
+    "endpoint_sequences": [
+      1,
+      2,
+      4
+    ],
+    "app_results": {
+      "1": "EXACT",
+      "2": "EXACT",
+      "3": "TIMEOUT",
+      "4": "EXACT"
+    },
+    "pbuf_joint_peak": 3,
+    "input_output_overlap_peak": 3,
+    "pool_peak": {
+      "3": 1,
+      "5": 2,
+      "4": 2
+    },
+    "native_boundary_peak": 1,
+    "input_copy_calls": 3,
+    "input_copy_bytes": 126,
+    "output_copy_calls": 3,
+    "output_copy_bytes": 126,
+    "stop_overlap_pbufs": 0,
+    "pool_alloc": {
+      "3": 1,
+      "5": 3,
+      "4": 6
+    },
+    "pool_free": {
+      "5": 3,
+      "4": 6,
+      "3": 1
+    },
+    "pbuf_credit_peak": "2",
+    "pbuf_credit_rejects": "1",
+    "allocator_rejects": 0,
+    "max_consecutive_zero_quanta": 0,
+    "verifier_sha256": "bd3a80386aeaf925c59ed31bddaf074f824db8318eada0122d959cab5fcdd21d"
+  }
+]
