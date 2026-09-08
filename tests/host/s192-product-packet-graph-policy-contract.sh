@@ -131,7 +131,9 @@ external_stage_call_count="$(awk '
   in_submit { print }
   in_submit && /^}/ { exit }
 ' "$graph_source" | grep -c 'product_packet_graph_policy_stage (&lease' || true)"
-[[ "$node_stage_call_count" == 1 && "$external_stage_call_count" == 0 ]] ||
+# Product and Host evidence have separate preprocessor branches at this seam.
+[[ ( "$node_stage_call_count" == 1 || "$node_stage_call_count" == 2 )
+   && "$external_stage_call_count" == 0 ]] ||
   fail "policy belongs to the real node; external submit must only schedule it"
 
 policy_body="$(awk '

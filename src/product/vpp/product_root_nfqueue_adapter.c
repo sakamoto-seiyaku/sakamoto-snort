@@ -1,12 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * Root dual-stack INPUT/OUTPUT adapter.
- *
- * Scope is intentionally narrow: IPv4/IPv6 LOCAL_OUT and LOCAL_IN default PASS
- * through the Product Packet graph. Each configured NFQUEUE lane owns one
- * queue/socket for both receive and verdict; completion always routes back to
- * the origin lane. Policy and release capacity belong to later work items.
+ * VPP-native Root packet I/O. Current product wiring captures one app-UID
+ * IPv4 UDP OUTPUT lane on worker 0. The shared graph parses and selects its
+ * owner; the origin Completion Frame consumer alone completes admitted NFQ
+ * obligations. Wider hooks/protocols and queue-pressure qualification remain
+ * separate acceptance work.
  */
 
 #include "product_root_nfqueue_adapter.h"
@@ -34,7 +33,7 @@
 #define PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES 1
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES 4
 #define PRODUCT_ROOT_NFQUEUE_MAX_NETLINK 8192
-#define PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY 64
+#define PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY PRODUCT_ROOT_COMPLETION_CAPACITY
 
 typedef enum
 {

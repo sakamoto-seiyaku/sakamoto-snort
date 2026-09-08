@@ -4,6 +4,10 @@
 
 #include "product_packet.h"
 
+/* Current bounded configuration; capacity qualification remains separate. */
+#define PRODUCT_ROOT_COMPLETION_CAPACITY 64
+#define PRODUCT_GRAPH_INJECTION_CAPACITY 32
+
 /* After terminal, this value replaces PacketFacts in opaque2. The native
  * frame carries the existing buffer index; no packet or platform facts are
  * copied into completion ownership. */

@@ -2346,7 +2346,7 @@ public final class RuntimeService extends VpnService {
                 + "\nhooks=OUTPUT"
                 + "\nfamilies=IPv4"
                 + "\nprotocols=UDP"
-                + "\ngraph_scope=owner-local"
+                + "\ngraph_scope=single-lane-primary-handoff"
                 + "\nroot_nfqueue_generation=" + status.rootNfqueueGeneration
                 + "\norigin_verdict_attempts=" + status.rootNfqueueVerdictAttempts
                 + "\ninternal_settlements=" + status.rootNfqueueInternalSettlements

@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * SAKAMOTO-174 Product packet kernel graph.  The CLI fixture is only a
- * bounded ingress/evidence seam: once bytes are materialized directly in a
- * VPP buffer, the graph moves that buffer index and its opaque2 metadata.
+ * Product VPP packet graph. Ordinary packet bytes stay in one native buffer
+ * through admit, owner-local policy, terminal and origin completion. A remote
+ * assignment uses one Primary Handoff; historical Host-only fixture routes
+ * are compiled separately from the product path.
  */
 
 #include "product_packet.h"
@@ -24,6 +25,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include <unistd.h>
 #endif
@@ -190,7 +192,17 @@ typedef struct
 typedef struct
 {
   vlib_main_t *vlib_main;
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u32 owner_guard_frame_queue;
+#else
+  u32 primary_frame_queue;
+  u32 completion_return_frame_queue;
+  u32 misroute_next;
+  u32 completion_pending_returns;
+  u64 primary_published, primary_received, primary_rejected;
+  u64 owner_delivery_checks, owner_delivery_failures;
+  u64 completion_returns, completion_deferred, completion_retry_attempts;
+#endif
   u32 handoff_credits[PRODUCT_GRAPH_WORKERS];
   u32 lifecycle_obligations;
   u32 lifecycle_buffers;
@@ -695,6 +707,15 @@ invalid_span:
 }
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static u64
+product_packet_event_clock_ns (void)
+{
+  struct timespec value;
+  if (clock_gettime (CLOCK_MONOTONIC, &value) != 0)
+    return 0;
+  return (u64) value.tv_sec * UINT64_C (1000000000) + value.tv_nsec;
+}
+
 static const char *
 product_packet_evidence_source (const product_packet_lease_t *lease)
 {
@@ -710,6 +731,7 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
 {
   if (!(metadata->state_bits & PRODUCT_META_TRACE))
     return;
+  u64 entered_ns = product_packet_event_clock_ns ();
   const product_packet_facts_t *f = &lease->facts;
   const product_platform_packet_facts_t *p = &lease->platform;
   product_buffer_platform_metadata_t extra;
@@ -740,7 +762,7 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
       for (u32 i = 0; i < buffer->current_length; i++)
         fprintf (stderr, "%02x", packet[i]);
     }
-  fprintf (stderr, "\n");
+  fprintf (stderr, " mono_ns=%llu\n", (unsigned long long) entered_ns);
   funlockfile (stderr);
 }
 #endif
@@ -790,6 +812,7 @@ product_handoff_credit_release (product_packet_graph_main_t *graph,
   PRODUCT_EVIDENCE_SUB (handoff_credit_debt, 1);
 }
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 /*
  * This FQM is private to the Product graph. Its 64 slots are guarded by only
  * 32 credits per target worker. The retained enqueue is still nonblocking: a
@@ -865,10 +888,14 @@ product_mark_handoff_rejected (product_packet_graph_main_t *graph,
 #endif
 }
 
+#endif
+
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 extern vlib_node_registration_t product_packet_test_ingress_node;
 #endif
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include "product_packet_fragment_graph.inc"
+#endif
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 enum
@@ -904,12 +931,58 @@ VLIB_REGISTER_NODE (product_packet_test_ingress_node) = {
 
 enum
 {
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_ADMIT_NEXT_FRAGMENT_STEER,
-  PRODUCT_ADMIT_NEXT_POLICY,
   PRODUCT_ADMIT_NEXT_OWNER_GUARD,
+#endif
+  PRODUCT_ADMIT_NEXT_POLICY,
   PRODUCT_ADMIT_NEXT_TERMINAL,
   PRODUCT_ADMIT_N_NEXT,
 };
+
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static int
+product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
+                          u32 bi, product_buffer_metadata_t *metadata)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u16 owner = metadata->expected_owner;
+  u16 target = vlib_get_worker_thread_index (owner);
+  u32 failed;
+  if (!product_handoff_credit_reserve (graph, owner, PRODUCT_HANDOFF_PRIMARY,
+                                       metadata->origin_obligation_id))
+    { clib_atomic_fetch_add_relax (&graph->primary_rejected, 1); return 0; }
+  if (graph->misroute_next)
+    {
+      graph->misroute_next = 0;
+      target = vm->thread_index; /* Explicit fault: do not rewrite owner. */
+      metadata->state_bits |= PRODUCT_META_TRACE;
+    }
+  metadata->state_bits |= PRODUCT_META_HANDOFF_CREDIT;
+  product_metadata_store (vlib_get_buffer (vm, bi), metadata);
+  if (metadata->state_bits & PRODUCT_META_TRACE)
+    fprintf (stderr, "s205 event=primary_publish thread=%u buffer=%u token=%llu generation=%llu owner=%u target_thread=%u primary=%u corrective=%u\n",
+      vm->thread_index, bi, (unsigned long long) metadata->origin_obligation_id,
+      (unsigned long long) metadata->generation, owner, target,
+      metadata->primary_handoff_count, metadata->corrective_handoff_count);
+  if (vlib_buffer_enqueue_to_thread_retained (vm, node, graph->primary_frame_queue,
+        &bi, &target, 1, &failed) != 1)
+    {
+      metadata->state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
+      product_metadata_store (vlib_get_buffer (vm, bi), metadata);
+      product_handoff_credit_release (graph, owner);
+      clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      return 0;
+    }
+  clib_atomic_fetch_add_relax (&graph->primary_published, 1);
+  /* The receiver may already own/free bi. Read only this local metadata copy. */
+  if (metadata->state_bits & PRODUCT_META_TRACE)
+    fprintf (stderr, "s205 event=primary_accepted thread=%u buffer=%u token=%llu generation=%llu owner=%u target_thread=%u\n",
+      vm->thread_index, bi, (unsigned long long) metadata->origin_obligation_id,
+      (unsigned long long) metadata->generation, owner, target);
+  return 1;
+}
+#endif
 
 VLIB_NODE_FN (product_packet_admit_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -987,17 +1060,16 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-      /* Only the selected local UDP4 path is open in this slice. */
+      /* Only ordinary UDP4 wire packets are open; owner may be remote. */
       if (admit_result != PRODUCT_PACKET_OK
           || (lease.platform.provenance != PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
               && (lease.facts.ip_family != 4 || lease.facts.protocol != 17
-                  || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))
-          || lease.expected_owner != logical_worker) {
+                  || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))) {
         lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
         lease.terminal_count = 1;
         lease.runtime_drop_reason = PRODUCT_PACKET_DROP_UNSUPPORTED_ENVELOPE;
       } else {
-        lease.policy_owner_ready = 1;
+        lease.policy_owner_ready = lease.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL;
       }
 #endif
       product_metadata_from_lease (&metadata, &lease,
@@ -1026,6 +1098,19 @@ VLIB_NODE_FN (product_packet_admit_node)
                          metadata.origin_obligation_id);
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
+          && lease.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE)
+        {
+          if (product_primary_handoff (vm, node, buffer_index, &metadata))
+            continue;
+          /* Retained rejection still owns this buffer on arrival worker. */
+          lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+          lease.terminal_count = 1;
+          lease.runtime_drop_reason = PRODUCT_PACKET_DROP_PRIMARY_HANDOFF_CONGESTION;
+          product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
+          metadata.runtime_drop_reason = lease.runtime_drop_reason;
+          product_metadata_store (buffer, &metadata);
+        }
       vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index,
         lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE
           ? PRODUCT_ADMIT_NEXT_POLICY : PRODUCT_ADMIT_NEXT_TERMINAL, 1);
@@ -1076,13 +1161,16 @@ VLIB_REGISTER_NODE (product_packet_admit_node) = {
   .flags = VLIB_NODE_FLAG_TRACE_SUPPORTED,
   .n_next_nodes = PRODUCT_ADMIT_N_NEXT,
   .next_nodes = {
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
     [PRODUCT_ADMIT_NEXT_FRAGMENT_STEER] = "product-packet-fragment-steer",
-    [PRODUCT_ADMIT_NEXT_POLICY] = "product-packet-policy",
     [PRODUCT_ADMIT_NEXT_OWNER_GUARD] = "product-packet-owner-guard",
+#endif
+    [PRODUCT_ADMIT_NEXT_POLICY] = "product-packet-policy",
     [PRODUCT_ADMIT_NEXT_TERMINAL] = "product-packet-terminal",
   },
 };
 
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 enum
 {
   PRODUCT_OWNER_GUARD_NEXT_POLICY,
@@ -1207,6 +1295,8 @@ VLIB_REGISTER_NODE (product_packet_owner_guard_node) = {
   },
 };
 
+#endif
+
 enum
 {
   PRODUCT_POLICY_NEXT_TERMINAL,
@@ -1242,11 +1332,60 @@ VLIB_NODE_FN (product_packet_policy_node)
           clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
           continue;
         }
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (metadata.state_bits & PRODUCT_META_HANDOFF_CREDIT)
+        {
+          product_handoff_credit_release (graph, metadata.expected_owner);
+          metadata.state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
+          product_metadata_store (buffer, &metadata);
+          clib_atomic_fetch_add_relax (&graph->primary_received, 1);
+          if (metadata.state_bits & PRODUCT_META_TRACE)
+            fprintf (stderr, "s205 event=primary_dequeue node=%u thread=%u buffer=%u token=%llu generation=%llu owner=%u primary=%u corrective=%u\n",
+              node->node_index, vm->thread_index, buffer_index,
+              (unsigned long long) metadata.origin_obligation_id,
+              (unsigned long long) metadata.generation, metadata.expected_owner,
+              metadata.primary_handoff_count, metadata.corrective_handoff_count);
+        }
+#endif
       product_lease_from_metadata (&metadata, buffer, &lease);
       if (!product_packet_graph_get_platform_facts (buffer, metadata.generation,
                                                   &lease.platform))
         product_packet_graph_platform_facts_unknown (&lease.platform);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      /* Evidence check at the actual policy receiver. An implementation
+       * error drops here; it never runs another selector or corrective hop. */
+      int delivery_error = 0;
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+        {
+          clib_atomic_fetch_add_relax (&graph->owner_delivery_checks, 1);
+          delivery_error = metadata.expected_owner != vlib_get_worker_index (vm->thread_index);
+          if (delivery_error)
+            clib_atomic_fetch_add_relax (&graph->owner_delivery_failures, 1);
+          fprintf (stderr, "s205 event=owner_delivery node=%u thread=%u buffer=%u token=%llu owner=%u actual_worker=%u match=%u\n",
+            node->node_index, vm->thread_index, buffer_index,
+            (unsigned long long) metadata.origin_obligation_id, metadata.expected_owner,
+            vlib_get_worker_index (vm->thread_index), !delivery_error);
+        }
+      if (delivery_error)
+        {
+          clib_memset (&evaluation, 0, sizeof (evaluation));
+          lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+          lease.terminal_count = 1;
+          lease.runtime_drop_reason = PRODUCT_PACKET_DROP_OWNER_DELIVERY_MISMATCH;
+          policy_result = PRODUCT_PACKET_OK;
+        }
+      else
+        {
+          if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+            {
+              lease.policy_owner_ready = 1;
+              metadata.state_bits |= PRODUCT_META_POLICY_READY;
+            }
+          policy_result = product_packet_graph_policy_stage (&lease, &evaluation);
+        }
+#else
       policy_result = product_packet_graph_policy_stage (&lease, &evaluation);
+#endif
       if (policy_result != PRODUCT_PACKET_OK
           && lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
         {
@@ -1287,6 +1426,98 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
     [PRODUCT_POLICY_NEXT_TERMINAL] = "product-packet-terminal",
   },
 };
+
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+#define PRODUCT_COMPLETION_RETURN_CAPACITY 128
+_Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
+                  PRODUCT_ROOT_COMPLETION_CAPACITY + PRODUCT_GRAPH_INJECTION_CAPACITY,
+                "return backlog covers every current admitted carrier");
+extern vlib_node_registration_t product_packet_completion_retry_node;
+typedef struct
+{
+  u32 buffers[PRODUCT_COMPLETION_RETURN_CAPACITY];
+  u16 head, count;
+} __attribute__((aligned(CLIB_CACHE_LINE_BYTES))) product_completion_return_queue_t;
+static product_completion_return_queue_t product_completion_returns[PRODUCT_GRAPH_WORKERS];
+
+static int
+product_completion_return_try (vlib_main_t *vm, vlib_node_runtime_t *node,
+                                u32 bi, const product_packet_completion_frame_t *completion,
+                                int retry)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u16 target = vlib_get_worker_thread_index (completion->obligation.origin_lane);
+  u32 failed;
+  if (completion->flags & PRODUCT_COMPLETION_TRACE)
+    fprintf (stderr, "s205 event=%s thread=%u buffer=%u token=%llu generation=%llu target_thread=%u producer_thread=%u\n",
+      retry ? "completion_return_retry" : "completion_return_publish",
+      vm->thread_index, bi, (unsigned long long) completion->obligation.token,
+      (unsigned long long) completion->obligation.queue_generation, target,
+      completion->producer_thread);
+  if (vlib_buffer_enqueue_to_thread_retained (vm, node,
+        graph->completion_return_frame_queue, &bi, &target, 1, &failed) != 1)
+    return 0;
+  clib_atomic_fetch_add_relax (&graph->completion_returns, 1);
+  /* No access to the transferred native buffer after successful enqueue. */
+  if (completion->flags & PRODUCT_COMPLETION_TRACE)
+    fprintf (stderr, "s205 event=completion_return_accepted thread=%u buffer=%u token=%llu generation=%llu target_thread=%u\n",
+      vm->thread_index, bi, (unsigned long long) completion->obligation.token,
+      (unsigned long long) completion->obligation.queue_generation, target);
+  return 1;
+}
+
+static void
+product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
+                            u32 bi, const product_packet_completion_frame_t *completion)
+{
+  if (product_completion_return_try (vm, node, bi, completion, 0))
+    return;
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u32 worker = vlib_get_worker_index (vm->thread_index);
+  ASSERT (worker < PRODUCT_GRAPH_WORKERS);
+  product_completion_return_queue_t *queue = &product_completion_returns[worker];
+  /* Root has one 64-credit lane and injection at most 32 buffers/generation.
+   * This queue owns indices only, within that existing admitted population. */
+  ASSERT (queue->count < PRODUCT_COMPLETION_RETURN_CAPACITY);
+  queue->buffers[(queue->head + queue->count) % PRODUCT_COMPLETION_RETURN_CAPACITY] = bi;
+  queue->count++;
+  clib_atomic_fetch_add_relax (&graph->completion_pending_returns, 1);
+  clib_atomic_fetch_add_relax (&graph->completion_deferred, 1);
+  vlib_node_set_state (vm, product_packet_completion_retry_node.index, VLIB_NODE_STATE_POLLING);
+}
+
+VLIB_NODE_FN (product_packet_completion_retry_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u32 worker = vlib_get_worker_index (vm->thread_index);
+  u32 completed = 0;
+  (void) frame;
+  ASSERT (worker < PRODUCT_GRAPH_WORKERS);
+  product_completion_return_queue_t *queue = &product_completion_returns[worker];
+  while (queue->count && completed < 64)
+    {
+      u32 bi = queue->buffers[queue->head];
+      product_packet_completion_frame_t completion;
+      clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
+      clib_atomic_fetch_add_relax (&graph->completion_retry_attempts, 1);
+      if (!product_completion_return_try (vm, node, bi, &completion, 1))
+        break;
+      queue->head = (queue->head + 1) % PRODUCT_COMPLETION_RETURN_CAPACITY;
+      queue->count--;
+      clib_atomic_fetch_sub_relax (&graph->completion_pending_returns, 1);
+      completed++;
+    }
+  if (!queue->count)
+    vlib_node_set_state (vm, node->node_index, VLIB_NODE_STATE_DISABLED);
+  return completed;
+}
+VLIB_REGISTER_NODE (product_packet_completion_retry_node) = {
+  .name = "product-completion-return",
+  .type = VLIB_NODE_TYPE_INPUT,
+  .state = VLIB_NODE_STATE_DISABLED,
+};
+#endif
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 extern vlib_node_registration_t product_packet_origin_completion_node;
@@ -1453,7 +1684,10 @@ VLIB_NODE_FN (product_packet_terminal_node)
           completion.obligation.packet_id, completion.obligation.origin_lane,
           completion.terminal_intent, (u32)sizeof (completion),
           clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
-      vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index, 0, 1);
+      if (vm->thread_index == vlib_get_worker_thread_index (completion.obligation.origin_lane))
+        vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index, 0, 1);
+      else
+        product_completion_return (vm, node, buffer_index, &completion);
       continue;
 #endif
       vlib_buffer_free (vm, &buffer_index, 1);
@@ -1510,12 +1744,13 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
         ? "COMPLETION_REPLAY" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
         ? "GRAPH_INJECTED" : "NFQ_CAPTURED";
       if (completion.flags & PRODUCT_COMPLETION_TRACE)
-        fprintf (stderr, "s204 event=completion_consume source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u producer_thread=%u intent=%u\n",
+        fprintf (stderr, "s204 event=completion_consume source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u producer_thread=%u intent=%u mono_ns=%llu\n",
           source, node->node_index, vm->thread_index, bi,
           (unsigned long long) completion.obligation.token,
           (unsigned long long) completion.obligation.queue_generation,
           completion.obligation.packet_id, completion.obligation.origin_lane,
-          completion.producer_thread, completion.terminal_intent);
+          completion.producer_thread, completion.terminal_intent,
+          (unsigned long long) product_packet_event_clock_ns ());
       if (completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && graph->external_completion)
         graph->external_completion (vm, bi, &completion, graph->external_completion_opaque);
@@ -1610,6 +1845,13 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   graph->generation = generation;
   graph->trace_packets = 0;
   graph->lifecycle_completion_frames = 0;
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  graph->misroute_next = 0;
+  graph->primary_published = graph->primary_received = graph->primary_rejected = 0;
+  graph->owner_delivery_checks = graph->owner_delivery_failures = 0;
+  graph->completion_returns = graph->completion_deferred = graph->completion_retry_attempts = 0;
+  graph->completion_pending_returns = 0;
+#endif
   if (!product_packet_graph_flow_pools_reset (graph))
     return 0;
   clib_atomic_store_rel_n (&graph->lifecycle_terminal_intents, 0);
@@ -5997,6 +6239,49 @@ VLIB_CLI_COMMAND (product_packet_graph_disable_command, static) = {
 #endif
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static clib_error_t *
+product_primary_misroute_cli (vlib_main_t *vm, unformat_input_t *input,
+                              vlib_cli_command_t *command)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  (void) input; (void) command;
+  if (!graph->accepting || graph->misroute_next)
+    return clib_error_return (0, "misroute probe rejected");
+  graph->misroute_next = 1;
+  vlib_cli_output (vm, "primary.misroute_next=armed generation=%llu",
+    (unsigned long long) graph->generation);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_primary_misroute_command, static) = {
+  .path = "product primary misroute-next", .function = product_primary_misroute_cli,
+};
+
+static clib_error_t *
+product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
+                            vlib_cli_command_t *command)
+{
+  product_packet_graph_main_t *g = &product_packet_graph_main;
+  (void) input; (void) command;
+  vlib_cli_output (vm, "primary.status generation=%llu published=%llu received=%llu rejected=%llu owner_checks=%llu owner_failures=%llu returns=%llu deferred=%llu retries=%llu pending_returns=%u handoff_debt=%u credit0=%u credit1=%u",
+    (unsigned long long) g->generation,
+    (unsigned long long) clib_atomic_load_acq_n (&g->primary_published),
+    (unsigned long long) clib_atomic_load_acq_n (&g->primary_received),
+    (unsigned long long) clib_atomic_load_acq_n (&g->primary_rejected),
+    (unsigned long long) clib_atomic_load_acq_n (&g->owner_delivery_checks),
+    (unsigned long long) clib_atomic_load_acq_n (&g->owner_delivery_failures),
+    (unsigned long long) clib_atomic_load_acq_n (&g->completion_returns),
+    (unsigned long long) clib_atomic_load_acq_n (&g->completion_deferred),
+    (unsigned long long) clib_atomic_load_acq_n (&g->completion_retry_attempts),
+    clib_atomic_load_acq_n (&g->completion_pending_returns),
+    clib_atomic_load_acq_n (&g->lifecycle_handoffs),
+    clib_atomic_load_acq_n (&g->handoff_credits[0]),
+    clib_atomic_load_acq_n (&g->handoff_credits[1]));
+  return 0;
+}
+VLIB_CLI_COMMAND (product_primary_status_command, static) = {
+  .path = "show product primary", .function = product_primary_status_cli,
+};
+
 /* Test-only ingress accepts bounded caller-supplied bytes. It never makes an
  * NFQUEUE obligation or publishes transport readiness. */
 static u32 product_metadata_injection_frame_queue;
@@ -6012,7 +6297,7 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
   u32 case_id = 0, bi, failed;
   u16 thread = vlib_get_worker_thread_index (0);
   (void) command;
-  if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > 32
+  if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > PRODUCT_GRAPH_INJECTION_CAPACITY
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
       || !graph->accepting || !graph->enabled)
     { vec_free (hex); return clib_error_return (0, "injection rejected"); }
@@ -6163,8 +6448,15 @@ product_packet_graph_init (vlib_main_t *vm)
   product_completion_probe_frame_queue =
     vlib_frame_queue_main_init (product_packet_origin_completion_node.index, 64);
 #endif
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   graph->owner_guard_frame_queue =
     vlib_frame_queue_main_init (product_packet_owner_guard_node.index, 0);
+#else
+  graph->primary_frame_queue =
+    vlib_frame_queue_main_init (product_packet_policy_node.index, 64);
+  graph->completion_return_frame_queue =
+    vlib_frame_queue_main_init (product_packet_origin_completion_node.index, 128);
+#endif
   return 0;
 }
 
