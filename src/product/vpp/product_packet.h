@@ -60,14 +60,62 @@ typedef enum
   PRODUCT_PACKET_DROP_POLICY_L4,
 } product_packet_runtime_drop_reason_t;
 
+typedef enum
+{
+  PRODUCT_PACKET_DIRECTION_UNKNOWN = 0,
+  PRODUCT_PACKET_DIRECTION_INPUT = 1,
+  PRODUCT_PACKET_DIRECTION_OUTPUT = 3,
+} product_packet_direction_t;
+
+typedef enum
+{
+  PRODUCT_PACKET_PROVENANCE_UNKNOWN = 0,
+  PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE,
+  PRODUCT_PACKET_PROVENANCE_VPN_TUN,
+  PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN,
+  PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED,
+} product_packet_provenance_t;
+
+enum
+{
+  PRODUCT_PLATFORM_UID_KNOWN = 1 << 0,
+  PRODUCT_PLATFORM_IFINDEX_KNOWN = 1 << 1,
+  PRODUCT_PLATFORM_CONTEXT_KNOWN = 1 << 2,
+};
+
 typedef struct
 {
   uint32_t uid;
-  uint32_t queue_id;
-  uint32_t interface_id;
-  uint64_t network_context_id;
-  uint32_t profile_id;
-} product_packet_hints_t;
+  uint32_t linux_ifindex;
+  uint32_t network_context_id;
+  uint8_t availability;
+  uint8_t direction; /* product_packet_direction_t */
+  uint8_t provenance; /* product_packet_provenance_t */
+  uint8_t reserved;
+} product_platform_packet_facts_t;
+
+typedef enum
+{
+  PRODUCT_ADAPTER_OBLIGATION_NONE = 0,
+  PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
+  PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED,
+} product_adapter_obligation_kind_t;
+
+/* Graph nodes carry this value opaquely. Only the adapter decodes it. */
+typedef struct
+{
+  uint64_t token;
+  uint64_t queue_generation;
+  uint32_t packet_id;
+  uint16_t origin_lane;
+  uint8_t kind;
+  uint8_t reserved;
+} product_adapter_obligation_t;
+
+_Static_assert (sizeof (product_platform_packet_facts_t) == 16,
+                "platform facts inline contract");
+_Static_assert (sizeof (product_adapter_obligation_t) == 24,
+                "adapter obligation inline contract");
 
 typedef struct
 {
@@ -82,7 +130,7 @@ typedef struct
   uint16_t current_worker;
   uint32_t flow_domain;
   uint64_t origin_obligation_id;
-  product_packet_hints_t hints;
+  product_platform_packet_facts_t platform;
 } product_packet_ingress_t;
 
 typedef struct
@@ -98,6 +146,20 @@ typedef struct
   uint16_t l3_header_length;
   uint16_t l4_header_length;
   uint32_t packet_length;
+  /* Parsed once; future TCP tracker consumes these values without decoding. */
+  uint32_t tcp_sequence;
+  uint32_t tcp_acknowledgment;
+  uint16_t tcp_window;
+  uint16_t transport_length;
+  uint16_t transport_offset;
+  uint16_t icmp_identifier;
+  uint16_t icmp_sequence;
+  uint8_t tcp_flags;
+  uint8_t tcp_window_scale;
+  uint8_t tcp_window_scale_known;
+  uint8_t icmp_type;
+  uint8_t icmp_code;
+  uint8_t icmp_identity_known;
 } product_packet_facts_t;
 
 typedef struct
@@ -119,7 +181,7 @@ typedef struct
 {
   product_packet_facts_t facts;
   product_canonical_flow_key_t canonical_key;
-  product_packet_hints_t hints;
+  product_platform_packet_facts_t platform;
   uint64_t origin_obligation_id;
   uint16_t expected_owner;
   uint8_t distribution;

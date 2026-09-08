@@ -82,7 +82,7 @@ ipv6_packet (uint8_t *packet, uint8_t protocol, const uint8_t source[16],
 
 static product_packet_lease_t
 admit (const uint8_t *packet, size_t length, uint16_t current_worker,
-       product_packet_hints_t hints, uint64_t obligation_id)
+       product_platform_packet_facts_t platform, uint64_t obligation_id)
 {
   const product_worker_layout_t layout = {
     .worker_count = 4,
@@ -94,7 +94,7 @@ admit (const uint8_t *packet, size_t length, uint16_t current_worker,
     .current_worker = current_worker,
     .flow_domain = 7,
     .origin_obligation_id = obligation_id,
-    .hints = hints,
+    .platform = platform,
   };
   product_packet_lease_t lease;
   memset (&lease, 0, sizeof (lease));
@@ -110,17 +110,17 @@ check_pair (const uint8_t *forward, size_t forward_length,
             uint8_t protocol, uint16_t source_port,
             uint16_t destination_port, uint64_t obligation_base)
 {
-  product_packet_hints_t hints = {
+  product_platform_packet_facts_t platform = {
     .uid = 10001,
-    .queue_id = 3,
-    .interface_id = 11,
+    .availability = PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_IFINDEX_KNOWN | PRODUCT_PLATFORM_CONTEXT_KNOWN,
+    .linux_ifindex = 11,
     .network_context_id = 21,
-    .profile_id = 1,
+    .direction = 1,
   };
   product_packet_lease_t a =
-    admit (forward, forward_length, 0, hints, obligation_base);
+    admit (forward, forward_length, 0, platform, obligation_base);
   product_packet_lease_t b =
-    admit (reverse, reverse_length, 0, hints, obligation_base + 1);
+    admit (reverse, reverse_length, 0, platform, obligation_base + 1);
 
   CHECK (a.facts.l3_status == PRODUCT_PACKET_L3_COMPLETE,
          "L3 status must be complete");
@@ -138,27 +138,23 @@ check_pair (const uint8_t *forward, size_t forward_length,
   CHECK (a.expected_owner == b.expected_owner,
          "forward and reverse must have one owner");
 
-  hints.uid = UINT32_MAX;
-  hints.queue_id = UINT32_MAX;
-  hints.interface_id = UINT32_MAX;
-  hints.network_context_id = UINT64_MAX;
-  hints.profile_id = UINT32_MAX;
+  memset (&platform, 0, sizeof (platform));
   product_packet_lease_t changed =
-    admit (forward, forward_length, 0, hints, obligation_base + 2);
+    admit (forward, forward_length, 0, platform, obligation_base + 2);
   CHECK (memcmp (&a.canonical_key, &changed.canonical_key,
                  sizeof (a.canonical_key)) == 0,
-         "platform hints must not alter canonical key");
+         "platform facts must not alter canonical key");
   CHECK (a.expected_owner == changed.expected_owner,
-         "platform hints must not alter owner");
+         "platform facts must not alter owner");
 }
 
 static void
 check_distribution_and_ledger (const uint8_t *packet, size_t length)
 {
-  product_packet_hints_t hints = { 0 };
-  product_packet_lease_t probe = admit (packet, length, 0, hints, 91);
+  product_platform_packet_facts_t platform = { 0 };
+  product_packet_lease_t probe = admit (packet, length, 0, platform, 91);
   product_packet_lease_t local =
-    admit (packet, length, probe.expected_owner, hints, 92);
+    admit (packet, length, probe.expected_owner, platform, 92);
   CHECK (local.distribution == PRODUCT_PACKET_DISTRIBUTION_LOCAL,
          "owner-local path must stay local");
   CHECK (local.primary_handoff_count == 0,
@@ -166,7 +162,7 @@ check_distribution_and_ledger (const uint8_t *packet, size_t length)
 
   uint16_t remote_worker = (uint16_t) ((probe.expected_owner + 1U) % 4U);
   product_packet_lease_t remote =
-    admit (packet, length, remote_worker, hints, 93);
+    admit (packet, length, remote_worker, platform, 93);
   CHECK (remote.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE,
          "non-owner initial placement must select Primary Distribution");
   CHECK (remote.primary_handoff_count == 1,
@@ -219,9 +215,9 @@ main (void)
 
   alen = ipv4_packet (a, 6, 0x0a000001, 12345, 0x0a000002, 443);
   blen = ipv4_packet (b, 17, 0x0a000001, 12345, 0x0a000002, 443);
-  product_packet_hints_t hints = { 0 };
-  product_packet_lease_t tcp = admit (a, alen, 0, hints, 50);
-  product_packet_lease_t udp = admit (b, blen, 0, hints, 51);
+  product_platform_packet_facts_t platform = { 0 };
+  product_packet_lease_t tcp = admit (a, alen, 0, platform, 50);
+  product_packet_lease_t udp = admit (b, blen, 0, platform, 51);
   CHECK (memcmp (&tcp.canonical_key, &udp.canonical_key,
                  sizeof (tcp.canonical_key)) != 0,
          "IP protocol must participate in canonical key");

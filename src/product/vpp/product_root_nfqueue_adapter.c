@@ -36,7 +36,6 @@
 #define PRODUCT_ROOT_NFQUEUE_MAX_NETLINK 8192
 #define PRODUCT_ROOT_NFQUEUE_OBLIGATION_PACKET_MASK UINT64_C (0xffffffff)
 #define PRODUCT_ROOT_NFQUEUE_OBLIGATION_LANE_SHIFT 32
-#define PRODUCT_ROOT_NFQUEUE_NETWORK_CONTEXT_WIFI UINT64_C (1)
 
 typedef enum
 {
@@ -57,6 +56,8 @@ typedef struct
   u8 ip_family;
   u8 protocol;
   u8 uid_present;
+  u8 indev_present, outdev_present;
+  u32 indev, outdev;
   u8 *payload;
   u32 payload_length;
 } product_root_nfqueue_packet_t;
@@ -543,6 +544,18 @@ product_root_nfqueue_parse_packet (u8 *data, u32 length,
                   packet->uid_present = 1;
                 }
               break;
+            case NFQA_IFINDEX_INDEV:
+            case NFQA_IFINDEX_OUTDEV:
+              if (NFA_PAYLOAD (attr) >= (int) sizeof (u32))
+                {
+                  u32 ifindex;
+                  clib_memcpy_fast (&ifindex, NFA_DATA (attr), sizeof (ifindex));
+                  if (NFA_TYPE (attr) == NFQA_IFINDEX_INDEV)
+                    { packet->indev = ntohl (ifindex); packet->indev_present = 1; }
+                  else
+                    { packet->outdev = ntohl (ifindex); packet->outdev_present = 1; }
+                }
+              break;
             case NFQA_PAYLOAD:
               packet->payload = (u8 *) NFA_DATA (attr);
               packet->payload_length = (u32) NFA_PAYLOAD (attr);
@@ -741,7 +754,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       u32 data_size;
       ssize_t received;
       product_root_nfqueue_packet_t packet;
-      product_packet_hints_t hints;
+      product_platform_packet_facts_t platform;
       product_packet_graph_external_result_t graph_result;
       u64 obligation_id;
       int submitted;
@@ -837,13 +850,25 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       buffer->current_data =
         (i16) (buffer->current_data + (packet.payload - base));
       buffer->current_length = (u16) packet.payload_length;
-      clib_memset (&hints, 0, sizeof (hints));
-      hints.uid = packet.uid_present ? packet.uid : UINT32_MAX;
-      hints.queue_id = lane->queue_id;
-      hints.interface_id = lane->lane_index;
-      hints.network_context_id = PRODUCT_ROOT_NFQUEUE_NETWORK_CONTEXT_WIFI;
-      /* SAKAMOTO-189 uses the profile_id slot as the device hook readback. */
-      hints.profile_id = packet.hook;
+      clib_memset (&platform, 0, sizeof (platform));
+      platform.uid = packet.uid;
+      platform.availability = packet.uid_present ? PRODUCT_PLATFORM_UID_KNOWN : 0;
+      platform.provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE;
+      platform.direction = packet.hook == NF_INET_LOCAL_OUT
+        ? PRODUCT_PACKET_DIRECTION_OUTPUT : packet.hook == NF_INET_LOCAL_IN
+        ? PRODUCT_PACKET_DIRECTION_INPUT : PRODUCT_PACKET_DIRECTION_UNKNOWN;
+      if (packet.hook == NF_INET_LOCAL_OUT && packet.outdev_present)
+        {
+          platform.linux_ifindex = packet.outdev;
+          platform.availability |= PRODUCT_PLATFORM_IFINDEX_KNOWN;
+        }
+      else if (packet.hook == NF_INET_LOCAL_IN && packet.indev_present)
+        {
+          platform.linux_ifindex = packet.indev;
+          platform.availability |= PRODUCT_PLATFORM_IFINDEX_KNOWN;
+        }
+      /* No reliable per-interface classification snapshot yet. Context stays
+       * unavailable, including for loopback. Never infer it from queue/lane. */
 
       obligation_id =
         product_root_nfqueue_obligation_id (lane->lane_index,
@@ -864,7 +889,12 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           lane->lane_index, lane->queue_id, packet.packet_id, buffer_index,
           (unsigned long long)obligation_id);
       submitted = product_packet_graph_submit_external (
-        vm, buffer_index, &hints, obligation_id, &graph_result);
+        vm, buffer_index, &platform,
+        &(product_adapter_obligation_t) {
+          .token = obligation_id, .queue_generation = nm->generation,
+          .packet_id = packet.packet_id, .origin_lane = lane->lane_index,
+          .kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
+        }, &graph_result);
       if (!submitted)
         {
           product_root_nfqueue_accept_extra_messages (

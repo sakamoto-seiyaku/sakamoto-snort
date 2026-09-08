@@ -34,14 +34,6 @@
 #define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE UINT32_C (9)
 #define PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORT UINT32_C (10)
 
-/*
- * Policy-hint direction is the normalized Device Packet Direction: INPUT is
- * 1 and OUTPUT is 3.  interface_id remains adapter interface/provenance
- * metadata and is never a direction source.  In particular, VPN TUN-origin
- * packets retain their TUN provenance in interface_id while callers provide
- * OUTPUT in profile_id; flow-stack return packets leave profile_id unknown.
- */
-
 typedef void (*product_packet_graph_completion_fn_t) (
   vlib_main_t *vm, u32 buffer_index, const product_packet_lease_t *lease,
   u64 origin_obligation_id,
@@ -297,22 +289,15 @@ product_packet_result_t product_packet_graph_policy_stage (
   product_packet_lease_t *lease,
   product_packet_graph_policy_evaluation_t *evaluation);
 
-/*
- * Adapters may attach only compact policy hints to the VPP buffer.  The
- * packet graph validates the generation before consuming them, so stale
- * buffers cannot reuse a previous packet's subject or network context.
- * `profile_id` is the normalized Device Packet Direction; `interface_id`
- * carries adapter interface/provenance and must not be reinterpreted as
- * direction by the graph.  A failed or stale read returns zero and fills
- * every hint field with its explicit unknown sentinel (`UINT32_MAX`, or
- * `UINT64_MAX` for network_context_id).
- */
-void product_packet_graph_set_policy_hints (vlib_buffer_t *buffer,
-                                            const product_packet_hints_t *hints,
-                                            uint16_t generation);
-int product_packet_graph_get_policy_hints (const vlib_buffer_t *buffer,
-                                           uint16_t generation,
-                                           product_packet_hints_t *hints);
+/* Platform availability is independent of numeric values. These accessors
+ * own the audited ordinary product subgraph only. Generation mismatch returns
+ * false and clears availability; no value is used as an unknown sentinel. */
+void product_packet_graph_set_platform_facts (vlib_buffer_t *buffer,
+                                            const product_platform_packet_facts_t *platform,
+                                            uint64_t generation);
+int product_packet_graph_get_platform_facts (const vlib_buffer_t *buffer,
+                                           uint64_t generation,
+                                           product_platform_packet_facts_t *platform);
 
 /*
  * Returns 1 when native frame scheduling accepts buffer ownership. A zero
@@ -320,8 +305,8 @@ int product_packet_graph_get_policy_hints (const vlib_buffer_t *buffer,
  * the origin worker; acceptance does not mean verdict or buffer return.
  */
 int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
-                                          const product_packet_hints_t *hints,
-                                          u64 origin_obligation_id,
+                                          const product_platform_packet_facts_t *platform,
+                                          const product_adapter_obligation_t *obligation,
                                           product_packet_graph_external_result_t
                                             *external_result);
 

@@ -39,8 +39,8 @@ grep -q 'PRODUCT_PACKET_GRAPH_POLICY_STAGE_GATE' "$graph_header"
 grep -q 'PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4' "$graph_header"
 grep -q 'PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT' "$graph_header"
 grep -q 'PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP' "$graph_header"
-grep -q 'product_packet_graph_set_policy_hints' "$graph_header"
-grep -q 'product_packet_graph_get_policy_hints' "$graph_header"
+grep -q 'product_packet_graph_set_platform_facts' "$graph_header"
+grep -q 'product_packet_graph_get_platform_facts' "$graph_header"
 grep -q 'product_l4_policy_view_t' "$graph_source"
 grep -q 'product_l4_policy_evaluate' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_L4_WINNER_RULE' "$graph_source"
@@ -102,24 +102,12 @@ if grep -Fq 'gate_claim_count > 1' "$plugin_source"; then
   fail "typed GateTable handler still rejects multiple enabled Gate entries"
 fi
 grep -q 'active_gate_count == 1' "$plugin_source"
-grep -q 'magic_generation_profile' "$graph_source" ||
-  fail "policy hints do not carry an explicit generation/profile token"
-grep -q 'metadata->queue_id' "$graph_source" ||
-  fail "policy hints do not preserve queue provenance"
-grep -q 'metadata->interface_id' "$graph_source" ||
-  fail "policy hints do not preserve interface provenance"
-grep -q 'hints->uid = UINT32_MAX' "$graph_source" ||
-  fail "missing policy hints do not use an unknown UID sentinel"
-grep -q 'hints->queue_id = UINT32_MAX' "$graph_source" ||
-  fail "missing policy hints do not use an unknown queue sentinel"
-grep -q 'hints->interface_id = UINT32_MAX' "$graph_source" ||
-  fail "missing policy hints do not use an unknown interface sentinel"
-grep -q 'hints->network_context_id = UINT64_MAX' "$graph_source" ||
-  fail "missing policy hints do not use an unknown context sentinel"
-hint_read_failure_count="$(grep -c \
-  'if (!product_packet_graph_get_policy_hints' "$graph_source" || true)"
-[[ "$hint_read_failure_count" == 3 ]] ||
-  fail "all graph node hint reads must handle unavailable metadata"
+# S216 replaces numeric unknown sentinels and the mixed hints overlay.
+grep -q 'metadata.obligation.queue_generation != generation' "$graph_source" ||
+  fail "platform facts lack full generation validation"
+grep -q 'PRODUCT_PLATFORM_UID_KNOWN' "$graph_source"
+grep -q 'PRODUCT_PLATFORM_IFINDEX_KNOWN' "$graph_source"
+grep -q 'PRODUCT_PLATFORM_CONTEXT_KNOWN' "$graph_source"
 
 grep -q 'product-packet-owner-guard.*' "$graph_source" ||
   fail "owner guard node is missing"
@@ -143,8 +131,8 @@ external_stage_call_count="$(awk '
   in_submit { print }
   in_submit && /^}/ { exit }
 ' "$graph_source" | grep -c 'product_packet_graph_policy_stage (&lease' || true)"
-[[ "$node_stage_call_count" == 1 && "$external_stage_call_count" == 1 ]] ||
-  fail "node and external paths must call the same policy stage"
+[[ "$node_stage_call_count" == 1 && "$external_stage_call_count" == 0 ]] ||
+  fail "policy belongs to the real node; external submit must only schedule it"
 
 policy_body="$(awk '
   /^product_packet_graph_policy_stage \(/ { in_stage = 1 }
@@ -194,20 +182,12 @@ printf '%s\n' "$projection_body" | grep -q 'source_address + 12' ||
 printf '%s\n' "$projection_body" | grep -q 'destination_address + 12' ||
   fail "typed IPv4 destination projection does not move PacketFacts tail bytes"
 printf '%s\n' "$projection_body" | grep -q \
-  'product_packet_graph_l4_direction_from_hints' ||
+  'product_packet_graph_l4_direction_from_platform' ||
   fail "typed projection does not normalize Device Packet Direction centrally"
-grep -q 'profile_id.*normalized Device Packet Direction' "$graph_header" ||
-  fail "graph header does not define profile_id direction semantics"
-grep -q 'interface_id.*adapter interface/provenance' "$graph_header" ||
-  fail "graph header does not preserve interface provenance semantics"
-grep -q 'profile_id.*adapter-normalized device direction' "$graph_source" ||
-  fail "graph projection does not document profile_id as direction input"
-if grep -Fq 'PRODUCT_VPN_PACKET_ORIGIN_TUN' "$graph_source" "$graph_header"; then
-  fail "graph owns VPN provenance instead of consuming normalized hints"
-fi
-if printf '%s\n' "$projection_body" | grep -Eq \
-    'interface_id[^\n]*direction|direction[^\n]*interface_id'; then
-  fail "graph projection derives policy direction from interface provenance"
+grep -q 'platform->direction' "$graph_source" ||
+  fail "graph does not consume typed device direction"
+if printf '%s\n' "$projection_body" | grep -Eq 'queue_id|origin_lane|packet_id|profile_id'; then
+  fail "policy projection interprets adapter completion ownership"
 fi
 
 bundle_fixture_body="$(awk '
@@ -225,7 +205,7 @@ fi
 
 # Completion belongs to the external submitter/adapter seam, never to policy
 # evaluation or the host fixture node.
-callback_count="$(grep -c 'graph->external_completion (' "$graph_source")"
+callback_count="$(grep -Ec 'graph->external_completion[[:space:]]*\(' "$graph_source")"
 [[ "$callback_count" == 1 ]] ||
   fail "external completion must have one graph call site"
 if printf '%s\n' "$policy_body" | grep -q 'external_completion'; then
@@ -236,9 +216,8 @@ terminal_body="$(awk '
   in_terminal { print }
   in_terminal && /^}/ { exit }
 ' "$graph_source")"
-if printf '%s\n' "$terminal_body" | grep -q 'external_completion'; then
-  fail "terminal node must not complete an adapter obligation"
-fi
+printf '%s\n' "$terminal_body" | grep -q 'external_completion' ||
+  fail "S203/S216 terminal must own the adapter completion call"
 external_body="$(awk '
   /^product_packet_graph_submit_external \(/ { in_submit = 1 }
   in_submit { print }
@@ -249,8 +228,8 @@ if printf '%s\n' "$external_body" | grep -Eq \
   fail "external path retains a private policy evaluator"
 fi
 grep -q 'product_packet_graph_policy_stage' "$graph_source"
-grep -q 'vnet_buffer_get_opaque' "$graph_source"
-grep -q 'PRODUCT_POLICY_HINTS_MAGIC' "$graph_source"
+grep -q 'product_buffer_platform_metadata_t' "$graph_source"
+grep -q 'metadata.obligation.queue_generation' "$graph_source"
 grep -q 'product_packet_graph_ipv4_scalar_value' "$graph_source"
 for status_field in \
   'typed_match_policy_key' 'typed_match_probe_key' \

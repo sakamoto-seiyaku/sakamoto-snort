@@ -42,7 +42,7 @@ check_rejected_envelope (const rejected_envelope_vector_t *vector)
     .current_worker = 0,
     .flow_domain = 9,
     .origin_obligation_id = vector->obligation_id,
-    .hints = { 0 },
+    .platform = { 0 },
   };
   product_packet_lease_t lease = { 0 };
 
@@ -92,7 +92,7 @@ check_l3_only_packet (const l3_only_vector_t *vector)
     .current_worker = 0,
     .flow_domain = 9,
     .origin_obligation_id = vector->obligation_id,
-    .hints = { 0 },
+    .platform = { 0 },
   };
   product_packet_lease_t lease = { 0 };
 
@@ -152,7 +152,7 @@ admit_for_corrective_handoff (const uint8_t *packet, size_t length,
     .current_worker = 0,
     .flow_domain = 9,
     .origin_obligation_id = obligation_id,
-    .hints = { 0 },
+    .platform = { 0 },
   };
   product_packet_lease_t lease = { 0 };
 

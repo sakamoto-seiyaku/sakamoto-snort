@@ -52,28 +52,79 @@ enum
   PRODUCT_META_HANDOFF_CREDIT = 1 << 7,
 };
 
+/* Owner assignment is independent of parser and adapter identity. */
 typedef struct
 {
-  u8 endpoint_a[16];
-  u8 endpoint_b[16];
-  u64 origin_obligation_id;
-  u16 port_a;
-  u16 port_b;
+  u64 generation;
   u16 expected_owner;
-  u16 generation;
-  u8 l3_header_length;
-  u8 l4_header_length;
-  u8 ip_family;
-  u8 protocol;
-  u8 state_bits;
   u8 primary_handoff_count;
   u8 corrective_handoff_count;
-  u8 runtime_drop_reason;
+} product_owner_assignment_t;
+
+typedef union
+{
+  struct { u32 sequence, acknowledgment; u16 window; u8 flags, scale; } tcp;
+  struct { u16 identifier, sequence; u8 type, code, identity_known; } icmp;
+} product_transport_metadata_t;
+
+typedef struct
+{
+  /* Aliases keep bounded transition code explicit while naming its owner. */
+  union
+  {
+    product_owner_assignment_t owner;
+    struct
+    {
+      u64 generation;
+      u16 expected_owner;
+      u8 primary_handoff_count, corrective_handoff_count;
+    };
+  };
+  u64 origin_obligation_id;
+  product_transport_metadata_t transport;
+  u32 packet_length;
+  u16 source_port, destination_port;
+  u16 span_length;
+  i16 span_current_data;
+  u8 l3_header_length, l4_header_length;
+  u8 ip_family, protocol, l3_status, l4_status;
+  u8 state_bits, runtime_drop_reason;
 } product_buffer_metadata_t;
 
+typedef struct
+{
+  product_adapter_obligation_t obligation;
+  product_platform_packet_facts_t platform;
+} product_buffer_platform_metadata_t;
+
+_Static_assert (sizeof (product_owner_assignment_t) == 16, "owner layout");
+_Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
+_Static_assert (sizeof (product_buffer_metadata_t) == 56, "packet layout");
 _Static_assert (sizeof (product_buffer_metadata_t) ==
-                  sizeof (((vlib_buffer_t *) 0)->opaque2),
-                "Product PacketLease metadata must exactly fit opaque2");
+                  sizeof (((vlib_buffer_t *) 0)->opaque2), "opaque2 capacity");
+_Static_assert (sizeof (product_buffer_platform_metadata_t) ==
+                  sizeof (((vlib_buffer_t *) 0)->opaque), "opaque capacity");
+_Static_assert (offsetof (product_buffer_metadata_t, origin_obligation_id) == 16,
+                "obligation token offset");
+_Static_assert (offsetof (product_buffer_metadata_t, transport) == 24,
+                "transport offset");
+_Static_assert (offsetof (product_buffer_metadata_t, packet_length) == 36,
+                "packet length offset");
+_Static_assert (offsetof (product_buffer_metadata_t, span_current_data) == 46,
+                "span offset");
+_Static_assert (offsetof (product_buffer_platform_metadata_t, platform) == 24,
+                "platform offset");
+_Static_assert (offsetof (product_buffer_metadata_t, state_bits) == 54,
+                "packet lifecycle offset");
+_Static_assert (_Alignof (product_buffer_metadata_t) == 8, "metadata alignment");
+_Static_assert (_Alignof (product_buffer_platform_metadata_t) == 8, "platform overlay alignment");
+_Static_assert (offsetof (product_platform_packet_facts_t, availability) == 12,
+                "platform availability offset");
+_Static_assert (offsetof (product_adapter_obligation_t, queue_generation) == 8,
+                "completion generation offset");
+_Static_assert (offsetof (product_adapter_obligation_t, packet_id) == 16,
+                "completion packet identity offset");
+/* Access is by memcpy: opaque itself need not provide typed pointer alignment. */
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 typedef struct
@@ -261,7 +312,7 @@ typedef struct
   u32 policy_last_drop_device_direction;
   product_packet_graph_completion_fn_t external_completion;
   void *external_completion_opaque;
-  u16 generation;
+  u64 generation;
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u32 ingress_frame_queue;
   u32 configured;
@@ -443,140 +494,45 @@ product_metadata_store (vlib_buffer_t *buffer,
   clib_memcpy_fast (buffer->opaque2, metadata, sizeof (*metadata));
 }
 
-/* vnet_buffer_opaque_t::unused is the only graph-owned side metadata area. */
-#define PRODUCT_POLICY_HINTS_MAGIC UINT32_C (0x2a55)
-#define PRODUCT_POLICY_HINTS_PROFILE_MASK UINT32_C (0x3)
-#define PRODUCT_POLICY_HINTS_GENERATION_SHIFT 2
-#define PRODUCT_POLICY_HINTS_MAGIC_SHIFT 18
-#define PRODUCT_POLICY_HINTS_MAGIC_MASK UINT32_C (0x3fff)
-
-/* The normalized profile contract has only ANY, INPUT and OUTPUT values. */
-enum
-{
-  PRODUCT_POLICY_HINTS_PROFILE_ANY = 0,
-  PRODUCT_POLICY_HINTS_PROFILE_INPUT = 1,
-  PRODUCT_POLICY_HINTS_PROFILE_OUTPUT = 2,
-  PRODUCT_POLICY_HINTS_PROFILE_UNKNOWN = 3,
-};
-
-typedef struct
-{
-  u32 magic_generation_profile;
-  u32 uid;
-  u64 network_context_id;
-  u32 queue_id;
-  u32 interface_id;
-} product_packet_graph_policy_hints_metadata_t;
-
-_Static_assert (
-  sizeof (product_packet_graph_policy_hints_metadata_t) ==
-    VNET_BUFFER_OPAQUE_SIZE,
-  "policy hints must use exactly the VPP unused opaque area");
-
-static product_packet_graph_policy_hints_metadata_t *
-product_packet_graph_policy_hints_metadata (vlib_buffer_t *buffer)
-{
-  return (product_packet_graph_policy_hints_metadata_t *)
-    vnet_buffer_get_opaque (buffer);
-}
-
+/* Own all opaque only along product admit -> policy -> terminal. */
 static void
-product_packet_graph_policy_hints_unknown (product_packet_hints_t *hints)
+product_packet_graph_platform_facts_unknown (product_platform_packet_facts_t *platform)
 {
-  if (hints == 0)
-    return;
-  hints->uid = UINT32_MAX;
-  hints->queue_id = UINT32_MAX;
-  hints->interface_id = UINT32_MAX;
-  hints->network_context_id = UINT64_MAX;
-  hints->profile_id = UINT32_MAX;
-}
-
-static u32
-product_packet_graph_policy_hints_profile_encode (u32 profile_id)
-{
-  if (profile_id == PRODUCT_L4_POLICY_DIRECTION_ANY)
-    return PRODUCT_POLICY_HINTS_PROFILE_ANY;
-  if (profile_id == PRODUCT_L4_POLICY_DIRECTION_INPUT)
-    return PRODUCT_POLICY_HINTS_PROFILE_INPUT;
-  if (profile_id == PRODUCT_L4_POLICY_DIRECTION_OUTPUT)
-    return PRODUCT_POLICY_HINTS_PROFILE_OUTPUT;
-  return PRODUCT_POLICY_HINTS_PROFILE_UNKNOWN;
-}
-
-static u32
-product_packet_graph_policy_hints_profile_decode (u32 profile)
-{
-  switch (profile & PRODUCT_POLICY_HINTS_PROFILE_MASK)
-    {
-    case PRODUCT_POLICY_HINTS_PROFILE_ANY:
-      return PRODUCT_L4_POLICY_DIRECTION_ANY;
-    case PRODUCT_POLICY_HINTS_PROFILE_INPUT:
-      return PRODUCT_L4_POLICY_DIRECTION_INPUT;
-    case PRODUCT_POLICY_HINTS_PROFILE_OUTPUT:
-      return PRODUCT_L4_POLICY_DIRECTION_OUTPUT;
-    default:
-      return UINT32_MAX;
-    }
-}
-
-static u32
-product_packet_graph_policy_hints_token (u16 generation, u32 profile_id)
-{
-  return (PRODUCT_POLICY_HINTS_MAGIC << PRODUCT_POLICY_HINTS_MAGIC_SHIFT)
-         | ((u32) generation << PRODUCT_POLICY_HINTS_GENERATION_SHIFT)
-         | product_packet_graph_policy_hints_profile_encode (profile_id);
+  if (platform)
+    clib_memset (platform, 0, sizeof (*platform));
 }
 
 void
-product_packet_graph_set_policy_hints (vlib_buffer_t *buffer,
-                                       const product_packet_hints_t *hints,
-                                       u16 generation)
+product_packet_graph_set_platform_facts (vlib_buffer_t *buffer,
+                                         const product_platform_packet_facts_t *platform,
+                                         u64 generation)
 {
-  product_packet_graph_policy_hints_metadata_t *metadata;
-
-  if (buffer == 0)
+  product_buffer_platform_metadata_t metadata;
+  if (!buffer)
     return;
-  metadata = product_packet_graph_policy_hints_metadata (buffer);
-  clib_memset (metadata, 0, sizeof (*metadata));
-  if (hints == 0 || generation == 0)
-    return;
-  metadata->magic_generation_profile =
-    product_packet_graph_policy_hints_token (generation, hints->profile_id);
-  metadata->uid = hints->uid;
-  metadata->network_context_id = hints->network_context_id;
-  metadata->queue_id = hints->queue_id;
-  metadata->interface_id = hints->interface_id;
+  clib_memcpy_fast (&metadata, buffer->opaque, sizeof (metadata));
+  clib_memset (&metadata.platform, 0, sizeof (metadata.platform));
+  if (platform && generation)
+    metadata.platform = *platform;
+  metadata.obligation.queue_generation = generation;
+  clib_memcpy_fast (buffer->opaque, &metadata, sizeof (metadata));
 }
 
 int
-product_packet_graph_get_policy_hints (const vlib_buffer_t *buffer,
-                                       u16 generation,
-                                       product_packet_hints_t *hints)
+product_packet_graph_get_platform_facts (const vlib_buffer_t *buffer,
+                                         u64 generation,
+                                         product_platform_packet_facts_t *platform)
 {
-  const product_packet_graph_policy_hints_metadata_t *metadata;
-
-  if (hints == 0)
+  product_buffer_platform_metadata_t metadata;
+  if (!platform)
     return 0;
-  product_packet_graph_policy_hints_unknown (hints);
-  if (buffer == 0 || generation == 0)
+  product_packet_graph_platform_facts_unknown (platform);
+  if (!buffer || !generation)
     return 0;
-  metadata = product_packet_graph_policy_hints_metadata ((vlib_buffer_t *)
-                                                            buffer);
-  if (((metadata->magic_generation_profile >> PRODUCT_POLICY_HINTS_MAGIC_SHIFT)
-       & PRODUCT_POLICY_HINTS_MAGIC_MASK)
-        != PRODUCT_POLICY_HINTS_MAGIC
-      || ((metadata->magic_generation_profile
-           >> PRODUCT_POLICY_HINTS_GENERATION_SHIFT)
-          & UINT32_C (0xffff))
-           != generation)
+  clib_memcpy_fast (&metadata, buffer->opaque, sizeof (metadata));
+  if (metadata.obligation.queue_generation != generation)
     return 0;
-  hints->uid = metadata->uid;
-  hints->network_context_id = metadata->network_context_id;
-  hints->queue_id = metadata->queue_id;
-  hints->interface_id = metadata->interface_id;
-  hints->profile_id = product_packet_graph_policy_hints_profile_decode (
-    metadata->magic_generation_profile);
+  *platform = metadata.platform;
   return 1;
 }
 
@@ -600,75 +556,58 @@ product_metadata_set_terminal_intent (product_buffer_metadata_t *metadata,
 static void
 product_metadata_from_lease (product_buffer_metadata_t *metadata,
                              const product_packet_lease_t *lease,
-                             u16 generation)
+                             u64 generation, const vlib_buffer_t *buffer)
 {
+  const product_packet_facts_t *facts = &lease->facts;
   clib_memset (metadata, 0, sizeof (*metadata));
-  clib_memcpy_fast (metadata->endpoint_a,
-                    lease->canonical_key.endpoint_a.address, 16);
-  clib_memcpy_fast (metadata->endpoint_b,
-                    lease->canonical_key.endpoint_b.address, 16);
   metadata->origin_obligation_id = lease->origin_obligation_id;
-  metadata->port_a = lease->canonical_key.endpoint_a.port;
-  metadata->port_b = lease->canonical_key.endpoint_b.port;
   metadata->expected_owner = lease->expected_owner;
   metadata->generation = generation;
-  metadata->l3_header_length = lease->facts.l3_header_length;
-  metadata->l4_header_length = lease->facts.l4_header_length;
-  metadata->ip_family = lease->facts.ip_family;
-  metadata->protocol = lease->facts.protocol;
+  metadata->l3_header_length = facts->l3_header_length;
+  metadata->l4_header_length = facts->l4_header_length;
+  metadata->ip_family = facts->ip_family;
+  metadata->protocol = facts->protocol;
+  metadata->l3_status = facts->l3_status;
+  metadata->l4_status = facts->l4_status;
+  metadata->packet_length = facts->packet_length;
+  metadata->source_port = facts->source_port;
+  metadata->destination_port = facts->destination_port;
+  metadata->span_current_data = buffer->current_data;
+  metadata->span_length = buffer->current_length;
+  if (facts->protocol == 6)
+    {
+      metadata->transport.tcp.sequence = facts->tcp_sequence;
+      metadata->transport.tcp.acknowledgment = facts->tcp_acknowledgment;
+      metadata->transport.tcp.window = facts->tcp_window;
+      metadata->transport.tcp.flags = facts->tcp_flags;
+      metadata->transport.tcp.scale = facts->tcp_window_scale_known
+                                       ? facts->tcp_window_scale : 255;
+    }
+  else if (facts->protocol == 1 || facts->protocol == 58)
+    {
+      metadata->transport.icmp.identifier = facts->icmp_identifier;
+      metadata->transport.icmp.sequence = facts->icmp_sequence;
+      metadata->transport.icmp.type = facts->icmp_type;
+      metadata->transport.icmp.code = facts->icmp_code;
+      metadata->transport.icmp.identity_known = facts->icmp_identity_known;
+    }
   metadata->state_bits = PRODUCT_META_ADMITTED;
   metadata->primary_handoff_count = lease->primary_handoff_count;
   metadata->corrective_handoff_count = lease->corrective_handoff_count;
   metadata->runtime_drop_reason = lease->runtime_drop_reason;
-  if (memcmp (lease->facts.source_address,
-              lease->canonical_key.endpoint_a.address, 16) == 0
-      && lease->facts.source_port == lease->canonical_key.endpoint_a.port)
+  if (memcmp (facts->source_address, lease->canonical_key.endpoint_a.address, 16) == 0
+      && facts->source_port == lease->canonical_key.endpoint_a.port)
     metadata->state_bits |= PRODUCT_META_SOURCE_IS_A;
   product_metadata_set_terminal_intent (metadata, lease->terminal_intent);
 }
 
-static void
+static int
 product_lease_from_metadata (const product_buffer_metadata_t *metadata,
-                             u32 packet_length, product_packet_lease_t *lease)
+                             const vlib_buffer_t *buffer, product_packet_lease_t *lease)
 {
+  product_packet_facts_t *facts;
   clib_memset (lease, 0, sizeof (*lease));
-  lease->facts.l3_status =
-    (metadata->state_bits & PRODUCT_META_ADMITTED)
-      ? PRODUCT_PACKET_L3_COMPLETE
-      : PRODUCT_PACKET_L3_UNAVAILABLE;
-  lease->facts.l4_status =
-    (metadata->state_bits & PRODUCT_META_ADMITTED)
-      ? PRODUCT_PACKET_L4_COMPLETE
-      : PRODUCT_PACKET_L4_UNAVAILABLE;
-  lease->facts.ip_family = metadata->ip_family;
-  lease->facts.protocol = metadata->protocol;
-  lease->facts.l3_header_length = metadata->l3_header_length;
-  lease->facts.l4_header_length = metadata->l4_header_length;
-  lease->facts.packet_length = packet_length;
-  lease->canonical_key.ip_family = metadata->ip_family;
-  lease->canonical_key.protocol = metadata->protocol;
-  clib_memcpy_fast (lease->canonical_key.endpoint_a.address,
-                    metadata->endpoint_a, 16);
-  clib_memcpy_fast (lease->canonical_key.endpoint_b.address,
-                    metadata->endpoint_b, 16);
-  lease->canonical_key.endpoint_a.port = metadata->port_a;
-  lease->canonical_key.endpoint_b.port = metadata->port_b;
-  if (metadata->state_bits & PRODUCT_META_SOURCE_IS_A)
-    {
-      clib_memcpy_fast (lease->facts.source_address, metadata->endpoint_a, 16);
-      clib_memcpy_fast (lease->facts.destination_address, metadata->endpoint_b,
-                        16);
-      lease->facts.source_port = metadata->port_a;
-      lease->facts.destination_port = metadata->port_b;
-    }
-  else
-    {
-      clib_memcpy_fast (lease->facts.source_address, metadata->endpoint_b, 16);
-      clib_memcpy_fast (lease->facts.destination_address, metadata->endpoint_a,
-                        16);
-      lease->facts.source_port = metadata->port_b;
-      lease->facts.destination_port = metadata->port_a;
-    }
+  facts = &lease->facts;
   lease->origin_obligation_id = metadata->origin_obligation_id;
   lease->expected_owner = metadata->expected_owner;
   lease->primary_handoff_count = metadata->primary_handoff_count;
@@ -676,15 +615,132 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
   lease->distribution = metadata->primary_handoff_count == 0
                           ? PRODUCT_PACKET_DISTRIBUTION_LOCAL
                           : PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
-  lease->policy_owner_ready =
-    (metadata->state_bits & PRODUCT_META_POLICY_READY) != 0;
+  lease->policy_owner_ready = (metadata->state_bits & PRODUCT_META_POLICY_READY) != 0;
   lease->terminal_intent = product_metadata_terminal_intent (metadata);
-  lease->terminal_count = lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE
-                            ? 0
-                            : 1;
+  lease->terminal_count = lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE;
   lease->runtime_drop_reason = metadata->runtime_drop_reason;
   lease->settled = (metadata->state_bits & PRODUCT_META_SETTLED) != 0;
+  /* The retained native span is immutable in this subgraph. No header decode,
+   * pointer escape, or access after completion/free is permitted. */
+  if (buffer->current_data != metadata->span_current_data
+      || buffer->current_length != metadata->span_length
+      || metadata->packet_length > buffer->current_length)
+    goto invalid_span;
+  facts->l3_status = metadata->l3_status;
+  facts->l4_status = metadata->l4_status;
+  facts->ip_family = metadata->ip_family;
+  facts->protocol = metadata->protocol;
+  facts->l3_header_length = metadata->l3_header_length;
+  facts->l4_header_length = metadata->l4_header_length;
+  facts->packet_length = metadata->packet_length;
+  facts->source_port = metadata->source_port;
+  facts->destination_port = metadata->destination_port;
+  if (facts->l3_status == PRODUCT_PACKET_L3_COMPLETE)
+    {
+      const u8 *packet = vlib_buffer_get_current ((vlib_buffer_t *) buffer);
+      u32 offset = facts->ip_family == 4 ? 12 : 8;
+      u32 width = facts->ip_family == 4 ? 4 : 16;
+      if ((facts->ip_family != 4 && facts->ip_family != 6)
+          || offset + 2 * width > facts->packet_length
+          || facts->l3_header_length > facts->packet_length
+          || facts->l3_header_length + facts->l4_header_length > facts->packet_length)
+        goto invalid_span;
+      clib_memcpy_fast (facts->source_address + 16 - width, packet + offset, width);
+      clib_memcpy_fast (facts->destination_address + 16 - width,
+                        packet + offset + width, width);
+      facts->transport_offset = facts->l3_header_length;
+      facts->transport_length = facts->packet_length - facts->l3_header_length;
+    }
+  if (facts->protocol == 6)
+    {
+      facts->tcp_sequence = metadata->transport.tcp.sequence;
+      facts->tcp_acknowledgment = metadata->transport.tcp.acknowledgment;
+      facts->tcp_window = metadata->transport.tcp.window;
+      facts->tcp_flags = metadata->transport.tcp.flags;
+      facts->tcp_window_scale_known = metadata->transport.tcp.scale != 255;
+      facts->tcp_window_scale = facts->tcp_window_scale_known
+                                 ? metadata->transport.tcp.scale : 0;
+    }
+  else if (facts->protocol == 1 || facts->protocol == 58)
+    {
+      facts->icmp_identifier = metadata->transport.icmp.identifier;
+      facts->icmp_sequence = metadata->transport.icmp.sequence;
+      facts->icmp_type = metadata->transport.icmp.type;
+      facts->icmp_code = metadata->transport.icmp.code;
+      facts->icmp_identity_known = metadata->transport.icmp.identity_known;
+    }
+  lease->canonical_key.ip_family = facts->ip_family;
+  lease->canonical_key.protocol = facts->protocol;
+  product_packet_endpoint_t *source = (metadata->state_bits & PRODUCT_META_SOURCE_IS_A)
+    ? &lease->canonical_key.endpoint_a : &lease->canonical_key.endpoint_b;
+  product_packet_endpoint_t *destination = (metadata->state_bits & PRODUCT_META_SOURCE_IS_A)
+    ? &lease->canonical_key.endpoint_b : &lease->canonical_key.endpoint_a;
+  clib_memcpy_fast (source->address, facts->source_address, 16);
+  clib_memcpy_fast (destination->address, facts->destination_address, 16);
+  source->port = facts->source_port;
+  destination->port = facts->destination_port;
+  product_packet_graph_get_platform_facts (buffer, metadata->generation, &lease->platform);
+  return 1;
+
+invalid_span:
+  clib_memset (facts, 0, sizeof (*facts));
+  lease->policy_owner_ready = 0;
+  lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+  lease->terminal_count = 1;
+  lease->runtime_drop_reason = PRODUCT_PACKET_DROP_INVALID_ENVELOPE;
+  return 0;
 }
+
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static const char *
+product_packet_evidence_source (const product_packet_lease_t *lease)
+{
+  return lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
+    ? "GRAPH_INJECTED" : "NFQ_CAPTURED";
+}
+
+static void
+product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
+                        vlib_buffer_t *buffer, u32 buffer_index,
+                        const product_buffer_metadata_t *metadata,
+                        const product_packet_lease_t *lease, const char *stage)
+{
+  if (!(metadata->state_bits & PRODUCT_META_TRACE))
+    return;
+  const product_packet_facts_t *f = &lease->facts;
+  const product_platform_packet_facts_t *p = &lease->platform;
+  product_buffer_platform_metadata_t extra;
+  clib_memcpy_fast (&extra, buffer->opaque, sizeof (extra));
+  flockfile (stderr);
+  fprintf (stderr, "s216 stage=%s source=%s node=%u thread=%u worker=%u buffer=%u generation=%llu token=%llu owner=%u l3=%u l4=%u family=%u protocol=%u packet_length=%u l3_length=%u l4_length=%u transport_offset=%u transport_length=%u src_port=%u dst_port=%u tcp_seq=%u tcp_ack=%u tcp_window=%u tcp_flags=%u wscale=%u wscale_known=%u icmp_type=%u icmp_code=%u icmp_id=%u icmp_seq=%u icmp_known=%u uid=%u ifindex=%u context=%u availability=%u direction=%u provenance=%u completion_kind=%u queue_generation=%llu packet_id=%u origin_lane=%u intent=%u src=",
+    stage, product_packet_evidence_source (lease), node->node_index,
+    vm->thread_index, vlib_get_worker_index (vm->thread_index), buffer_index,
+    (unsigned long long) metadata->generation,
+    (unsigned long long) metadata->origin_obligation_id, lease->expected_owner,
+    f->l3_status, f->l4_status, f->ip_family, f->protocol, f->packet_length,
+    f->l3_header_length, f->l4_header_length, f->transport_offset,
+    f->transport_length, f->source_port, f->destination_port,
+    f->tcp_sequence, f->tcp_acknowledgment, f->tcp_window, f->tcp_flags,
+    f->tcp_window_scale, f->tcp_window_scale_known, f->icmp_type, f->icmp_code,
+    f->icmp_identifier, f->icmp_sequence, f->icmp_identity_known,
+    p->uid, p->linux_ifindex, p->network_context_id, p->availability,
+    p->direction, p->provenance, extra.obligation.kind,
+    (unsigned long long) extra.obligation.queue_generation,
+    extra.obligation.packet_id, extra.obligation.origin_lane, lease->terminal_intent);
+  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", f->source_address[i]);
+  fprintf (stderr, " dst=");
+  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", f->destination_address[i]);
+  if (strcmp (stage, "admit") == 0)
+    {
+      const u8 *packet = vlib_buffer_get_current (buffer);
+      fprintf (stderr, " raw=");
+      for (u32 i = 0; i < buffer->current_length; i++)
+        fprintf (stderr, "%02x", packet[i]);
+    }
+  fprintf (stderr, "\n");
+  funlockfile (stderr);
+}
+#endif
 
 typedef enum
 {
@@ -908,9 +964,9 @@ VLIB_NODE_FN (product_packet_admit_node)
       ingress.current_worker = logical_worker;
       ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
       ingress.origin_obligation_id = initial_metadata.origin_obligation_id;
-      if (!product_packet_graph_get_policy_hints (
-            buffer, initial_metadata.generation, &ingress.hints))
-        product_packet_graph_policy_hints_unknown (&ingress.hints);
+      if (!product_packet_graph_get_platform_facts (
+            buffer, initial_metadata.generation, &ingress.platform))
+        product_packet_graph_platform_facts_unknown (&ingress.platform);
       clib_memset (&lease, 0, sizeof (lease));
       product_packet_result_t admit_result =
         product_packet_admit (&layout, &ingress, &lease);
@@ -929,9 +985,10 @@ VLIB_NODE_FN (product_packet_admit_node)
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       /* Only the selected local UDP4 path is open in this slice. */
-      if (admit_result != PRODUCT_PACKET_OK || lease.facts.ip_family != 4
-          || lease.facts.protocol != 17
-          || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE
+      if (admit_result != PRODUCT_PACKET_OK
+          || (lease.platform.provenance != PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
+              && (lease.facts.ip_family != 4 || lease.facts.protocol != 17
+                  || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))
           || lease.expected_owner != logical_worker) {
         lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
         lease.terminal_count = 1;
@@ -941,7 +998,7 @@ VLIB_NODE_FN (product_packet_admit_node)
       }
 #endif
       product_metadata_from_lease (&metadata, &lease,
-                                   initial_metadata.generation);
+                                   initial_metadata.generation, buffer);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (vm->thread_index == vlib_get_worker_thread_index (1))
         metadata.state_bits |= PRODUCT_META_ADMIT_THREAD_2;
@@ -952,10 +1009,11 @@ VLIB_NODE_FN (product_packet_admit_node)
         metadata.state_bits |= PRODUCT_META_POLICY_READY;
       if (admit_result != PRODUCT_PACKET_OK)
         metadata.state_bits &= ~PRODUCT_META_ADMITTED;
+      product_metadata_trace (vm, node, buffer, buffer_index, &metadata, &lease, "admit");
       if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=admit source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u parse=1 assignment=1 owner=%u family=%u protocol=%u src_port=%u dst_port=%u intent=%u\n",
-        node->node_index, vm->thread_index, logical_worker, buffer_index,
-        (unsigned long long)metadata.origin_obligation_id, metadata.generation,
+      fprintf(stderr, "s203 event=admit source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu parse=1 assignment=1 owner=%u family=%u protocol=%u src_port=%u dst_port=%u intent=%u\n",
+        product_packet_evidence_source (&lease), node->node_index, vm->thread_index, logical_worker, buffer_index,
+        (unsigned long long)metadata.origin_obligation_id, (unsigned long long)metadata.generation,
         lease.expected_owner, lease.facts.ip_family, lease.facts.protocol,
         lease.facts.source_port, lease.facts.destination_port, lease.terminal_intent);
 #endif
@@ -1073,10 +1131,10 @@ VLIB_NODE_FN (product_packet_owner_guard_node)
           metadata.state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
           product_metadata_store (buffer, &metadata);
       }
-      product_lease_from_metadata (&metadata, buffer->current_length, &lease);
-      if (!product_packet_graph_get_policy_hints (buffer, metadata.generation,
-                                                  &lease.hints))
-        product_packet_graph_policy_hints_unknown (&lease.hints);
+      product_lease_from_metadata (&metadata, buffer, &lease);
+      if (!product_packet_graph_get_platform_facts (buffer, metadata.generation,
+                                                  &lease.platform))
+        product_packet_graph_platform_facts_unknown (&lease.platform);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (graph->congestion_fixture
           && metadata.origin_obligation_id == UINT64_C (174002))
@@ -1181,10 +1239,10 @@ VLIB_NODE_FN (product_packet_policy_node)
           clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
           continue;
         }
-      product_lease_from_metadata (&metadata, buffer->current_length, &lease);
-      if (!product_packet_graph_get_policy_hints (buffer, metadata.generation,
-                                                  &lease.hints))
-        product_packet_graph_policy_hints_unknown (&lease.hints);
+      product_lease_from_metadata (&metadata, buffer, &lease);
+      if (!product_packet_graph_get_platform_facts (buffer, metadata.generation,
+                                                  &lease.platform))
+        product_packet_graph_platform_facts_unknown (&lease.platform);
       policy_result = product_packet_graph_policy_stage (&lease, &evaluation);
       if (policy_result != PRODUCT_PACKET_OK
           && lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
@@ -1196,10 +1254,11 @@ VLIB_NODE_FN (product_packet_policy_node)
             lease.runtime_drop_reason = PRODUCT_PACKET_DROP_INVALID_ENVELOPE;
         }
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      product_metadata_trace (vm, node, buffer, buffer_index, &metadata, &lease, "policy");
       if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=policy source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u owner=%u stage=%u verdict=%u rule=%llu\n",
-        node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
-        buffer_index, (unsigned long long)metadata.origin_obligation_id, metadata.generation,
+      fprintf(stderr, "s203 event=policy source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu owner=%u stage=%u verdict=%u rule=%llu\n",
+        product_packet_evidence_source (&lease), node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
+        buffer_index, (unsigned long long)metadata.origin_obligation_id, (unsigned long long)metadata.generation,
         lease.expected_owner, evaluation.stage, evaluation.verdict,
         (unsigned long long)evaluation.rule_id);
 #endif
@@ -1258,7 +1317,7 @@ VLIB_NODE_FN (product_packet_terminal_node)
           vlib_buffer_free (vm, &buffer_index, 1);
           continue;
         }
-      product_lease_from_metadata (&metadata, buffer->current_length, &lease);
+      product_lease_from_metadata (&metadata, buffer, &lease);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!product_fixture_index_from_obligation (
             metadata.origin_obligation_id, &fixture_index))
@@ -1354,12 +1413,16 @@ VLIB_NODE_FN (product_packet_terminal_node)
 #endif
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      product_metadata_trace (vm, node, buffer, buffer_index, &metadata, &lease, "terminal");
       if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=terminal source=NFQ_CAPTURED node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%u intent=%u owner=%u\n",
-        node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
+      fprintf(stderr, "s203 event=terminal source=%s node=%u thread=%u worker=%u buffer=%u obligation=%llu generation=%llu intent=%u owner=%u\n",
+        product_packet_evidence_source (&lease), node->node_index, vm->thread_index, vlib_get_worker_index(vm->thread_index),
         buffer_index, (unsigned long long)metadata.origin_obligation_id,
-        metadata.generation, lease.terminal_intent, lease.expected_owner);
-      if (graph->external_completion)
+        (unsigned long long)metadata.generation, lease.terminal_intent, lease.expected_owner);
+      product_buffer_platform_metadata_t completion_metadata;
+      clib_memcpy_fast (&completion_metadata, buffer->opaque, sizeof (completion_metadata));
+      if (completion_metadata.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+          && graph->external_completion)
         graph->external_completion(vm, buffer_index, &lease,
           metadata.origin_obligation_id, lease.terminal_intent,
           lease.runtime_drop_reason, graph->external_completion_opaque);
@@ -1372,8 +1435,8 @@ VLIB_NODE_FN (product_packet_terminal_node)
       clib_atomic_fetch_add_relax (&graph->lifecycle_returns, 1);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (metadata.state_bits & PRODUCT_META_TRACE)
-      fprintf(stderr, "s203 event=buffer_free source=NFQ_CAPTURED thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u\n",
-        vm->thread_index, buffer_index, (unsigned long long)metadata.origin_obligation_id,
+      fprintf(stderr, "s203 event=buffer_free source=%s thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u\n",
+        product_packet_evidence_source (&lease), vm->thread_index, buffer_index, (unsigned long long)metadata.origin_obligation_id,
         clib_atomic_load_acq_n(&graph->lifecycle_buffers),
         clib_atomic_load_acq_n(&graph->lifecycle_obligations));
 #endif
@@ -1419,7 +1482,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
 
-  if (vm == 0 || generation == 0 || generation > UINT16_MAX)
+  if (vm == 0 || generation == 0)
     return 0;
   if (clib_atomic_load_acq_n (&graph->enabled)
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
@@ -1428,7 +1491,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
     return 0;
 
   graph->vlib_main = vm;
-  graph->generation = (u16) generation;
+  graph->generation = generation;
   graph->trace_packets = 0;
   if (!product_packet_graph_flow_pools_reset (graph))
     return 0;
@@ -1663,24 +1726,22 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
 }
 
 static void
-product_packet_graph_l4_direction_from_hints (
-  const product_packet_hints_t *hints, u8 *direction, u8 *direction_known)
+product_packet_graph_l4_direction_from_platform (
+  const product_platform_packet_facts_t *platform, u8 *direction, u8 *direction_known)
 {
   if (direction == 0 || direction_known == 0)
     return;
 
   *direction = PRODUCT_L4_POLICY_DIRECTION_ANY;
   *direction_known = 0;
-  if (hints == 0)
+  if (platform == 0)
     return;
 
-  /* profile_id is already the adapter-normalized device direction.  Do not
-   * infer it from interface_id: VPN TUN and flow-stack values are provenance.
-   */
-  if (hints->profile_id == PRODUCT_L4_POLICY_DIRECTION_INPUT
-      || hints->profile_id == PRODUCT_L4_POLICY_DIRECTION_OUTPUT)
+  /* Direction and provenance are distinct typed platform facts. */
+  if (platform->direction == PRODUCT_L4_POLICY_DIRECTION_INPUT
+      || platform->direction == PRODUCT_L4_POLICY_DIRECTION_OUTPUT)
     {
-      *direction = (u8) hints->profile_id;
+      *direction = (u8) platform->direction;
       *direction_known = 1;
     }
 }
@@ -1690,21 +1751,20 @@ product_packet_graph_l4_packet_projection (
   const product_packet_lease_t *lease, product_l4_policy_packet_t *packet)
 {
   const product_packet_facts_t *facts = &lease->facts;
-  u64 network_context = lease->hints.network_context_id;
+  u64 network_context = lease->platform.network_context_id;
 
   clib_memset (packet, 0, sizeof (*packet));
-  packet->uid = lease->hints.uid;
-  packet->uid_known = lease->hints.uid != UINT32_MAX;
-  packet->network_context_known = network_context <= UINT32_MAX;
+  packet->uid = lease->platform.uid;
+  packet->uid_known = !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN);
+  packet->network_context_known = !!(lease->platform.availability & PRODUCT_PLATFORM_CONTEXT_KNOWN);
   packet->network_context_id = (u32) network_context;
-  /* interface_id is adapter interface/provenance; it never supplies policy
-   * direction. */
-  packet->ifindex = lease->hints.interface_id;
-  packet->ifindex_known = lease->hints.interface_id != UINT32_MAX;
+  /* Linux ifindex is independent of direction and provenance. */
+  packet->ifindex = lease->platform.linux_ifindex;
+  packet->ifindex_known = !!(lease->platform.availability & PRODUCT_PLATFORM_IFINDEX_KNOWN);
   packet->family = facts->ip_family;
   packet->protocol = facts->protocol;
-  product_packet_graph_l4_direction_from_hints (
-    &lease->hints, &packet->direction, &packet->direction_known);
+  product_packet_graph_l4_direction_from_platform (
+    &lease->platform, &packet->direction, &packet->direction_known);
   packet->source_port = facts->source_port;
   packet->destination_port = facts->destination_port;
   /* L4 availability controls only port predicates in the matcher. */
@@ -1740,19 +1800,19 @@ product_packet_graph_flow_packet_from_lease (
           && facts->ip_family != PRODUCT_FLOW_ENTRY_FAMILY_IPV6)
       || (facts->protocol != PRODUCT_FLOW_ENTRY_PROTOCOL_TCP
           && facts->protocol != PRODUCT_FLOW_ENTRY_PROTOCOL_UDP)
-      || (lease->hints.profile_id != PRODUCT_FLOW_ENTRY_DIRECTION_INPUT
-          && lease->hints.profile_id != PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT))
+      || (lease->platform.direction != PRODUCT_FLOW_ENTRY_DIRECTION_INPUT
+          && lease->platform.direction != PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT))
     return 0;
 
   clib_memset (packet, 0, sizeof (*packet));
-  packet->uid = lease->hints.uid;
-  packet->network_context = lease->hints.network_context_id <= UINT32_MAX
-                              ? (u32) lease->hints.network_context_id
+  packet->uid = lease->platform.uid;
+  packet->network_context = (lease->platform.availability & PRODUCT_PLATFORM_CONTEXT_KNOWN)
+                              ? (u32) lease->platform.network_context_id
                               : PRODUCT_FLOW_ENTRY_NETWORK_CONTEXT_UNKNOWN;
   packet->packet_bytes = facts->packet_length;
   packet->family = facts->ip_family;
   packet->protocol = facts->protocol;
-  packet->device_direction = (u8) lease->hints.profile_id;
+  packet->device_direction = (u8) lease->platform.direction;
   packet->source_port = facts->source_port;
   packet->destination_port = facts->destination_port;
   packet->timestamp = graph->vlib_main == 0
@@ -2437,12 +2497,12 @@ product_packet_graph_record_l4_view_match (
                                                  snapshot_hash, 1));
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_verdict, verdict);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
   clib_atomic_store_rel_n (&graph->l4_last_match_revision, revision);
   clib_atomic_store_rel_n (&graph->l4_last_match_rule_id, match->rule_id);
-  clib_atomic_store_rel_n (&graph->l4_last_match_uid, lease->hints.uid);
+  clib_atomic_store_rel_n (&graph->l4_last_match_uid, lease->platform.uid);
   clib_atomic_store_rel_n (&graph->l4_last_match_network_context,
-                           (u32) lease->hints.network_context_id);
+                           (u32) lease->platform.network_context_id);
   clib_atomic_store_rel_n (&graph->l4_last_match_reason_id, match->reason_id);
   clib_atomic_store_rel_n (&graph->l4_last_match_verdict, verdict);
   /* The public last-match winner identifies the winning stage, while the
@@ -2450,9 +2510,9 @@ product_packet_graph_record_l4_view_match (
   clib_atomic_store_rel_n (&graph->l4_last_match_winner,
                            PRODUCT_PACKET_GRAPH_L4_WINNER_RULE);
   clib_atomic_store_rel_n (&graph->l4_last_match_uid_known,
-                           lease->hints.uid == UINT32_MAX ? 0 : 1);
+                           !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
   clib_atomic_store_rel_n (&graph->l4_last_match_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
   clib_atomic_store_rel_n (&graph->l4_last_match_action, match->action);
   if (match->action == PRODUCT_L4_POLICY_ACTION_DROP)
     {
@@ -2462,9 +2522,9 @@ product_packet_graph_record_l4_view_match (
                                match->rule_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_completion_attempts,
                                lease->terminal_count);
-      clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->hints.uid);
+      clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->platform.uid);
       clib_atomic_store_rel_n (&graph->policy_last_drop_network_context,
-                               (u32) lease->hints.network_context_id);
+                               (u32) lease->platform.network_context_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_reason_id,
                                match->reason_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_verdict,
@@ -2472,9 +2532,9 @@ product_packet_graph_record_l4_view_match (
       clib_atomic_store_rel_n (&graph->policy_last_drop_winner,
                                PRODUCT_PACKET_GRAPH_L4_WINNER_RULE);
       clib_atomic_store_rel_n (&graph->policy_last_drop_uid_known,
-                               lease->hints.uid == UINT32_MAX ? 0 : 1);
+                               !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
       clib_atomic_store_rel_n (&graph->policy_last_drop_device_direction,
-                               lease->hints.profile_id);
+                               lease->platform.direction);
     }
   product_packet_graph_l4_match_association_remember (
     graph, lease, generation, revision, snapshot_hash);
@@ -2503,7 +2563,7 @@ product_packet_graph_record_l4_view_no_match (
   clib_atomic_fetch_add_relax (&graph->l4_policy_view_no_match_records, 1);
   clib_atomic_fetch_add_relax (&graph->l4_no_match_records, 1);
   unrelated_no_match = view_rule_count != 0
-                       && (lease->hints.uid == UINT32_MAX
+                       && (!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
                            || match->candidate_count == 0);
   if (unrelated_no_match)
     {
@@ -2546,7 +2606,7 @@ product_packet_graph_record_l4_view_no_match (
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_verdict,
                            PRODUCT_POLICY_VERDICT_PASS_NEXT);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
 }
 
 void
@@ -3248,9 +3308,9 @@ product_packet_graph_record_policy_drop (
   clib_atomic_store_rel_n (&graph->policy_last_drop_rule_id, matched->rule_id);
   clib_atomic_store_rel_n (&graph->policy_last_drop_completion_attempts,
                            lease->terminal_count);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->hints.uid);
+  clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->platform.uid);
   clib_atomic_store_rel_n (&graph->policy_last_drop_network_context,
-                           (u32) lease->hints.network_context_id);
+                           (u32) lease->platform.network_context_id);
   clib_atomic_store_rel_n (&graph->policy_last_drop_reason_id,
                            matched->reason_id);
   clib_atomic_store_rel_n (&graph->policy_last_drop_verdict,
@@ -3258,9 +3318,9 @@ product_packet_graph_record_policy_drop (
   clib_atomic_store_rel_n (&graph->policy_last_drop_winner,
                            PRODUCT_NETWORK_GATE_WINNER_NETWORK_GATE);
   clib_atomic_store_rel_n (&graph->policy_last_drop_uid_known,
-                           lease->hints.uid == UINT32_MAX ? 0 : 1);
+                           !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
   clib_atomic_store_rel_n (&graph->policy_last_drop_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
 }
 
 static int
@@ -3362,13 +3422,15 @@ product_packet_graph_l4_match (product_packet_graph_main_t *graph,
       || matched->network_context_id == 0
       || matched->protocol != PRODUCT_PACKET_GRAPH_L4_PROTOCOL_TCP
       || matched->action == 0
-      || lease->hints.uid != matched->subject_uid
-      || lease->hints.network_context_id != matched->network_context_id
+      || !(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
+      || !(lease->platform.availability & PRODUCT_PLATFORM_CONTEXT_KNOWN)
+      || lease->platform.uid != matched->subject_uid
+      || lease->platform.network_context_id != matched->network_context_id
       || lease->facts.ip_family != PRODUCT_PACKET_GRAPH_L4_FAMILY_IPV4
       || lease->facts.protocol != PRODUCT_PACKET_GRAPH_L4_PROTOCOL_TCP
       || lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE
       || !product_packet_graph_l4_direction_matches (
-        matched->direction, lease->hints.profile_id)
+        matched->direction, lease->platform.direction)
       || !product_packet_graph_ipv4_prefix_matches (
         lease->facts.source_address, matched->source_address,
         matched->source_prefix_length)
@@ -3404,7 +3466,7 @@ product_packet_graph_record_l4_no_match (
     return;
   l4_policy_direction = clib_atomic_load_acq_n (&graph->l4_policy_direction);
   if (!product_packet_graph_l4_direction_matches (l4_policy_direction,
-                                                  lease->hints.profile_id))
+                                                  lease->platform.direction))
     return;
   clib_atomic_fetch_add_relax (&graph->l4_no_match_records, 1);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_revision, revision);
@@ -3413,7 +3475,7 @@ product_packet_graph_record_l4_no_match (
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_verdict,
                            PRODUCT_POLICY_VERDICT_PASS_NEXT);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
 }
 
 static void
@@ -3435,22 +3497,22 @@ product_packet_graph_record_l4_match (
                            PRODUCT_PACKET_GRAPH_L4_EVALUATION_MATCH);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_verdict, verdict);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
   clib_atomic_store_rel_n (&graph->l4_last_match_revision,
                            matched->revision);
   clib_atomic_store_rel_n (&graph->l4_last_match_rule_id, matched->rule_id);
-  clib_atomic_store_rel_n (&graph->l4_last_match_uid, lease->hints.uid);
+  clib_atomic_store_rel_n (&graph->l4_last_match_uid, lease->platform.uid);
   clib_atomic_store_rel_n (&graph->l4_last_match_network_context,
-                           (u32) lease->hints.network_context_id);
+                           (u32) lease->platform.network_context_id);
   clib_atomic_store_rel_n (&graph->l4_last_match_reason_id,
                            matched->reason_id);
   clib_atomic_store_rel_n (&graph->l4_last_match_verdict, verdict);
   clib_atomic_store_rel_n (&graph->l4_last_match_winner,
                            PRODUCT_PACKET_GRAPH_L4_WINNER_RULE);
   clib_atomic_store_rel_n (&graph->l4_last_match_uid_known,
-                           lease->hints.uid == UINT32_MAX ? 0 : 1);
+                           !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
   clib_atomic_store_rel_n (&graph->l4_last_match_device_direction,
-                           lease->hints.profile_id);
+                           lease->platform.direction);
   clib_atomic_store_rel_n (&graph->l4_last_match_action, matched->action);
   if (matched->action == PRODUCT_PACKET_GRAPH_L4_ACTION_DROP)
     {
@@ -3462,9 +3524,9 @@ product_packet_graph_record_l4_match (
                                matched->rule_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_completion_attempts,
                                lease->terminal_count);
-      clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->hints.uid);
+      clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->platform.uid);
       clib_atomic_store_rel_n (&graph->policy_last_drop_network_context,
-                               (u32) lease->hints.network_context_id);
+                               (u32) lease->platform.network_context_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_reason_id,
                                matched->reason_id);
       clib_atomic_store_rel_n (&graph->policy_last_drop_verdict,
@@ -3472,9 +3534,9 @@ product_packet_graph_record_l4_match (
       clib_atomic_store_rel_n (&graph->policy_last_drop_winner,
                                PRODUCT_PACKET_GRAPH_L4_WINNER_RULE);
       clib_atomic_store_rel_n (&graph->policy_last_drop_uid_known,
-                               lease->hints.uid == UINT32_MAX ? 0 : 1);
+                               !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
       clib_atomic_store_rel_n (&graph->policy_last_drop_device_direction,
-                               lease->hints.profile_id);
+                               lease->platform.direction);
     }
 }
 
@@ -3745,18 +3807,20 @@ product_packet_graph_policy_stage (
 
 int
 product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
-                                      const product_packet_hints_t *hints,
-                                      u64 origin_obligation_id,
+                                      const product_platform_packet_facts_t *platform,
+                                      const product_adapter_obligation_t *obligation,
                                       product_packet_graph_external_result_t *external_result)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_buffer_metadata_t metadata = { 0 };
+  u64 origin_obligation_id = obligation ? obligation->token : 0;
   vlib_frame_t *frame;
   u32 *to;
   if (external_result)
     clib_memset (external_result, 0, sizeof (*external_result));
   if (!vm || vm->thread_index != vlib_get_worker_thread_index (0)
-      || !origin_obligation_id || !graph->external_completion
+      || !origin_obligation_id || obligation->queue_generation != graph->generation
+      || !graph->external_completion
       || !clib_atomic_load_acq_n (&graph->enabled)
       || !clib_atomic_load_acq_n (&graph->accepting)) {
     fprintf(stderr, "s203 event=submit_reject thread=%u tls=%u obligation=%llu enabled=%u accepting=%u callback=%u\n",
@@ -3769,9 +3833,12 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
     metadata.state_bits |= PRODUCT_META_TRACE;
   metadata.origin_obligation_id = origin_obligation_id;
   metadata.generation = graph->generation;
+  product_buffer_platform_metadata_t platform_metadata = { .obligation = *obligation };
+  clib_memcpy_fast (vlib_get_buffer (vm, buffer_index)->opaque,
+                    &platform_metadata, sizeof (platform_metadata));
   product_metadata_store (vlib_get_buffer (vm, buffer_index), &metadata);
-  product_packet_graph_set_policy_hints (vlib_get_buffer (vm, buffer_index),
-                                         hints, metadata.generation);
+  product_packet_graph_set_platform_facts (vlib_get_buffer (vm, buffer_index),
+                                         platform, metadata.generation);
   clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
   clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
   frame = vlib_get_frame_to_node (vm, product_packet_admit_node.index);
@@ -4282,7 +4349,7 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
       vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_indices[index]);
       product_buffer_metadata_t metadata;
       product_ingress_evidence_t *evidence = &graph->ingress[index];
-      product_packet_hints_t policy_hints;
+      product_platform_packet_facts_t platform_facts;
       u32 packet_length;
 
       vlib_buffer_reset (buffer);
@@ -4294,13 +4361,14 @@ product_packet_graph_run_fixture_cli (vlib_main_t *vm,
       metadata.origin_obligation_id = UINT64_C (174001) + index;
       metadata.generation = graph->generation;
       product_metadata_store (buffer, &metadata);
-      clib_memset (&policy_hints, 0, sizeof (policy_hints));
-      policy_hints.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
-      policy_hints.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
-      policy_hints.profile_id = (index & 1) ?
+      clib_memset (&platform_facts, 0, sizeof (platform_facts));
+      platform_facts.availability = PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_CONTEXT_KNOWN;
+      platform_facts.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
+      platform_facts.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
+      platform_facts.direction = (index & 1) ?
                                   PRODUCT_PACKET_GRAPH_L4_DIRECTION_INPUT :
                                   PRODUCT_PACKET_GRAPH_L4_DIRECTION_OUTPUT;
-      product_packet_graph_set_policy_hints (buffer, &policy_hints,
+      product_packet_graph_set_platform_facts (buffer, &platform_facts,
                                              graph->generation);
 
       evidence->buffer_index = buffer_indices[index];
@@ -4718,7 +4786,7 @@ product_lifecycle_enqueue_stale_events (vlib_main_t *vm, u16 generation)
     if (product_packet_admit (&layout, &ingress, &lease)
         != PRODUCT_PACKET_OK)
       return 0;
-    product_metadata_from_lease (&metadata, &lease, generation);
+    product_metadata_from_lease (&metadata, &lease, generation, buffer);
     product_metadata_store (buffer, &metadata);
   }
   {
@@ -4933,7 +5001,7 @@ product_packet_graph_show_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "graph.workers=2");
   vlib_cli_output (vm, "graph.enabled=%u",
                    clib_atomic_load_acq_n (&graph->enabled));
-  vlib_cli_output (vm, "graph.generation=%u", graph->generation);
+  vlib_cli_output (vm, "graph.generation=%llu", (unsigned long long)graph->generation);
   vlib_cli_output (vm, "graph.fragment_context_debt=%u",
                    clib_atomic_load_acq_n (&graph->lifecycle_obligations));
   vlib_cli_output (vm, "graph.handoff_credit_debt=%u",
@@ -5149,7 +5217,7 @@ VLIB_CLI_COMMAND (product_packet_graph_show_command, static) = {
 
 static product_packet_result_t
 product_packet_graph_association_prepare_lease (
-  const u8 *packet, u32 packet_length, const product_packet_hints_t *hints,
+  const u8 *packet, u32 packet_length, const product_platform_packet_facts_t *platform,
   u64 origin_obligation_id, product_packet_lease_t *lease)
 {
   product_packet_ingress_t ingress;
@@ -5165,7 +5233,7 @@ product_packet_graph_association_prepare_lease (
   ingress.current_worker = 0;
   ingress.flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN;
   ingress.origin_obligation_id = origin_obligation_id;
-  ingress.hints = *hints;
+  ingress.platform = *platform;
   result = product_packet_admit (&layout, &ingress, lease);
   if (result != PRODUCT_PACKET_OK)
     return result;
@@ -5182,12 +5250,12 @@ product_packet_graph_policy_association_fixture_cli (
   product_packet_graph_l4_status_t same_probe_status;
   product_packet_graph_l4_status_t wrong_port_status;
   product_packet_graph_policy_evaluation_t evaluation;
-  product_packet_hints_t hints = {
+  product_platform_packet_facts_t platform = {
     .uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID,
-    .queue_id = 0,
-    .interface_id = 0,
+    .availability = PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_IFINDEX_KNOWN | PRODUCT_PLATFORM_CONTEXT_KNOWN,
+    .linux_ifindex = 0,
     .network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT,
-    .profile_id = PRODUCT_PACKET_GRAPH_L4_DIRECTION_OUTPUT,
+    .direction = PRODUCT_PACKET_GRAPH_L4_DIRECTION_OUTPUT,
   };
   product_packet_lease_t lease;
   u8 packet[64];
@@ -5213,7 +5281,7 @@ product_packet_graph_policy_association_fixture_cli (
   packet_length = product_ipv4_fixture (packet, 6, 0x0a000001, 12345,
                                         0x0a000002, 443);
   result = product_packet_graph_association_prepare_lease (
-    packet, packet_length, &hints, UINT64_C (192601), &lease);
+    packet, packet_length, &platform, UINT64_C (192601), &lease);
   if (result != PRODUCT_PACKET_OK)
     return clib_error_return (0, "drop association admission failed: %d",
                               result);
@@ -5236,7 +5304,7 @@ product_packet_graph_policy_association_fixture_cli (
   packet_length = product_ipv4_fixture (packet, 6, 0x0a000001, 12345,
                                         0x0a000099, 443);
   result = product_packet_graph_association_prepare_lease (
-    packet, packet_length, &hints, UINT64_C (192602), &lease);
+    packet, packet_length, &platform, UINT64_C (192602), &lease);
   if (result != PRODUCT_PACKET_OK)
     return clib_error_return (0, "unrelated admission failed: %d", result);
   result = product_packet_graph_policy_stage (&lease, &evaluation);
@@ -5256,7 +5324,7 @@ product_packet_graph_policy_association_fixture_cli (
   packet_length = product_ipv4_fixture (packet, 6, 0x0a000001, 12346,
                                         0x0a000002, 443);
   result = product_packet_graph_association_prepare_lease (
-    packet, packet_length, &hints, UINT64_C (192603), &lease);
+    packet, packet_length, &platform, UINT64_C (192603), &lease);
   if (result != PRODUCT_PACKET_OK)
     return clib_error_return (0, "same-probe admission failed: %d", result);
   result = product_packet_graph_policy_stage (&lease, &evaluation);
@@ -5277,7 +5345,7 @@ product_packet_graph_policy_association_fixture_cli (
   packet_length = product_ipv4_fixture (packet, 6, 0x0a000001, 12345,
                                         0x0a000002, 444);
   result = product_packet_graph_association_prepare_lease (
-    packet, packet_length, &hints, UINT64_C (192604), &lease);
+    packet, packet_length, &platform, UINT64_C (192604), &lease);
   if (result != PRODUCT_PACKET_OK)
     return clib_error_return (0, "wrong-port admission failed: %d", result);
   result = product_packet_graph_policy_stage (&lease, &evaluation);
@@ -5354,7 +5422,7 @@ VLIB_CLI_COMMAND (product_packet_graph_policy_association_fixture_command,
 
 static int
 product_packet_graph_gate_table_fixture_vector (
-  const u8 *packet, u32 packet_length, const product_packet_hints_t *hints,
+  const u8 *packet, u32 packet_length, const product_platform_packet_facts_t *platform,
   u64 origin_obligation_id,
   product_packet_graph_policy_evaluation_t *evaluation)
 {
@@ -5362,7 +5430,7 @@ product_packet_graph_gate_table_fixture_vector (
   product_packet_result_t result;
 
   result = product_packet_graph_association_prepare_lease (
-    packet, packet_length, hints, origin_obligation_id, &lease);
+    packet, packet_length, platform, origin_obligation_id, &lease);
   if (result != PRODUCT_PACKET_OK)
     return 0;
   result = product_packet_graph_policy_stage (&lease, evaluation);
@@ -5402,12 +5470,12 @@ product_packet_graph_gate_table_fixture_cli (
   product_packet_graph_gate_status_t wildcard_status;
   product_packet_graph_flow_status_t flow_status;
   product_packet_graph_policy_evaluation_t evaluation;
-  product_packet_hints_t hints = {
+  product_platform_packet_facts_t platform = {
     .uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID,
-    .queue_id = 0,
-    .interface_id = 77,
+    .availability = PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_IFINDEX_KNOWN | PRODUCT_PLATFORM_CONTEXT_KNOWN,
+    .linux_ifindex = 77,
     .network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT,
-    .profile_id = PRODUCT_PACKET_GRAPH_L4_DIRECTION_OUTPUT,
+    .direction = PRODUCT_PACKET_GRAPH_L4_DIRECTION_OUTPUT,
   };
   u8 packet[80];
   u32 packet_length;
@@ -5534,7 +5602,7 @@ product_packet_graph_gate_table_fixture_cli (
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000002, 443);
   drop_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192701), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192701), &evaluation)
              && evaluation.stage == PRODUCT_PACKET_GRAPH_POLICY_STAGE_GATE
              && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP
              && evaluation.rule_id == UINT64_C (192301);
@@ -5543,7 +5611,7 @@ product_packet_graph_gate_table_fixture_cli (
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 15000, 0x0a000002, 444);
   range_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192702), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192702), &evaluation)
               && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
               && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&range_status);
@@ -5551,7 +5619,7 @@ product_packet_graph_gate_table_fixture_cli (
   packet_length = product_ipv6_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_UDP,
                                         ip6_a, 60000, ip6_b, 443);
   ipv6_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192703), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192703), &evaluation)
              && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
              && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&ipv6_status);
@@ -5559,54 +5627,56 @@ product_packet_graph_gate_table_fixture_cli (
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000099, 444);
   address_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192704), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192704), &evaluation)
                && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&address_status);
 
-  hints.interface_id = 78;
+  platform.linux_ifindex = 78;
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000002, 443);
   ifindex_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192705), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192705), &evaluation)
                && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&ifindex_status);
 
-  hints.interface_id = 77;
+  platform.linux_ifindex = 77;
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000002, 443);
   packet[2] = 0;
   packet[3] = 20;
   unavailable_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, 20, &hints, UINT64_C (192706), &evaluation)
+    packet, 20, &platform, UINT64_C (192706), &evaluation)
                   && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                   && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&unavailable_status);
 
-  hints.uid = UINT32_MAX;
+  platform.availability &= ~PRODUCT_PLATFORM_UID_KNOWN;
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000002, 443);
   unknown_uid_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192707), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192707), &evaluation)
                    && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                    && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&unknown_uid_status);
 
-  hints.uid = UINT32_C (10002);
-  hints.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
+  platform.availability |= PRODUCT_PLATFORM_UID_KNOWN;
+  platform.uid = UINT32_C (10002);
+  platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
+  platform.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 12345, 0x0a000002, 443);
   wildcard_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192709), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192709), &evaluation)
                 && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                 && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&wildcard_status);
 
-  hints.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
-  hints.network_context_id = UINT64_MAX;
+  platform.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
+  platform.availability &= ~PRODUCT_PLATFORM_CONTEXT_KNOWN;
   unknown_context_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192708), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192708), &evaluation)
                        && evaluation.verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                        && evaluation.rule_id == 0;
   product_packet_graph_gate_status (&unknown_context_status);
@@ -5619,13 +5689,14 @@ product_packet_graph_gate_table_fixture_cli (
   if (product_packet_graph_publish_policy_bundle (&bundle)
       != PRODUCT_PACKET_OK)
     return clib_error_return (0, "GateTable successor publication rejected");
-  hints.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
-  hints.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
-  hints.interface_id = 77;
+  platform.uid = PRODUCT_GRAPH_POLICY_FIXTURE_UID;
+  platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
+  platform.network_context_id = PRODUCT_GRAPH_POLICY_FIXTURE_CONTEXT;
+  platform.linux_ifindex = 77;
   packet_length = product_ipv4_fixture (packet, PRODUCT_L4_POLICY_PROTOCOL_TCP,
                                         0x0a000001, 15000, 0x0a000002, 444);
   lazy_revision_ok = product_packet_graph_gate_table_fixture_vector (
-    packet, packet_length, &hints, UINT64_C (192710), &evaluation)
+    packet, packet_length, &platform, UINT64_C (192710), &evaluation)
                      && evaluation.verdict
                           == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
                      && evaluation.rule_id == 0;
@@ -5808,6 +5879,152 @@ VLIB_CLI_COMMAND (product_packet_graph_disable_command, static) = {
 };
 #endif
 
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+/* Test-only ingress accepts bounded caller-supplied bytes. It never makes an
+ * NFQUEUE obligation or publishes transport readiness. */
+static u32 product_metadata_injection_frame_queue;
+static u64 product_metadata_injection_generation;
+static u32 product_metadata_injection_count;
+
+static clib_error_t *
+product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
+                             vlib_cli_command_t *command)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u8 *hex = 0;
+  u32 case_id = 0, bi, failed;
+  u16 thread = vlib_get_worker_thread_index (0);
+  (void) command;
+  if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > 32
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || !graph->accepting || !graph->enabled)
+    { vec_free (hex); return clib_error_return (0, "injection rejected"); }
+  u32 length = strlen ((char *) hex);
+  if (!length || (length & 1) || length > 512)
+    { vec_free (hex); return clib_error_return (0, "invalid bounded hex span"); }
+  if (product_metadata_injection_generation != graph->generation)
+    { product_metadata_injection_generation = graph->generation; product_metadata_injection_count = 0; }
+  if (product_metadata_injection_count & (1U << (case_id - 1)))
+    { vec_free (hex); return clib_error_return (0, "duplicate case in generation"); }
+  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
+    { vec_free (hex); return clib_error_return (0, "buffer unavailable"); }
+  vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
+  buffer->current_data = 0;
+  buffer->current_length = length / 2;
+  u8 *bytes = vlib_buffer_get_current (buffer);
+  for (u32 i = 0; i < length; i += 2)
+    {
+      u32 value = 0;
+      for (u32 j = 0; j < 2; j++)
+        {
+          u8 c = hex[i+j];
+          if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            { vec_free (hex); vlib_buffer_free (vm, &bi, 1); return clib_error_return (0, "invalid hex"); }
+          value = value * 16 + (c <= '9' ? c - '0' : c - 'a' + 10);
+        }
+      bytes[i/2] = value;
+    }
+  vec_free (hex);
+  product_buffer_metadata_t metadata = {
+    .generation = graph->generation, .origin_obligation_id = UINT64_C (216000000) + case_id,
+    .state_bits = PRODUCT_META_TRACE,
+  };
+  product_buffer_platform_metadata_t extra = {
+    .obligation = { .token = metadata.origin_obligation_id,
+      .queue_generation = graph->generation, .packet_id = case_id,
+      .kind = PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED },
+    .platform = { .availability = (case_id & 1) ? 7 : 0,
+      .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
+      .provenance = PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED },
+  };
+  product_metadata_store (buffer, &metadata);
+  clib_memcpy_fast (buffer->opaque, &extra, sizeof (extra));
+  clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
+  clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
+  if (vlib_buffer_enqueue_to_thread_retained (vm,
+        vlib_node_get_runtime (vm, product_packet_admit_node.index),
+        product_metadata_injection_frame_queue, &bi, &thread, 1, &failed) != 1)
+    {
+      vlib_buffer_free (vm, &bi, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
+      clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
+      return clib_error_return (0, "injection enqueue rejected and settled");
+    }
+  product_metadata_injection_count |= 1U << (case_id - 1);
+  vlib_cli_output (vm, "metadata.inject=accepted source=GRAPH_INJECTED case=%u generation=%llu buffer=%u target_thread=%u",
+    case_id, (unsigned long long) graph->generation, bi, thread);
+  return 0;
+}
+
+VLIB_CLI_COMMAND (product_metadata_inject_command, static) = {
+  .path = "product metadata inject",
+  .short_help = "product metadata inject <case 1..32> <hex, max 256 bytes>",
+  .function = product_metadata_inject_cli,
+};
+
+static clib_error_t *
+product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
+                            vlib_cli_command_t *command)
+{
+  u32 bi;
+  (void) input; (void) command;
+  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
+    return clib_error_return (0, "buffer unavailable");
+  vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
+  buffer->current_data = 0; buffer->current_length = 44;
+  u8 *bytes = vlib_buffer_get_current (buffer);
+  clib_memset (bytes, 0, 44);
+  bytes[0] = 0x45; bytes[3] = 44; bytes[9] = 6;
+  bytes[12] = 127; bytes[16] = 127; bytes[15] = 1; bytes[19] = 1;
+  bytes[20] = 0x75; bytes[21] = 0x31; bytes[22] = 0x9d; bytes[23] = 0xd3;
+  bytes[24] = 0x12; bytes[28] = 0x34; bytes[32] = 0x60; bytes[33] = 0x12;
+  bytes[34] = 0xff; bytes[35] = 0xfe;
+  bytes[40] = 3; bytes[41] = 3; bytes[42] = 7;
+  product_worker_layout_t layout = { .worker_count = 2, .hash_seed = PRODUCT_GRAPH_HASH_SEED };
+  product_packet_ingress_t ingress = { .data = bytes, .length = 44,
+    .flow_domain = PRODUCT_GRAPH_FLOW_DOMAIN, .origin_obligation_id = 216,
+    .platform = { .availability = 7, .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
+      .provenance = PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED } };
+  product_packet_lease_t before, after;
+  product_buffer_metadata_t metadata;
+  u64 generation = UINT64_C (0x123456780001);
+  int ok = product_packet_admit (&layout, &ingress, &before) == PRODUCT_PACKET_OK;
+  clib_memset (buffer->opaque, 0, sizeof (buffer->opaque));
+  product_packet_graph_set_platform_facts (buffer, &ingress.platform, generation);
+  product_metadata_from_lease (&metadata, &before, generation, buffer);
+  product_metadata_store (buffer, &metadata);
+  product_metadata_load (buffer, &metadata);
+  ok &= product_lease_from_metadata (&metadata, buffer, &after)
+    && memcmp (&before.facts, &after.facts, sizeof (before.facts)) == 0
+    && memcmp (&before.platform, &after.platform, sizeof (before.platform)) == 0
+    && memcmp (&before.canonical_key, &after.canonical_key, sizeof (before.canonical_key)) == 0;
+  buffer->current_data++;
+  int data_guard = !product_lease_from_metadata (&metadata, buffer, &after);
+  buffer->current_data--; buffer->current_length--;
+  int length_guard = !product_lease_from_metadata (&metadata, buffer, &after);
+  buffer->current_length++;
+  product_platform_packet_facts_t platform;
+  int generation_guard = !product_packet_graph_get_platform_facts (buffer,
+    generation + UINT64_C (0x100000000), &platform) && platform.availability == 0;
+  vlib_buffer_free (vm, &bi, 1);
+  vlib_cli_output (vm, "metadata.layout opaque=%u opaque2=%u owner=%u transport=%u platform=%u obligation=%u alignment=%u platform_offset=%u transport_offset=%u span_offset=%u",
+    (u32)sizeof (buffer->opaque), (u32)sizeof (buffer->opaque2),
+    (u32)sizeof (product_owner_assignment_t), (u32)sizeof (product_transport_metadata_t),
+    (u32)sizeof (product_platform_packet_facts_t), (u32)sizeof (product_adapter_obligation_t),
+    (u32)_Alignof (product_buffer_metadata_t),
+    (u32)offsetof (product_buffer_platform_metadata_t, platform),
+    (u32)offsetof (product_buffer_metadata_t, transport),
+    (u32)offsetof (product_buffer_metadata_t, span_current_data));
+  vlib_cli_output (vm, "metadata.check roundtrip=%u data_guard=%u length_guard=%u generation_guard=%u buffer_return=1",
+    ok, data_guard, length_guard, generation_guard);
+  return ok && data_guard && length_guard && generation_guard ? 0
+    : clib_error_return (0, "metadata check failed");
+}
+VLIB_CLI_COMMAND (product_metadata_check_command, static) = {
+  .path = "product metadata check", .function = product_metadata_check_cli,
+};
+#endif
+
 static clib_error_t *
 product_packet_graph_init (vlib_main_t *vm)
 {
@@ -5822,6 +6039,10 @@ product_packet_graph_init (vlib_main_t *vm)
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   graph->ingress_frame_queue =
     vlib_frame_queue_main_init (product_packet_test_ingress_node.index, 0);
+#endif
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  product_metadata_injection_frame_queue =
+    vlib_frame_queue_main_init (product_packet_admit_node.index, 64);
 #endif
   graph->owner_guard_frame_queue =
     vlib_frame_queue_main_init (product_packet_owner_guard_node.index, 0);

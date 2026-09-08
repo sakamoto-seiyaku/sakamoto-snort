@@ -17,6 +17,12 @@ read_be16 (const uint8_t *value)
   return (uint16_t) (((uint16_t) value[0] << 8) | value[1]);
 }
 
+static uint32_t
+read_be32 (const uint8_t *value)
+{
+  return ((uint32_t) read_be16 (value) << 16) | read_be16 (value + 2);
+}
+
 static int
 endpoint_compare (const product_packet_endpoint_t *left,
                   const product_packet_endpoint_t *right)
@@ -134,6 +140,8 @@ parse_transport (const uint8_t *packet, size_t packet_length,
       return PRODUCT_PACKET_OK;
     }
   transport_length = packet_length - transport_offset;
+  facts->transport_offset = (uint16_t) transport_offset;
+  facts->transport_length = (uint16_t) transport_length;
   if (facts->protocol == PRODUCT_IP_PROTOCOL_TCP)
     {
       uint8_t header_length;
@@ -148,6 +156,36 @@ parse_transport (const uint8_t *packet, size_t packet_length,
           facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
           return PRODUCT_PACKET_OK;
         }
+      /* Validate options before exposing any complete TCP facts. */
+      size_t option = 20;
+      uint8_t scale = 0, scale_known = 0;
+      while (option < header_length)
+        {
+          const uint8_t *value = packet + transport_offset + option;
+          if (value[0] == 0)
+            break;
+          if (value[0] == 1)
+            {
+              option++;
+              continue;
+            }
+          if (option + 2 > header_length || value[1] < 2
+              || option + value[1] > header_length
+              || (value[0] == 3 && (value[1] != 3 || scale_known)))
+            return PRODUCT_PACKET_OK;
+          if (value[0] == 3)
+            {
+              scale = value[2] > 14 ? 14 : value[2];
+              scale_known = 1;
+            }
+          option += value[1];
+        }
+      facts->tcp_sequence = read_be32 (packet + transport_offset + 4);
+      facts->tcp_acknowledgment = read_be32 (packet + transport_offset + 8);
+      facts->tcp_flags = packet[transport_offset + 13];
+      facts->tcp_window = read_be16 (packet + transport_offset + 14);
+      facts->tcp_window_scale = scale;
+      facts->tcp_window_scale_known = scale_known;
       facts->l4_header_length = header_length;
     }
   else if (facts->protocol == PRODUCT_IP_PROTOCOL_UDP)
@@ -164,6 +202,27 @@ parse_transport (const uint8_t *packet, size_t packet_length,
           return PRODUCT_PACKET_OK;
         }
       facts->l4_header_length = 8;
+    }
+  else if ((facts->ip_family == 4 && facts->protocol == 1)
+           || (facts->ip_family == 6 && facts->protocol == 58))
+    {
+      if (transport_length < 8)
+        return PRODUCT_PACKET_OK;
+      facts->icmp_type = packet[transport_offset];
+      facts->icmp_code = packet[transport_offset + 1];
+      facts->l4_header_length = 8;
+      if (facts->icmp_code == 0
+          && ((facts->ip_family == 4
+               && (facts->icmp_type == 0 || facts->icmp_type == 8))
+              || (facts->ip_family == 6
+                  && (facts->icmp_type == 128 || facts->icmp_type == 129))))
+        {
+          facts->icmp_identifier = read_be16 (packet + transport_offset + 4);
+          facts->icmp_sequence = read_be16 (packet + transport_offset + 6);
+          facts->icmp_identity_known = 1;
+        }
+      facts->l4_status = PRODUCT_PACKET_L4_OTHER_TERMINAL;
+      return PRODUCT_PACKET_OK;
     }
   else
     {
@@ -247,6 +306,7 @@ product_packet_admit (const product_worker_layout_t *layout,
 
   memset (lease, 0, sizeof (*lease));
   lease->origin_obligation_id = ingress->origin_obligation_id;
+  lease->platform = ingress->platform;
   if (ingress->length == 0)
     result = PRODUCT_PACKET_TRUNCATED_ENVELOPE;
   else
@@ -283,7 +343,6 @@ product_packet_admit (const product_worker_layout_t *layout,
     }
 
   make_canonical_key (&lease->facts, &lease->canonical_key);
-  lease->hints = ingress->hints;
   lease->expected_owner = select_owner (layout, ingress->flow_domain,
                                         &lease->canonical_key);
   if (lease->expected_owner == ingress->current_worker)
