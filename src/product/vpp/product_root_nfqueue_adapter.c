@@ -733,7 +733,7 @@ product_root_nfqueue_complete_from_graph (
       lane->verdict_failed++; clib_atomic_fetch_add_relax (&nm->verdict_failed, 1); clib_atomic_fetch_add_relax (&nm->verdict_outcome_unknown, 1);
       return;
     }
-  if (lane->internal_settlements <= 64)
+  if (lane->internal_settlements <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
     fprintf (stderr, "s203 event=verdict source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u obligation=%llu generation=%llu verdict=%u owner=%u\n",
       vm->thread_index, lane_index, lane->queue_id, packet_id,
       (unsigned long long) obligation->token, (unsigned long long) obligation->queue_generation,
@@ -835,7 +835,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
 
       lane->callback_thread = vm->thread_index;
       lane->callback_tls = vlib_get_thread_index ();
-      if (lane->packets_seen < 64)
+      if (lane->packets_seen < product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
         {
           lane->last_cpu = UINT32_MAX;
           syscall (SYS_getcpu, &lane->last_cpu, 0, 0);
@@ -923,7 +923,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           continue;
         }
       obligation_id = pending->completion.obligation.token;
-      if (lane->packets_seen <= 64)
+      if (lane->packets_seen <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
         fprintf(stderr, "s203 event=capture source=NFQ_CAPTURED thread=%u tls=%u polling_thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu\n",
           vm->thread_index, vlib_get_thread_index(), file->polling_thread_index,
           lane->lane_index, lane->queue_id, packet.packet_id, buffer_index,
@@ -947,7 +947,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         {
           lane->packets_submitted++;
           clib_atomic_fetch_add_relax (&nm->packets_submitted, 1);
-          if (lane->packets_submitted <= 64)
+          if (lane->packets_submitted <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
           fprintf(stderr, "s203 event=frame_accept source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu generation=%llu\n",
             vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
             buffer_index, (unsigned long long)obligation_id,

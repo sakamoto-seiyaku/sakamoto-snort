@@ -40,11 +40,11 @@ for token in \
   'PRODUCT_FLOW_ENTRY_VERDICT_DROP' \
   'PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG' \
   'PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY' \
-  'product_flow_entry_publish_revision' \
   'product_flow_entry_observe' \
   'product_flow_entry_set_decision' \
   'product_flow_entry_pool_flush' \
-  'active_policy_revision' \
+  'product_flow_policy_identity_t' \
+  'policy_generation' \
   'revision_invalidation_count' \
   'capacity_rejection_count'; do
   grep -Fq "$token" "$header" "$source"
@@ -61,12 +61,11 @@ drop = observe.index("stage_verdict == PRODUCT_FLOW_ENTRY_VERDICT_DROP")
 find = observe.index("entry = find_entry")
 if drop > find:
     raise AssertionError("early DROP must precede FlowEntry lookup")
-publish_start = source.index("product_flow_entry_publish_revision (")
-publish = source[publish_start:source.index("product_flow_entry_observe (", publish_start)]
-if "for (" in publish or "entries[" in publish:
-    raise AssertionError("revision publication must not scan or rewrite entries")
-if "policy_revision < pool->active_policy_revision" not in publish:
-    raise AssertionError("revision publication must reject non-successor revisions")
+if "product_flow_entry_publish_revision" in source or "active_policy_revision" in source:
+    raise AssertionError("FlowEntry must have no publisher-side epoch mutation API")
+for identity in ("policy_generation == policy->generation", "policy_revision == policy->revision", "policy_snapshot_hash == policy->snapshot_hash"):
+    assert identity in source, identity
+
 PY
 
 cc -std=c11 -Wall -Wextra -Werror -pedantic \
@@ -92,7 +91,7 @@ assert 'memcmp (&entry->key, &assignment->key, sizeof (entry->key))' in source
 text=(root/'src/product/vpp/product_packet_graph.c').read_text()
 flow=text.split('static void\nproduct_packet_graph_flow_observe (',1)[1].split('typedef struct',1)[0]
 assert 'vlib_get_worker_index (vm->thread_index)' in flow and 'flow_pools[worker]' in flow
-assert 'product_packet_graph_policy_publish_lock' not in flow and 'product_owner_assign (' not in flow
+assert 'product_packet_graph_policy_writer_lock' not in flow and 'product_owner_assign (' not in flow
 assert 'flow_pools[lease' not in flow and 'flow_pools[owner' not in flow
 print('S208 current-worker mutation and no second selector audit: PASS')
 PY_OWNER

@@ -1059,6 +1059,12 @@ product_core_init (vlib_main_t *vm)
       return clib_error_return (0,
                                 "product core API message ID table unavailable");
     }
+  /* These main-thread handlers publish immutable banks and never access a
+   * worker's FlowEntry pool. Queries and lifecycle retain their barriers. */
+  vl_api_set_msg_thread_safe (vlibapi_get_main (),
+    pcm->msg_id_base + VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY, 1);
+  vl_api_set_msg_thread_safe (vlibapi_get_main (),
+    pcm->msg_id_base + VL_API_PRODUCT_CORE_POLICY_APPLY, 1);
   pcm->core_ready = product_core_profile_is_root () ? 0 : 1;
   return 0;
 }

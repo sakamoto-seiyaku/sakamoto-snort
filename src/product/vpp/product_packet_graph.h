@@ -205,6 +205,7 @@ typedef struct
   uint8_t matched;
   uint8_t terminal_preserved;
   uint32_t winner;
+  uint64_t generation;
   uint64_t revision;
   uint64_t snapshot_hash;
   uint64_t rule_id;
@@ -254,6 +255,7 @@ typedef struct
 int product_packet_graph_start_external (vlib_main_t *vm, u64 generation);
 void product_packet_graph_stop_external (vlib_main_t *vm);
 
+uint32_t product_packet_graph_trace_limit (void);
 uint32_t product_packet_graph_worker_count (void);
 uint64_t product_packet_graph_hash_seed (void);
 uint32_t product_packet_graph_handoff_credits (void);

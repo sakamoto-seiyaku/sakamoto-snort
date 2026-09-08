@@ -54,9 +54,19 @@ typedef enum
   PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION,
 } product_flow_entry_status_t;
 
+/* Identity of the immutable snapshot acquired by this packet. Revision/hash
+ * zero is the bootstrap view; generation is always the running generation. */
+typedef struct
+{
+  uint64_t generation;
+  uint64_t revision;
+  uint64_t snapshot_hash;
+} product_flow_policy_identity_t;
+
 /* Attribution and counters accompany the already assigned typed identity. */
 typedef struct
 {
+  product_flow_policy_identity_t policy;
   uint32_t uid;
   uint32_t network_context;
   uint32_t packet_bytes;
@@ -83,6 +93,7 @@ typedef struct
   uint64_t last_seen;
   uint64_t packets;
   uint64_t bytes;
+  uint64_t policy_generation;
   uint64_t policy_revision;
   uint64_t policy_snapshot_hash;
   uint64_t winner_rule_id;
@@ -104,14 +115,14 @@ typedef struct
   uint16_t worker_index;
   uint16_t worker_count;
   uint32_t active_entries;
-  uint64_t active_snapshot_hash;
-  uint64_t active_policy_revision;
   uint64_t allocation_count;
   uint64_t reuse_count;
   uint64_t early_drop_count;
   uint64_t wrong_owner_count;
   uint64_t capacity_rejection_count;
   uint64_t revision_invalidation_count;
+  uint64_t unavailable_count;
+  uint64_t revision_mismatch_count;
   uint64_t flush_count;
   product_flow_entry_t entries[PRODUCT_FLOW_ENTRY_MAX_ENTRIES];
 } product_flow_entry_pool_t;
@@ -120,12 +131,6 @@ typedef struct
 product_flow_entry_status_t
 product_flow_entry_pool_init (product_flow_entry_pool_t *pool,
                               uint16_t worker_index, uint16_t worker_count);
-
-/* Publish a revision/hash epoch without scanning or mutating existing entries. */
-product_flow_entry_status_t
-product_flow_entry_publish_revision (product_flow_entry_pool_t *pool,
-                                     uint64_t policy_revision,
-                                     uint64_t snapshot_hash);
 
 /*
  * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment
@@ -139,10 +144,11 @@ product_flow_entry_observe (product_flow_entry_pool_t *pool,
                             uint8_t stage_verdict,
                             product_flow_entry_observation_t *observation);
 
-/* Cache the result of a later stage for the current active revision. */
+/* Cache only the decision from this packet's acquired snapshot. */
 product_flow_entry_status_t
 product_flow_entry_set_decision (product_flow_entry_pool_t *pool,
                                  product_flow_entry_t *entry,
+                                 const product_flow_policy_identity_t *policy,
                                  uint8_t decision, uint64_t winner_rule_id,
                                  uint32_t reason_id);
 

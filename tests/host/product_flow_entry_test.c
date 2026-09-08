@@ -24,7 +24,7 @@ static product_owner_assignment_t reverse(product_packet_facts_t f) {
   return assign(f);
 }
 static product_flow_entry_packet_t packet(unsigned direction,unsigned bytes,unsigned time) {
-  return (product_flow_entry_packet_t){.uid=10001,.network_context=7,.packet_bytes=bytes,.device_direction=direction,.timestamp=time};
+  return (product_flow_entry_packet_t){.policy={1,0,0},.uid=10001,.network_context=7,.packet_bytes=bytes,.device_direction=direction,.timestamp=time};
 }
 static void observe(product_flow_entry_pool_t *pool,const product_owner_assignment_t *a,
                     product_flow_entry_packet_t p,product_flow_entry_observation_t *o) {
@@ -46,27 +46,39 @@ int main(void) {
     assert(o.created && o.flow_direction==PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG);
     assert(entry->origin_is_endpoint_a==reply.source_is_a && entry->flow_origin_device_direction==1);
     assert(entry->policy_revision==0 && entry->decision==PRODUCT_FLOW_ENTRY_DECISION_NONE);
-    assert(product_flow_entry_publish_revision(&pool,1,101)==PRODUCT_FLOW_ENTRY_STATUS_OK);
-    p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,120,12);p.uid=20002;p.network_context=99;
+    p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,120,12);p.uid=20002;p.network_context=99;p.policy=(product_flow_policy_identity_t){1,1,101};
     observe(&pool,&a,p,&o);
     assert(o.reused && o.entry==entry && o.flow_direction==PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY && o.revision_invalidated);
     assert(entry->uid==10001 && entry->network_context==7 && entry->packets==2 && entry->bytes==200);
-    assert(product_flow_entry_set_decision(&pool,entry,PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,9001,77)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    assert(product_flow_entry_set_decision(&pool,entry,&p.policy,PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,9001,77)==PRODUCT_FLOW_ENTRY_STATUS_OK);
     product_flow_entry_t before=*entry;
-    assert(product_flow_entry_publish_revision(&pool,2,202)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    product_flow_policy_identity_t old=p.policy;
+    p=packet(3,100,13);p.policy=(product_flow_policy_identity_t){1,2,202};
+    /* Publishing elsewhere has no pool API and cannot mutate this entry. */
     assert(memcmp(&before,entry,sizeof(before))==0);
-    observe(&pool,&reply,packet(3,100,13),&o);
+    assert(product_flow_entry_set_decision(&pool,entry,&p.policy,1,1,1)==PRODUCT_FLOW_ENTRY_STATUS_STALE_REVISION);
+    observe(&pool,&reply,p,&o);
     assert(o.revision_invalidated && o.entry==entry && entry->decision==PRODUCT_FLOW_ENTRY_DECISION_NONE);
     assert(entry->packets==3 && entry->bytes==300 && entry->first_seen==11 && entry->flow_origin_device_direction==1);
     assert(entry->origin_is_endpoint_a==reply.source_is_a && o.flow_direction==1);
     before=*entry;
-    assert(product_flow_entry_publish_revision(&pool,2,303)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    p=packet(0,90,14);p.policy=(product_flow_policy_identity_t){1,2,303};
     assert(memcmp(&before,entry,sizeof(before))==0);
-    observe(&pool,&a,packet(0,90,14),&o);
+    observe(&pool,&a,p,&o);
     assert(o.revision_invalidated && entry->policy_snapshot_hash==303 && entry->packets==4 && entry->bytes==390);
-    assert(product_flow_entry_publish_revision(&pool,2,303)==PRODUCT_FLOW_ENTRY_STATUS_OK);
-    observe(&pool,&a,packet(1,90,15),&o);assert(!o.revision_invalidated && entry->packets==5);
-    assert(product_flow_entry_publish_revision(&pool,1,101)==PRODUCT_FLOW_ENTRY_STATUS_REVISION_NOT_ADVANCING);
+    p.timestamp=15;observe(&pool,&a,p,&o);assert(!o.revision_invalidated && entry->packets==5);
+    /* A previously acquired old snapshot may finish; the next new packet
+     * must invalidate its decision again, never reuse a stale identity. */
+    product_flow_policy_identity_t current=p.policy;
+    p.policy=old;p.timestamp=16;observe(&pool,&a,p,&o);
+    assert(o.revision_invalidated && entry->policy_revision==1);
+    assert(product_flow_entry_set_decision(&pool,entry,&old,1,11,7)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+    assert(product_flow_entry_set_decision(&pool,entry,&current,1,22,8)==PRODUCT_FLOW_ENTRY_STATUS_STALE_REVISION);
+    p.policy=current;p.timestamp=17;observe(&pool,&a,p,&o);
+    assert(o.revision_invalidated && entry->decision==0 && entry->winner_rule_id==0 && entry->reason_id==0);
+    p.policy.generation=2;p.timestamp=18;observe(&pool,&a,p,&o);
+    assert(o.revision_invalidated && entry->policy_generation==2 && entry->policy_revision==2 && entry->policy_snapshot_hash==303);
+    assert(entry->packets==8 && entry->bytes==750 && entry->first_seen==11 && entry->uid==10001);
     before=*entry;
     assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_DROP,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
     assert(memcmp(&before,entry,sizeof(before))==0);
@@ -74,7 +86,7 @@ int main(void) {
     assert(product_flow_entry_pool_init(&wrong,a.execution_owner^1,2)==PRODUCT_FLOW_ENTRY_STATUS_OK);
     assert(product_flow_entry_observe(&wrong,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER);
     assert(!wrong.active_entries && wrong.wrong_owner_count==1);
-    assert(product_flow_entry_set_decision(&wrong,entry,PRODUCT_FLOW_ENTRY_DECISION_DROP,1,1)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT);
+    assert(product_flow_entry_set_decision(&wrong,entry,&p.policy,PRODUCT_FLOW_ENTRY_DECISION_DROP,1,1)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT);
     assert(memcmp(&before,entry,sizeof(before))==0);
     product_flow_entry_pool_flush(&pool);assert(!pool.active_entries && !entry->in_use);
   }
@@ -107,6 +119,6 @@ int main(void) {
   assert(pool.active_entries==64 && memcmp(&first,&pool.entries[0],sizeof(first))==0);
   a.valid=0;assert(product_flow_entry_observe(&pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);
   product_flow_entry_pool_flush(&pool);assert(product_flow_entry_pool_active_count(&pool)==0);
-  puts("S208 owner-local typed FlowEntry mutation properties: PASS");
+  puts("S208/S209 owner-local FlowEntry and packet snapshot identity properties: PASS");
   return 0;
 }

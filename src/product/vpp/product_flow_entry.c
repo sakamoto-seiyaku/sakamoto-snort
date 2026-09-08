@@ -52,20 +52,20 @@ product_flow_entry_pool_init (product_flow_entry_pool_t *pool,
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 
-product_flow_entry_status_t
-product_flow_entry_publish_revision (product_flow_entry_pool_t *pool,
-                                     uint64_t policy_revision, uint64_t snapshot_hash)
+static int
+policy_identity_valid (const product_flow_policy_identity_t *policy)
 {
-  if (pool == NULL || pool->worker_count == 0U)
-    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
-  if (policy_revision == 0U || snapshot_hash == 0U)
-    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_REVISION;
-  if (policy_revision < pool->active_policy_revision)
-    return PRODUCT_FLOW_ENTRY_STATUS_REVISION_NOT_ADVANCING;
-  /* Deliberately no entry-table loop: invalidation is lazy on next packet. */
-  pool->active_policy_revision = policy_revision;
-  pool->active_snapshot_hash = snapshot_hash;
-  return PRODUCT_FLOW_ENTRY_STATUS_OK;
+  return policy && policy->generation != 0
+         && ((policy->revision == 0) == (policy->snapshot_hash == 0));
+}
+
+static int
+policy_identity_matches (const product_flow_entry_t *entry,
+                          const product_flow_policy_identity_t *policy)
+{
+  return entry->policy_generation == policy->generation
+         && entry->policy_revision == policy->revision
+         && entry->policy_snapshot_hash == policy->snapshot_hash;
 }
 
 product_flow_entry_status_t
@@ -94,6 +94,8 @@ product_flow_entry_observe (
     }
   if (stage_verdict != PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
+  if (!policy_identity_valid (&packet->policy))
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_REVISION;
 
   observation->owner_worker = pool->worker_index;
   if (assignment->execution_owner != pool->worker_index)
@@ -122,8 +124,9 @@ product_flow_entry_observe (
       entry->last_device_direction = packet->device_direction;
       entry->last_flow_direction = PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG;
       entry->first_seen = packet->timestamp;
-      entry->policy_revision = pool->active_policy_revision;
-      entry->policy_snapshot_hash = pool->active_snapshot_hash;
+      entry->policy_generation = packet->policy.generation;
+      entry->policy_revision = packet->policy.revision;
+      entry->policy_snapshot_hash = packet->policy.snapshot_hash;
       pool->active_entries++;
       pool->allocation_count++;
       observation->created = 1U;
@@ -132,15 +135,15 @@ product_flow_entry_observe (
     {
       pool->reuse_count++;
       observation->reused = 1U;
-      if (entry->policy_revision != pool->active_policy_revision
-          || entry->policy_snapshot_hash != pool->active_snapshot_hash)
+      if (!policy_identity_matches (entry, &packet->policy))
         {
           /* Preserve identity/facts/counters; invalidate only policy cache. */
           entry->decision = PRODUCT_FLOW_ENTRY_DECISION_NONE;
           entry->winner_rule_id = 0U;
           entry->reason_id = 0U;
-          entry->policy_revision = pool->active_policy_revision;
-          entry->policy_snapshot_hash = pool->active_snapshot_hash;
+          entry->policy_generation = packet->policy.generation;
+          entry->policy_revision = packet->policy.revision;
+          entry->policy_snapshot_hash = packet->policy.snapshot_hash;
           observation->revision_invalidated = 1U;
           pool->revision_invalidation_count++;
         }
@@ -161,6 +164,7 @@ product_flow_entry_observe (
 product_flow_entry_status_t
 product_flow_entry_set_decision (product_flow_entry_pool_t *pool,
                                  product_flow_entry_t *entry,
+                                 const product_flow_policy_identity_t *policy,
                                  uint8_t decision, uint64_t winner_rule_id,
                                  uint32_t reason_id)
 {
@@ -170,8 +174,9 @@ product_flow_entry_set_decision (product_flow_entry_pool_t *pool,
   if (address < begin || address - begin >= sizeof (pool->entries)
       || (address - begin) % sizeof (*entry) != 0 || !entry->in_use)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
-  if (entry->policy_revision != pool->active_policy_revision
-      || entry->policy_snapshot_hash != pool->active_snapshot_hash)
+  if (!policy_identity_valid (policy) || policy->revision == 0)
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_REVISION;
+  if (!policy_identity_matches (entry, policy))
     return PRODUCT_FLOW_ENTRY_STATUS_STALE_REVISION;
   if (decision > PRODUCT_FLOW_ENTRY_DECISION_DROP)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION;

@@ -78,7 +78,7 @@ grep -q '#include "product_flow_entry.h"' "$graph_source" ||
 grep -q 'flow_pools\[PRODUCT_GRAPH_WORKERS\]' "$graph_source" ||
   fail "graph does not own one fixed FlowEntry pool per worker"
 for flow_symbol in product_flow_entry_pool_init \
-  product_flow_entry_publish_revision product_flow_entry_observe \
+  product_flow_policy_identity_t product_flow_entry_observe \
   product_flow_entry_set_decision product_flow_entry_pool_flush \
   product_packet_graph_flow_status; do
   grep -q "$flow_symbol" "$graph_source" "$graph_header" ||
@@ -125,19 +125,19 @@ node_stage_call_count="$(awk '
   /^VLIB_NODE_FN \(product_packet_policy_node\)/ { in_node = 1 }
   in_node { print }
   in_node && /^}/ { exit }
-' "$graph_source" | grep -c 'product_packet_graph_policy_stage (&lease' || true)"
+' "$graph_source" | grep -c 'product_packet_graph_policy_on_owner (' || true)"
 external_stage_call_count="$(awk '
   /^product_packet_graph_submit_external \(/ { in_submit = 1 }
   in_submit { print }
   in_submit && /^}/ { exit }
-' "$graph_source" | grep -c 'product_packet_graph_policy_stage (&lease' || true)"
+' "$graph_source" | grep -c 'product_packet_graph_policy_on_owner (' || true)"
 # Product and Host evidence have separate preprocessor branches at this seam.
 [[ ( "$node_stage_call_count" == 1 || "$node_stage_call_count" == 2 )
    && "$external_stage_call_count" == 0 ]] ||
   fail "policy belongs to the real node; external submit must only schedule it"
 
 policy_body="$(awk '
-  /^product_packet_graph_policy_stage \(/ { in_stage = 1 }
+  /^product_packet_graph_policy_stage_snapshot \(/ { in_stage = 1 }
   in_stage { print }
   in_stage && /^}/ { exit }
 ' "$graph_source")"
@@ -145,16 +145,9 @@ gate_line="$(printf '%s\n' "$policy_body" | grep -n \
   'product_packet_graph_policy_gate_drop' | head -n1 | cut -d: -f1)"
 view_eval_line="$(printf '%s\n' "$policy_body" | grep -n \
   'product_packet_graph_l4_view_evaluate' | head -n1 | cut -d: -f1)"
-legacy_label_line="$(printf '%s\n' "$policy_body" | grep -n \
-  '^[[:space:]]*scalar_l4_evaluation:' | head -n1 | cut -d: -f1)"
-legacy_eval_line="$(printf '%s\n' "$policy_body" | grep -n \
-  'product_packet_graph_l4_match' | head -n1 | cut -d: -f1)"
 [[ -n "$gate_line" && -n "$view_eval_line" &&
-   -n "$legacy_label_line" && -n "$legacy_eval_line" &&
-   "$gate_line" -lt "$view_eval_line" &&
-   "$view_eval_line" -lt "$legacy_label_line" &&
-   "$legacy_label_line" -lt "$legacy_eval_line" ]] ||
-  fail "Gate must precede the shared L4 stage"
+   "$gate_line" -lt "$view_eval_line" ]] ||
+  fail "Gate must precede the shared immutable L4 stage"
 printf '%s\n' "$policy_body" | grep -q 'PRODUCT_PACKET_INTENT_DROP_RUNTIME' ||
   fail "policy stage does not own terminal DROP"
 printf '%s\n' "$policy_body" | grep -q 'PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT' ||
@@ -164,14 +157,24 @@ printf '%s\n' "$policy_body" | grep -q 'terminal_preserved' ||
 printf '%s\n' "$policy_body" | grep -q \
   'product_packet_graph_l4_view_evaluate' ||
   fail "policy stage does not call the shared typed matcher seam"
-printf '%s\n' "$policy_body" | grep -q 'gate_sequence != l4_sequence' ||
-  fail "policy stage does not reject a mixed Gate/typed-L4 snapshot"
-printf '%s\n' "$policy_body" | grep -q 'gate_sequence != legacy_sequence' ||
-  fail "policy stage does not reject a mixed Gate/legacy-L4 snapshot"
-printf '%s\n' "$policy_body" | grep -q 'gate_match.revision != view_revision' ||
-  fail "policy stage does not bind Gate and typed L4 revisions"
-printf '%s\n' "$policy_body" | grep -q 'gate_match.revision != matched_l4.revision' ||
-  fail "policy stage does not bind Gate and legacy L4 revisions"
+# S209 binds once instead of retrying independent Gate/L4 acquisitions.
+for identity in generation revision snapshot_hash; do
+  printf '%s\n' "$policy_body" | grep -q "evaluation->$identity = snapshot->identity.$identity" ||
+    fail "policy stage does not consume the acquired $identity"
+done
+python3 - "$graph_source" <<'PY_SNAPSHOT'
+from pathlib import Path
+import sys
+s=Path(sys.argv[1]).read_text()
+body=s.split('static product_packet_result_t\nproduct_packet_graph_policy_on_owner (',1)[1].split('\nint\nproduct_packet_graph_submit_external',1)[0]
+assert body.index('product_policy_snapshot_acquire') < body.index('product_packet_graph_policy_stage_snapshot') < body.index('product_packet_graph_flow_observe') < body.index('product_policy_snapshot_release')
+assert 'product_flow_entry_publish_revision' not in s
+assert 'product_packet_graph_l4_match (' not in s
+gate=s.split('static int\nproduct_packet_graph_policy_gate_drop (',1)[1].split('static void\nproduct_packet_graph_gate_policy_from_match',1)[0]
+assert 'product_packet_graph_gate_rule_matches (entry, &packet, &no_match_reason)' in gate
+assert 'index < bank->gate_table.entry_count' in gate
+assert 'matched->rule = *entry' in gate
+PY_SNAPSHOT
 projection_body="$(awk '
   /^product_packet_graph_l4_packet_projection \(/ { in_projection = 1 }
   in_projection { print }
@@ -234,7 +237,7 @@ fi
 grep -q 'product_packet_graph_policy_stage' "$graph_source"
 grep -q 'product_buffer_platform_metadata_t' "$graph_source"
 grep -q 'metadata.obligation.queue_generation' "$graph_source"
-grep -q 'product_packet_graph_ipv4_scalar_value' "$graph_source"
+grep -q 'product_packet_graph_l4_packet_projection' "$graph_source"
 for status_field in \
   'typed_match_policy_key' 'typed_match_probe_key' \
   'last_evaluation_probe_key'; do
@@ -296,10 +299,8 @@ grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_UID' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_CONTEXT' "$graph_source"
 grep -q 'PRODUCT_L4_POLICY_IFINDEX_ANY' "$plugin_source"
-for offset in 12 13 14 15; do
-  grep -q "address\\[$offset\\]" "$graph_source" ||
-    fail "scalar IPv4 policy projection omits PacketFacts address[$offset]"
-done
+# The shared typed projection above replaces the former scalar address reader.
+
 
 for script in "$host_source"; do
   [[ -f "$script" ]] || fail "missing host evidence source"
