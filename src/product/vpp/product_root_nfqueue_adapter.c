@@ -57,6 +57,8 @@ typedef struct
   u8 uid_present;
   u8 indev_present, outdev_present;
   u32 indev, outdev;
+  u32 skb_info, captured_length;
+  u8 skb_info_present, captured_length_present;
   u8 *payload;
   u32 payload_length;
 } product_root_nfqueue_packet_t;
@@ -575,6 +577,18 @@ product_root_nfqueue_parse_packet (u8 *data, u32 length,
               packet->payload = (u8 *) NFA_DATA (attr);
               packet->payload_length = (u32) NFA_PAYLOAD (attr);
               break;
+            case NFQA_SKB_INFO:
+            case NFQA_CAP_LEN:
+              if (NFA_PAYLOAD (attr) >= (int) sizeof (u32))
+                {
+                  u32 value;
+                  clib_memcpy_fast (&value, NFA_DATA (attr), sizeof (value));
+                  if (NFA_TYPE (attr) == NFQA_SKB_INFO)
+                    { packet->skb_info = ntohl (value); packet->skb_info_present = 1; }
+                  else
+                    { packet->captured_length = ntohl (value); packet->captured_length_present = 1; }
+                }
+              break;
             default:
               break;
             }
@@ -936,10 +950,25 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         }
       obligation_id = pending->completion.obligation.token;
       if (lane->packets_seen <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+        {
         fprintf(stderr, "s203 event=capture source=NFQ_CAPTURED thread=%u tls=%u polling_thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu\n",
           vm->thread_index, vlib_get_thread_index(), file->polling_thread_index,
           lane->lane_index, lane->queue_id, packet.packet_id, buffer_index,
           (unsigned long long)obligation_id);
+        /* Adapter observation only: preserve absent NFQA attributes as unknown.
+         * Neither these fields nor this bounded wire trace classify packets. */
+        flockfile (stderr);
+        fprintf (stderr, "s231 event=nfq_payload source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u token=%llu generation=%llu hook=%u family=%u payload_bytes=%u cap_len_known=%u cap_len=%u skb_info_known=%u skb_info=%u raw=",
+          vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
+          buffer_index, (unsigned long long) obligation_id,
+          (unsigned long long) nm->generation, packet.hook, packet.ip_family,
+          packet.payload_length, packet.captured_length_present,
+          packet.captured_length, packet.skb_info_present, packet.skb_info);
+        for (u32 octet = 0; octet < packet.payload_length; octet++)
+          fprintf (stderr, "%02x", packet.payload[octet]);
+        fprintf (stderr, "\n");
+        funlockfile (stderr);
+        }
       submitted = product_packet_graph_submit_external (
         vm, buffer_index, &platform,
         &pending->completion.obligation, &graph_result);
