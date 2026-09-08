@@ -60,3 +60,10 @@ retain their actual pre-commit source identities.
 `feat(s213): route native TUN packets through shared policy completion` records
 the accepted native TUN graph slice, bounded fd/control lifecycle and real-app
 DROP evidence. See the [S213 report](SAKAMOTO_213_NATIVE_TUN_GRAPH.md).
+
+## S198 subsequent task commit
+
+`feat(s198): preserve shared TUN protocol facts and unsupported outcomes`
+records the accepted protocol increment and its real-device matrix. See the
+[S198 report](SAKAMOTO_198_TUN_PROTOCOL_MATRIX.md), including its explicit
+unconfirmed startup observation and scope limits.

@@ -1890,6 +1890,12 @@ VLIB_NODE_FN (product_packet_terminal_node)
         .processing_bypass_reason = lease.processing_bypass_reason,
         .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
       };
+      if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN
+          && lease.terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
+          && lease.facts.l3_status == PRODUCT_PACKET_L3_COMPLETE
+          && lease.facts.l4_status == PRODUCT_PACKET_L4_OTHER_TERMINAL
+          && lease.facts.protocol != 6 && lease.facts.protocol != 17)
+        completion.flags |= PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED;
       /* End the packet metadata lifetime. Only this 32-byte value survives
        * into origin completion; packet bytes remain unchanged and owned. */
       clib_memcpy_fast (buffer->opaque2, &completion, sizeof (completion));

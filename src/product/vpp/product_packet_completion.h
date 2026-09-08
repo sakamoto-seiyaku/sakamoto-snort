@@ -29,6 +29,8 @@ enum
   PRODUCT_COMPLETION_REPLAY_PROBE = 1 << 1,
   PRODUCT_COMPLETION_FRAGMENT_MEMBER = 1 << 2,
   PRODUCT_COMPLETION_FRAGMENT_PINNED = 1 << 3,
+  /* Derived from shared PacketFacts before their terminal lifetime ends. */
+  PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED = 1 << 4,
 };
 
 _Static_assert (sizeof (product_packet_completion_frame_t) == 32,

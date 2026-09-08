@@ -31,6 +31,7 @@ static struct {
   vlib_main_t *vm;
   u64 generation, next_token, captured, submitted, completed;
   u64 policy_drops, runtime_drops, transport_unavailable, errors, rejected;
+  u64 transport_unsupported;
   u64 pregraph_returns, local, remote;
   u32 pending, test_uid, tun_file, listener_file;
   int tun_fd, listener_fd;
@@ -68,17 +69,22 @@ static void tun_complete (vlib_main_t *vm, u32 bi,
   int policy_drop = frame->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
     && (frame->runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_GATE
         || frame->runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4);
+  int unsupported = frame->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
+    && (frame->flags & PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED);
   if (policy_drop) tun.policy_drops++;
   else if (frame->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME) tun.runtime_drops++;
+  else if (unsupported) tun.transport_unsupported++;
   else tun.transport_unavailable++;
   /* The shared origin consumer frees the VPP buffer after this callback. No
    * TUN write is a valid completion for an outbound TUN-origin packet. */
   if (frame->flags & PRODUCT_COMPLETION_TRACE)
-    fprintf (stderr, "s213 event=completion source=TUN_CAPTURED generation=%llu token=%llu buffer=%u thread=%u producer=%u intent=%u drop_reason=%u policy_drop=%u transport_unavailable=%u pending=%u tun_writes=0 nfq_verdicts=0 flow_stack_admissions=0\n",
+    fprintf (stderr, "s213 event=completion source=TUN_CAPTURED generation=%llu token=%llu buffer=%u thread=%u producer=%u intent=%u drop_reason=%u policy_drop=%u transport_unavailable=%u pending=%u tun_writes=0 nfq_verdicts=0 flow_stack_admissions=0 transport_outcome=%s\n",
       (unsigned long long) tun.generation, (unsigned long long) o->token, bi,
       vm->thread_index, frame->producer_thread, frame->terminal_intent,
       frame->runtime_drop_reason, policy_drop,
-      frame->terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME, tun.pending);
+      frame->terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME && !unsupported, tun.pending,
+      frame->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME ? "NOT_ATTEMPTED"
+        : unsupported ? "UNSUPPORTED" : "UNAVAILABLE");
 }
 
 static clib_error_t *tun_read_ready (clib_file_t *file) {
@@ -274,6 +280,8 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
 
 static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command) {
   (void) input; (void) command;
+  vlib_cli_output (vm, "tun.transport unsupported=%llu unavailable=%llu",
+    (unsigned long long) tun.transport_unsupported, (unsigned long long) tun.transport_unavailable);
   vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=0 nfq_verdicts=0 flow_stack_admissions=0 direct_egress_ready=0",
     (unsigned long long) tun.generation, tun.enabled, tun.tun_fd >= 0, tun.tun_fd,
     vlib_get_worker_thread_index (0), tun.draining,

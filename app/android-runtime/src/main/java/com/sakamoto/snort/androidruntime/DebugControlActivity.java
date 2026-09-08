@@ -247,6 +247,13 @@ public class DebugControlActivity extends Activity {
                     intent.getIntExtra("s213ProbePort", 0));
             handled = true;
         }
+        if (debuggable && intent.hasExtra("s198ProbeNonce")) {
+            sendTunProtocolProbe(intent.getStringExtra("s198ProbeNonce"),
+                    intent.getIntExtra("s198ProbePort", 0),
+                    intent.getIntExtra("s198ProbeFamily", 0),
+                    intent.getIntExtra("s198ProbeProtocol", 0));
+            handled = true;
+        }
         if (intent.hasExtra("debugNetworkSnapshotMissing")) {
             backend.setNetworkSnapshotMissing(this,
                     intent.getBooleanExtra("debugNetworkSnapshotMissing", false));
@@ -339,6 +346,54 @@ public class DebugControlActivity extends Activity {
                 android.util.Log.e("SakamotoTunProbe", "probe record failed", error);
             }
         }, "s213-udp-probe").start();
+    }
+
+    private void sendTunProtocolProbe(String nonce, int sourcePort, int family, int protocol) {
+        if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,120}")
+                || sourcePort < 1024 || sourcePort > 65535
+                || (family != 4 && family != 6) || (protocol != 6 && protocol != 17)) return;
+        final java.io.File result = new java.io.File(getFilesDir(), "product-state/s198-probe.properties");
+        new Thread(() -> {
+            String outcome;
+            try {
+                InetAddress source = InetAddress.getByName(family == 4
+                        ? VpnTunPlatformSession.IPV4_ADDRESS : VpnTunPlatformSession.IPV6_ADDRESS);
+                InetAddress destination = InetAddress.getByName(family == 4
+                        ? "198.18.198.1" : "fd00:198::1");
+                if (protocol == 17) {
+                    try (DatagramSocket socket = new DatagramSocket(sourcePort, source)) {
+                        socket.setSoTimeout(400);
+                        socket.connect(destination, 40634);
+                        byte[] payload = nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        socket.send(new DatagramPacket(payload, payload.length));
+                        socket.receive(new DatagramPacket(new byte[256], 256));
+                        outcome = "received";
+                    }
+                } else {
+                    try (Socket socket = new Socket()) {
+                        socket.setTcpNoDelay(true);
+                        socket.bind(new InetSocketAddress(source, sourcePort));
+                        socket.connect(new InetSocketAddress(destination, 40634), 400);
+                        outcome = "connected";
+                    }
+                }
+            } catch (java.net.SocketTimeoutException expected) {
+                outcome = "timeout";
+            } catch (Exception error) {
+                outcome = "error:" + error.getClass().getSimpleName();
+            }
+            try {
+                result.getParentFile().mkdirs();
+                try (java.io.FileOutputStream stream = new java.io.FileOutputStream(result)) {
+                    stream.write(("nonce=" + nonce + "\nsourcePort=" + sourcePort
+                            + "\nfamily=" + family + "\nprotocol=" + protocol
+                            + "\nuid=" + android.os.Process.myUid() + "\noutcome=" + outcome + "\n")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+            } catch (java.io.IOException error) {
+                android.util.Log.e("SakamotoTunProbe", "protocol probe record failed", error);
+            }
+        }, "s198-protocol-probe").start();
     }
 
     private boolean hasInteractiveDebugExtras(Intent intent) {

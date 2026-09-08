@@ -205,3 +205,14 @@ cleanup, and ordinary VPN START/Resume remain unavailable. Pixel and Linux Root
 regressions pass another 70 and 64 real NFQUEUE packets. Seven semantic evidence
 mutations are rejected. See [S213 native TUN report](SAKAMOTO_213_NATIVE_TUN_GRAPH.md).
 S213 is committed separately; Pixel is stopped920 with Wi-Fi restored.
+
+## S198 complete — real TUN protocol matrix
+
+S198 passes 38 real TUN originals across generations 925/926, including 24
+TCP/UDP/ICMP target cases, plus eight separately identified graph diagnostics.
+Other-protocol allow ends UNSUPPORTED without becoming malformed or Policy DROP;
+unwalked IPv6 extension facts remain unavailable. Same-source Root regressions
+pass 69 Pixel + 64 Linux packets. Eight evidence mutations are rejected. See
+[S198 protocol report](SAKAMOTO_198_TUN_PROTOCOL_MATRIX.md). A safely reported but
+unconfirmed startup-readiness checkpoint is recorded in S243 and excluded from
+acceptance; no startup robustness is claimed. Pixel is stopped927, Wi-Fi restored.

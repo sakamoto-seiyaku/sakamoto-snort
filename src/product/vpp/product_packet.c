@@ -144,6 +144,18 @@ parse_transport (const uint8_t *packet, size_t packet_length,
   transport_length = packet_length - transport_offset;
   facts->transport_offset = (uint16_t) transport_offset;
   facts->transport_length = (uint16_t) transport_length;
+  /* These IPv6 next-header values describe deeper encapsulation, not a
+   * terminal transport already identified by this bounded parser. */
+  if (facts->ip_family == 6
+      && (facts->protocol == 0 || facts->protocol == 43
+          || facts->protocol == 44 || facts->protocol == 50
+          || facts->protocol == 51 || facts->protocol == 60
+          || facts->protocol == 135 || facts->protocol == 139
+          || facts->protocol == 140))
+    {
+      facts->l4_status = PRODUCT_PACKET_L4_UNAVAILABLE;
+      return PRODUCT_PACKET_OK;
+    }
   if (facts->protocol == PRODUCT_IP_PROTOCOL_TCP)
     {
       uint8_t header_length;
