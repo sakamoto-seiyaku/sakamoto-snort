@@ -1,0 +1,176 @@
+diff --git a/src/vnet/ip/reass/ip4_full_reass.c b/src/vnet/ip/reass/ip4_full_reass.c
+--- a/src/vnet/ip/reass/ip4_full_reass.c
++++ b/src/vnet/ip/reass/ip4_full_reass.c
+@@ -756,7 +756,7 @@
+       ip4_header_t *ip = vlib_buffer_get_current (tmp);
+       vnet_buffer_opaque_t *vnb = vnet_buffer (tmp);
+       if (vnb->ip.reass.range_first < vnb->ip.reass.fragment_first ||
+-	  vnb->ip.reass.range_last <= vnb->ip.reass.fragment_first)
++	  vnb->ip.reass.range_last < vnb->ip.reass.fragment_first)
+ 	{
+ 	  return IP4_REASS_RC_INTERNAL_ERROR;
+ 	}
+@@ -974,7 +974,7 @@
+     }
+   vnet_buffer_opaque_t *vnb = vnet_buffer (new_next_b);
+   if (vnb->ip.reass.range_first < vnb->ip.reass.fragment_first ||
+-      vnb->ip.reass.range_last <= vnb->ip.reass.fragment_first)
++      vnb->ip.reass.range_last < vnb->ip.reass.fragment_first)
+     {
+       return IP4_REASS_RC_INTERNAL_ERROR;
+     }
+@@ -1006,7 +1006,7 @@
+     }
+   vnet_buffer_opaque_t *vnb = vnet_buffer (discard_b);
+   if (vnb->ip.reass.range_first < vnb->ip.reass.fragment_first ||
+-      vnb->ip.reass.range_last <= vnb->ip.reass.fragment_first)
++      vnb->ip.reass.range_last < vnb->ip.reass.fragment_first)
+     {
+       return IP4_REASS_RC_INTERNAL_ERROR;
+     }
+@@ -1151,7 +1151,15 @@
+ 			IP4_FULL_REASS_CUSTOM_ERROR_BUNDLE_CAPACITY);
+ 		      return IP4_REASS_RC_OK;
+ 		    }
+-		  break;
++		  /* The custom consumer has retained every obligation. Retire
++		   * this engine reference now, not through a later error frame
++		   * which could outlive completion of the surviving datagram. */
++		  ++reass->fragments_n;
++		  vlib_node_increment_counter (vm, node->node_index,
++				       IP4_ERROR_REASS_DUPLICATE_FRAGMENT, 1);
++		  vlib_buffer_free_one (vm, *bi0);
++		  *bi0 = ~0;
++		  return IP4_REASS_RC_OK;
+ 		}
+ 	      return IP4_REASS_RC_OVERLAP;
+ 	    }
+@@ -1368,8 +1376,13 @@
+ 	  (fragment_length < 8 && // 8 is minimum frag length per RFC 791
+ 	   ip4_get_fragment_more (ip0)))
+ 	{
+-	  next0 = IP4_FULL_REASS_NEXT_DROP;
++	  next0 = CUSTOM == type ?
++		    vnet_buffer (b0)->ip.reass.error_next_index :
++		    IP4_FULL_REASS_NEXT_DROP;
+ 	  error0 = IP4_ERROR_REASS_MALFORMED_PACKET;
++	  if (CUSTOM == type)
++	    ip4_full_reass_custom_report_error (
++	      vm, bi0, IP4_FULL_REASS_CUSTOM_ERROR_MALFORMED);
+ 	  goto packet_enqueue;
+ 	}
+ 
+@@ -1649,6 +1662,60 @@
+   ip4_full_reass_main.custom_error_opaque = opaque;
+ }
+ 
++/* Control-only snapshot/flush. The caller quiesces workers before changing
++ * lifetime state; matching the registered custom error slot leaves unrelated
++ * native feature contexts alone. Native locks own their native context pools. */
++u32
++ip4_full_reass_custom_count (u32 error_next_index)
++{
++  ip4_full_reass_main_t *rm = &ip4_full_reass_main;
++  u32 count = 0;
++  ip4_full_reass_per_thread_t *rt;
++  vec_foreach (rt, rm->per_thread_data)
++    {
++      clib_spinlock_lock (&rt->lock);
++      ip4_full_reass_t *reass;
++      pool_foreach (reass, rt->pool)
++        if (reass->error_next_index == error_next_index) count++;
++      clib_spinlock_unlock (&rt->lock);
++    }
++  return count;
++}
++
++u32
++ip4_full_reass_custom_flush (vlib_main_t *vm, u32 error_next_index)
++{
++  ip4_full_reass_main_t *rm = &ip4_full_reass_main;
++  vlib_node_runtime_t *node = vlib_node_get_runtime (
++    vm, ip4_full_reass_node_custom.index);
++  u32 count = 0;
++  ip4_full_reass_per_thread_t *rt;
++  vec_foreach (rt, rm->per_thread_data)
++    {
++      u32 *indices = 0;
++      uword index;
++      clib_spinlock_lock (&rt->lock);
++      pool_foreach_index (index, rt->pool)
++        {
++          ip4_full_reass_t *reass = pool_elt_at_index (rt->pool, index);
++          if (reass->error_next_index == error_next_index)
++            vec_add1 (indices, (u32) index);
++        }
++      u32 *slot;
++      vec_foreach (slot, indices)
++        {
++          ip4_full_reass_t *reass = pool_elt_at_index (rt->pool, *slot);
++          ip4_full_reass_drop_all (vm, node, reass, IP4_ERROR_REASS_TIMEOUT,
++                                   IP4_FULL_REASS_CUSTOM_ERROR_STOP);
++          ip4_full_reass_free (rm, rt, reass);
++          count++;
++        }
++      vec_free (indices);
++      clib_spinlock_unlock (&rt->lock);
++    }
++  return count;
++}
++
+ always_inline u32
+ ip4_full_reass_get_nbuckets ()
+ {
+@@ -2124,8 +2191,27 @@
+       ti += 1;
+       b += 1;
+     }
+-  n_enq = vlib_buffer_enqueue_to_thread (vm, node, fq_index, from,
+-					 thread_indices, frame->n_vectors, 1);
++  if (CUSTOM == type)
++    {
++      u32 failed[VLIB_FRAME_SIZE];
++      n_enq = vlib_buffer_enqueue_to_thread_retained (
++        vm, node, fq_index, from, thread_indices, frame->n_vectors, failed);
++      for (u32 i = 0; i < frame->n_vectors - n_enq; i++)
++        {
++          u32 bi = failed[i];
++          vlib_buffer_t *retained = vlib_get_buffer (vm, bi);
++          ip4_full_reass_custom_report_error (
++            vm, bi, IP4_FULL_REASS_CUSTOM_ERROR_HANDOFF);
++          u32 error_node = ip4_full_reass_custom_error_node_index (
++            vm, vnet_buffer (retained)->ip.reass.error_next_index);
++          if (PREDICT_FALSE (error_node == ~0))
++            clib_panic ("custom reassembly lost its error continuation");
++          ip4_full_reass_enqueue_direct (vm, error_node, &bi, 1);
++        }
++    }
++  else
++    n_enq = vlib_buffer_enqueue_to_thread (vm, node, fq_index, from,
++                                          thread_indices, frame->n_vectors, 1);
+ 
+   if (n_enq < frame->n_vectors)
+     vlib_node_increment_counter (vm, node->node_index,
+diff --git a/src/vnet/ip/reass/ip4_full_reass.h b/src/vnet/ip/reass/ip4_full_reass.h
+--- a/src/vnet/ip/reass/ip4_full_reass.h
++++ b/src/vnet/ip/reass/ip4_full_reass.h
+@@ -63,6 +63,9 @@
+   IP4_FULL_REASS_CUSTOM_ERROR_CAPACITY,
+   IP4_FULL_REASS_CUSTOM_ERROR_BUNDLE_CAPACITY,
+   IP4_FULL_REASS_CUSTOM_ERROR_RESOURCE,
++  IP4_FULL_REASS_CUSTOM_ERROR_HANDOFF,
++  IP4_FULL_REASS_CUSTOM_ERROR_STOP,
++  IP4_FULL_REASS_CUSTOM_ERROR_MALFORMED,
+ } ip4_full_reass_custom_error_reason_t;
+ 
+ /* Reports Product-specific failure reasons before a fragment is sent to the
+@@ -73,6 +76,9 @@
+ void ip4_full_reass_custom_register_error_hook (
+   ip4_full_reass_custom_error_fn_t fn, void *opaque);
+ 
++u32 ip4_full_reass_custom_count (u32 error_next_index);
++u32 ip4_full_reass_custom_flush (vlib_main_t *vm, u32 error_next_index);
++
+ void ip4_local_full_reass_enable_disable (int enable);
+ int ip4_local_full_reass_enabled ();
+ #endif /* __included_ip4_full_reass_h__ */

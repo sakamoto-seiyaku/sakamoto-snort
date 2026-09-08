@@ -56,7 +56,6 @@ enum
 /* Owner assignment is independent of parser and adapter identity. */
 typedef struct
 {
-  u64 generation;
   u16 expected_owner;
   u8 primary_handoff_count;
   u8 corrective_handoff_count;
@@ -77,12 +76,13 @@ typedef struct
     product_compact_owner_assignment_t owner;
     struct
     {
-      u64 generation;
       u16 expected_owner;
       u8 primary_handoff_count, corrective_handoff_count;
       u8 key_kind, query_class, assignment_valid, processing_bypass_reason;
     };
   };
+  u32 fragment_bundle_head;
+  u16 fragment_bundle_count, fragment_flags;
   u64 canonical_hash;
   product_transport_metadata_t transport;
   u32 packet_length;
@@ -94,6 +94,9 @@ typedef struct
   u8 state_bits, runtime_drop_reason;
   /* Stack projection of the one token in opaque; not serialized into opaque2. */
   u64 origin_obligation_id;
+  /* The active graph and Adapter obligation share one generation. Keep its
+   * one authoritative inline value in opaque and project it on the stack. */
+  u64 generation;
 } product_buffer_metadata_t;
 
 #define PRODUCT_PACKET_METADATA_BYTES offsetof (product_buffer_metadata_t, origin_obligation_id)
@@ -106,7 +109,7 @@ typedef struct
 
 _Static_assert (sizeof (product_packet_completion_frame_t) <= sizeof (((vlib_buffer_t *) 0)->opaque2),
                 "completion carrier fits existing opaque2");
-_Static_assert (sizeof (product_compact_owner_assignment_t) == 16, "owner layout");
+_Static_assert (sizeof (product_compact_owner_assignment_t) == 8, "owner layout");
 _Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
 _Static_assert (PRODUCT_PACKET_METADATA_BYTES == 56, "packet layout");
 _Static_assert (PRODUCT_PACKET_METADATA_BYTES ==
@@ -457,6 +460,16 @@ static void product_packet_graph_flow_pools_flush (
 static void product_packet_graph_flow_observe (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
   const product_packet_graph_policy_evaluation_t *evaluation, int trace);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+static int product_fragment_dispatch (vlib_main_t *, vlib_node_runtime_t *,
+                                      u32, const product_buffer_metadata_t *);
+static void product_fragment_start (vlib_main_t *);
+static void product_fragment_terminal (vlib_main_t *, vlib_node_runtime_t *,
+                                       u32, const product_buffer_metadata_t *,
+                                       const product_packet_lease_t *);
+static void product_fragment_origin_check (vlib_main_t *, u32,
+                                           const product_packet_completion_frame_t *);
+#endif
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #define PRODUCT_EVIDENCE_ADD(field, value)                                    \
@@ -572,6 +585,9 @@ product_metadata_load (const vlib_buffer_t *buffer,
 {
   clib_memcpy_fast (metadata, buffer->opaque2, PRODUCT_PACKET_METADATA_BYTES);
   clib_memcpy_fast (&metadata->origin_obligation_id, buffer->opaque, sizeof (u64));
+  product_buffer_platform_metadata_t platform;
+  clib_memcpy_fast (&platform, buffer->opaque, sizeof (platform));
+  metadata->generation = platform.obligation.queue_generation;
 }
 
 static void
@@ -580,6 +596,13 @@ product_metadata_store (vlib_buffer_t *buffer,
 {
   clib_memcpy_fast (buffer->opaque2, metadata, PRODUCT_PACKET_METADATA_BYTES);
   clib_memcpy_fast (buffer->opaque, &metadata->origin_obligation_id, sizeof (u64));
+#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  /* Historical fixtures do not all construct an Adapter obligation. */
+  product_buffer_platform_metadata_t platform;
+  clib_memcpy_fast (&platform, buffer->opaque, sizeof (platform));
+  platform.obligation.queue_generation = metadata->generation;
+  clib_memcpy_fast (buffer->opaque, &platform, sizeof (platform));
+#endif
 }
 
 /* Own all opaque only along product admit -> policy -> terminal. */
@@ -1040,6 +1063,9 @@ enum
 #endif
   PRODUCT_ADMIT_NEXT_POLICY,
   PRODUCT_ADMIT_NEXT_TERMINAL,
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  PRODUCT_ADMIT_NEXT_REASSEMBLY,
+#endif
   PRODUCT_ADMIT_N_NEXT,
 };
 
@@ -1162,6 +1188,10 @@ VLIB_NODE_FN (product_packet_admit_node)
       };
 
       product_metadata_load (buffer, &initial_metadata);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (product_fragment_dispatch (vm, node, buffer_index, &initial_metadata))
+        continue;
+#endif
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!clib_atomic_load_acq_n (&graph->accepting))
         {
@@ -1220,6 +1250,11 @@ VLIB_NODE_FN (product_packet_admit_node)
 #endif
       product_metadata_from_lease (&metadata, &lease,
                                    initial_metadata.generation, buffer);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      metadata.fragment_bundle_head = initial_metadata.fragment_bundle_head;
+      metadata.fragment_bundle_count = initial_metadata.fragment_bundle_count;
+      metadata.fragment_flags = initial_metadata.fragment_flags;
+#endif
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (vm->thread_index == vlib_get_worker_thread_index (1))
         metadata.state_bits |= PRODUCT_META_ADMIT_THREAD_2;
@@ -1324,6 +1359,9 @@ VLIB_REGISTER_NODE (product_packet_admit_node) = {
 #endif
     [PRODUCT_ADMIT_NEXT_POLICY] = "product-packet-policy",
     [PRODUCT_ADMIT_NEXT_TERMINAL] = "product-packet-terminal",
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+    [PRODUCT_ADMIT_NEXT_REASSEMBLY] = "ip4-full-reassembly-custom",
+#endif
   },
 };
 
@@ -1592,7 +1630,7 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
 #define PRODUCT_COMPLETION_RETURN_CAPACITY 512
 _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
                   PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_CAPACITY
-                  + PRODUCT_GRAPH_INJECTION_CAPACITY,
+                  + 3 * PRODUCT_GRAPH_INJECTION_CAPACITY,
                 "return backlog covers every current admitted carrier");
 extern vlib_node_registration_t product_packet_completion_retry_node;
 typedef struct
@@ -1600,7 +1638,7 @@ typedef struct
   u32 buffers[PRODUCT_COMPLETION_RETURN_CAPACITY];
   u16 head, count;
 } __attribute__((aligned(CLIB_CACHE_LINE_BYTES))) product_completion_return_queue_t;
-static product_completion_return_queue_t product_completion_returns[PRODUCT_GRAPH_WORKERS];
+static product_completion_return_queue_t product_completion_returns[PRODUCT_GRAPH_WORKERS + 1];
 
 static int
 product_completion_return_try (vlib_main_t *vm, vlib_node_runtime_t *node,
@@ -1635,10 +1673,11 @@ product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
   if (product_completion_return_try (vm, node, bi, completion, 0))
     return;
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  u32 worker = vlib_get_worker_index (vm->thread_index);
-  ASSERT (worker < PRODUCT_GRAPH_WORKERS);
-  product_completion_return_queue_t *queue = &product_completion_returns[worker];
-  /* Root has at most four 64-credit lanes and 32 injection buffers/generation.
+  u32 thread = vm->thread_index;
+  ASSERT (thread <= PRODUCT_GRAPH_WORKERS);
+  product_completion_return_queue_t *queue = &product_completion_returns[thread];
+  /* Root has four 64-credit lanes plus bounded replay, metadata-injection and
+   * fragment-injection populations (32 carriers/generation each).
    * This queue owns indices only, within that existing admitted population. */
   ASSERT (queue->count < PRODUCT_COMPLETION_RETURN_CAPACITY);
   queue->buffers[(queue->head + queue->count) % PRODUCT_COMPLETION_RETURN_CAPACITY] = bi;
@@ -1658,11 +1697,11 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  u32 worker = vlib_get_worker_index (vm->thread_index);
+  u32 thread = vm->thread_index;
   u32 completed = 0;
   (void) frame;
-  ASSERT (worker < PRODUCT_GRAPH_WORKERS);
-  product_completion_return_queue_t *queue = &product_completion_returns[worker];
+  ASSERT (thread <= PRODUCT_GRAPH_WORKERS);
+  product_completion_return_queue_t *queue = &product_completion_returns[thread];
   while (queue->count && completed < 64)
     {
       u32 bi = queue->buffers[queue->head];
@@ -1690,6 +1729,7 @@ VLIB_REGISTER_NODE (product_packet_completion_retry_node) = {
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 extern vlib_node_registration_t product_packet_origin_completion_node;
 static u32 product_completion_probe_frame_queue;
+#include "product_packet_reassembly_graph.inc"
 #endif
 
 VLIB_NODE_FN (product_packet_terminal_node)
@@ -1784,6 +1824,13 @@ VLIB_NODE_FN (product_packet_terminal_node)
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_TERMINAL,
                          metadata.origin_obligation_id);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (metadata.fragment_bundle_count)
+        {
+          product_fragment_terminal (vm, node, buffer_index, &metadata, &lease);
+          continue;
+        }
+#endif
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!lifecycle_fixture_packet)
@@ -1923,6 +1970,7 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
       if (completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && graph->external_completion)
         graph->external_completion (vm, bi, &completion, graph->external_completion_opaque);
+      product_fragment_origin_check (vm, bi, &completion);
       vlib_buffer_free (vm, &bi, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, 1);
@@ -2012,6 +2060,9 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
 
   graph->vlib_main = vm;
   graph->generation = generation;
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  product_fragment_start (vm);
+#endif
   graph->trace_packets = 0;
   graph->trace_limit = 256;
   clib_memset (graph->policy_hold_next_us, 0, sizeof (graph->policy_hold_next_us));
@@ -6111,13 +6162,15 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u8 *hex = 0;
-  u32 case_id = 0, bi, failed, arrival_worker = 0;
+  u32 case_id = 0, bi, failed, arrival_worker = 0, uid = 21200;
+  int fragment_probe = strcmp (command->path, "product reassembly inject") == 0;
   int owner_probe = 0;
   (void) command;
   if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > PRODUCT_GRAPH_INJECTION_CAPACITY
       || !graph->accepting || !graph->enabled)
     { vec_free (hex); return clib_error_return (0, "injection rejected"); }
   owner_probe = unformat (input, "worker %u", &arrival_worker);
+  if (fragment_probe) (void) unformat (input, "uid %u", &uid);
   if (arrival_worker >= PRODUCT_GRAPH_WORKERS
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     { vec_free (hex); return clib_error_return (0, "invalid injection worker"); }
@@ -6127,7 +6180,9 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
     { vec_free (hex); return clib_error_return (0, "invalid bounded hex span"); }
   if (product_metadata_injection_generation != graph->generation)
     { product_metadata_injection_generation = graph->generation; product_metadata_injection_count = 0; }
-  if (product_metadata_injection_count & (1U << (case_id - 1)))
+  u32 *used = fragment_probe ? &product_fragment_main.injected
+                            : &product_metadata_injection_count;
+  if (*used & (1U << (case_id - 1)))
     { vec_free (hex); return clib_error_return (0, "duplicate case in generation"); }
   if (vlib_buffer_alloc (vm, &bi, 1) != 1)
     { vec_free (hex); return clib_error_return (0, "buffer unavailable"); }
@@ -6149,7 +6204,8 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
     }
   vec_free (hex);
   product_buffer_metadata_t metadata = {
-    .generation = graph->generation, .origin_obligation_id = UINT64_C (216000000) + case_id,
+    .generation = graph->generation,
+    .origin_obligation_id = (fragment_probe ? UINT64_C (212000000) : UINT64_C (216000000)) + case_id,
     .state_bits = PRODUCT_META_TRACE,
   };
   product_buffer_platform_metadata_t extra = {
@@ -6169,6 +6225,12 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
       extra.platform.direction = (case_id & 1)
         ? PRODUCT_PACKET_DIRECTION_OUTPUT : PRODUCT_PACKET_DIRECTION_INPUT;
     }
+  if (fragment_probe)
+    {
+      extra.platform.uid = uid;
+      extra.platform.availability = PRODUCT_PLATFORM_UID_KNOWN;
+      extra.platform.direction = PRODUCT_PACKET_DIRECTION_OUTPUT;
+    }
   product_metadata_store (buffer, &metadata);
   clib_memcpy_fast (buffer->opaque, &extra, sizeof (extra));
   clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
@@ -6182,15 +6244,22 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
       clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, 1);
       return clib_error_return (0, "injection enqueue rejected and settled");
     }
-  product_metadata_injection_count |= 1U << (case_id - 1);
-  vlib_cli_output (vm, "metadata.inject=accepted source=GRAPH_INJECTED case=%u generation=%llu buffer=%u target_thread=%u",
-    case_id, (unsigned long long) graph->generation, bi, thread);
+  *used |= 1U << (case_id - 1);
+  vlib_cli_output (vm, "%s.inject=accepted source=GRAPH_INJECTED case=%u generation=%llu buffer=%u target_thread=%u",
+    fragment_probe ? "reassembly" : "metadata", case_id,
+    (unsigned long long) graph->generation, bi, thread);
   return 0;
 }
 
 VLIB_CLI_COMMAND (product_metadata_inject_command, static) = {
   .path = "product metadata inject",
   .short_help = "product metadata inject <case 1..32> <hex, max 256 bytes> [worker <0|1>]",
+  .function = product_metadata_inject_cli,
+};
+
+VLIB_CLI_COMMAND (product_reassembly_inject_command, static) = {
+  .path = "product reassembly inject",
+  .short_help = "product reassembly inject <case 1..32> <hex, max 256 bytes> [worker <0|1>] [uid <uid>]",
   .function = product_metadata_inject_cli,
 };
 

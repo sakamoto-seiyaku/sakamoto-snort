@@ -697,7 +697,8 @@ product_root_nfqueue_complete_from_graph (
     completion->terminal_intent == PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS
     && completion->runtime_drop_reason == PRODUCT_PACKET_DROP_NONE
     && (completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED
-        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED);
+        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED
+        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_REASSEMBLY_RESOURCE);
   u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER || capacity_bypass
                   ? NF_ACCEPT : NF_DROP;
 
@@ -763,7 +764,9 @@ product_root_nfqueue_complete_from_graph (
     fprintf (stderr, "s203 event=verdict source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u obligation=%llu generation=%llu verdict=%u owner=%u\n",
       vm->thread_index, lane_index, lane->queue_id, packet_id,
       (unsigned long long) obligation->token, (unsigned long long) obligation->queue_generation,
-      verdict, vlib_get_worker_index (completion->producer_thread));
+      verdict, completion->producer_thread
+        ? vlib_get_worker_index (completion->producer_thread)
+        : PRODUCT_EXECUTION_OWNER_UNKNOWN);
   if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id, verdict))
     { lane->verdict_succeeded++; clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1); }
   else
@@ -1450,6 +1453,7 @@ product_root_stop_cli (vlib_main_t *vm, unformat_input_t *input,
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   (void) input; (void) command;
   for (u32 i = 0; i < nm->lane_count; i++) nm->lanes[i].draining = 1;
+  product_packet_graph_quiesce_reassembly (vm);
   if (nm->pending_count || product_packet_graph_buffer_debt ()
       || product_packet_graph_obligation_debt () || product_packet_graph_handoff_debt ()
       || product_packet_graph_completion_frame_debt ())

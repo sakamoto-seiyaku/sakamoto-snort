@@ -96,7 +96,7 @@ printf '%s\n' 'sakamoto-product-vpp-stage-v1' \
 cat >"$bad_stage/host-vpp-stage.properties" <<EOF
 schema=sakamoto-product-vpp-stage/v1
 vpp.base.revision=0000000000000000000000000000000000000000
-vpp.core.patch.count=3
+vpp.core.patch.count=4
 vpp.core.patch.sha256=0d95c4e7e0144d57728bfa29e1f734fa6205dcc73a09929ebd4b57e8995bb72f
 vpp.stage.profile=host
 vpp.runtime.closure.sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -196,7 +196,7 @@ if [[ "${SAKAMOTO_S175_RUN_FULL_STAGE:-0}" == 1 ]]; then
     fail "formal stage schema is invalid"
   [[ "$(property "$manifest" vpp.base.revision)" == "$pin" ]] ||
     fail "formal stage lost its base revision"
-  [[ "$(property "$manifest" vpp.core.patch.count)" == 3 ]] ||
+  [[ "$(property "$manifest" vpp.core.patch.count)" == 4 ]] ||
     fail "formal stage lost its core patch count"
   [[ "$(property "$manifest" vpp.stage.profile)" == host ]] ||
     fail "formal stage is not the Host profile"

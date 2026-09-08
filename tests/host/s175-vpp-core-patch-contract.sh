@@ -35,19 +35,19 @@ expect_fail() {
 [[ -f "$series_file" ]] || fail "missing ordered Product VPP core series"
 [[ -f "$identity_file" ]] || fail "missing Product VPP identity manifest"
 
-expected_series=$'0001-vlib-nonblocking-retained-enqueue.patch\n0002-ip-full-reass-product-custom-seam.patch\n0003-ip-reass-active-expiry.patch'
+expected_series=$'0001-vlib-nonblocking-retained-enqueue.patch\n0002-ip-full-reass-product-custom-seam.patch\n0003-ip-reass-active-expiry.patch\n0004-ip4-custom-retained-exits.patch'
 actual_series="$(sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*#/d' "$series_file")"
 [[ "$actual_series" == "$expected_series" ]] || \
   fail "core patches are missing, duplicated, or out of order"
 
 expected_count="$(property vpp.core.patch.count)"
 expected_sha256="$(property vpp.core.patch.sha256)"
-fixed_sha256=a44860f74501a7cee8f6c9dd5a4778d7d91ce8220644b02f34c2311353b1ffc6
-[[ "$expected_count" == "3" ]] || fail "core patch count allowlist must remain 3"
+fixed_sha256=23ae97add09b2c2288046a065f7d1422dd6699c60d3abc60170dacc6cfd47b59
+[[ "$expected_count" == "4" ]] || fail "core patch count allowlist must remain 4"
 [[ "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
   fail "core patch hash allowlist is not a SHA-256 digest"
 [[ "$expected_sha256" == "$fixed_sha256" ]] || \
-  fail "core patch hash does not match the SAKAMOTO-175 fixed allowlist"
+  fail "core patch hash does not match the SAKAMOTO-212 fixed allowlist"
 
 manifest_lines=""
 while IFS= read -r patch_name; do

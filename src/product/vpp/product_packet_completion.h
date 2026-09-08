@@ -27,6 +27,8 @@ enum
 {
   PRODUCT_COMPLETION_TRACE = 1 << 0,
   PRODUCT_COMPLETION_REPLAY_PROBE = 1 << 1,
+  PRODUCT_COMPLETION_FRAGMENT_MEMBER = 1 << 2,
+  PRODUCT_COMPLETION_FRAGMENT_PINNED = 1 << 3,
 };
 
 _Static_assert (sizeof (product_packet_completion_frame_t) == 32,

@@ -44,6 +44,8 @@ typedef void (*product_packet_graph_completion_fn_t) (
 int product_packet_graph_replay_completion (
   vlib_main_t *vm, const product_packet_completion_frame_t *completion);
 uint64_t product_packet_graph_completion_frame_debt (void);
+/* Control-only: quiesce native fragment contexts while origin lanes stay open. */
+void product_packet_graph_quiesce_reassembly (vlib_main_t *vm);
 
 typedef struct
 {
