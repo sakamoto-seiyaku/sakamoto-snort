@@ -1060,10 +1060,11 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-      /* Ordinary dual-stack UDP wire packets are open; owner may be remote. */
+      /* Ordinary dual-stack TCP/UDP wire packets are open; owner may be remote. */
       if (admit_result != PRODUCT_PACKET_OK
           || (lease.platform.provenance != PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
-              && ((lease.facts.ip_family != 4 && lease.facts.ip_family != 6) || lease.facts.protocol != 17
+              && ((lease.facts.ip_family != 4 && lease.facts.ip_family != 6)
+                  || (lease.facts.protocol != 17 && lease.facts.protocol != 6)
                   || lease.facts.l4_status != PRODUCT_PACKET_L4_COMPLETE))) {
         lease.terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
         lease.terminal_count = 1;

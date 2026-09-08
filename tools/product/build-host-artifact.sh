@@ -12,6 +12,11 @@ pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 expected_revision="$(tr -d '[:space:]' < "$pin_file")"
 stage_raw="${VPP_HOST_STAGE_DIR:-}"
+host_evidence="${SAKAMOTO_PRODUCT_HOST_EVIDENCE:-ON}"
+if [[ "$host_evidence" != ON && "$host_evidence" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_HOST_EVIDENCE must be ON or OFF" >&2
+  exit 2
+fi
 product_prepare_build_output || exit 2
 artifact_root="$(product_validate_artifact_root \
   "${PRODUCT_ARTIFACT_DIR:-$repo_root/build-output/product-vpp-host}")" || exit 2
@@ -187,7 +192,7 @@ cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DVPP_VAPI_C_GEN="$vpp_vapi_gen" \
   -DVPP_VAPI_CPP_GEN="$vpp_vapi_cpp_gen" \
   -DSAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256="$source_tree_sha256" \
-  -DSAKAMOTO_PRODUCT_HOST_EVIDENCE=ON \
+  -DSAKAMOTO_PRODUCT_HOST_EVIDENCE="$host_evidence" \
   -DCMAKE_INSTALL_PREFIX="$artifact_root" \
   -DCMAKE_INSTALL_LIBDIR=lib
 cmake --build "$plugin_build" --target install
@@ -244,6 +249,7 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
 {
   echo "source.revision=$actual_revision"
   echo "vpp.stage.profile=host"
+  echo "product.host.evidence=$host_evidence"
   echo "vpp.runtime.closure.sha256=$runtime_closure_sha256"
   echo "vpp.source.closure.sha256=$source_closure_sha256"
   echo "vpp.source.tree.sha256=$source_tree_sha256"

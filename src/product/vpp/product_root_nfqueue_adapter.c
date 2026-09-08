@@ -205,8 +205,9 @@ product_root_nfqueue_uid_from_env (u32 *uid_owner)
 
   errno = 0;
   parsed = strtoul (value, &end, 10);
-  if (errno != 0 || end == value || *end != '\0' || parsed == 0
-      || parsed > UINT32_MAX)
+  /* UID zero is a real Linux endpoint identity; UINT32_MAX is unknown. */
+  if (errno != 0 || end == value || *end != '\0' || *value == '-'
+      || parsed >= UINT32_MAX)
     return 0;
   *uid_owner = (u32) parsed;
   return 1;
