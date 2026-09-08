@@ -27,6 +27,7 @@
 #include "product_l4_policy.h"
 #include "product_packet_graph.h"
 #include "product_root_nfqueue_adapter.h"
+#include "product_vpn_tun_adapter.h"
 
 #ifndef SAKAMOTO_PRODUCT_VPP_REVISION
 #error "the product plugin must be compiled with the pinned VPP revision"
@@ -390,7 +391,7 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                       product_root_nfqueue_adapter_stale_completion_drops ());
                   rmp->vpn_tun_fd_attached =
                     clib_host_to_net_u64 (
-                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
+                      product_vpn_tun_attached ());
                   rmp->vpn_direct_udp4_socket_attached =
                     clib_host_to_net_u64 (
                       0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
@@ -402,7 +403,7 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                       0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
                   rmp->vpn_tun_ingress_packets =
                     clib_host_to_net_u64 (
-                      0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
+                      product_vpn_tun_captured ());
                   rmp->vpn_tun_udp4_tun_origin_packets =
                     clib_host_to_net_u64 (
                       0 /* VPN Flow Stack not implemented; reserved ABI counter. */);
@@ -1089,7 +1090,7 @@ product_core_init (vlib_main_t *vm)
     pcm->msg_id_base + VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY, 1);
   vl_api_set_msg_thread_safe (vlibapi_get_main (),
     pcm->msg_id_base + VL_API_PRODUCT_CORE_POLICY_APPLY, 1);
-  pcm->core_ready = product_core_profile_is_root () ? 0 : 1;
+  pcm->core_ready = product_core_profile_is_root () || product_vpn_tun_validation_enabled () ? 0 : 1;
   return 0;
 }
 
@@ -1117,7 +1118,7 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
   product_core_main_t *pcm = &product_core_main;
   f64 deadline = vlib_time_now (vm) + 1.0;
   (void)node; (void)frame;
-  if (!product_core_profile_is_root ())
+  if (!product_core_profile_is_root () && !product_vpn_tun_validation_enabled ())
     return 0;
   while (clib_atomic_load_acq_n (&product_core_worker_ready_mask) != 3)
     {
@@ -1126,7 +1127,9 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
       vlib_process_wait_for_event_or_clock (vm, 0.001);
     }
   vlib_worker_thread_barrier_sync (vm);
-  pcm->core_ready = product_root_nfqueue_adapter_start (vm, pcm->generation);
+  pcm->core_ready = product_core_profile_is_root ()
+    ? product_root_nfqueue_adapter_start (vm, pcm->generation)
+    : product_vpn_tun_start (vm, pcm->generation);
   vlib_worker_thread_barrier_release (vm);
   return 0;
 }

@@ -50,6 +50,14 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.stop()));
     }
 
+    public StartResult startVpnGraphValidation(Context context) {
+        if (!RuntimeService.notificationsReady(context)) return StartResult.NOTIFICATION_REQUIRED;
+        Intent intent = requestIntent(context, RuntimeControlRequest.start(RuntimeProfile.VPN));
+        intent.putExtra("debugVpnGraphValidation", true);
+        context.startForegroundService(intent);
+        return StartResult.ACCEPTED;
+    }
+
     public void pauseProtection(Context context) {
         context.startService(requestIntent(context, RuntimeControlRequest.pauseProtection()));
     }

@@ -27,6 +27,10 @@ public final class VpnTunPlatformSession implements AutoCloseable {
     }
 
     public static EstablishResult establish(VpnService service, boolean enableIpv6) {
+        return establish(service, enableIpv6, false);
+    }
+
+    static EstablishResult establish(VpnService service, boolean enableIpv6, boolean graphValidation) {
         if (service == null) {
             return EstablishResult.error("vpn_service_missing",
                     "VpnService instance is unavailable");
@@ -39,6 +43,9 @@ public final class VpnTunPlatformSession implements AutoCloseable {
                     .setMtu(MTU)
                     .addAddress(IPV4_ADDRESS, 32)
                     .addRoute("0.0.0.0", 0);
+            if (graphValidation) {
+                builder.addAllowedApplication(service.getPackageName());
+            }
             if (enableIpv6) {
                 builder = builder.addAddress(IPV6_ADDRESS, 128)
                         .addRoute("::", 0);

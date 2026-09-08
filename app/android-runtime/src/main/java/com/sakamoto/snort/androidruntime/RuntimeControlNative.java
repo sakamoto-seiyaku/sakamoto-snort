@@ -1134,6 +1134,10 @@ public final class RuntimeControlNative {
                     false, false, false, "", "", "", "", "", "");
         }
 
+        static Status adapterCloseFailure(Status previous, String detail) {
+            return nativeFailure(previous, 11, detail); // Product DISCONNECT_FAILED tag.
+        }
+
         private static Status nativeFailure(Status previous, int code, String detail) {
             Status base = previous == null ? unavailable() : previous;
             return new Status(base.abiVersion, base.apiVersion, code, code, base.generation,

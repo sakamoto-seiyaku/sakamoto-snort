@@ -832,7 +832,8 @@ static const char *
 product_packet_evidence_source (const product_packet_lease_t *lease)
 {
   return lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
-    ? "GRAPH_INJECTED" : "NFQ_CAPTURED";
+    ? "GRAPH_INJECTED" : lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN
+    ? "TUN_CAPTURED" : "NFQ_CAPTURED";
 }
 
 static void
@@ -1960,7 +1961,8 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
       clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
       const char *source = (completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE)
         ? "COMPLETION_REPLAY" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
-        ? "GRAPH_INJECTED" : "NFQ_CAPTURED";
+        ? "GRAPH_INJECTED" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
+        ? "TUN_CAPTURED" : "NFQ_CAPTURED";
       if (completion.flags & PRODUCT_COMPLETION_TRACE)
         fprintf (stderr, "s204 event=completion_consume source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u producer_thread=%u intent=%u mono_ns=%llu\n",
           source, node->node_index, vm->thread_index, bi,
@@ -1969,7 +1971,8 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
           completion.obligation.packet_id, completion.obligation.origin_lane,
           completion.producer_thread, completion.terminal_intent,
           (unsigned long long) product_packet_event_clock_ns ());
-      if (completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+      if ((completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+           || completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
           && graph->external_completion)
         graph->external_completion (vm, bi, &completion, graph->external_completion_opaque);
       product_fragment_origin_check (vm, bi, &completion);

@@ -117,6 +117,7 @@ typedef enum
   PRODUCT_ADAPTER_OBLIGATION_NONE = 0,
   PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
   PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED,
+  PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
 } product_adapter_obligation_kind_t;
 
 /* Graph nodes carry this value opaquely. Only the adapter decodes it. */

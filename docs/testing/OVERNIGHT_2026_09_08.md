@@ -195,3 +195,13 @@ cleans generation 911; generation 912 restarts with a fresh snapshot. Seven
 semantic evidence mutations are rejected. The accepted report is
 [S232 network snapshots](SAKAMOTO_232_ANDROID_NETWORK_SNAPSHOT.md).
 Pixel is stopped913 with Wi-Fi restored; the task is committed separately.
+
+## S213 complete — real TUN owner-local UDP DROP
+
+The final same-source artifacts pass two native TUN generations: 30 original
+packets, including 16 actual app UDP packets with owner-local Gate/L4 DROP.
+All originals complete/free once, native drain closes TUN before process
+cleanup, and ordinary VPN START/Resume remain unavailable. Pixel and Linux Root
+regressions pass another 70 and 64 real NFQUEUE packets. Seven semantic evidence
+mutations are rejected. See [S213 native TUN report](SAKAMOTO_213_NATIVE_TUN_GRAPH.md).
+S213 is committed separately; Pixel is stopped920 with Wi-Fi restored.

@@ -193,6 +193,8 @@ public final class RuntimeService extends VpnService {
 
     private final Object stateLock = new Object();
     private PlatformNetworkSnapshots platformNetworkSnapshots;
+    private boolean requestedVpnGraphValidation;
+    private boolean vpnGraphValidation;
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
                 Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
@@ -520,11 +522,17 @@ public final class RuntimeService extends VpnService {
         }
         if (ACTION_START.equals(action)) {
             final RuntimeProfile profile = requested == null ? activeProfile : requested;
+            final boolean graphValidation = intent != null
+                    && intent.getBooleanExtra("debugVpnGraphValidation", false)
+                    && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             if (!ensureForeground(profile)) {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            enqueueLifecycle(() -> startRuntime(profile));
+            enqueueLifecycle(() -> {
+                requestedVpnGraphValidation = graphValidation;
+                startRuntime(profile);
+            });
             return START_STICKY;
         }
         if (ACTION_PROTECTION_RESUME.equals(action)) {
@@ -534,7 +542,10 @@ public final class RuntimeService extends VpnService {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            enqueueLifecycle(() -> startRuntime(profile));
+            enqueueLifecycle(() -> {
+                requestedVpnGraphValidation = false;
+                startRuntime(profile);
+            });
             return START_STICKY;
         }
         if (hasVpnFaultEvent && ACTION_QUERY.equals(action)) {
@@ -822,9 +833,10 @@ public final class RuntimeService extends VpnService {
         }
         activeProfile = selected;
         initializeProfilePaths(selected);
+        vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(selected);
-        if (!adapter.productLaunchAllowed) {
+        if (!adapter.productLaunchAllowed && !vpnGraphValidation) {
             publish(RuntimeSnapshot.error(selected, "", "", "", "",
                     adapter.unavailableErrorCode, adapter.unavailableMessage, false,
                     ProductCoreLifecycle.UNKNOWN_PID, generation));
@@ -952,6 +964,9 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("SAKAMOTO_VPP_SVM_DIR", svm.getPath());
             builder.environment().put("SAKAMOTO_VPP_RUNTIME_DIR", runtime.getPath());
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
+            if (vpnGraphValidation) {
+                builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
+            }
             if (selected == RuntimeProfile.ROOT) {
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_QUEUE", "176");
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES",
@@ -1007,7 +1022,18 @@ public final class RuntimeService extends VpnService {
                         "Product Core VAPI adapter readiness does not match the selected profile");
                 return;
             }
-            if (selected == RuntimeProfile.VPN) {
+            if (selected == RuntimeProfile.VPN && vpnGraphValidation) {
+                vpnTunSession = pendingVpnTunSession;
+                pendingVpnTunSession = null;
+                if (vpnTunSession == null) throw new IOException("TUN validation session missing");
+                NativeTunFdClient.attach(runtime.getPath(), generation,
+                        vpnTunSession.releaseFd(), getApplicationInfo().uid);
+                closeVpnTunSessionAfterNativeHandoff();
+                status = session.query();
+                if (status.vpnTunFdAttached != 1 || status.adapterAvailable || status.protectionRunning) {
+                    throw new IOException("TUN graph handoff/readiness mismatch");
+                }
+            } else if (selected == RuntimeProfile.VPN) {
                 resetVpnDirectUnderlaySnapshot();
                 vpnTunSession = pendingVpnTunSession;
                 pendingVpnTunSession = null;
@@ -2330,6 +2356,16 @@ public final class RuntimeService extends VpnService {
                 deviceAbi(), adapterReadiness, status.protectionRunning, pid, generation));
         if (published) {
             writeRootNfqueueStatus(status);
+            if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation) {
+                writeBestEffortEvidenceFile("product-state/s213-tun-graph.properties",
+                        "generation=" + generation + "\nvalidation=true\n"
+                        + "tunAttached=" + status.vpnTunFdAttached + "\n"
+                        + "captured=" + status.vpnTunIngressPackets + "\n"
+                        + "adapterAvailable=" + status.adapterAvailable + "\n"
+                        + "protectionRunning=" + status.protectionRunning + "\n"
+                        + "uidSource=CONTROLLED_TEST_PROVIDER\n");
+                return true;
+            }
             writeS180VpnUdp4DirectEgressStatus(status);
             writeS181VpnTcp4DirectEgressStatus(status);
             writeS182VpnUdp6DirectEgressStatus(status);
@@ -4760,13 +4796,22 @@ public final class RuntimeService extends VpnService {
     }
 
     private RuntimeControlNative.Status closeProductCoreSession() {
+        boolean tunClosed = true;
+        if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation
+                && processAlive(vppProcess) && productCoreSession != null
+                && productCoreSession.isConnected()) {
+            tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
+            appendLog("s213 native_tun_drain=" + tunClosed);
+        }
         if (platformNetworkSnapshots != null) {
             platformNetworkSnapshots.close();
             platformNetworkSnapshots = null;
         }
         RuntimeControlNative.Session session = productCoreSession;
         if (session != null) {
-            return session.closeAndGetStatus();
+            RuntimeControlNative.Status closed = session.closeAndGetStatus();
+            return tunClosed ? closed : RuntimeControlNative.Status.adapterCloseFailure(
+                    closed, "native TUN bounded drain failed");
         }
         return null;
     }
@@ -5832,7 +5877,7 @@ public final class RuntimeService extends VpnService {
             return null;
         }
         VpnTunPlatformSession.EstablishResult result =
-                VpnTunPlatformSession.establish(this, adapter.enableIpv6);
+                VpnTunPlatformSession.establish(this, adapter.enableIpv6, vpnGraphValidation);
         if (!result.ok) {
             failSelectedProfileWithoutRuntime(result.errorCode, result.errorMessage);
             return null;

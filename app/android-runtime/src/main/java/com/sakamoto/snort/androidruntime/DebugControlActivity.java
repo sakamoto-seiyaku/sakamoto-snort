@@ -236,6 +236,17 @@ public class DebugControlActivity extends Activity {
             return false;
         }
         boolean handled = false;
+        boolean debuggable = (getApplicationInfo().flags
+                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        if (debuggable && intent.getBooleanExtra("debugVpnGraphValidation", false)) {
+            backend.startVpnGraphValidation(this);
+            handled = true;
+        }
+        if (debuggable && intent.hasExtra("s213ProbeNonce")) {
+            sendTunGraphProbe(intent.getStringExtra("s213ProbeNonce"),
+                    intent.getIntExtra("s213ProbePort", 0));
+            handled = true;
+        }
         if (intent.hasExtra("debugNetworkSnapshotMissing")) {
             backend.setNetworkSnapshotMissing(this,
                     intent.getBooleanExtra("debugNetworkSnapshotMissing", false));
@@ -294,6 +305,40 @@ public class DebugControlActivity extends Activity {
             handled = true;
         }
         return handled;
+    }
+
+    private void sendTunGraphProbe(String nonce, int sourcePort) {
+        if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,120}")
+                || sourcePort < 1024 || sourcePort > 65535) return;
+        final java.io.File result = new java.io.File(getFilesDir(), "product-state/s213-probe.properties");
+        new Thread(() -> {
+            String outcome;
+            try (DatagramSocket socket = new DatagramSocket(sourcePort,
+                    InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS))) {
+                socket.setSoTimeout(300);
+                socket.connect(InetAddress.getByName("198.18.213.1"), 40633);
+                byte[] payload = nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                socket.send(new DatagramPacket(payload, payload.length));
+                try {
+                    socket.receive(new DatagramPacket(new byte[256], 256));
+                    outcome = "received";
+                } catch (java.net.SocketTimeoutException expected) {
+                    outcome = "timeout";
+                }
+            } catch (Exception error) {
+                outcome = "error:" + error.getClass().getSimpleName();
+            }
+            try {
+                result.getParentFile().mkdirs();
+                try (java.io.FileOutputStream stream = new java.io.FileOutputStream(result)) {
+                    stream.write(("nonce=" + nonce + "\nsourcePort=" + sourcePort
+                            + "\nuid=" + android.os.Process.myUid() + "\noutcome=" + outcome + "\n")
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+            } catch (java.io.IOException error) {
+                android.util.Log.e("SakamotoTunProbe", "probe record failed", error);
+            }
+        }, "s213-udp-probe").start();
     }
 
     private boolean hasInteractiveDebugExtras(Intent intent) {

@@ -54,3 +54,9 @@ recorded separately as `feat(s228): close native IPv6 reassembly ownership`.
 accepted event-to-packet implementation, final-artifact tests and
 [S232 report](SAKAMOTO_232_ANDROID_NETWORK_SNAPSHOT.md). Its build snapshots
 retain their actual pre-commit source identities.
+
+## S213 subsequent task commit
+
+`feat(s213): route native TUN packets through shared policy completion` records
+the accepted native TUN graph slice, bounded fd/control lifecycle and real-app
+DROP evidence. See the [S213 report](SAKAMOTO_213_NATIVE_TUN_GRAPH.md).
