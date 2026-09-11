@@ -3,7 +3,7 @@
 import argparse, hashlib, importlib.util, json, re, shlex, subprocess, time, zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];PKG='com.sakamoto.snort.androidruntime';SERIAL='28201JEGR0XPAJ'
-p=argparse.ArgumentParser();p.add_argument('--apk',type=Path,required=True);p.add_argument('--policy-helper',type=Path,required=True);p.add_argument('--endpoint',type=Path,required=True);p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
+p=argparse.ArgumentParser();p.add_argument('--apk',type=Path,required=True);p.add_argument('--policy-helper',type=Path,required=True);p.add_argument('--endpoint',type=Path,required=True);p.add_argument('--capacity',action='store_true',help='S229 real TUN bundle capacity, then allow/completion recovery with transport unavailable');p.add_argument('--output',type=Path,required=True);a=p.parse_args();a.output.mkdir(parents=True,exist_ok=False)
 def save(name,text): (a.output/name).write_text(text);return text
 def adb(*args,check=True):
  r=subprocess.run([str(ROOT/'dev/adb'),'-s',SERIAL,*args],capture_output=True,text=True,errors='replace',timeout=30)
@@ -49,6 +49,10 @@ for family in (4,6):
     d=dict(l3=1,l4=1,family=family,protocol=17,src=(bytes(12)+src if family==4 else src).hex(),dst=(bytes(12)+dst if family==4 else dst).hex(),src_port=port,dst_port=40633,icmp_known=0)
     if oracle.owner(d)==owner:break
    targets.append(dict(family=family,mode=mode,owner=owner,port=port))
+if a.capacity:
+ # Capacity/recovery both install an explicit empty default-pass bundle.
+ # Mode 2 is the S218 L4 DROP mode, not an allow/recovery request.
+ targets=[dict(t,mode=0,payload_bytes=6000 if t['owner']==0 else 1800,phase='capacity' if t['owner']==0 else 'recovery') for t in targets if t['mode']==2]
 wifi=adb('shell','settings','get','global','wifi_on').strip()
 result=dict(status='HOLD',started_ns=time.time_ns(),platform='pixel',serial=SERIAL,generations=[],apk_sha256=hashlib.sha256(a.apk.read_bytes()).hexdigest());active=False
 def snapshot(label,context,minimum=0):
@@ -102,10 +106,15 @@ try:
   epoch=dict(generation=generation,interface=interface,interface_index=interface_index,pid=pid,cases=[]);result['generations'].append(epoch)
   for case_index,target in enumerate(targets):
    mode=target['mode'];port=target['port'];revision=21950+case_index+index*20
+   if a.capacity:
+    originals=4 if target['phase']=='capacity' else 32
+    cli(f'{label}-c{case_index}-reassembly-config',
+        [f'product reassembly configure timeout-ms 10000 contexts 64 originals {originals}'])
    policy=root(f'LD_LIBRARY_PATH={shlex.quote(native)} /data/local/tmp/s218-policy {BASE}runtime/api.sock {generation} /data/local/tmp/s219-tun-policy-{generation} {revision} {mode} {result["uid"]} 1')
    save(f'{label}-c{case_index}-policy.txt',policy);assert 'policy rc=0' in policy
-   nonce=f's219_{label}_{case_index}_{time.time_ns()}'
-   probe=save(f'{label}-c{case_index}-probe.txt',root(f'/data/local/tmp/s219-tun-udp {result["uid"]} {target["family"]} {port} {nonce}'))
+   nonce=f'{"s229" if a.capacity else "s219"}_{label}_{case_index}_{time.time_ns()}'
+   payload=target.get('payload_bytes',1800)
+   probe=save(f'{label}-c{case_index}-probe.txt',root(f'/data/local/tmp/s219-tun-udp {result["uid"]} {target["family"]} {port} {nonce} {payload}'))
    assert 'outcome=timeout' in probe
    deadline=time.monotonic()+15
    while time.monotonic()<deadline:

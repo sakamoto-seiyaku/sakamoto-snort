@@ -301,11 +301,34 @@ parse_ipv6 (const uint8_t *packet, size_t length,
   facts->l3_header_length = 40;
   facts->packet_length = (uint32_t) packet_length;
   facts->l3_status = PRODUCT_PACKET_L3_COMPLETE;
-  return parse_transport (packet, packet_length, 40, facts);
+  /* Bounded shared extension walk. Addresses always remain the outer IPv6
+   * endpoints; Routing/AH contents do not replace policy or owner identity. */
+  size_t offset = 40, walked = 0;
+  unsigned headers = 0;
+  while (facts->protocol == 0 || facts->protocol == 43
+         || facts->protocol == 60 || facts->protocol == 51)
+    {
+      facts->l3_header_length = (uint16_t) offset;
+      facts->transport_offset = (uint16_t) offset;
+      facts->transport_length = (uint16_t) (packet_length - offset);
+      if (headers == 8 || packet_length - offset < 2)
+        return PRODUCT_PACKET_OK;
+      size_t bytes = facts->protocol == 51
+        ? ((size_t) packet[offset + 1] + 2) * 4
+        : ((size_t) packet[offset + 1] + 1) * 8;
+      if (bytes > packet_length - offset || bytes > 256 - walked)
+        return PRODUCT_PACKET_OK;
+      facts->protocol = packet[offset];
+      offset += bytes;
+      walked += bytes;
+      headers++;
+    }
+  facts->l3_header_length = (uint16_t) offset;
+  return parse_transport (packet, packet_length, offset, facts);
 }
 
-product_packet_result_t
-product_packet_admit (const product_worker_layout_t *layout,
+static product_packet_result_t
+product_packet_parse_ingress (const product_worker_layout_t *layout,
                       const product_packet_ingress_t *ingress,
                       product_packet_lease_t *lease)
 {
@@ -356,6 +379,16 @@ product_packet_admit (const product_worker_layout_t *layout,
       return result;
     }
 
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_admit (const product_worker_layout_t *layout,
+                      const product_packet_ingress_t *ingress,
+                      product_packet_lease_t *lease)
+{
+  product_packet_result_t result = product_packet_parse_ingress (layout, ingress, lease);
+  if (result != PRODUCT_PACKET_OK) return result;
   result = product_owner_assign (layout, &lease->facts, &lease->assignment);
   if (result != PRODUCT_PACKET_OK)
     return result;
@@ -366,6 +399,45 @@ product_packet_admit (const product_worker_layout_t *layout,
       lease->distribution = PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
       lease->primary_handoff_count = 1;
     }
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
+product_packet_admit_selected (const product_worker_layout_t *layout,
+                               const product_packet_ingress_t *ingress,
+                               const product_owner_assignment_t *assignment,
+                               product_packet_lease_t *lease)
+{
+  product_packet_result_t result = product_packet_parse_ingress (layout, ingress, lease);
+  if (result != PRODUCT_PACKET_OK) return result;
+  const product_packet_facts_t *f = &lease->facts;
+  if (!assignment || assignment->valid != 1 || assignment->source_is_a > 1 ||
+      assignment->execution_owner >= layout->worker_count)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  const product_canonical_owner_key_t *key = &assignment->key;
+  const uint8_t *source = assignment->source_is_a ? key->address_a : key->address_b;
+  const uint8_t *destination = assignment->source_is_a ? key->address_b : key->address_a;
+  int matches = key->ip_family == f->ip_family && key->protocol == f->protocol
+    && !memcmp(source, f->source_address, 16) && !memcmp(destination, f->destination_address, 16);
+  if (key->kind == PRODUCT_OWNER_KEY_L4_PORTS)
+    matches = matches && f->l4_status == PRODUCT_PACKET_L4_COMPLETE
+      && f->source_port == (assignment->source_is_a ? key->transport.ports.a : key->transport.ports.b)
+      && f->destination_port == (assignment->source_is_a ? key->transport.ports.b : key->transport.ports.a);
+  else if (key->kind == PRODUCT_OWNER_KEY_ICMP_QUERY)
+    matches = matches && f->icmp_identity_known && key->query_class == PRODUCT_ICMP_QUERY_ECHO
+      && key->transport.query.identifier == f->icmp_identifier;
+  else matches = matches && key->kind == PRODUCT_OWNER_KEY_L3;
+  lease->assignment = *assignment;
+  if (!matches)
+    {
+      lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+      lease->terminal_count = 1;
+      lease->runtime_drop_reason = PRODUCT_PACKET_DROP_REASSEMBLY_MALFORMED;
+      return PRODUCT_PACKET_INVALID_L3;
+    }
+  lease->distribution = assignment->execution_owner == ingress->current_worker
+    ? PRODUCT_PACKET_DISTRIBUTION_LOCAL : PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
+  lease->primary_handoff_count = lease->distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE;
   return PRODUCT_PACKET_OK;
 }
 

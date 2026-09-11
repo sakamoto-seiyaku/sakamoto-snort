@@ -93,6 +93,13 @@ are not merged.
 
 ## Unavailable and malformed facts
 
+2026-09-11 update: the S229 independent-reassembly implementation adds the
+shared bounded walk for Hop-by-Hop, Routing, Destination Options and AH
+(8 headers / 256 extension bytes). The unwalked-header limitation below
+describes this older S198 artifact, not current source. Truncated or over-budget
+chains still expose no guessed ports. New evidence is recorded separately in
+[the independent-reassembly report](2026-09-11_S229_INDEPENDENT_REASSEMBLY.md).
+
 The bounded parser does not walk the recognized IPv6 extension headers listed
 in its predicate. Their deeper transport now remains L4 unavailable, instead
 of being presented as an already identified other terminal. Next Header

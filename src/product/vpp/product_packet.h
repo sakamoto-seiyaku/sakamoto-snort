@@ -256,6 +256,14 @@ product_packet_admit (const product_worker_layout_t *layout,
                       const product_packet_ingress_t *ingress,
                       product_packet_lease_t *lease);
 
+/* Reassembly supplies the first-fragment assignment. Validate the complete
+ * packet and its identity, but do not hash or select an owner a second time. */
+product_packet_result_t
+product_packet_admit_selected (const product_worker_layout_t *layout,
+                               const product_packet_ingress_t *ingress,
+                               const product_owner_assignment_t *assignment,
+                               product_packet_lease_t *lease);
+
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 product_packet_result_t
 product_packet_owner_guard (product_packet_lease_t *lease,

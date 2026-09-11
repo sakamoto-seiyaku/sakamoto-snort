@@ -3,7 +3,7 @@
 import argparse,collections,hashlib,importlib.util,json,re,struct
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--run',type=Path,required=True);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--run',type=Path,required=True);p.add_argument('--verification-output',type=Path);a=p.parse_args()
 def module(name,path):
  s=importlib.util.spec_from_file_location(name,ROOT/path);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
 chain=module('chain','tests/evidence/product_chain.py');oracle=module('oracle','tests/device/s207-owner-oracle.py');vectors=module('vectors','tests/device/s219-fragment-matrix.py')
@@ -32,6 +32,7 @@ for case,plan in zip(r['cases'],plans):
  for key,value in plan.items():need(case.get(key)==value,'declared input differs '+plan['label']+'/'+key)
 events=collections.defaultdict(list)
 for e in rows(log,'s212 '):events[e['event']].append(e)
+reassembled=rows(log,'s229 event=product_reassembled ')
 packets={str(212000000+p['case']):p for c in r['cases'] for p in c['packets']}
 need(len(packets)==30,'original count')
 def one(records,token,name):
@@ -57,7 +58,7 @@ need(collections.Counter(e['token'] for e in events['pin'])==collections.Counter
 successes=[];owner_pairs=set()
 publications={e['revision']:e for e in rows(log,'s232 event=snapshot_publish ')}
 for case in r['cases']:
- tokens=[str(212000000+e['case']) for e in case['packets']];found=[e for e in events['native_success'] if e['token'] in tokens]
+ tokens=[str(212000000+e['case']) for e in case['packets']];found=[e for e in reassembled if e['token'] in tokens]
  if case['no_first']:
   need(not found and not any(e['token'] in tokens for e in admit+policy+terminal),'missing offset zero produced policy/success '+case['label'])
   for token in tokens:
@@ -70,7 +71,7 @@ for case in r['cases']:
  need(success.get('originals')=='2','success original count '+token)
  metadata=one(admit,token,'shared parser');pf=one(policy,token,'policy facts');tf=one(terminal,token,'terminal facts')
  for field,value in expected.items():
-  for stage in (success,metadata,pf,tf):need(stage.get(field)==str(value),'first facts overwritten/merged '+token+'/'+field)
+  for stage in (metadata,pf,tf):need(stage.get(field)==str(value),'first facts overwritten/merged '+token+'/'+field)
  wire=[bytes.fromhex(e['hex']) for e in case['packets']];family=case['family'];header=20 if family==4 else 48
  parts=sorted(((int.from_bytes(w[6:8],'big')&0x1fff)*8 if family==4 else int.from_bytes(w[42:44],'big')&0xfff8,w[header:]) for w in wire)
  payload=b''.join(part for offset,part in parts);need([offset for offset,part in parts]==[0,16],'wire offsets '+token)
@@ -102,12 +103,13 @@ for case in r['cases']:
    if r['platform']=='pixel' and publication:
     need(f"revision={revision} event_elapsed_ns={publication['event_elapsed_ns']}" in android,'Android event missing '+str(revision))
   if r['platform']=='linux':need('network rc=0' in (a.run/(case['label']+'-snapshot-change.txt')).read_text(),'controlled publication failed')
- prepared=one(events['native_finalize_prepare'],token,'native prepare');owner_pairs.add((int(prepared.get('thread','0'))-1,owner['owner']));successes.append(token)
-need(len(successes)==14 and len(events['native_success'])==14,'successful datagram count')
+ owner_pairs.add((int(success.get('thread','0'))-1,owner['owner']));successes.append(token)
+need(len(successes)==14 and len(reassembled)==14,'successful datagram count')
 for stage in (admit,policy,terminal):need(collections.Counter(e['token'] for e in stage)==collections.Counter(successes),'extra/missing post-reassembly graph stage')
 status=(a.run/'runtime.txt').read_text();reassembly=rows(status,'reassembly.status ');completion=rows(status,'completion.status ')
 need(len(reassembly)==1 and all(reassembly[0][k]=='0' for k in ('contexts','originals','retained')),'fragment stop debt')
 need(len(completion)==1 and all(completion[0][k]=='0' for k in ('pending','frames','buffers','obligations','verdicts')),'graph completion/NFQUEUE debt')
-need('ip4-full-reassembly' in status and 'ip6-full-reassembly' in status,'actual native node evidence missing')
+need('product-reassembly' in status,'actual Product reassembly node evidence missing')
 out=dict(status='HOLD' if errors else 'PASS',platform=r['platform'],generation=generation,originals=len(packets),datagrams=len(successes),no_first_timeouts=2,memory_final_owner_pairs=sorted(owner_pairs),errors=errors)
-(a.run/'verification.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out,indent=2));raise SystemExit(bool(errors))
+with (a.verification_output or a.run/'verification.json').open('x') as output:output.write(json.dumps(out,indent=2)+'\n')
+print(json.dumps(out,indent=2));raise SystemExit(bool(errors))

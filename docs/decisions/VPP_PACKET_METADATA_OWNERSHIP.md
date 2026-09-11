@@ -61,8 +61,9 @@ SAKAMOTO-235 定义对应 Linux 真机验收。分类选择已收口；具体事
 - 只在已审计的 graph 区间声明所有权，并以明确 accessor 和 compile-time size/offset guard 访问；
 - 普通 graph 可在没有冲突消费者的区间内保存 compact PacketLease/PacketFacts 与 Platform Packet
   Facts；handoff 只移动 buffer index 和这些 inline facts；
-- 进入 full reassembly 时，VPP 拥有 `vnet_buffer_opaque_t` 的 IP reassembly union。仍需存活的
-  Platform Packet Facts 必须先进入 bounded fragment envelope，重组完成后恢复，再进入最终
+- 进入产品重组区间时，`opaque2` 保存 bounded fragment envelope，原片各自的 obligation
+  与 Platform Packet Facts 随 buffer 保留；不进入 upstream IP reassembly union 的生命周期。
+  重组成功后恢复 offset-zero 首片事实及已保存的 OwnerAssignment，再进入最终
   ExecutionOwner、Network Gate、L4 policy 与可选 FlowEntry；
 - 任何 node 若使用同一区域的其它 VPP overlay，必须在 wiring review 中被禁止或建立显式
   save/restore transition；静态结构体相等不证明跨 subgraph lifetime 安全；
@@ -82,10 +83,26 @@ queue/generation/packet ID 都须独立保留并按适用终态分别结清，�
 已有重组合法性检查与 Adapter generation 约束保持有效；其他片的缺失值或 snapshot revision
 变化本身不通过整块 metadata 比较被误报为 malformed。没有 offset=0 首片不能产生成功重组结果。
 
-参考 fork `stellar_ip_reassembly_node.c` 的 `FIRST_FRAG_IDX`、
-`ip_reassembly_table_update_queue()` 和 `ip_fragment_queue_reassemble()`：其首片选取与必要
-metadata 恢复提供设计依据，但没有替本产品证明 Android UID/availability 语义。此处只继承
-首片基准，不把当前 native reassembly 改为 stellar 的自建重组器，不引入通用合并模块。
+2026-09-11 用户决定：产品使用独立的有界重组流程，替换 upstream full-reassembly 业务路径。
+同一 datagram 先汇合到重组 worker；offset=0 首片通过现有唯一 owner assignment 确定并
+保存流所属 worker，重组后沿用该结果交接，不重新计算归属。投递、失败收尾以及每片完成
+和释放接入现有 NFQ/TUN 机制。此决定取代此前仅继承首片基准、不替换重组器的约束。
+首片事实规则保持不变，不引入通用 metadata 合并模块。
+
+默认每重组 worker 64 contexts、每 datagram 32 originals，两项都是启动配置默认值，
+可调大或调小，不是编译期或隐藏上限。启动校验并按配置预分配，重启生效；运行中不自动
+扩容，启动分配失败明确报错，不静默降容。重复片、重叠片、超时及普通 IPv6 扩展头处理
+保持本轮已确认的设计语义，禁止以全重叠一律拒绝或只识别紧邻 IPv6 基础头的 Fragment
+Header 缩减支持。接 L3 双栈，不加入 L2、隧道内层重组或出站重分片，观测复用现有机制。
+纯资源不足按 processing fail-open 契约处理；成功、超时、拒绝、资源不足均须逐 original
+恰好结清一次，既有策略 DROP 不得改为放行。
+
+当前实现将 datagram 临时描述符保存在重组 worker 的预分配表中。detach 后只在当前同步
+调用内借用描述符，把 originals 转为 buffer-index 链或完成消息后才能再次修改表；表指针
+不跨 node/worker 传递。原片始终只有一个 buffer 引用，不借助 upstream consume pin。
+正常 packet overlay 仍为 56 bytes：L3 header span 使用 16 bits，family 与 L3 validity 共用
+一个 byte，容纳 IPv6 扩展头而不扩大 `vlib_buffer_t`。具体复验证据见
+[独立重组实现记录](../testing/2026-09-11_S229_INDEPENDENT_REASSEMBLY.md)。
 
 SAKAMOTO-219 的双栈真机矩阵核对首片晚到、首片 known/其他片 unknown、首片 unknown/其他片
 known、其他片取值不同及 snapshot revision 变化，输出始终按首片恢复且缺失不拼补。真实 NFQ

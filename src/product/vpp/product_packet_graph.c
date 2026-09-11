@@ -17,8 +17,6 @@
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
 #include <vnet/ip/ip.h>
-#include <vnet/ip/reass/ip4_full_reass.h>
-#include <vnet/ip/reass/ip6_full_reass.h>
 #include <vnet/buffer.h>
 #include <vnet/vnet.h>
 #include <vppinfra/atomics.h>
@@ -85,15 +83,17 @@ typedef struct
     };
   };
   u32 fragment_bundle_head;
-  u16 fragment_bundle_count, fragment_flags;
+  u32 fragment_bundle_count;
   u64 canonical_hash;
   product_transport_metadata_t transport;
   u32 packet_length;
   u16 source_port, destination_port;
   u16 span_length;
   i16 span_current_data;
-  u8 l3_header_length, l4_header_length;
-  u8 ip_family, protocol, l3_status, l4_status;
+  u16 l3_header_length;
+  u8 l4_header_length;
+  u8 ip_family : 4, l3_status : 4;
+  u8 protocol, l4_status;
   u8 state_bits, runtime_drop_reason;
   /* Stack projection of the one token in opaque; not serialized into opaque2. */
   u64 origin_obligation_id;
@@ -496,6 +496,7 @@ typedef enum
   PRODUCT_TRACE_OWNER_GUARD,
   PRODUCT_TRACE_POLICY,
   PRODUCT_TRACE_TERMINAL,
+  PRODUCT_TRACE_FRAGMENT_INGRESS,
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_TRACE_FIXTURE,
 #endif
@@ -527,7 +528,7 @@ format_product_packet_trace (u8 *s, va_list *args)
   CLIB_UNUSED (vlib_node_t *node) = va_arg (*args, vlib_node_t *);
   product_packet_trace_t *trace = va_arg (*args, product_packet_trace_t *);
   static const char *stages[] = {
-    "admit", "owner-guard", "policy", "terminal",
+    "admit", "owner-guard", "policy", "terminal", "fragment-ingress",
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
     "fixture-ingress",
 #endif
@@ -1067,7 +1068,6 @@ enum
   PRODUCT_ADMIT_NEXT_TERMINAL,
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   PRODUCT_ADMIT_NEXT_REASSEMBLY,
-  PRODUCT_ADMIT_NEXT_REASSEMBLY6,
 #endif
   PRODUCT_ADMIT_N_NEXT,
 };
@@ -1151,6 +1151,17 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
     {
       ASSERT (failed == bi);
       *reason = PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED;
+      if (metadata->fragment_bundle_count && (metadata->state_bits & PRODUCT_META_TRACE))
+        {
+          vlib_frame_queue_main_t *fqm = vec_elt_at_index (
+            vlib_get_thread_main ()->frame_queue_mains, graph->primary_frame_queue);
+          vlib_frame_queue_t *fq = fqm->vlib_frame_queues[target];
+          fprintf (stderr, "s229 event=product_handoff_rejected thread=%u buffer=%u token=%llu generation=%llu family=%u reason=8 prepared=1 refs=1 queue=%u target_thread=%u slots=%u occupancy=%llu originals=%u\n",
+            vm->thread_index, bi, (unsigned long long)metadata->origin_obligation_id,
+            (unsigned long long)metadata->generation, metadata->ip_family,
+            graph->primary_frame_queue, target, fq->nelts,
+            (unsigned long long)(fq->tail-fq->head), metadata->fragment_bundle_count);
+        }
       metadata->state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
       product_metadata_store (vlib_get_buffer (vm, bi), metadata);
       product_handoff_credit_release (graph, owner);
@@ -1230,8 +1241,17 @@ VLIB_NODE_FN (product_packet_admit_node)
             buffer, initial_metadata.generation, &ingress.platform))
         product_packet_graph_platform_facts_unknown (&ingress.platform);
       clib_memset (&lease, 0, sizeof (lease));
-      product_packet_result_t admit_result =
-        product_packet_admit (&layout, &ingress, &lease);
+      product_packet_result_t admit_result;
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (initial_metadata.fragment_bundle_count)
+        {
+          if (!product_lease_from_metadata (&initial_metadata, buffer, &lease))
+            clib_panic ("prepared fragment packet metadata changed before admission");
+          admit_result = PRODUCT_PACKET_OK;
+        }
+      else
+#endif
+        admit_result = product_packet_admit (&layout, &ingress, &lease);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (admit_result != PRODUCT_PACKET_OK)
         {
@@ -1256,7 +1276,6 @@ VLIB_NODE_FN (product_packet_admit_node)
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       metadata.fragment_bundle_head = initial_metadata.fragment_bundle_head;
       metadata.fragment_bundle_count = initial_metadata.fragment_bundle_count;
-      metadata.fragment_flags = initial_metadata.fragment_flags;
 #endif
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (vm->thread_index == vlib_get_worker_thread_index (1))
@@ -1363,8 +1382,7 @@ VLIB_REGISTER_NODE (product_packet_admit_node) = {
     [PRODUCT_ADMIT_NEXT_POLICY] = "product-packet-policy",
     [PRODUCT_ADMIT_NEXT_TERMINAL] = "product-packet-terminal",
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-    [PRODUCT_ADMIT_NEXT_REASSEMBLY] = "ip4-full-reassembly-custom",
-    [PRODUCT_ADMIT_NEXT_REASSEMBLY6] = "ip6-full-reassembly-custom",
+    [PRODUCT_ADMIT_NEXT_REASSEMBLY] = "product-reassembly",
 #endif
   },
 };
@@ -6179,7 +6197,7 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
   int fragment_probe = strcmp (command->path, "product reassembly inject") == 0;
   int owner_probe = 0;
   (void) command;
-  if (!unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > PRODUCT_GRAPH_INJECTION_CAPACITY
+  if (vm->thread_index != 0 || !unformat (input, "%u %s", &case_id, &hex) || !case_id || case_id > PRODUCT_GRAPH_INJECTION_CAPACITY
       || !graph->accepting || !graph->enabled)
     { vec_free (hex); return clib_error_return (0, "injection rejected"); }
   owner_probe = unformat (input, "worker %u", &arrival_worker);
@@ -6201,7 +6219,8 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
     { vec_free (hex); return clib_error_return (0, "invalid injection worker"); }
   u16 thread = vlib_get_worker_thread_index (arrival_worker);
   u32 length = strlen ((char *) hex);
-  if (!length || (length & 1) || length > 512)
+  u32 max_bytes = fragment_probe ? clib_min (2048, vlib_buffer_get_default_data_size (vm)) : 256;
+  if (!length || (length & 1) || length / 2 > max_bytes)
     { vec_free (hex); return clib_error_return (0, "invalid bounded hex span"); }
   if (product_metadata_injection_generation != graph->generation)
     { product_metadata_injection_generation = graph->generation; product_metadata_injection_count = 0; }
@@ -6289,13 +6308,16 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
 }
 
 VLIB_CLI_COMMAND (product_metadata_inject_command, static) = {
-  .path = "product metadata inject",
+  .path = "product metadata inject", .is_mp_safe = 1,
   .short_help = "product metadata inject <case 1..32> <hex, max 256 bytes> [worker <0|1>]",
   .function = product_metadata_inject_cli,
 };
 
 VLIB_CLI_COMMAND (product_reassembly_inject_command, static) = {
   .path = "product reassembly inject",
+  /* Main-thread-only bounded inputs; admission counters are atomic and the
+   * immutable buffer is transferred asynchronously. Do not wait for workers. */
+  .is_mp_safe = 1,
   .short_help = "product reassembly inject <case 1..32> <hex, max 256 bytes> [worker <0|1>] [uid <uid>] [facts <uid> <ifindex> <context> <availability> <direction> <provenance>]",
   .function = product_metadata_inject_cli,
 };

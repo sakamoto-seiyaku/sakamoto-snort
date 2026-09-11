@@ -10,10 +10,11 @@
 #include <unistd.h>
 static void fail(const char *s){perror(s);exit(1);}
 int main(int argc,char **argv){
- if(argc!=5)return 2;
+ if(argc!=5&&argc!=6)return 2;
  unsigned uid=(unsigned)strtoul(argv[1],0,10),family=(unsigned)strtoul(argv[2],0,10),port=(unsigned)strtoul(argv[3],0,10);
  const char *nonce=argv[4];size_t nonce_length=strlen(nonce);
- if((family!=4&&family!=6)||port<1024||port>65535||nonce_length>120)return 2;
+ size_t payload_length=argc==6?(size_t)strtoul(argv[5],0,10):1800;
+ if((family!=4&&family!=6)||port<1024||port>65535||nonce_length>120||payload_length<nonce_length||payload_length>8192)return 2;
  if(setgid(uid)||setuid(uid)||getuid()!=uid)fail("test endpoint UID");
  int fd=socket(family==4?AF_INET:AF_INET6,SOCK_DGRAM,0),discovery=IP_PMTUDISC_DONT;
  if(fd<0)fail("socket");
@@ -28,9 +29,9 @@ int main(int argc,char **argv){
   inet_pton(AF_INET6,"fd00:111:111::2",&s->sin6_addr);inet_pton(AF_INET6,"fd00:198::1",&d->sin6_addr);size=sizeof *s;
  }
  if(bind(fd,(void*)&src,size)||connect(fd,(void*)&dst,size))fail("bind/connect");
- unsigned char payload[1800];for(unsigned i=0;i<sizeof payload;i++)payload[i]=(unsigned char)(i%251);memcpy(payload,nonce,nonce_length);
- if(send(fd,payload,sizeof payload,0)!=sizeof payload)fail("kernel UDP send");
+ unsigned char payload[8192];for(unsigned i=0;i<payload_length;i++)payload[i]=(unsigned char)(i%251);memcpy(payload,nonce,nonce_length);
+ if(send(fd,payload,payload_length,0)!=(ssize_t)payload_length)fail("kernel UDP send");
  unsigned char reply[256];ssize_t received=recv(fd,reply,sizeof reply,0);int error=errno;close(fd);
  if(received>=0||(error!=EAGAIN&&error!=EWOULDBLOCK)){errno=error;fail("expected DROP timeout");}
- printf("probe uid=%u family=%u source_port=%u destination_port=40633 bytes=1800 outcome=timeout source=KERNEL_UDP nonce=%s\n",getuid(),family,port,nonce);return 0;
+ printf("probe uid=%u family=%u source_port=%u destination_port=40633 bytes=%zu outcome=timeout source=KERNEL_UDP nonce=%s\n",getuid(),family,port,payload_length,nonce);return 0;
 }

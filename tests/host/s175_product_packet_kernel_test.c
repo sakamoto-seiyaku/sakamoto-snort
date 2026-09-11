@@ -278,13 +278,13 @@ main (void)
     0,    0,    0,    0,    0,    0,    0,    2,
     0x30, 0x39, 0x01, 0xbb,
   };
-  /* A complete L3 envelope with an unwalked Hop-by-Hop header followed by
-   * UDP must not be advertised as an identified other terminal or TCP/UDP. */
+  /* An extension claiming more bytes than the complete L3 envelope contains
+   * must not expose ports from the following bytes. */
   static const uint8_t ipv6_deeper_transport[56] = {
     0x60, 0, 0, 0, 0, 16, 0, 64,
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
-    17, 0, 0, 0, 0, 0, 0, 0, 0x30, 0x39, 0x01, 0xbb, 0, 8, 0, 0,
+    17, 7, 0, 0, 0, 0, 0, 0, 0x30, 0x39, 0x01, 0xbb, 0, 8, 0, 0,
   };
   static const rejected_envelope_vector_t vectors[] = {
     {
@@ -314,7 +314,7 @@ main (void)
   };
   static const l3_only_vector_t l3_only_vectors[] = {
     {
-      .name = "unwalked IPv6 extension keeps deeper transport unavailable",
+      .name = "truncated IPv6 extension keeps deeper transport unavailable",
       .packet = ipv6_deeper_transport,
       .length = sizeof (ipv6_deeper_transport),
       .expected_family = 6,

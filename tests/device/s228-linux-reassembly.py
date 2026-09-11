@@ -18,6 +18,8 @@ parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--artifact', type=Path, required=True)
 parser.add_argument('--vppctl', type=Path, required=True)
 parser.add_argument('--policy-client', type=Path, default=ROOT/'build-output/s230-policy')
+parser.add_argument('--policy-drop-reason', type=int, choices=(7, 8), default=7,
+                    help='Expected Gate DROP=7 or L4 DROP=8 for the selected policy helper')
 args = parser.parse_args()
 args.output = args.output.resolve()
 args.artifact = args.artifact.resolve()
@@ -29,6 +31,11 @@ def command(*argv, check=True):
         argv = (argv[0], '-w', '5', *argv[1:])
     p = subprocess.run(list(map(str, argv)), env=env, text=True,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20)
+    if str(argv[0]) == str(args.policy_client):
+        with (args.output/'policy-calls.jsonl').open('a') as record:
+            record.write(json.dumps(dict(argv=list(map(str, argv)),
+                ld_library_path=env['LD_LIBRARY_PATH'], rc=p.returncode,
+                output=p.stdout))+'\n')
     if check and p.returncode:
         raise RuntimeError(p.stdout)
     return p.stdout
@@ -73,6 +80,19 @@ NET = ROOT/'build-output/s231-fragments/linux-net'
 ECHO = ROOT/'build-output/s231-fragments/linux-echo'
 result = dict(status='HOLD', started_ns=time.time_ns(), cases=[],
               helper_sha256={str(p.name):hashlib.sha256(p.read_bytes()).hexdigest() for p in (NET,ECHO)})
+result['source'] = 'NFQ_CAPTURED'
+result['expected_policy_drop_reason'] = args.policy_drop_reason
+result['runner_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+result['policy_client'] = str(args.policy_client.resolve())
+result['policy_helper_sha256'] = hashlib.sha256(args.policy_client.read_bytes()).hexdigest()
+dependencies = command('ldd', args.policy_client)
+save(args.output/'policy-dependencies.txt', dependencies)
+core_paths = [Path(line.split('=>', 1)[1].split()[0]).resolve()
+              for line in dependencies.splitlines()
+              if line.strip().startswith('libsakamoto_product_core.so => /')]
+assert len(core_paths) == 1, 'cannot identify loaded Product Core cdylib'
+result['policy_core'] = str(core_paths[0])
+result['policy_core_sha256'] = hashlib.sha256(core_paths[0].read_bytes()).hexdigest()
 save(args.output/'kernel.txt',command('uname','-a')+command('id')+'netns='+os.readlink('/proc/self/ns/net')+'\n')
 uid_map=Path('/proc/self/uid_map').read_text().split()
 assert os.getuid()==0 and uid_map[0]=='0' and uid_map[1]!='0' and uid_map[2]=='1'
@@ -193,7 +213,7 @@ try:
     send_fragments('one-byte-final',make_fragments(21219,9))
     send_fragments('atomic',make_fragments(21218,8))
     packets=make_fragments(21221)
-    send_fragments('duplicate',[packets[0],packets[0],packets[1]])
+    send_fragments('duplicate',[packets[0],packets[0]])
     packets=make_fragments(21222)
     bad=bytearray(packets[0]);bad[-1]^=255
     send_fragments('conflict',[packets[0],bytes(bad)])
