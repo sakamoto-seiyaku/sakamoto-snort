@@ -350,6 +350,15 @@ TCP/UDP/ICMP/timeout 共用此 pin，不跟随 latest，不凭记忆改写秒数
 重传 UDP payload 没有“重复 packet 可不计数”的特权。
 S223 不实现自动 expiry；以有限流量和 stop 回收验收。
 
+[S223 实现] `product_flow_tracker.h` 定义内部 CtFacts/result 和单字节 UDP state；
+`product_flow_udp.c::product_udp_update` 消费 parser facts 与 FlowRuntime 给出的方向。
+`product_flow_entry_packet_t.facts` 仅在同步 observe 中借用，entry 不保存该指针。
+UDP 必须具有完整 parser facts；缺失 facts 是 Interface error，不是容量 bypass。
+TCP/ICMP 尚未接入 tracker，observation 的 result 保持 NONE/UNKNOWN。
+状态仍在现有 tagged union 中，entry 大小未因本项增加；没有新增 table/timer。
+逐分支映射与实际 Linux/Pixel 验收见
+[`2026-09-11_S223_UDP_TRACKER.md`](2026-09-11_S223_UDP_TRACKER.md)。
+
 ### 5.3 TCP（S222，保持完整任务）
 
 [代码事实] parser 已提供 seq/ack/window/flags/wscale-known、transport length/offset；

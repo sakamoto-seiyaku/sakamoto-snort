@@ -75,7 +75,9 @@ PY
 
 cc -std=c11 -Wall -Wextra -Werror -pedantic \
   -I"$repo_root/src/product/vpp" \
-  "$repo_root/src/product/vpp/product_packet.c" "$source" "$test_source" -o "$fixture_root/product-flow-entry-test"
+  "$repo_root/src/product/vpp/product_packet.c" \
+  "$repo_root/src/product/vpp/product_flow_udp.c" \
+  "$source" "$test_source" -o "$fixture_root/product-flow-entry-test"
 
 "$fixture_root/product-flow-entry-test"
 

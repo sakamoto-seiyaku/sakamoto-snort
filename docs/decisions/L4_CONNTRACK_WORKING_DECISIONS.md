@@ -64,8 +64,9 @@ tagged union。协议 tag 来自 typed key。UUID、格式化地址、NAT/transl
 OVS 管理对象、巨大 debug blob 不进热 entry。将来确有 consumer 时仍通过同一 FlowEntry
 seam 组织 attachments，不为潜在扩展预建通用管理框架。
 
-当前 S221 的 union 只是明确的承载位置，不代表 TCP/UDP/ICMP tracker 已实现。
-S223、S222、S224 分别增加对应协议语义；不会以 `created=true` 冒充 `ct.state=new`。
+S221 建立统一 union；S223 已在其中增加单字节 UDP FIRST/MULTIPLE/BIDIR 状态，
+由独立的纯 C tracker 输出 CtFacts/update/timeout class。TCP、ICMP 分支仍为占位，
+不返回假 CtFacts；不会以 `created=true` 冒充 `ct.state=new`。
 
 ## 4. 执行顺序与 policy cache
 

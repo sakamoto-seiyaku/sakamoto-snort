@@ -186,6 +186,14 @@ product_flow_entry_observe (
       return PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION;
     }
   unsigned protocol = protocol_index (assignment);
+  /* A tracker consumes the shared parser's facts, never a key-derived stand-in.
+   * Missing/unavailable facts are an Interface error, not capacity bypass. */
+  if (protocol == 1
+      && (!packet->facts || packet->facts->protocol != assignment->key.protocol
+          || packet->facts->ip_family != assignment->key.ip_family
+          || packet->facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
+          || packet->facts->l4_status != PRODUCT_PACKET_L4_COMPLETE))
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   uint32_t slot = find_entry (pool, assignment);
   if (slot == NO_SLOT)
     {
@@ -257,6 +265,9 @@ product_flow_entry_observe (
   unsigned side = entry->last_flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY;
   entry->side_packets[side]++;
   entry->side_bytes[side] += packet->packet_bytes;
+  if (protocol == 1)
+    observation->tracker = product_udp_update (
+      &entry->protocol_state.udp, packet->facts, observation->flow_direction);
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 

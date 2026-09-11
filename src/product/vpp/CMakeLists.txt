@@ -211,6 +211,7 @@ add_vpp_plugin(product_core
     product_fragment.c
     product_l4_policy.c
     product_flow_entry.c
+    product_flow_udp.c
     product_root_nfqueue_adapter.c
     product_vpn_tun_adapter.c
     product_network_snapshot.c

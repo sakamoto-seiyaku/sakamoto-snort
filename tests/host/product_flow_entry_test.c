@@ -28,6 +28,10 @@ static product_flow_entry_packet_t packet(unsigned direction,unsigned bytes,unsi
 }
 static void observe(product_flow_runtime_t *pool,const product_owner_assignment_t *a,
                     product_flow_entry_packet_t p,product_flow_entry_observation_t *o) {
+  /* These storage vectors deliberately inject assigned identities, including
+   * full-hash collisions. Supply corresponding decoded-facts fixtures too. */
+  product_packet_facts_t f=facts(a->key.ip_family,a->key.protocol,0);
+  p.facts=&f;
   assert(product_flow_entry_observe(pool,a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
 }
 
@@ -63,6 +67,8 @@ static void mixed_capacity(void) {
     if(protocol==2)miss.key.transport.query.identifier++;
     else miss.key.transport.ports.a++;
     product_flow_entry_packet_t p=packet(3,64,3);
+    product_packet_facts_t f=facts(miss.key.ip_family,miss.key.protocol,0);
+    p.facts=&f;
     assert(product_flow_entry_observe(runtime,&miss,&p,0,&o)==PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED);
     assert(!o.entry && !o.created);
     assert(product_flow_entry_observe(runtime,&miss,&p,1,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);

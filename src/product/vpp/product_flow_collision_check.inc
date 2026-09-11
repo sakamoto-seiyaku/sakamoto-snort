@@ -17,7 +17,12 @@ product_flow_check_vectors (product_flow_runtime_t *runtime, u16 worker,
                             u64 generation)
 {
   product_owner_assignment_t keys[9] = { 0 };
+  product_packet_facts_t facts = {
+    .l3_status = PRODUCT_PACKET_L3_COMPLETE,
+    .l4_status = PRODUCT_PACKET_L4_COMPLETE,
+  };
   product_flow_entry_packet_t packet = {
+    .facts = &facts,
     .policy = { generation, 1, 1 }, .packet_bytes = 64,
     .device_direction = PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,
   };
@@ -54,6 +59,8 @@ product_flow_check_vectors (product_flow_runtime_t *runtime, u16 worker,
   keys[8].key.address_b[15]++;
   for (u32 i = 0; i < 8; i++)
     {
+      facts.ip_family = keys[i].key.ip_family;
+      facts.protocol = keys[i].key.protocol;
       packet.timestamp++;
       if (product_flow_entry_observe (runtime, &keys[i], &packet, 0, &observation)
             != PRODUCT_FLOW_ENTRY_STATUS_OK || !observation.created
@@ -67,6 +74,8 @@ product_flow_check_vectors (product_flow_runtime_t *runtime, u16 worker,
   for (u32 i = 0; i < 8; i++)
     {
       product_owner_assignment_t reverse = keys[i];
+      facts.ip_family = keys[i].key.ip_family;
+      facts.protocol = keys[i].key.protocol;
       reverse.source_is_a = 0;
       packet.timestamp++;
       if (product_flow_entry_observe (runtime, &reverse, &packet, 0, &observation)
@@ -75,6 +84,8 @@ product_flow_check_vectors (product_flow_runtime_t *runtime, u16 worker,
           || observation.entry->packets != 2)
         return 30 + i;
     }
+  facts.ip_family = keys[8].key.ip_family;
+  facts.protocol = keys[8].key.protocol;
   if (product_flow_entry_observe (runtime, &keys[8], &packet, 0, &observation)
         != PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED || observation.entry)
     return 40;

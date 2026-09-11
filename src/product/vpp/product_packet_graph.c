@@ -2393,6 +2393,7 @@ product_packet_graph_flow_observe (
       return;
     }
   product_flow_entry_packet_t packet = {
+    .facts = &lease->facts,
     .policy = { evaluation->generation, evaluation->revision, evaluation->snapshot_hash },
     .uid = (lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
       ? lease->platform.uid : PRODUCT_FLOW_ENTRY_UID_UNKNOWN,
@@ -2465,6 +2466,20 @@ product_packet_graph_flow_observe (
       entry ? entry->decision : 0, counters.active_entries,
       (unsigned long long) counters.allocation_count, (unsigned long long) counters.reuse_count,
       (unsigned long long) counters.early_drop_count);
+    if (entry && entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP)
+      fprintf (stderr, "s223 event=udp_update source=%s generation=%llu token=%llu buffer=%u thread=%u worker=%u owner=%u slot=%u incarnation=%llu created=%u invalidated=%u phase=%u ct_state=%u flow_dir=%u update=%u timeout=%u refresh=%u close=%u replacement=%u orig_packets=%llu reply_packets=%llu\n",
+        product_packet_evidence_source (lease),
+        (unsigned long long) packet.policy.generation,
+        (unsigned long long) lease->origin_obligation_id, buffer_index,
+        vm->thread_index, worker, lease->assignment.execution_owner,
+        observation.slot, (unsigned long long) entry->incarnation,
+        observation.created, observation.revision_invalidated,
+        entry->protocol_state.udp.phase, observation.tracker.facts.state,
+        observation.tracker.facts.direction, observation.tracker.update,
+        observation.tracker.timeout, observation.tracker.refresh_deadline,
+        observation.tracker.close_old_instance, observation.tracker.create_replacement,
+        (unsigned long long) entry->side_packets[0],
+        (unsigned long long) entry->side_packets[1]);
     }
 #else
   (void) buffer_index; (void) trace; (void) event;
@@ -6131,6 +6146,10 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             (unsigned long long)e->incarnation,
             (unsigned long long)e->side_packets[0], (unsigned long long)e->side_packets[1],
             (unsigned long long)e->side_bytes[0], (unsigned long long)e->side_bytes[1]);
+          if (e->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP)
+            vlib_cli_output (vm, "flow.udp worker=%u slot=%u incarnation=%llu phase=%u",
+              worker, slot, (unsigned long long) e->incarnation,
+              e->protocol_state.udp.phase);
         }
     }
   return 0;

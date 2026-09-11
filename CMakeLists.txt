@@ -47,6 +47,7 @@ target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
 # testable before graph integration.
 add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
+  src/product/vpp/product_flow_udp.c
 )
 target_include_directories(sakamoto_product_flow_entry PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
@@ -70,6 +71,15 @@ target_link_libraries(sakamoto-product-flow-entry-test PRIVATE
 add_executable(sakamoto-product-host-fixture-abi-test
   tests/host/product_host_fixture_abi_test.c
 )
+
+add_executable(sakamoto-product-flow-udp-test
+  tests/host/product_flow_udp_test.c
+  src/product/vpp/product_packet.c
+)
+target_compile_features(sakamoto-product-flow-udp-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-flow-udp-test PRIVATE
+  -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-flow-udp-test PRIVATE sakamoto_product_flow_entry)
 target_include_directories(sakamoto-product-host-fixture-abi-test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/include"
 )
@@ -79,6 +89,7 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_test(NAME sakamoto-product-flow-udp-test COMMAND sakamoto-product-flow-udp-test)
 add_test(NAME sakamoto-product-host-fixture-abi-test
   COMMAND sakamoto-product-host-fixture-abi-test)
 add_test(NAME sakamoto-product-l4-policy-test

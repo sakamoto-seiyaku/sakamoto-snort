@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "product_packet.h"
+#include "product_flow_tracker.h"
 
 #define PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)
 #define PRODUCT_FLOW_ENTRY_UID_UNKNOWN UINT32_MAX
@@ -36,8 +37,8 @@
 #define PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT UINT8_C (1)
 #define PRODUCT_FLOW_ENTRY_DECISION_DROP UINT8_C (2)
 
-#define PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG UINT8_C (1)
-#define PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY UINT8_C (2)
+#define PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_ORIG PRODUCT_FLOW_DIRECTION_ORIG
+#define PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY PRODUCT_FLOW_DIRECTION_REPLY
 
 typedef enum
 {
@@ -68,6 +69,7 @@ typedef struct
 /* Attribution and counters accompany the already assigned typed identity. */
 typedef struct
 {
+  const product_packet_facts_t *facts; /* synchronous borrow; never stored */
   product_flow_policy_identity_t policy;
   uint32_t uid;
   uint32_t network_context;
@@ -103,10 +105,10 @@ typedef struct
   uint64_t incarnation;
   uint64_t side_packets[2]; /* ORIG, REPLY */
   uint64_t side_bytes[2];
-  /* The key protocol is the tag. Trackers are introduced by later tasks. */
+  /* The key protocol is the tag; TCP/ICMP remain unimplemented placeholders. */
   union {
     struct { uint8_t initialized; } tcp;
-    struct { uint8_t initialized; } udp;
+    product_udp_state_t udp;
     struct { uint8_t initialized; } icmp;
   } protocol_state;
 } product_flow_entry_t;
@@ -120,6 +122,7 @@ typedef struct
   uint8_t created;
   uint8_t reused;
   uint8_t revision_invalidated;
+  product_tracker_result_t tracker; /* NONE/UNKNOWN for unimplemented protocols */
 } product_flow_entry_observation_t;
 
 typedef struct
