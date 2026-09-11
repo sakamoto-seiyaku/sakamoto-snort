@@ -6,6 +6,13 @@ The former Host gtest/CTest suite, NDK daemon build, and device/DX scripts
 exercised the removed Snort C++ mainline. They are not runnable acceptance
 paths for the current product and must not be used to claim C/VPP readiness.
 
+Focused current VPP-native C evidence:
+
+- [S229 bounded Product reassembly](2026-09-11_S229_INDEPENDENT_REASSEMBLY.md).
+- [S221 owner-local FlowRuntime](2026-09-11_S221_FLOW_RUNTIME.md): shared typed storage,
+  startup capacity, processing bypass, worker/collision and stop ledgers. Protocol trackers,
+  automatic expiry and release latency/size budgets remain distinct claims.
+
 The first current product acceptance path was the combined SAKAMOTO-171/172
 Product Spine device run recorded in
 [`SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md`](SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md).

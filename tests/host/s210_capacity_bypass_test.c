@@ -21,6 +21,32 @@ remote_root (void)
 
 int main (void)
 {
+  /* S221: only a post-Gate/L4 owner-local miss can bypass FlowRuntime. */
+  for (unsigned provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE;
+       provenance <= PRODUCT_PACKET_PROVENANCE_VPN_TUN; provenance++)
+    {
+      product_packet_lease_t flow = remote_root ();
+      flow.platform.provenance = provenance;
+      product_packet_lease_t before = flow;
+      assert (product_packet_bypass_flow_capacity (&flow) == PRODUCT_PACKET_ORDER_VIOLATION);
+      assert (memcmp (&before, &flow, sizeof flow) == 0);
+      flow.policy_owner_ready = 1;
+      assert (product_packet_bypass_flow_capacity (&flow) == PRODUCT_PACKET_OK);
+      assert (flow.processing_bypass_reason == PRODUCT_PACKET_BYPASS_FLOW_CAPACITY);
+      assert (flow.terminal_intent == PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS);
+      assert (!flow.runtime_drop_reason && flow.terminal_count == 1);
+      assert (product_packet_settle (&flow) == PRODUCT_PACKET_OK);
+      assert (product_packet_settle (&flow) == PRODUCT_PACKET_ALREADY_SETTLED);
+      for (unsigned reason = PRODUCT_PACKET_DROP_POLICY_GATE;
+           reason <= PRODUCT_PACKET_DROP_POLICY_L4; reason++)
+        {
+          flow = remote_root (); flow.policy_owner_ready = 1;
+          assert (product_packet_set_terminal (&flow, PRODUCT_PACKET_INTENT_DROP_RUNTIME) == PRODUCT_PACKET_OK);
+          flow.runtime_drop_reason = reason; before = flow;
+          assert (product_packet_bypass_flow_capacity (&flow) == PRODUCT_PACKET_ORDER_VIOLATION);
+          assert (memcmp (&before, &flow, sizeof flow) == 0);
+        }
+    }
   for (unsigned reason = PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED;
        reason <= PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED; reason++)
     {

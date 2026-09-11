@@ -23,8 +23,8 @@ done
 
 # This module is a worker-local C seam, not a second runtime or a platform
 # bridge.  A source-level guard keeps the ownership boundary reviewable.
-for forbidden in '<vlib/' 'jni.h' 'jni/' 'pthread' 'malloc' 'calloc' 'realloc' \
-  'free (' '#include <new>' 'operator new' 'operator delete' 'conntrack' \
+for forbidden in '<vlib/' 'jni.h' 'jni/' 'pthread' 'realloc (' \
+  '#include <new>' 'operator new' 'operator delete' 'conntrack' \
   'Conntrack' 'sucre-snort' 'SnortConfig' \
   'product_core.api'; do
   if grep -Fq "$forbidden" "$header" "$source" "$test_source"; then
@@ -34,7 +34,7 @@ for forbidden in '<vlib/' 'jni.h' 'jni/' 'pthread' 'malloc' 'calloc' 'realloc' \
 done
 
 for token in \
-  'PRODUCT_FLOW_ENTRY_MAX_ENTRIES UINT32_C (64)' \
+  'product_flow_runtime_create' \
   'PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)' \
   'PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT' \
   'PRODUCT_FLOW_ENTRY_VERDICT_DROP' \
@@ -42,7 +42,7 @@ for token in \
   'PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY' \
   'product_flow_entry_observe' \
   'product_flow_entry_set_decision' \
-  'product_flow_entry_pool_flush' \
+  'product_flow_runtime_flush' \
   'product_flow_policy_identity_t' \
   'policy_generation' \
   'revision_invalidation_count' \
@@ -58,9 +58,14 @@ source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 observe_start = source.index("product_flow_entry_observe (")
 observe = source[observe_start:source.index("product_flow_entry_set_decision (", observe_start)]
 drop = observe.index("stage_verdict == PRODUCT_FLOW_ENTRY_VERDICT_DROP")
-find = observe.index("entry = find_entry")
+find = observe.index("slot = find_entry")
 if drop > find:
     raise AssertionError("early DROP must precede FlowEntry lookup")
+for allocation in ('malloc (', 'calloc (', 'free (', 'realloc ('):
+    assert allocation not in observe, 'no packet-side allocation: ' + allocation
+assert 'pool->free_head' in observe
+assert 'pool->buckets' in source
+assert 'PRODUCT_FLOW_ENTRY_MAX_ENTRIES' not in source
 if "product_flow_entry_publish_revision" in source or "active_policy_revision" in source:
     raise AssertionError("FlowEntry must have no publisher-side epoch mutation API")
 for identity in ("policy_generation == policy->generation", "policy_revision == policy->revision", "policy_snapshot_hash == policy->snapshot_hash"):
@@ -80,14 +85,16 @@ grep -Fq 'sakamoto-product-flow-entry-test' "$root_cmake"
 grep -Fq 'sakamoto-product-flow-entry-contract' "$root_cmake"
 grep -Fq 'product_flow_entry.c' "$vpp_cmake"
 
-echo "sakamoto S208 owner-local FlowEntry contract: PASS"
+echo "sakamoto S221 owner-local FlowRuntime contract: PASS"
 
 python3 - "$repo_root" <<'PY_OWNER'
 import re,sys
 from pathlib import Path
 root=Path(sys.argv[1]);source=(root/'src/product/vpp/product_flow_entry.c').read_text()
 assert not re.search(r'product_flow_entry_owner_for_packet|observe_on_owner|endpoint_compare|hash_bytes',source)
-assert 'memcmp (&entry->key, &assignment->key, sizeof (entry->key))' in source
+assert 'key_equal (&entry->key, &assignment->key)' in source
+for field in ('a->kind != b->kind', 'a->ip_family != b->ip_family', 'a->protocol != b->protocol', 'a->query_class == b->query_class', 'a->transport.query.identifier == b->transport.query.identifier', 'a->transport.ports.a == b->transport.ports.a', 'a->transport.ports.b == b->transport.ports.b'):
+    assert field in source, field
 text=(root/'src/product/vpp/product_packet_graph.c').read_text()
 flow=text.split('static void\nproduct_packet_graph_flow_observe (',1)[1].split('typedef struct',1)[0]
 assert 'vlib_get_worker_index (vm->thread_index)' in flow and 'flow_pools[worker]' in flow

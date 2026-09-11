@@ -4,17 +4,17 @@
 #define SAKAMOTO_PRODUCT_FLOW_ENTRY_H
 
 /*
- * This is the small stateful seam for the first Product flow release.  It is
- * deliberately independent of VPP, Android, Rust, and the policy ABI.  A
- * caller owns one pool per worker. Early DROP only records rejection;
- * PASS_NEXT performs the bounded owner-local lookup/create.
+ * Worker-local FlowRuntime owns one preallocated pool and hash index for all
+ * tracked protocols. It is independent of VPP, Android, Rust and the policy
+ * ABI. Early DROP only records rejection; PASS_NEXT performs lookup/create.
+ * Creation/destruction/flush require stopped or drained owner execution;
+ * ordinary observe/decision calls allocate nothing and never access a peer.
  */
 
 #include <stddef.h>
 #include <stdint.h>
 #include "product_packet.h"
 
-#define PRODUCT_FLOW_ENTRY_MAX_ENTRIES UINT32_C (64)
 #define PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)
 #define PRODUCT_FLOW_ENTRY_UID_UNKNOWN UINT32_MAX
 #define PRODUCT_FLOW_ENTRY_NETWORK_CONTEXT_UNKNOWN UINT32_MAX
@@ -52,6 +52,8 @@ typedef enum
   PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND,
   PRODUCT_FLOW_ENTRY_STATUS_STALE_REVISION,
   PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION,
+  PRODUCT_FLOW_ENTRY_STATUS_ALLOCATION_FAILED,
+  PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION,
 } product_flow_entry_status_t;
 
 /* Identity of the immutable snapshot acquired by this packet. Revision/hash
@@ -98,11 +100,21 @@ typedef struct
   uint64_t policy_snapshot_hash;
   uint64_t winner_rule_id;
   uint32_t reason_id;
+  uint64_t incarnation;
+  uint64_t side_packets[2]; /* ORIG, REPLY */
+  uint64_t side_bytes[2];
+  /* The key protocol is the tag. Trackers are introduced by later tasks. */
+  union {
+    struct { uint8_t initialized; } tcp;
+    struct { uint8_t initialized; } udp;
+    struct { uint8_t initialized; } icmp;
+  } protocol_state;
 } product_flow_entry_t;
 
 typedef struct
 {
-  product_flow_entry_t *entry;
+  const product_flow_entry_t *entry; /* borrowed until owner mutation/flush */
+  uint32_t slot;
   uint16_t owner_worker;
   uint8_t flow_direction;
   uint8_t created;
@@ -114,6 +126,10 @@ typedef struct
 {
   uint16_t worker_index;
   uint16_t worker_count;
+  uint64_t generation;
+  uint64_t allocated_bytes;
+  uint32_t capacity;
+  uint32_t high_watermark;
   uint32_t active_entries;
   uint64_t allocation_count;
   uint64_t reuse_count;
@@ -121,24 +137,33 @@ typedef struct
   uint64_t wrong_owner_count;
   uint64_t capacity_rejection_count;
   uint64_t revision_invalidation_count;
-  uint64_t unavailable_count;
   uint64_t revision_mismatch_count;
   uint64_t flush_count;
-  product_flow_entry_t entries[PRODUCT_FLOW_ENTRY_MAX_ENTRIES];
-} product_flow_entry_pool_t;
+  struct {
+    uint32_t active;
+    uint64_t creates;
+    uint64_t hits;
+    uint64_t capacity_misses;
+  } protocol[3]; /* TCP, UDP, ICMP_QUERY, sharing one total capacity */
+} product_flow_runtime_snapshot_t;
 
-/* Initialize one fixed-capacity pool for one canonical flow owner. */
+typedef struct product_flow_runtime product_flow_runtime_t;
+
+/* Allocate once before admission. *runtime must be NULL; failure leaves it NULL.
+ * Capacity is explicit, immutable until destruction, and has no protocol quota.
+ * generation is immutable; no entry or borrowed pointer survives recreation. */
 product_flow_entry_status_t
-product_flow_entry_pool_init (product_flow_entry_pool_t *pool,
-                              uint16_t worker_index, uint16_t worker_count);
+product_flow_runtime_create (product_flow_runtime_t **runtime,
+                             uint16_t worker_index, uint16_t worker_count,
+                             uint64_t generation, uint32_t capacity);
 
 /*
  * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment
  * on the caller's current-worker pool; there is no owner selector or remote
- * pool accessor here. L4_PORTS is the bounded S208 eligibility scope.
+ * pool accessor here. TCP/UDP L4_PORTS and ICMP_QUERY share this runtime.
  */
 product_flow_entry_status_t
-product_flow_entry_observe (product_flow_entry_pool_t *pool,
+product_flow_entry_observe (product_flow_runtime_t *pool,
                             const product_owner_assignment_t *assignment,
                             const product_flow_entry_packet_t *packet,
                             uint8_t stage_verdict,
@@ -146,16 +171,22 @@ product_flow_entry_observe (product_flow_entry_pool_t *pool,
 
 /* Cache only the decision from this packet's acquired snapshot. */
 product_flow_entry_status_t
-product_flow_entry_set_decision (product_flow_entry_pool_t *pool,
-                                 product_flow_entry_t *entry,
+product_flow_entry_set_decision (product_flow_runtime_t *pool,
+                                 const product_flow_entry_t *entry,
                                  const product_flow_policy_identity_t *policy,
                                  uint8_t decision, uint64_t winner_rule_id,
                                  uint32_t reason_id);
 
 /* Stop/profile boundary: clear every slot without changing pool capacity. */
-void product_flow_entry_pool_flush (product_flow_entry_pool_t *pool);
+void product_flow_runtime_flush (product_flow_runtime_t *pool);
+void product_flow_runtime_destroy (product_flow_runtime_t *pool);
+/* Diagnostics require the current owner or a drained/control worker barrier. */
+product_flow_runtime_snapshot_t product_flow_runtime_snapshot (
+  const product_flow_runtime_t *pool);
+const product_flow_entry_t *product_flow_runtime_entry (
+  const product_flow_runtime_t *pool, uint32_t slot);
 
 uint32_t product_flow_entry_pool_active_count (
-  const product_flow_entry_pool_t *pool);
+  const product_flow_runtime_t *pool);
 
 #endif

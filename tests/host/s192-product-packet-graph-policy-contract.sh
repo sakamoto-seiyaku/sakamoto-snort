@@ -77,9 +77,9 @@ grep -q '#include "product_flow_entry.h"' "$graph_source" ||
   fail "graph does not consume the bounded FlowEntry seam"
 grep -q 'flow_pools\[PRODUCT_GRAPH_WORKERS\]' "$graph_source" ||
   fail "graph does not own one fixed FlowEntry pool per worker"
-for flow_symbol in product_flow_entry_pool_init \
+for flow_symbol in product_flow_runtime_create \
   product_flow_policy_identity_t product_flow_entry_observe \
-  product_flow_entry_set_decision product_flow_entry_pool_flush \
+  product_flow_entry_set_decision product_flow_runtime_flush \
   product_packet_graph_flow_status; do
   grep -q "$flow_symbol" "$graph_source" "$graph_header" ||
     fail "graph FlowEntry integration omits $flow_symbol"
@@ -420,7 +420,7 @@ count_line() {
 require_flow_common() {
   local output="$1"
   require_line "$output" 'graph.flow_worker_count=2'
-  require_line "$output" 'graph.flow_max_entries_per_worker=64'
+  require_line "$output" 'graph.flow_max_entries_per_worker=1024'
   [[ "$(field "$output" graph.flow_active_generation)" == \
      "$(field "$output" graph.generation)" ]] ||
     fail "FlowEntry status is not tied to the active graph generation"

@@ -508,6 +508,22 @@ product_packet_bypass_primary_capacity (
 }
 
 product_packet_result_t
+product_packet_bypass_flow_capacity (product_packet_lease_t *lease)
+{
+  if (!lease)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  if (!lease->assignment.valid || !lease->policy_owner_ready
+      || lease->terminal_count || lease->settled
+      || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE
+      || lease->runtime_drop_reason != PRODUCT_PACKET_DROP_NONE)
+    return PRODUCT_PACKET_ORDER_VIOLATION;
+  lease->terminal_intent = PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  lease->processing_bypass_reason = PRODUCT_PACKET_BYPASS_FLOW_CAPACITY;
+  lease->terminal_count = 1;
+  return PRODUCT_PACKET_OK;
+}
+
+product_packet_result_t
 product_packet_settle (product_packet_lease_t *lease)
 {
   if (lease == NULL)

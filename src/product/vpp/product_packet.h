@@ -45,7 +45,7 @@ typedef enum
   PRODUCT_PACKET_INTENT_NONE = 0,
   PRODUCT_PACKET_INTENT_PASS_ADAPTER,
   PRODUCT_PACKET_INTENT_DROP_RUNTIME,
-  /* Root pre-policy capacity disposition; never a Policy Verdict. */
+  /* Processing-resource disposition; never a Policy Verdict. */
   PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS,
 } product_packet_terminal_intent_t;
 
@@ -55,6 +55,7 @@ typedef enum
   PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED,
   PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED,
   PRODUCT_PACKET_BYPASS_REASSEMBLY_RESOURCE,
+  PRODUCT_PACKET_BYPASS_FLOW_CAPACITY,
 } product_packet_processing_bypass_reason_t;
 
 typedef enum
@@ -250,6 +251,10 @@ product_packet_result_t
 product_packet_bypass_primary_capacity (
   product_packet_lease_t *lease,
   product_packet_processing_bypass_reason_t reason);
+
+/* Owner-local FlowRuntime capacity miss, after Gate/L4 passed. */
+product_packet_result_t product_packet_bypass_flow_capacity (
+  product_packet_lease_t *lease);
 
 product_packet_result_t
 product_packet_admit (const product_worker_layout_t *layout,

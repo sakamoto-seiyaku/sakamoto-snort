@@ -260,7 +260,10 @@ typedef struct
   u64 flow_active_policy_revision;
   u64 flow_active_snapshot_hash;
   u64 flow_flush_count;
-  product_flow_entry_pool_t flow_pools[PRODUCT_GRAPH_WORKERS];
+  product_flow_runtime_t *flow_pools[PRODUCT_GRAPH_WORKERS];
+  u32 flow_capacity;
+  u64 flow_unavailable[PRODUCT_GRAPH_WORKERS];
+  u64 flow_mutation_errors[PRODUCT_GRAPH_WORKERS];
   u64 gate_policy_revision;
   u64 gate_policy_snapshot_hash;
   u64 gate_policy_rule_id;
@@ -1627,6 +1630,7 @@ VLIB_NODE_FN (product_packet_policy_node)
 #endif
       product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
       metadata.runtime_drop_reason = lease.runtime_drop_reason;
+      metadata.processing_bypass_reason = lease.processing_bypass_reason;
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_POLICY,
                          metadata.origin_obligation_id);
@@ -2219,12 +2223,28 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   clib_memset (graph->policy_workers, 0, sizeof (graph->policy_workers));
   graph->policy_packet_lock_acquisitions = 0;
   graph->policy_publications = 0;
+  clib_memset (graph->flow_unavailable, 0, sizeof (graph->flow_unavailable));
+  clib_memset (graph->flow_mutation_errors, 0, sizeof (graph->flow_mutation_errors));
+  /* Provisional development setting, not a release sizing decision. */
+  if (!graph->flow_capacity)
+    graph->flow_capacity = 1024;
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
-    if (product_flow_entry_pool_init (
-          &graph->flow_pools[worker], (u16) worker,
-          PRODUCT_GRAPH_WORKERS)
-        != PRODUCT_FLOW_ENTRY_STATUS_OK)
-      return 0;
+    {
+      product_flow_runtime_destroy (graph->flow_pools[worker]);
+      graph->flow_pools[worker] = 0;
+    }
+  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+    if (product_flow_runtime_create (
+          &graph->flow_pools[worker], (u16) worker, PRODUCT_GRAPH_WORKERS,
+          graph->generation, graph->flow_capacity) != PRODUCT_FLOW_ENTRY_STATUS_OK)
+      {
+        for (u32 cleanup = 0; cleanup < PRODUCT_GRAPH_WORKERS; cleanup++)
+          {
+            product_flow_runtime_destroy (graph->flow_pools[cleanup]);
+            graph->flow_pools[cleanup] = 0;
+          }
+        return 0;
+      }
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
   clib_atomic_store_rel_n (&graph->flow_active_snapshot_hash, 0);
   clib_atomic_store_rel_n (&graph->flow_flush_count, 0);
@@ -2242,7 +2262,7 @@ product_packet_graph_flow_pools_flush (product_packet_graph_main_t *graph)
     return;
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     {
-      product_flow_entry_pool_flush (&graph->flow_pools[worker]);
+      product_flow_runtime_flush (graph->flow_pools[worker]);
 
     }
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
@@ -2262,7 +2282,7 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
   clib_memset (status, 0, sizeof (*status));
   product_packet_graph_policy_writer_lock (graph);
   status->worker_count = PRODUCT_GRAPH_WORKERS;
-  status->max_entries_per_worker = PRODUCT_FLOW_ENTRY_MAX_ENTRIES;
+  status->max_entries_per_worker = graph->flow_capacity;
   status->active_generation =
     clib_atomic_load_acq_n (&graph->flow_pools_initialized) != 0
       ? graph->generation
@@ -2275,7 +2295,8 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
    * aggregates pools; packets update their current worker's counters alone. */
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     {
-      const product_flow_entry_pool_t *pool = &graph->flow_pools[worker];
+      product_flow_runtime_snapshot_t snapshot = product_flow_runtime_snapshot (graph->flow_pools[worker]);
+      const product_flow_runtime_snapshot_t *pool = &snapshot;
       status->active_entries += pool->active_entries;
       status->allocation_count += pool->allocation_count;
       status->reuse_count += pool->reuse_count;
@@ -2283,8 +2304,8 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
       status->wrong_owner_count += pool->wrong_owner_count;
       status->capacity_rejection_count += pool->capacity_rejection_count;
       status->revision_invalidation_count += pool->revision_invalidation_count;
-      status->revision_mismatch_count += pool->revision_mismatch_count;
-      status->unavailable_count += pool->unavailable_count;
+      status->revision_mismatch_count += pool->revision_mismatch_count + graph->flow_mutation_errors[worker];
+      status->unavailable_count += graph->flow_unavailable[worker];
       status->pass_next_count += pool->allocation_count + pool->reuse_count;
       status->drop_count += pool->early_drop_count;
     }
@@ -2363,11 +2384,12 @@ product_packet_graph_flow_observe (
     return;
   u16 worker = (u16) vlib_get_worker_index (vm->thread_index);
   /* The only packet-side pool lookup uses the actual executing worker. */
-  product_flow_entry_pool_t *pool = &product_packet_graph_main.flow_pools[worker];
+  product_flow_runtime_t *pool = product_packet_graph_main.flow_pools[worker];
   if (!lease->assignment.valid
-      || lease->assignment.key.kind != PRODUCT_OWNER_KEY_L4_PORTS)
+      || (lease->assignment.key.kind != PRODUCT_OWNER_KEY_L4_PORTS
+          && lease->assignment.key.kind != PRODUCT_OWNER_KEY_ICMP_QUERY))
     {
-      pool->unavailable_count++;
+      product_packet_graph_main.flow_unavailable[worker]++;
       return;
     }
   product_flow_entry_packet_t packet = {
@@ -2385,7 +2407,7 @@ product_packet_graph_flow_observe (
     ? PRODUCT_FLOW_ENTRY_VERDICT_DROP : PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT;
   product_flow_entry_status_t status = product_flow_entry_observe (
     pool, &lease->assignment, &packet, stage_verdict, &observation);
-  product_flow_entry_t *entry = observation.entry;
+  const product_flow_entry_t *entry = observation.entry;
   const char *event = "observe";
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK)
     {
@@ -2406,23 +2428,28 @@ product_packet_graph_flow_observe (
     {
       event = "runtime_drop";
       if (status != PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
-          && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER)
-        pool->revision_mismatch_count++;
-      if (lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+          && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER
+          && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION)
+        product_packet_graph_main.flow_mutation_errors[worker]++;
+      if (status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
+          && product_packet_bypass_flow_capacity (lease) == PRODUCT_PACKET_OK)
+        event = "capacity_bypass";
+      else if (lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
         {
           lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
           lease->terminal_count = 1;
-          lease->runtime_drop_reason = status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
-            ? PRODUCT_PACKET_DROP_FLOW_CAPACITY : PRODUCT_PACKET_DROP_FLOW_MUTATION;
+          lease->runtime_drop_reason = PRODUCT_PACKET_DROP_FLOW_MUTATION;
         }
     }
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (trace)
+    {
+    product_flow_runtime_snapshot_t counters = product_flow_runtime_snapshot (pool);
     fprintf (stderr, "s208 event=%s source=%s generation=%llu token=%llu buffer=%u thread=%u worker=%u owner=%u pool_worker=%u pool=%p slot=%u status=%u created=%u reused=%u invalidated=%u key_kind=%u hash=%llu stored_hash=%llu stored_kind=%u source_is_a=%u origin_is_a=%u flow_origin_dir=%u device_dir=%u flow_dir=%u packets=%llu bytes=%llu first_seen=%llu last_seen=%llu revision=%llu snapshot_hash=%llu policy_generation=%llu decision=%u active=%u allocations=%llu reuse_count=%llu early_drops=%llu\n",
       event, product_packet_evidence_source (lease), (unsigned long long) packet.policy.generation,
       (unsigned long long) lease->origin_obligation_id, buffer_index,
-      vm->thread_index, worker, lease->assignment.execution_owner, pool->worker_index,
-      (void *) pool, entry ? (u32) (entry - pool->entries) : ~0U, status,
+      vm->thread_index, worker, lease->assignment.execution_owner, counters.worker_index,
+      (void *) pool, observation.slot, status,
       observation.created, observation.reused, observation.revision_invalidated,
       lease->assignment.key.kind, (unsigned long long) lease->assignment.canonical_hash,
       (unsigned long long) (entry ? entry->canonical_hash : 0), entry ? entry->key.kind : 0,
@@ -2435,9 +2462,10 @@ product_packet_graph_flow_observe (
       (unsigned long long) (entry ? entry->policy_revision : packet.policy.revision),
       (unsigned long long) (entry ? entry->policy_snapshot_hash : packet.policy.snapshot_hash),
       (unsigned long long) (entry ? entry->policy_generation : packet.policy.generation),
-      entry ? entry->decision : 0, pool->active_entries,
-      (unsigned long long) pool->allocation_count, (unsigned long long) pool->reuse_count,
-      (unsigned long long) pool->early_drop_count);
+      entry ? entry->decision : 0, counters.active_entries,
+      (unsigned long long) counters.allocation_count, (unsigned long long) counters.reuse_count,
+      (unsigned long long) counters.early_drop_count);
+    }
 #else
   (void) buffer_index; (void) trace; (void) event;
 #endif
@@ -6030,7 +6058,8 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
     clib_atomic_load_acq_n (&g->lifecycle_handoffs),
     clib_atomic_load_acq_n (&g->handoff_credits[0]),
     clib_atomic_load_acq_n (&g->handoff_credits[1]),
-    g->flow_pools[0].active_entries + g->flow_pools[1].active_entries);
+    product_flow_entry_pool_active_count (g->flow_pools[0])
+      + product_flow_entry_pool_active_count (g->flow_pools[1]));
   return 0;
 }
 VLIB_CLI_COMMAND (product_primary_status_command, static) = {
@@ -6056,7 +6085,8 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
   product_policy_snapshot_release (g, &snapshot);
   for (u32 worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     {
-      product_flow_entry_pool_t *pool = &g->flow_pools[worker];
+      product_flow_runtime_snapshot_t snapshot = product_flow_runtime_snapshot (g->flow_pools[worker]);
+      const product_flow_runtime_snapshot_t *pool = &snapshot;
       const product_policy_worker_t *policy = &g->policy_workers[worker];
       vlib_cli_output (vm, "policy.worker worker=%u acquired=%llu released=%llu retired=%llu mismatches=%llu generation=%llu revision=%llu snapshot_hash=%llu",
         worker, (unsigned long long) policy->acquired, (unsigned long long) policy->released,
@@ -6064,18 +6094,30 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
         (unsigned long long) policy->generation, (unsigned long long) policy->revision,
         (unsigned long long) policy->snapshot_hash);
       vlib_cli_output (vm, "flow.pool worker=%u pool=%p entries=%u allocations=%llu reused=%llu early_drops=%llu wrong_owner=%llu capacity_drops=%llu invalidations=%llu flushes=%llu revision=%llu snapshot_hash=%llu epoch_source=last_packet unavailable=%llu revision_mismatches=%llu",
-        worker, (void *)pool, pool->active_entries,
+        worker, (void *)g->flow_pools[worker], pool->active_entries,
         (unsigned long long)pool->allocation_count, (unsigned long long)pool->reuse_count,
         (unsigned long long)pool->early_drop_count, (unsigned long long)pool->wrong_owner_count,
         (unsigned long long)pool->capacity_rejection_count,
         (unsigned long long)pool->revision_invalidation_count, (unsigned long long)pool->flush_count,
         (unsigned long long)policy->revision, (unsigned long long)policy->snapshot_hash,
-        (unsigned long long) pool->unavailable_count, (unsigned long long) pool->revision_mismatch_count);
-      for (u32 slot = 0; slot < PRODUCT_FLOW_ENTRY_MAX_ENTRIES; slot++)
+        (unsigned long long) g->flow_unavailable[worker],
+        (unsigned long long) (pool->revision_mismatch_count + g->flow_mutation_errors[worker]));
+      vlib_cli_output (vm, "flow.runtime worker=%u generation=%llu capacity=%u high_watermark=%u allocated_bytes=%llu entry_bytes=%u capacity_misses=%llu",
+        worker, (unsigned long long) pool->generation, pool->capacity, pool->high_watermark,
+        (unsigned long long) pool->allocated_bytes, (u32) sizeof (product_flow_entry_t),
+        (unsigned long long) pool->capacity_rejection_count);
+      for (u32 protocol = 0; protocol < 3; protocol++)
+        vlib_cli_output (vm, "flow.protocol worker=%u protocol=%s active=%u creates=%llu hits=%llu capacity_misses=%llu",
+          worker, protocol == 0 ? "tcp" : protocol == 1 ? "udp" : "icmp_query",
+          pool->protocol[protocol].active,
+          (unsigned long long) pool->protocol[protocol].creates,
+          (unsigned long long) pool->protocol[protocol].hits,
+          (unsigned long long) pool->protocol[protocol].capacity_misses);
+      for (u32 slot = 0; slot < pool->capacity; slot++)
         {
-          const product_flow_entry_t *e = &pool->entries[slot];
-          if (!e->in_use) continue;
-          vlib_cli_output (vm, "flow.entry worker=%u slot=%u kind=%u family=%u protocol=%u hash=%llu key_a=%U key_b=%U port_a=%u port_b=%u origin_is_a=%u flow_origin_dir=%u device_dir=%u flow_dir=%u uid=%u context=%u packets=%llu bytes=%llu first_seen=%llu last_seen=%llu policy_generation=%llu revision=%llu snapshot_hash=%llu decision=%u rule=%llu",
+          const product_flow_entry_t *e = product_flow_runtime_entry (g->flow_pools[worker], slot);
+          if (!e) continue;
+          vlib_cli_output (vm, "flow.entry worker=%u slot=%u kind=%u family=%u protocol=%u hash=%llu key_a=%U key_b=%U port_a=%u port_b=%u origin_is_a=%u flow_origin_dir=%u device_dir=%u flow_dir=%u uid=%u context=%u packets=%llu bytes=%llu first_seen=%llu last_seen=%llu policy_generation=%llu revision=%llu snapshot_hash=%llu decision=%u rule=%llu query_class=%u identifier=%u incarnation=%llu orig_packets=%llu reply_packets=%llu orig_bytes=%llu reply_bytes=%llu",
             worker, slot, e->key.kind, e->key.ip_family, e->key.protocol,
             (unsigned long long)e->canonical_hash,
             format_hex_bytes, e->key.address_a, 16, format_hex_bytes, e->key.address_b, 16,
@@ -6084,13 +6126,40 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             e->uid, e->network_context, (unsigned long long)e->packets, (unsigned long long)e->bytes,
             (unsigned long long)e->first_seen, (unsigned long long)e->last_seen,
             (unsigned long long)e->policy_generation, (unsigned long long)e->policy_revision, (unsigned long long)e->policy_snapshot_hash,
-            e->decision, (unsigned long long)e->winner_rule_id);
+            e->decision, (unsigned long long)e->winner_rule_id,
+            e->key.query_class, e->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY ? e->key.transport.query.identifier : 0,
+            (unsigned long long)e->incarnation,
+            (unsigned long long)e->side_packets[0], (unsigned long long)e->side_packets[1],
+            (unsigned long long)e->side_bytes[0], (unsigned long long)e->side_bytes[1]);
         }
     }
   return 0;
 }
 VLIB_CLI_COMMAND (product_flow_status_command, static) = {
   .path = "show product flows", .function = product_flow_status_cli,
+};
+
+static clib_error_t *
+product_flow_capacity_cli (vlib_main_t *vm, unformat_input_t *input,
+                           vlib_cli_command_t *command)
+{
+  product_packet_graph_main_t *g = &product_packet_graph_main;
+  u64 capacity;
+  (void) command;
+  if (!unformat (input, "%llu", &capacity) || !capacity
+      || capacity > UINT32_MAX / 4
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    return clib_error_return (0, "expected a positive startup entry capacity");
+  if (g->enabled || g->lifecycle_obligations || g->lifecycle_buffers
+      || g->lifecycle_handoffs || g->lifecycle_completion_frames)
+    return clib_error_return (0, "capacity changes require stopped, drained runtime");
+  g->flow_capacity = (u32) capacity;
+  vlib_cli_output (vm, "flow.capacity next_start=%u live_resize=0", (u32) capacity);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_flow_capacity_command, static) = {
+  .path = "product flow capacity", .short_help = "product flow capacity <entries-per-worker> (stopped only)",
+  .function = product_flow_capacity_cli,
 };
 
 static clib_error_t *
@@ -6384,14 +6453,31 @@ VLIB_CLI_COMMAND (product_metadata_check_command, static) = {
 };
 #endif
 
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+#include "product_flow_collision_check.inc"
+#endif
+
+static clib_error_t *
+product_flow_startup_config (vlib_main_t *vm, unformat_input_t *input)
+{
+  (void) vm;
+  u64 capacity = 1024; /* Check before narrowing: unformat %u truncates u64. */
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    if (!unformat (input, "entries %llu", &capacity) || !capacity
+        || capacity > UINT32_MAX / 4)
+      return clib_error_return (0, "product-flow-runtime: expected entries <positive capacity>");
+  product_packet_graph_main.flow_capacity = (u32) capacity;
+  return 0;
+}
+VLIB_CONFIG_FUNCTION (product_flow_startup_config, "product-flow-runtime");
+
 static clib_error_t *
 product_packet_graph_init (vlib_main_t *vm)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u32 worker;
   graph->vlib_main = vm;
-  if (!product_packet_graph_flow_pools_reset (graph))
-    return clib_error_return (0, "failed to initialize graph FlowEntry pools");
+  /* Storage belongs to an Adapter generation and is allocated at start. */
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     clib_atomic_store_rel_n (&graph->handoff_credits[worker],
                              PRODUCT_GRAPH_HANDOFF_CREDITS);

@@ -10,13 +10,50 @@ state 由该 worker 私有拥有。其他合法协议仍有稳定 ExecutionOwner
 TCP/UDP FlowEntry。选择该模型是为了参考已验证的 VPP/session-manager 架构，避免共享
 authoritative flow table 的跨 worker update、锁和 cache-line ownership 成为长期基础。
 
+### 2026-09-11 FlowRuntime 参考范围
+
+FlowRuntime 使用本产品的职责、术语与 Interface，不将外部参考项目名称、模块名或本地
+源码路径作为设计契约。设计复用不等于代码导入，也不以 upstream VPP session 子系统
+替代产品流生命周期。端点规模通过启动容量配置适配，不因此简化正确的结束与回收流程。
+
+FlowRuntime 协调当前 owner 上的查找、创建、更新和结束；内部 table 负责索引，pool 负责
+存储与槽位分配回收，协议 tracker 更新状态并确定 timeout/结束判断，Expiry 管理 deadline
+并触发统一结束，FlowEnd 承载下游结束处理。调用方不分别操作 table/timer/pool 拼装关闭。
+协议 tracker 的状态与 timeout 语义继续取自 OVS。
+
+FlowEntry 容量独立配置、启动预分配、重启生效，运行中不自动扩容。旧 64 槽/owner 仅为
+历史基础实现事实，不作为正式默认值或隐藏上限。S221 使用 opaque、统一 TCP/UDP/ICMP_QUERY
+runtime，table/pool/free-list 不暴露给 packet caller；1024/worker 是可替换的开发设置。
+正式默认值根据完整 entry、索引、timer 等内存
+占用、worker 数量和端点流量验证确定，计入等待超时及等待 FlowEnd 回收的占用。
+配置非法、溢出或预分配失败明确启动失败，不静默缩小容量。已有流不因新流满池被驱逐，
+不跨 owner 借位；普通满池保留 Gate/L4 结果，允许包跳过依赖 FlowEntry 的处理并记录
+capacity bypass，策略 DROP 仍 DROP。回收后自然恢复建表，不因此停止 VPP。
+
+正常 close 先移除查找索引与 timer，再保留旧 entry 供 FlowEnd 消费，最后由 native buffer
+free callback 归还槽位。同 tuple 可以在另一空闲槽建立新流，不提前覆盖旧槽。
+FlowEnd 使用独立无 payload buffer，不长期保留 NFQ/TUN 首包，不带 AdapterObligation。
+
+FlowEnd buffer 分配失败属于 runtime 级致命故障，而非普通流表满；可能是 VPP buffer 池
+耗尽，不等于已证明整机 OOM。停止 ingress，通过现有监督层有界清理并退出故障 runtime。
+个人终端以联网连续性为先：NFQ 撤销本产品捕获规则并清理队列，VPN 撤销本产品 VPN/TUN
+接管与路由，不能留下死队列或无人读取的 TUN。恢复系统联网不等待 VPP 重启；后续功能
+恢复使用新 generation，连续失败限制重启频率并明确报告保护停止。不得伪称全部原始包、
+verdict 或 FlowEnd 已完成；故障瞬间个别包可能丢失，不能持续黑洞。平台强制的 VPN lockdown
+等外部约束仍有效，产品不能绕过或把受其阻止的联网报告为已恢复。
+
+Expiry 在没有新包时也须推进，有界批量回收以免长时间占住 worker；逻辑到期后 lookup
+不得复用旧流，物理回收统一走 FlowEnd。min-heap 只是候选，具体容器与 polling/唤醒方式
+由后续验证选择。下文约 1 秒的正常负载实验目标不变，不是任意负载下的硬实时承诺。
+该校准保留唯一 owner、运行期容量冻结、无迁移/借位和明确生命周期的约束。
+
 Owner Selector 只使用 direction-independent typed Canonical Owner Key。三种显式 shape 都包含
 key kind、IP family、terminal IP protocol 和 canonical address pair：`L4_PORTS` 在完整 TCP/UDP
 具备 typed ports 时包含 canonical port pair；`ICMP_QUERY` 包含归一化 Echo query class 与
 identifier，request/reply 共用 identity，sequence 只属于 PacketFacts/trace；其他合法协议或
 valid L3 with unavailable transport identity 使用 `L3`。缺失端口不能伪造为零端口五元组。
 Canonical Flow Key 是可供后续 FlowEntry/tracker 消费的 `L4_PORTS` 或 `ICMP_QUERY` identity；
-本轮 assignment 不代表 ICMP tracker 或 entry 创建已经实现。
+assignment 本身不创建 entry；S221 可按该 identity 创建 ICMP_QUERY entry，仍不代表 ICMP tracker。
 complete Linux UID、Android user/profile、Network Gate、interface、capture queue、CPU 和 Root/VPN
 Runtime Profile 都不进入 handoff hash，也不进入 FlowEntry identity。
 

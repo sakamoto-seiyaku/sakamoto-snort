@@ -707,7 +707,8 @@ product_root_nfqueue_complete_from_graph (
     && completion->runtime_drop_reason == PRODUCT_PACKET_DROP_NONE
     && (completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED
         || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_PRIMARY_ENQUEUE_REJECTED
-        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_REASSEMBLY_RESOURCE);
+        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_REASSEMBLY_RESOURCE
+        || completion->processing_bypass_reason == PRODUCT_PACKET_BYPASS_FLOW_CAPACITY);
   u32 verdict = completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER || capacity_bypass
                   ? NF_ACCEPT : NF_DROP;
 

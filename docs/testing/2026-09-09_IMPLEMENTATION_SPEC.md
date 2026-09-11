@@ -202,24 +202,28 @@ CLI worker barrier 会影响时序；压力窗口中不能用全局 barrier 查�
 
 ### 4.1 已有状态与改造方式
 
-[代码事实] `product_flow_entry_pool_t` 含 64 个内联 entry；`find_entry/free_entry` 都线性扫描。
-eligibility 只接受 TCP/UDP `L4_PORTS`；graph 在完整 Gate/L4 执行后调用 flow observe。
-容量不足目前映射 `PRODUCT_PACKET_DROP_FLOW_CAPACITY`。policy revision mismatch 只清缓存，
-保留 identity/counters；这项语义保留。
+[S221 前的代码事实，现已替换] 原 `product_flow_entry_pool_t` 含 64 个内联 entry，
+lookup/free-slot 均线性扫描，只接纳 TCP/UDP；容量不足曾映射 runtime DROP。
+[2026-09-11 实现] 现为 opaque `product_flow_runtime_t`，支持 TCP/UDP/ICMP_QUERY 共用
+预分配 table/pool。graph 仍在 Gate/L4 后 observe；普通新流容量不足使用 processing bypass。
+policy revision mismatch 只失效 decision，保留 identity/counters；runtime generation 不匹配则拒绝。
 
 [实施基线；具体布局按 §1 的 2026-09-11 校准复核] 原地替换扫描实现，保留 `product_flow_entry` 文件和已有命名家族。
 使用启动时一次分配的 entry array + fixed bucket-head array + index-based intrusive 链 + free-list。
 不使用可增长 VPP pool 来暗中突破硬上限，不加入 LRU/eviction/跨 owner 借位。
 bucket 个数取不小于 `2*entry_capacity` 的最小 2 次幂；启动校验乘法/round-up 溢出。
-bucket 由现有 canonical hash 的高位折叠选择，例如 `((h >> 32) ^ (h >> 16)) & mask`；
+bucket 由现有 canonical hash 折叠选择，当前为 `(h ^ (h >> 32) ^ (h >> 16)) & mask`；
 不重算 hash，不把它当第二次 owner selection。最坏 lookup 有 capacity 次遍历的硬界。
 
-每槽 private metadata：`bucket_next`、`free_next`、`allocation_serial`、`linked`、`allocated`。
+S221 的 FREE/LINKED 两态复用一个 private `next` 字段分别承载 free-list/bucket 链，
+不用重复存储两套 link。entry 的只读 `incarnation` 记录 allocation serial，不是外部 flow identity。
 invalid index 为 `UINT32_MAX`，0 是合法 slot。删除从 bucket unlink，不移动其他 entry。
 池初始化失败整体启动失败，不以减小容量偷偷继续；destroy 只在图排空后执行。
 FlowEntry 容量独立 startup-only 配置，重启生效；64/owner 仅为旧实现事实，不作为正式默认值。
 正式默认值待完整 entry/索引/timer 内存、worker 数量与端点流量验证确定，须包含等待超时
 及等待 FlowEnd 回收的占用。不得写成固定数组或隐藏硬上限；实验必须记录实际启动配置。
+当前 VPP stanza 为 `product-flow-runtime { entries N }`；1024/worker 仅是开发 composition
+设置。`product flow capacity N` 只接受 stopped/drained runtime，作用于下次 start。
 
 full-key equality 必须比较 kind/family/protocol、两端地址以及相应 union 有效字段：
 L4 比较两端 port；ICMP_QUERY 比较 query_class/identifier。不依赖结构体 padding 的 memcmp。
@@ -230,18 +234,18 @@ L4 比较两端 port；ICMP_QUERY 比较 query_class/identifier。不依赖结�
 FlowRuntime 对调用方统一管理查找/创建/更新/结束；table/pool、协议 tracker、Expiry 和
 FlowEnd 的内部职责见 owner/lifecycle 决策，调用方不分别操作索引、timer 和 pool 拼装关闭。
 
-目标内部 Interface：
+S221 已实现的内部 Interface（具体类型见 header）：
 
 ```c
-/* names illustrative; all mutation runs on this runtime's actual owner */
-flow_status init(runtime*, owner, owner_count, generation, capacity);
+/* names abbreviated; all packet mutation runs on this runtime's actual owner */
+flow_status create(runtime**, owner, owner_count, generation, capacity);
 flow_status observe(runtime*, const owner_assignment*, const packet_observation*,
                     early_stage_result, flow_observation* out);
 flow_status set_decision(runtime*, entry*, const policy_identity*, decision, rule, reason);
-flow_status unlink(runtime*, flow_index, end_reason); /* S225 adds usage */
-void release_unlinked(runtime*, flow_index);          /* free callback only normally */
-void clear_after_graph_drain(runtime*);
-void snapshot_under_barrier(const runtime*, bounded_status*);
+void flush_after_graph_drain(runtime*);
+void destroy_after_graph_drain(runtime*);
+snapshot snapshot_under_barrier(const runtime*);
+const entry* diagnostic_entry_under_barrier(const runtime*, slot);
 ```
 
 `observe` 仅借用 assignment/packet，返回 entry 指针只允许本 owner 当前同步处理段使用；
@@ -250,6 +254,7 @@ void snapshot_under_barrier(const runtime*, bounded_status*);
 不能通过扩大 pointer 可见范围解决。
 
 S221 阶段状态只有 FREE 和 LINKED；S225 加入 UNLINKED_WITH_END_BUFFER。
+统一 unlink/release 的使用也在 S225 增加，不在 S221 暴露空实现。
 不得提前添加 RETIRING_PENDING、分配重试队列或共享引用计数。
 
 ```text
@@ -322,11 +327,12 @@ bool/enum 只是内部 C 表达，不直接成为 wire ABI。INVALID 不自动�
 不续期；不得因部分窗口检查失败留下半更新 state。使用局部 candidate state 验证后提交。
 packet counters 可以记录被观察的 invalid packet，protocol accepted-state/expiry 不随之续期。
 
-**OVS pin 限制：** 本轮未找到可认证为本系列正式母本的 OVS commit，不能编造 SHA。
-S221 的首次交付必须记录一个真实完整 commit、源文件 hash、许可归属和 timeout 表。
-优先采用已有任务记录中明确选定且可取回的母本；若没有，选定一个明确 release tag
-并解析为完整 commit，固定后不跟随 latest。TCP/UDP/ICMP/timeout 必须共用该 pin。
-接手者在 pin 确认前可完成 pool/table，不可凭记忆写 timeout 秒数和 TCP window 算法。
+**OVS pin（S221 已固定）：** upstream `v3.1.0` 对应完整 commit
+`3c2bea086ef8912d57331173af266f21d36740a0`。
+源文件 hashes、BSD/Apache 归属、timeout 默认表与类名映射见
+[`OVS_CONNTRACK_BASELINE.md`](../reference/OVS_CONNTRACK_BASELINE.md)。
+TCP/UDP/ICMP/timeout 共用此 pin，不跟随 latest，不凭记忆改写秒数或 TCP window 算法；
+已核对内容与 tag/commit，未声称独立验证其 PGP 签名信任链。
 
 ### 5.2 UDP（S223，先做）
 
