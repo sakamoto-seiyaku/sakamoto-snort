@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_end.h"
+#include "product_flow_expiry.h"
 #include "product_packet_graph.h"
 #include <vlib/threads.h>
 #include <vnet/buffer.h>
@@ -174,12 +175,17 @@ buffers_freed (vlib_main_t *vm, u8 pool_index, u32 *buffers, u32 count)
       const product_flow_entry_t *entry = validate_identity (vm, &metadata);
       product_flow_end_owner_t *owner = current_owner (vm);
       trace_signal (vm, "free_callback", ~0, buffers[i], &metadata, entry);
+      product_flow_entry_t expired_snapshot;
+      int report_expiry = entry->deadline_us && entry->end_reason == PRODUCT_FLOW_END_EXPIRED;
+      if (report_expiry) expired_snapshot = *entry;
       ((u8 *) b->opaque2)[PRODUCT_FLOW_END_DISCRIMINANT_OFFSET] &=
         ~PRODUCT_FLOW_END_DISCRIMINANT;
       if (PREDICT_FALSE (product_flow_runtime_release_end (
             owner->runtime, metadata.flow_index, metadata.generation,
             metadata.incarnation, metadata.end_reason) != PRODUCT_FLOW_ENTRY_STATUS_OK))
         clib_panic ("FlowEnd final release rejected");
+      if (report_expiry)
+        product_flow_expiry_released (vm, &expired_snapshot, metadata.flow_index);
       owner->released++;
       clib_atomic_fetch_sub_relax (&product_flow_end_main.buffers, 1);
     }
@@ -263,6 +269,7 @@ product_flow_end_start (u64 generation, product_flow_runtime_t **runtimes,
           != PRODUCT_FLOW_ENTRY_STATUS_OK)
         return 0;
     }
+  product_flow_expiry_bind (generation, runtimes);
   return 1;
 }
 
@@ -277,6 +284,7 @@ product_flow_end_unbind (void)
 {
   if (PREDICT_FALSE (product_flow_end_buffer_debt ()))
     clib_panic ("cannot replace a runtime referenced by FlowEnd");
+  product_flow_expiry_bind (0, NULL);
   for (u32 i = 0; i < PRODUCT_FLOW_END_WORKERS; i++)
     product_flow_end_main.owners[i].runtime = 0;
 }
@@ -383,6 +391,7 @@ VLIB_REGISTER_NODE (product_flow_end_control_node) = {
 void
 product_flow_end_quiesce (vlib_main_t *vm)
 {
+  product_flow_expiry_quiesce ();
   /* Caller holds the same lifecycle worker barrier used to quiesce ingress.
    * Cancel only commands which have not closed an entry. Live ENDs drain in
    * their existing graph before administrative FlowRuntime cleanup. */

@@ -218,6 +218,7 @@ add_vpp_plugin(product_core
     product_l4_policy.c
     product_flow_entry.c
     product_flow_end.c
+    product_flow_expiry.c
     product_flow_udp.c
     product_flow_tcp.c
     product_root_nfqueue_adapter.c

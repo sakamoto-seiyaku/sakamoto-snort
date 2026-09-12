@@ -11,6 +11,7 @@
 #include "product_root_nfqueue_adapter.h"
 #include "product_network_snapshot.h"
 #include "product_root_receive_pool.h"
+#include "product_diagnostic_hex.h"
 
 #include "product_packet_graph.h"
 
@@ -1119,8 +1120,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         fprintf (stderr, "s217 event=netlink_message source=NFQ_CAPTURED thread=%u token=%llu generation=%llu bytes=%u raw=",
           vm->thread_index, (unsigned long long) obligation_id,
           (unsigned long long) nm->generation, (u32) received);
-        for (u32 octet = 0; octet < (u32) received; octet++)
-          fprintf (stderr, "%02x", base[octet]);
+        product_diagnostic_write_hex (stderr, base, (u32) received);
         fprintf (stderr, "\n");
         fprintf (stderr, "s231 event=nfq_payload source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u token=%llu generation=%llu hook=%u family=%u payload_bytes=%u cap_len_known=%u cap_len=%u skb_info_known=%u skb_info=%u raw=",
           vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
@@ -1128,8 +1128,7 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           (unsigned long long) nm->generation, packet.hook, packet.ip_family,
           packet.payload_length, packet.captured_length_present,
           packet.captured_length, packet.skb_info_present, packet.skb_info);
-        for (u32 octet = 0; octet < packet.payload_length; octet++)
-          fprintf (stderr, "%02x", packet.payload[octet]);
+        product_diagnostic_write_hex (stderr, packet.payload, packet.payload_length);
         fprintf (stderr, "\n");
         funlockfile (stderr);
         }

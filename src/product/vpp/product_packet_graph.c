@@ -11,10 +11,12 @@
 #include "product_packet_graph.h"
 #include "product_flow_entry.h"
 #include "product_flow_end.h"
+#include "product_flow_expiry.h"
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
 #include "product_vpn_flow_stack_driver.h"
 #include "product_network_snapshot.h"
+#include "product_diagnostic_hex.h"
 
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
@@ -894,15 +896,14 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
     p->direction, p->provenance, extra.obligation.kind,
     (unsigned long long) extra.obligation.queue_generation,
     extra.obligation.packet_id, extra.obligation.origin_lane, lease->terminal_intent);
-  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", f->source_address[i]);
+  product_diagnostic_write_hex (stderr, f->source_address, 16);
   fprintf (stderr, " dst=");
-  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", f->destination_address[i]);
+  product_diagnostic_write_hex (stderr, f->destination_address, 16);
   if (strcmp (stage, "admit") == 0)
     {
       const u8 *packet = vlib_buffer_get_current (buffer);
       fprintf (stderr, " raw=");
-      for (u32 i = 0; i < buffer->current_length; i++)
-        fprintf (stderr, "%02x", packet[i]);
+      product_diagnostic_write_hex (stderr, packet, buffer->current_length);
     }
   fprintf (stderr, " mono_ns=%llu\n", (unsigned long long) entered_ns);
   const product_owner_assignment_t *a = &lease->assignment;
@@ -915,9 +916,9 @@ product_metadata_trace (vlib_main_t *vm, vlib_node_runtime_t *node,
     a->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY ? a->key.transport.query.identifier : 0,
     a->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? a->key.transport.ports.a : 0,
     a->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? a->key.transport.ports.b : 0);
-  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", a->key.address_a[i]);
+  product_diagnostic_write_hex (stderr, a->key.address_a, 16);
   fprintf (stderr, " key_b=");
-  for (u32 i = 0; i < 16; i++) fprintf (stderr, "%02x", a->key.address_b[i]);
+  product_diagnostic_write_hex (stderr, a->key.address_b, 16);
   fprintf (stderr, "\n");
   funlockfile (stderr);
 }
@@ -2576,6 +2577,7 @@ product_packet_graph_flow_observe (
   const char *event = "observe";
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK)
     {
+      product_flow_expiry_observed (vm, &observation, packet.timestamp);
       /* Revision zero is the existing bootstrap default-pass view. It creates
        * flow facts but no cached policy decision before the first snapshot. */
       if (entry && packet.policy.revision != 0)

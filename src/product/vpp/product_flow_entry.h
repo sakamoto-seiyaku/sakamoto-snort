@@ -116,6 +116,11 @@ typedef struct
   uint64_t incarnation;
   uint64_t side_packets[2]; /* ORIG, REPLY */
   uint64_t side_bytes[2];
+  /* One indexed timer per linked entry, never a list of stale refreshes.
+   * Deadline survives unlink for the END consumer; heap_position does not. */
+  uint64_t deadline_us;
+  uint32_t heap_position;
+  uint8_t timeout_class;
   /* The key protocol is the tag; ICMP remains an unimplemented placeholder. */
   union {
     product_tcp_state_t tcp;
@@ -148,6 +153,7 @@ typedef struct
   uint32_t active_entries;
   uint32_t linked_entries;
   uint32_t ending_entries; /* allocated but no longer searchable */
+  uint32_t timer_entries;
   uint64_t release_count;
   uint64_t administrative_release_count;
   uint64_t allocation_count;
@@ -201,6 +207,18 @@ product_flow_entry_status_t product_flow_runtime_close (
 product_flow_entry_status_t product_flow_runtime_release_end (
   product_flow_runtime_t *runtime, uint32_t slot, uint64_t generation,
   uint64_t incarnation, product_flow_end_reason_t reason);
+
+/* Owner-local timer primitives shared by the controlled S226 arms. Nothing
+ * schedules automatically: the caller must supply an explicit monotonic
+ * deadline. Production protocol refresh/wake composition belongs to S227.
+ * A single preallocated index bounds memory to entry capacity. */
+product_flow_entry_status_t product_flow_runtime_set_deadline (
+  product_flow_runtime_t *runtime, uint32_t slot, uint64_t generation,
+  uint64_t incarnation, uint64_t deadline_us, product_ct_timeout_t timeout_class);
+uint64_t product_flow_runtime_next_deadline (const product_flow_runtime_t *runtime);
+product_flow_entry_status_t product_flow_runtime_run_due (
+  product_flow_runtime_t *runtime, uint64_t now_us, uint32_t budget,
+  uint32_t *closed);
 
 /*
  * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment

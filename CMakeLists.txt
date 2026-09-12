@@ -90,10 +90,20 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-diagnostic-hex-test tests/host/product_diagnostic_hex_test.c)
+target_include_directories(sakamoto-product-diagnostic-hex-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-diagnostic-hex-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-diagnostic-hex-test COMMAND sakamoto-product-diagnostic-hex-test)
+
 add_executable(sakamoto-product-flow-end-test tests/host/product_flow_end_test.c src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-flow-end-test PRIVATE sakamoto_product_flow_entry)
 target_compile_options(sakamoto-product-flow-end-test PRIVATE -Wall -Wextra -Werror -pedantic)
 add_test(NAME sakamoto-product-flow-end-test COMMAND sakamoto-product-flow-end-test)
+
+add_executable(sakamoto-product-flow-expiry-test tests/host/product_flow_expiry_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-flow-expiry-test PRIVATE sakamoto_product_flow_entry)
+target_compile_options(sakamoto-product-flow-expiry-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-flow-expiry-test COMMAND sakamoto-product-flow-expiry-test)
 add_executable(sakamoto-product-root-receive-pool-test tests/host/product_root_receive_pool_test.c)
 target_include_directories(sakamoto-product-root-receive-pool-test PRIVATE src/product/vpp)
 target_compile_options(sakamoto-product-root-receive-pool-test PRIVATE -Wall -Wextra -Werror -pedantic)
