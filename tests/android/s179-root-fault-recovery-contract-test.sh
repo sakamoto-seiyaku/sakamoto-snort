@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Historical S179 source-shape oracle. Its fixed ABI sizes, synchronous
+# completion bodies and synthetic unknown-verdict expectations predate the
+# current worker-owned implementation. Do not cite it as S242 coverage; use
+# the current VAPI lifecycle, receive identity and real device matrices.
+
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 activity="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"

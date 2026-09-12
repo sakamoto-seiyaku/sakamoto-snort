@@ -9,6 +9,7 @@ static product_packet_facts_t facts(unsigned family,unsigned protocol,unsigned p
   product_packet_facts_t f={0};
   f.l3_status=PRODUCT_PACKET_L3_COMPLETE;f.l4_status=PRODUCT_PACKET_L4_COMPLETE;
   f.ip_family=family;f.protocol=protocol;f.source_port=port;f.destination_port=443;
+  if(protocol==6) { f.tcp_flags=16;f.l4_header_length=f.transport_length=20;f.tcp_window=8192; }
   f.source_address[15]=1;f.destination_address[15]=2;
   if(family==6)f.source_address[0]=f.destination_address[0]=0x20;
   return f;
@@ -202,6 +203,7 @@ int main(void) {
   product_flow_entry_t first=*product_flow_runtime_entry(pool,0);
   do {f=facts(4,6,port++);a=assign(f);}while(a.execution_owner!=product_flow_runtime_snapshot(pool).worker_index);
   product_flow_entry_packet_t p=packet(3,40,100);
+  p.facts=&f;
   assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED);
   assert(product_flow_runtime_snapshot(pool).active_entries==128 && memcmp(&first,product_flow_runtime_entry(pool,0),sizeof(first))==0);
   a.valid=0;assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);

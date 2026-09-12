@@ -40,6 +40,8 @@ int main (int argc, char **argv)
   setvbuf (stdout, NULL, _IOLBF, 0);
   int fd = socket (family == 4 ? AF_INET : AF_INET6, SOCK_DGRAM, 0), one = 1;
   if (fd < 0) fail ("socket");
+  if (family == 6 && setsockopt (fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof one))
+    fail ("v6only");
   if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one)) fail ("reuse");
   struct sockaddr_storage local, peer;
   socklen_t length = address (&local, family, argv[4], port);

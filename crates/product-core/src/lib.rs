@@ -284,6 +284,11 @@ struct ProductSession {
 }
 
 unsafe extern "C" {
+    fn sakamoto_product_session_stop_root(
+        session: *mut ProductSession,
+        expected_generation: u64,
+        out_stopped: *mut u32,
+    ) -> c_uint;
     fn sakamoto_product_session_publish_network(
         session: *mut ProductSession,
         expected_generation: u64,
@@ -362,6 +367,36 @@ pub unsafe extern "C" fn sakamoto_product_core_publish_network(
     }
 }
 pub const API_VERSION: u32 = 1;
+
+/// One supervisor-owned Root stop step; no packet or buffer crosses this FFI.
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_stop_root(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    out_stopped: *mut u32,
+) -> c_uint {
+    if !out_stopped.is_null() {
+        unsafe { *out_stopped = 0 };
+    }
+    if handle.is_null() || out_stopped.is_null() || generation == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        match core.session {
+            Some(session) => unsafe {
+                sakamoto_product_session_stop_root(session.as_ptr(), generation, out_stopped)
+            },
+            None => ErrorCode::StaleHandle.raw(),
+        }
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
 
 pub fn abi_version() -> u32 {
     unsafe { sakamoto_product_abi_version() }

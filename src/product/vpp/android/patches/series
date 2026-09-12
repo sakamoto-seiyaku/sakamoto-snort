@@ -16,3 +16,4 @@
 0016-vpp-android-no-ipsec-profile.patch
 0017-vpp-android-idle-profile.patch
 0018-vpp-android-barrier-wakeup.patch
+0019-vpp-worker-notification-latch.patch

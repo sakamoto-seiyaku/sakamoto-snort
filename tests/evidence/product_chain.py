@@ -8,7 +8,9 @@ def digest(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def encode(d):return json.dumps(d,sort_keys=True,separators=(',',':')).encode()
 def write(p,d):Path(p).write_text(json.dumps(d,indent=2)+'\n')
 def source_files():
- names=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z','src/product','app/android-runtime','crates/product-core','Cargo.toml','Cargo.lock','.cargo'],cwd=ROOT,text=True).split('\0')
+ # Include dependency source, reviewed fork patches, and staging/build logic:
+ # changing any of these invalidates an earlier installed-binary claim.
+ names=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z','src/product','app/android-runtime','crates/product-core','Cargo.toml','Cargo.lock','.cargo','third_party/hev','tools/product'],cwd=ROOT,text=True).split('\0')
  return {n:digest(ROOT/n) if (ROOT/n).is_file() else None for n in sorted(set(names)) if n}
 def source_snapshot(out):
  files=source_files()
@@ -20,7 +22,7 @@ def source_snapshot(out):
 def build(out):
  out=Path(out).resolve();out.mkdir(parents=True,exist_ok=False)
  m={'schema':SCHEMA,'started_ns':time.time_ns(),**source_snapshot(out)}
- env=dict(os.environ,SAKAMOTO_VPP_STAGE_DIR=os.environ.get('SAKAMOTO_VPP_STAGE_DIR','/tmp/sakamoto-s181-clean-vpp-stage.current'),SAKAMOTO_VPP_SOURCE_DIR=str(ROOT/'build-output/pinned-vpp-clean'),SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR=str(out/'stage'),SAKAMOTO_ANDROID_VERSION_STATE_FILE=str(out/'version-code'),SAKAMOTO_VPP_PYTHONPATH='/tmp/sakamoto-pydeps',SAKAMOTO_ANDROID_APK_OUTPUT_DIR=str(out/'apk'))
+ env=dict(os.environ,SAKAMOTO_VPP_STAGE_DIR=os.environ.get('SAKAMOTO_VPP_STAGE_DIR','/tmp/sakamoto-s181-clean-vpp-stage.current'),SAKAMOTO_VPP_SOURCE_DIR=str(ROOT/'build-output/pinned-vpp-clean'),SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR=str(out/'stage'),SAKAMOTO_ANDROID_VERSION_STATE_FILE=str(out/'version-code'),SAKAMOTO_VPP_PYTHONPATH=os.environ.get('SAKAMOTO_VPP_PYTHONPATH','/usr/lib/python3/dist-packages'),SAKAMOTO_ANDROID_APK_OUTPUT_DIR=str(out/'apk'))
  for mode in ['stage-only','apk-only']:
   with (out/(mode+'.log')).open('w') as f:r=subprocess.run(['bash',str(ROOT/'app/android-runtime/scripts/build-debug-apk.sh'),'--'+mode],cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT)
   if r.returncode:raise RuntimeError((out/(mode+'.log')).read_text()[-5000:])

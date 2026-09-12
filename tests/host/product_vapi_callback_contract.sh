@@ -11,6 +11,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 stub_dir="$(mktemp -d /tmp/sakamoto-vapi-callback-contract.XXXXXX)"
 cleanup() {
+  if [[ "${SAKAMOTO_VAPI_TEST_KEEP:-0}" == 1 ]]; then
+    echo "VAPI test artifacts: $stub_dir"
+    return
+  fi
   rm -rf -- "$stub_dir"
 }
 trap cleanup EXIT
@@ -281,6 +285,23 @@ typedef vapi_error_e (*vapi_product_core_policy_apply_callback_t)(
 typedef vapi_error_e (*vapi_product_core_policy_bundle_apply_callback_t)(
   vapi_ctx_t, void *, vapi_error_e, bool,
   vapi_payload_product_core_policy_bundle_apply_reply *);
+typedef struct { int32_t retval; } vapi_payload_product_core_network_publish_reply;
+typedef struct {
+  struct {
+    uint64_t generation, revision, event_elapsed_ns;
+    uint32_t count, reserved;
+    struct { uint32_t linux_ifindex, network_context; } entries[32];
+  } payload;
+} vapi_msg_product_core_network_publish;
+typedef vapi_error_e (*vapi_product_core_network_publish_callback_t)(
+  vapi_ctx_t, void *, vapi_error_e, bool,
+  vapi_payload_product_core_network_publish_reply *);
+
+typedef struct { int32_t retval; uint64_t generation; uint32_t stopped; }
+  vapi_payload_product_core_root_stop_reply;
+typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_core_root_stop;
+typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
+  vapi_ctx_t, void *, vapi_error_e, bool, vapi_payload_product_core_root_stop_reply *);
 
 #define VAPI_OK 0
 #define VAPI_EINVAL 22
@@ -295,7 +316,11 @@ typedef vapi_error_e (*vapi_product_core_policy_bundle_apply_callback_t)(
   vapi_msg_id_t vapi_msg_id_product_core_policy_apply; \
   vapi_msg_id_t vapi_msg_id_product_core_policy_apply_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_policy_bundle_apply; \
-  vapi_msg_id_t vapi_msg_id_product_core_policy_bundle_apply_reply;
+  vapi_msg_id_t vapi_msg_id_product_core_policy_bundle_apply_reply; \
+  vapi_msg_id_t vapi_msg_id_product_core_network_publish; \
+  vapi_msg_id_t vapi_msg_id_product_core_network_publish_reply; \
+  vapi_msg_id_t vapi_msg_id_product_core_root_stop; \
+  vapi_msg_id_t vapi_msg_id_product_core_root_stop_reply;
 
 extern vapi_msg_id_t vapi_msg_id_product_core_status;
 extern vapi_msg_id_t vapi_msg_id_product_core_status_reply;
@@ -303,9 +328,18 @@ extern vapi_msg_id_t vapi_msg_id_product_core_policy_apply;
 extern vapi_msg_id_t vapi_msg_id_product_core_policy_apply_reply;
 extern vapi_msg_id_t vapi_msg_id_product_core_policy_bundle_apply;
 extern vapi_msg_id_t vapi_msg_id_product_core_policy_bundle_apply_reply;
+extern vapi_msg_id_t vapi_msg_id_product_core_network_publish;
+extern vapi_msg_id_t vapi_msg_id_product_core_network_publish_reply;
+extern vapi_msg_id_t vapi_msg_id_product_core_root_stop;
+extern vapi_msg_id_t vapi_msg_id_product_core_root_stop_reply;
+vapi_msg_product_core_root_stop *vapi_alloc_product_core_root_stop(vapi_ctx_t);
+vapi_error_e vapi_product_core_root_stop(vapi_ctx_t, vapi_msg_product_core_root_stop *,
+  vapi_product_core_root_stop_callback_t, void *);
 
 vapi_error_e vapi_ctx_alloc(vapi_ctx_t *);
 void vapi_ctx_free(vapi_ctx_t);
+void vapi_msg_free(vapi_ctx_t, void *);
+size_t vapi_get_request_count(vapi_ctx_t);
 bool vapi_is_msg_available(vapi_ctx_t, vapi_msg_id_t);
 vapi_error_e vapi_connect_ex(vapi_ctx_t, const char *, const char *, int, int,
                              int, bool, bool);
@@ -323,6 +357,9 @@ vapi_alloc_product_core_policy_bundle_apply(vapi_ctx_t);
 vapi_error_e vapi_product_core_policy_bundle_apply(
   vapi_ctx_t, vapi_msg_product_core_policy_bundle_apply *,
   vapi_product_core_policy_bundle_apply_callback_t, void *);
+vapi_msg_product_core_network_publish *vapi_alloc_product_core_network_publish(vapi_ctx_t);
+vapi_error_e vapi_product_core_network_publish(vapi_ctx_t,
+  vapi_msg_product_core_network_publish *, vapi_product_core_network_publish_callback_t, void *);
 
 extern int sakamoto_test_request_available;
 extern int sakamoto_test_reply_available;
@@ -391,6 +428,34 @@ int sakamoto_test_reply_retval = 0;
 int sakamoto_test_policy_reply_retval = 0;
 int sakamoto_test_policy_bundle_reply_retval = 0;
 int sakamoto_test_disconnect_error = 0;
+int sakamoto_test_network_send_calls = 0;
+int sakamoto_test_network_omit_callback = 0;
+int sakamoto_test_network_send_error = 0;
+int sakamoto_test_context_count = 0;
+int sakamoto_test_live_messages = 0;
+static size_t pending_requests;
+int sakamoto_test_root_stop_mode;
+int sakamoto_test_root_stop_calls;
+
+static void *test_message_alloc(size_t size)
+{
+  void *message = calloc(1, size);
+  if (message) ++sakamoto_test_live_messages;
+  return message;
+}
+
+void vapi_msg_free(vapi_ctx_t context, void *message)
+{
+  (void)context;
+  if (--sakamoto_test_live_messages < 0) abort();
+  free(message);
+}
+
+size_t vapi_get_request_count(vapi_ctx_t context)
+{
+  (void)context;
+  return pending_requests;
+}
 
 vapi_error_e
 vapi_ctx_alloc (vapi_ctx_t *context)
@@ -398,12 +463,18 @@ vapi_ctx_alloc (vapi_ctx_t *context)
   if (sakamoto_test_ctx_alloc_error != 0)
     return sakamoto_test_ctx_alloc_error;
   *context = (vapi_ctx_t) (uintptr_t) 1U;
+  ++sakamoto_test_context_count;
+  pending_requests = 0;
   vapi_msg_id_product_core_status = 100U;
   vapi_msg_id_product_core_status_reply = 101U;
   vapi_msg_id_product_core_policy_apply = 102U;
   vapi_msg_id_product_core_policy_apply_reply = 103U;
   vapi_msg_id_product_core_policy_bundle_apply = 104U;
   vapi_msg_id_product_core_policy_bundle_apply_reply = 105U;
+  vapi_msg_id_product_core_network_publish = 106U;
+  vapi_msg_id_product_core_network_publish_reply = 107U;
+  vapi_msg_id_product_core_root_stop = 108U;
+  vapi_msg_id_product_core_root_stop_reply = 109U;
   return VAPI_OK;
 }
 
@@ -411,12 +482,16 @@ void
 vapi_ctx_free (vapi_ctx_t context)
 {
   (void) context;
+  if (--sakamoto_test_context_count < 0) abort();
 }
 
 bool
 vapi_is_msg_available (vapi_ctx_t context, vapi_msg_id_t type)
 {
   (void) context;
+  if (type == vapi_msg_id_product_core_root_stop
+      || type == vapi_msg_id_product_core_root_stop_reply)
+    return sakamoto_test_root_stop_mode != 8;
   if (type == vapi_msg_id_product_core_status)
     return sakamoto_test_request_available != 0;
   if (type == vapi_msg_id_product_core_status_reply)
@@ -426,7 +501,9 @@ vapi_is_msg_available (vapi_ctx_t context, vapi_msg_id_t type)
   if (type == vapi_msg_id_product_core_policy_apply_reply)
     return sakamoto_test_policy_apply_reply_available != 0;
   if (type == vapi_msg_id_product_core_policy_bundle_apply
-      || type == vapi_msg_id_product_core_policy_bundle_apply_reply)
+      || type == vapi_msg_id_product_core_policy_bundle_apply_reply
+      || type == vapi_msg_id_product_core_network_publish
+      || type == vapi_msg_id_product_core_network_publish_reply)
     return true;
   return false;
 }
@@ -453,7 +530,54 @@ vapi_error_e
 vapi_disconnect (vapi_ctx_t context)
 {
   (void) context;
+  pending_requests = 0;
   return sakamoto_test_disconnect_error;
+}
+
+vapi_msg_product_core_root_stop *
+vapi_alloc_product_core_root_stop(vapi_ctx_t context)
+{
+  (void) context;
+  return sakamoto_test_root_stop_mode == 9 ? NULL
+    : test_message_alloc(sizeof(vapi_msg_product_core_root_stop));
+}
+vapi_error_e
+vapi_product_core_root_stop(vapi_ctx_t context, vapi_msg_product_core_root_stop *message,
+  vapi_product_core_root_stop_callback_t callback, void *opaque)
+{
+  ++sakamoto_test_root_stop_calls;
+  int mode = sakamoto_test_root_stop_mode;
+  if (mode == 6) return VAPI_EINVAL;
+  vapi_payload_product_core_root_stop_reply reply = {
+    .generation = message->payload.generation + (mode == 3),
+    .stopped = mode == 1 ? 0 : (mode == 4 ? 2 : 1),
+    .retval = mode == 5 ? -1 : 0,
+  };
+  vapi_msg_free(context, message);
+  pending_requests = mode == 7;
+  if (mode == 7) return VAPI_OK;
+  return callback(context, opaque, mode == 10 ? VAPI_EINVAL : VAPI_OK,
+                  true, mode == 2 ? NULL : &reply);
+}
+
+vapi_msg_product_core_network_publish *
+vapi_alloc_product_core_network_publish(vapi_ctx_t context)
+{
+  (void) context;
+  return test_message_alloc(sizeof(vapi_msg_product_core_network_publish));
+}
+vapi_error_e
+vapi_product_core_network_publish(vapi_ctx_t context,
+  vapi_msg_product_core_network_publish *message,
+  vapi_product_core_network_publish_callback_t callback, void *opaque)
+{
+  ++sakamoto_test_network_send_calls;
+  if (sakamoto_test_network_send_error) return sakamoto_test_network_send_error;
+  vapi_msg_free(context, message);
+  pending_requests = !!sakamoto_test_network_omit_callback;
+  if (sakamoto_test_network_omit_callback) return VAPI_OK;
+  vapi_payload_product_core_network_publish_reply reply = {0};
+  return callback(context, opaque, VAPI_OK, true, &reply);
 }
 
 vapi_msg_product_core_status *
@@ -463,7 +587,7 @@ vapi_alloc_product_core_status (vapi_ctx_t context)
   if (sakamoto_test_alloc_message != 0)
     return NULL;
   vapi_msg_product_core_status *message =
-    calloc (1U, sizeof (vapi_msg_product_core_status));
+    test_message_alloc (sizeof (vapi_msg_product_core_status));
   if (message != NULL)
     message->header._vl_msg_id =
       sakamoto_test_request_available ? 7U : UINT16_MAX;
@@ -482,6 +606,8 @@ vapi_product_core_status (vapi_ctx_t context,
     ++sakamoto_test_send_invalid_id_calls;
   if (sakamoto_test_send_error != 0)
     return sakamoto_test_send_error;
+  vapi_msg_free(context, message);
+  pending_requests = !!sakamoto_test_omit_callback;
   if (sakamoto_test_omit_callback)
     return VAPI_OK;
   if (sakamoto_test_null_reply)
@@ -510,7 +636,7 @@ vapi_alloc_product_core_policy_apply (vapi_ctx_t context)
   if (sakamoto_test_policy_alloc_message != 0)
     return NULL;
   vapi_msg_product_core_policy_apply *message =
-    calloc (1U, sizeof (vapi_msg_product_core_policy_apply));
+    test_message_alloc (sizeof (vapi_msg_product_core_policy_apply));
   if (message != NULL)
     message->header._vl_msg_id =
       sakamoto_test_policy_apply_available ? 9U : UINT16_MAX;
@@ -528,6 +654,8 @@ vapi_product_core_policy_apply (
     ++sakamoto_test_send_invalid_id_calls;
   if (sakamoto_test_policy_send_error != 0)
     return sakamoto_test_policy_send_error;
+  vapi_msg_free(context, message);
+  pending_requests = !!sakamoto_test_policy_omit_callback;
   if (sakamoto_test_policy_omit_callback)
     return VAPI_OK;
   if (sakamoto_test_policy_null_reply)
@@ -550,7 +678,7 @@ vapi_alloc_product_core_policy_bundle_apply (vapi_ctx_t context)
 {
   (void) context;
   vapi_msg_product_core_policy_bundle_apply *message =
-    calloc (1U, sizeof (vapi_msg_product_core_policy_bundle_apply));
+    test_message_alloc (sizeof (vapi_msg_product_core_policy_bundle_apply));
   if (message != NULL)
     message->header._vl_msg_id = 11U;
   return message;
@@ -562,12 +690,13 @@ vapi_product_core_policy_bundle_apply (
   vapi_product_core_policy_bundle_apply_callback_t callback,
   void *callback_context)
 {
-  (void) message;
   if (callback == NULL)
     return VAPI_EINVAL;
   ++sakamoto_test_policy_bundle_send_calls;
   if (sakamoto_test_policy_bundle_send_error != 0)
     return sakamoto_test_policy_bundle_send_error;
+  vapi_msg_free(context, message);
+  pending_requests = !!sakamoto_test_policy_bundle_omit_callback;
   if (sakamoto_test_policy_bundle_omit_callback)
     return VAPI_OK;
   if (sakamoto_test_policy_bundle_null_reply)
@@ -590,6 +719,7 @@ cat > "$stub_dir/harness.c" <<'EOF'
 #include "sakamoto_product_abi.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 extern int sakamoto_test_request_available;
@@ -620,6 +750,15 @@ extern int sakamoto_test_reply_retval;
 extern int sakamoto_test_policy_reply_retval;
 extern int sakamoto_test_policy_bundle_reply_retval;
 extern int sakamoto_test_disconnect_error;
+extern int sakamoto_test_network_send_calls;
+extern int sakamoto_test_network_omit_callback;
+extern int sakamoto_test_network_send_error;
+extern int sakamoto_test_context_count;
+extern int sakamoto_test_live_messages;
+extern int sakamoto_test_root_stop_mode;
+extern int sakamoto_test_root_stop_calls;
+static sakamoto_product_session_t **current_session;
+static int expect_retired(sakamoto_product_session_t *session);
 
 static void
 reset_faults (void)
@@ -644,6 +783,23 @@ reset_faults (void)
   sakamoto_test_policy_omit_callback = 0;
   sakamoto_test_policy_bundle_omit_callback = 0;
   sakamoto_test_policy_alloc_message = 0;
+  sakamoto_test_network_omit_callback = 0;
+  sakamoto_test_network_send_error = 0;
+  sakamoto_test_root_stop_mode = 0;
+  // Transport dispatch failures now retire the session. Each independent
+  // fault case starts with a new handle instead of reusing retired callbacks.
+  if (current_session && *current_session) {
+    int stops_before_close = sakamoto_test_root_stop_calls;
+    if (sakamoto_product_session_destroy(*current_session)) abort();
+    if (stops_before_close != sakamoto_test_root_stop_calls) {
+      fprintf(stderr, "ordinary session close stopped the runtime\n");
+      abort();
+    }
+    const char socket_path[] = "/tmp/unused-vapi-callback-contract.sock";
+    sakamoto_product_bytes_t path = {(const uint8_t *)socket_path, sizeof(socket_path) - 1};
+    sakamoto_product_status_t status;
+    if (sakamoto_product_session_connect(path, 77, current_session, &status)) abort();
+  }
 }
 
 static int
@@ -701,7 +857,8 @@ expect_query_code_detail (sakamoto_product_session_t *session,
                expected, detail);
       return 1;
     }
-  return 0;
+  return (sakamoto_test_send_error || sakamoto_test_omit_callback)
+    ? expect_retired(session) : 0;
 }
 
 static sakamoto_product_policy_snapshot_t
@@ -734,6 +891,31 @@ valid_empty_policy_bundle (void)
   return bundle;
 }
 
+static int expect_retired(sakamoto_product_session_t *session)
+{
+  uint32_t stopped = 99;
+  sakamoto_product_network_snapshot_t network = {.revision = 2};
+  sakamoto_product_status_t status;
+  sakamoto_product_policy_snapshot_t scalar = valid_empty_policy();
+  sakamoto_product_policy_bundle_t bundle = valid_empty_policy_bundle();
+  int sends = sakamoto_test_network_send_calls + sakamoto_test_send_calls
+    + sakamoto_test_policy_send_calls + sakamoto_test_policy_bundle_send_calls
+    + sakamoto_test_root_stop_calls;
+  if (sakamoto_product_session_publish_network(session, 77, &network) != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_query(session, 77, &status) != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_apply_policy(session, 77, &scalar, &status) != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_apply_policy_bundle(session, 77, &bundle, &status) != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_stop_root(session, 77, &stopped) != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || stopped != 0
+      || sends != sakamoto_test_network_send_calls + sakamoto_test_send_calls
+        + sakamoto_test_policy_send_calls + sakamoto_test_policy_bundle_send_calls
+        + sakamoto_test_root_stop_calls) {
+    fprintf(stderr, "retired VAPI context admitted a subsequent generated request\n");
+    return 1;
+  }
+  return 0;
+}
+
 static int
 expect_policy_code_detail (sakamoto_product_session_t *session,
                            uint32_t expected, const char *detail,
@@ -751,7 +933,8 @@ expect_policy_code_detail (sakamoto_product_session_t *session,
                expected, detail);
       return 1;
     }
-  return 0;
+  return (sakamoto_test_policy_send_error || sakamoto_test_policy_omit_callback)
+    ? expect_retired(session) : 0;
 }
 
 static int
@@ -778,7 +961,8 @@ expect_policy_bundle_code_detail (sakamoto_product_session_t *session,
                sakamoto_test_send_calls, expected, detail, status_send_calls);
       return 1;
     }
-  return 0;
+  return (sakamoto_test_policy_bundle_send_error || sakamoto_test_policy_bundle_omit_callback)
+    ? expect_retired(session) : 0;
 }
 
 int
@@ -901,6 +1085,65 @@ main (void)
     }
 
   sakamoto_product_policy_bundle_t bundle = valid_empty_policy_bundle ();
+  current_session = &session;
+  const uint32_t stop_codes[] = {
+    SAKAMOTO_PRODUCT_OK, SAKAMOTO_PRODUCT_OK, SAKAMOTO_PRODUCT_INTERNAL_ERROR,
+    SAKAMOTO_PRODUCT_STALE_HANDLE, SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH,
+    SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH, SAKAMOTO_PRODUCT_INTERNAL_ERROR,
+    SAKAMOTO_PRODUCT_INTERNAL_ERROR, SAKAMOTO_PRODUCT_API_UNAVAILABLE,
+    SAKAMOTO_PRODUCT_ALLOCATION_FAILED, SAKAMOTO_PRODUCT_INTERNAL_ERROR,
+  };
+  uint32_t stopped = 99;
+  if (sakamoto_product_session_stop_root(NULL, 77, &stopped)
+        != SAKAMOTO_PRODUCT_INVALID_ARGUMENT || stopped != 0
+      || sakamoto_product_session_stop_root(session, 0, &stopped)
+        != SAKAMOTO_PRODUCT_INVALID_ARGUMENT
+      || sakamoto_product_session_stop_root(session, 77, NULL)
+        != SAKAMOTO_PRODUCT_INVALID_ARGUMENT
+      || sakamoto_product_session_stop_root(session, 76, &stopped)
+        != SAKAMOTO_PRODUCT_STALE_HANDLE || sakamoto_test_root_stop_calls != 0)
+    return 1;
+  for (unsigned mode = 0; mode < sizeof(stop_codes)/sizeof(stop_codes[0]); ++mode) {
+    reset_faults();
+    sakamoto_test_root_stop_mode = (int)mode;
+    int before = sakamoto_test_root_stop_calls;
+    stopped = 99;
+    code = sakamoto_product_session_stop_root(session, 77, &stopped);
+    if (code != stop_codes[mode] || stopped != (mode == 0)
+        || sakamoto_test_root_stop_calls - before != (mode != 8 && mode != 9)) {
+      fprintf(stderr, "root stop mode=%u code=%u stopped=%u calls=%d\n",
+        mode, code, stopped, sakamoto_test_root_stop_calls - before);
+      return 1;
+    }
+    if ((mode == 6 || mode == 7) && expect_retired(session)) return 1;
+  }
+  reset_faults();
+  /* A real blocking VAPI failure may retain a stack callback. No subsequent
+   * network publication, query or policy request may reach that context. */
+  sakamoto_product_network_snapshot_t network = {.revision = 1};
+  sakamoto_test_network_omit_callback = 1;
+  if (sakamoto_product_session_publish_network(session, 77, &network)
+      != SAKAMOTO_PRODUCT_INTERNAL_ERROR) return 1;
+  int network_sends = sakamoto_test_network_send_calls;
+  int old_status_sends = sakamoto_test_send_calls;
+  int old_policy_sends = sakamoto_test_policy_bundle_send_calls;
+  if (sakamoto_product_session_publish_network(session, 77, &network)
+        != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_query(session, 77, &status)
+        != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || sakamoto_product_session_apply_policy_bundle(session, 77, &bundle, &status)
+        != SAKAMOTO_PRODUCT_STALE_HANDLE
+      || network_sends != sakamoto_test_network_send_calls
+      || old_status_sends != sakamoto_test_send_calls
+      || old_policy_sends != sakamoto_test_policy_bundle_send_calls) {
+    fprintf(stderr, "failed dispatch allowed another request on a retired callback context\n");
+    return 1;
+  }
+  reset_faults();
+  sakamoto_test_network_send_error = 99;
+  if (sakamoto_product_session_publish_network(session, 77, &network)
+      != SAKAMOTO_PRODUCT_INTERNAL_ERROR || expect_retired(session)) return 1;
+  reset_faults();
   sakamoto_test_policy_bundle_send_calls = 0;
   code = sakamoto_product_session_apply_policy_bundle (session, 77U, &bundle,
                                                        &status);
@@ -1089,13 +1332,28 @@ main (void)
       fprintf (stderr, "callback omission was not reported as QUERY_FAILED\n");
       return 1;
     }
+  if (sakamoto_test_context_count != 0) {
+    fprintf(stderr, "retired VAPI context was not reclaimed\n");
+    return 1;
+  }
+  if (sakamoto_test_live_messages != 0) {
+    fprintf(stderr, "unsent VAPI messages were not reclaimed: %d\n", sakamoto_test_live_messages);
+    return 1;
+  }
   return 0;
 }
 EOF
 
-cc -std=c11 -Wall -Wextra -Werror -pthread \
-  -I"$repo_root/src/product/include" -I"$stub_dir" \
-  "$repo_root/src/product/native/sakamoto_product_vapi.c" \
+test_flags=()
+if [[ "${SAKAMOTO_VAPI_TEST_SANITIZE:-0}" == 1 ]]; then
+  # This host's Clang 14 PIE sanitizer can crash in AsanInitInternal/mmap
+  # before main. Fix only this throwaway checker address layout; never the
+  # Product binaries or system-wide ASLR policy.
+  test_flags=(-g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie)
+fi
+"${SAKAMOTO_VAPI_TEST_CC:-cc}" -std=c11 -Wall -Wextra -Werror -pthread "${test_flags[@]}" \
+  -I"$repo_root/src/product/include" -I"$repo_root/src/product/native" -I"$stub_dir" \
+  "${SAKAMOTO_VAPI_BRIDGE_TEST_SOURCE:-$repo_root/src/product/native/sakamoto_product_vapi.c}" \
   "$stub_dir/vapi_stub.c" "$stub_dir/harness.c" \
   -o "$stub_dir/callback-contract"
 "$stub_dir/callback-contract"

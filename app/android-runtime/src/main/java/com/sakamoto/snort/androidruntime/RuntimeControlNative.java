@@ -309,10 +309,17 @@ public final class RuntimeControlNative {
 
     private static native int nativeDestroy(long handle);
 
+    private static native int nativeStopRoot(long handle, long generation);
+
     private static native int nativePublishNetwork(long handle, long generation,
             long revision, long eventElapsedNs, int[] interfaceContextPairs);
 
     public static final class Session implements AutoCloseable {
+        /** Supervisor only: 0 draining, 1 native lanes closed, negative error.
+         * Ordinary query client close must never stop the runtime. */
+        public synchronized int stopRootStep() {
+            return nativeHandle == 0L ? -5 : nativeStopRoot(nativeHandle, generation);
+        }
         public synchronized int publishNetwork(long revision, long eventElapsedNs,
                                                 int[] interfaceContextPairs) {
             if (nativeHandle == 0 || interfaceContextPairs == null) return -1;

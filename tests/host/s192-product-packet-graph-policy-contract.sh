@@ -210,10 +210,24 @@ fi
 
 # Completion belongs to the external submitter/adapter seam, never to policy
 # evaluation or the host fixture node.
-callback_count="$(grep -Ec 'graph->external_completion[[:space:]]*\(' "$graph_source")"
-[[ "$callback_count" == 1 ]] ||
-  fail "external completion must have one graph call site"
-if printf '%s\n' "$policy_body" | grep -q 'external_completion'; then
+completion_body="$(awk '
+  /^VLIB_NODE_FN \(product_packet_origin_completion_node\)/ { in_completion = 1 }
+  in_completion { print }
+  in_completion && /^}/ { exit }
+' "$graph_source")"
+for endpoint in product_root_nfqueue_complete_from_graph product_vpn_tun_complete_from_graph; do
+  callback_count="$(grep -Ec "$endpoint[[:space:]]*\\(" "$graph_source" || true)"
+  [[ "$callback_count" == 1 ]] ||
+    fail "typed adapter endpoint must have one graph call site: $endpoint"
+  printf '%s\n' "$completion_body" | grep -Fq "$endpoint" ||
+    fail "adapter completion must run only at Origin: $endpoint"
+done
+printf '%s\n' "$completion_body" | grep -Fq 'switch (completion.obligation.kind)' ||
+  fail "immutable adapter obligation must select completion endpoint"
+if grep -q 'graph->external_completion' "$graph_source"; then
+  fail "mutable global callback must not redirect typed adapter completion"
+fi
+if printf '%s\n' "$policy_body" | grep -Eq 'external_completion|complete_from_graph'; then
   fail "policy stage must not complete an adapter obligation"
 fi
 terminal_body="$(awk '
@@ -221,7 +235,7 @@ terminal_body="$(awk '
   in_terminal { print }
   in_terminal && /^}/ { exit }
 ' "$graph_source")"
-if printf '%s\n' "$terminal_body" | grep -q 'graph->external_completion'; then
+if printf '%s\n' "$terminal_body" | grep -Eq 'external_completion|complete_from_graph'; then
   fail "terminal must publish Completion Frame, not call the adapter"
 fi
 grep -q 'VLIB_NODE_FN (product_packet_origin_completion_node)' "$graph_source"

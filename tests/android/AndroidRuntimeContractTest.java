@@ -373,6 +373,31 @@ public final class AndroidRuntimeContractTest {
 
     private static void runtimeRecoveryPolicyIsBoundedAndActionable() {
         RuntimeRecoveryPolicy policy = new RuntimeRecoveryPolicy();
+        RuntimeRecoveryPolicy.Decision vpnFirst =
+                policy.afterVpnFlowStackFailure(0, "unexpected_exit");
+        check(vpnFirst.shouldRestart && vpnFirst.attempt == 1
+                        && vpnFirst.nextFailureCount == 1 && vpnFirst.backoffMillis == 1000L,
+                "VPN Flow Stack has exactly one bounded fresh-generation restart");
+        RuntimeRecoveryPolicy.Decision vpnSecond =
+                policy.afterVpnFlowStackFailure(vpnFirst.nextFailureCount, "runtime_start_failed");
+        check(!vpnSecond.shouldRestart && vpnSecond.requiresUserIntervention
+                        && vpnSecond.backoffMillis == 0L
+                        && vpnSecond.message.contains("protection stopped"),
+                "VPN second failure withdraws protection without another retry");
+        check(!policy.afterVpnFlowStackFailure(100, "unexpected_exit").shouldRestart,
+                "VPN exhausted budget cannot wrap into another retry");
+        check(policy.vpnFlowStackRecoverable("vpn_socket_broker_failed")
+                        && policy.vpnFlowStackRecoverable("product_core_not_ready")
+                        && policy.vpnFlowStackRecoverable("product_core_connect_failed")
+                        && policy.vpnFlowStackRecoverable("product_core_query_failed")
+                        && policy.vpnFlowStackRecoverable("product_core_disconnected")
+                        && policy.vpnFlowStackRecoverable("product_core_stale_handle")
+                        && !policy.vpnFlowStackRecoverable("product_core_protocol_mismatch")
+                        && !policy.vpnFlowStackRecoverable("vpn_authorization_revoked")
+                        && !policy.vpnFlowStackRecoverable("cleanup_failed")
+                        && !policy.vpnFlowStackRecoverable("runtime_state_persistence_unavailable")
+                        && !policy.vpnFlowStackRecoverable("root_authorization_required"),
+                "VPN retry never overrides cleanup, persistence or authorization failures");
         RuntimeRecoveryPolicy.Decision first =
                 policy.afterFailure(0, "unexpected_exit");
         check(first.shouldRestart && first.attempt == 1 && first.backoffMillis == 1000L,

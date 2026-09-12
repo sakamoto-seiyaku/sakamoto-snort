@@ -1,5 +1,26 @@
 --- a/src/vlib/threads.c
 +++ b/src/vlib/threads.c
+@@ -1276,5 +1276,20 @@
+   deadline = now + BARRIER_SYNC_TIMEOUT;
+   *vlib_worker_threads->wait_at_barrier = 1;
++#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
++  /* Initial startup has no barrier hold-down protection either. A worker
++   * can already be in file polling before main enters its first barrier.
++   * Queue a wake even before the worker publishes its sleeping flag. */
++  for (clib_thread_index_t ti = 1; ti < vlib_get_n_threads (); ti++)
++    {
++      vlib_main_t *worker_vm = vlib_get_main_by_index (ti);
++      u64 value = 1;
++      ssize_t rv;
++      do
++        rv = write (worker_vm->wakeup_fd, &value, sizeof (value));
++      while (rv < 0 && errno == EINTR);
++    }
++#endif
++
+   while (*vlib_worker_threads->workers_at_barrier != count)
+     {
+       if ((now = vlib_time_now (vm)) > deadline)
 @@ -1379,7 +1379,24 @@
    __atomic_store_n (vlib_worker_threads->wait_at_barrier, 1, __ATOMIC_RELEASE);
  

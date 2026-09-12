@@ -62,6 +62,19 @@ typedef struct {
   uint32_t code;
 } network_call_t;
 
+static void
+release_unsent_request (sakamoto_product_session_t *session, vapi_error_e rv,
+                        bool callback_called, void *message)
+{
+  /* This mutex-owned blocking UDS context has one outstanding slot. A
+   * failed generated call with no callback and no stored request failed
+   * before ownership transfer; vapi.h requires the caller to free it.
+   * A failed dispatch with a stored request already consumed the message. */
+  if (rv != VAPI_OK && !callback_called
+      && vapi_get_request_count (session->context) == 0)
+    vapi_msg_free (session->context, message);
+}
+
 static vapi_error_e
 network_publish_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
                        bool is_last,
@@ -112,7 +125,78 @@ sakamoto_product_session_publish_network (
   network_call_t call = { .called = false, .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
   vapi_error_e rv = vapi_product_core_network_publish (
     session->context, message, network_publish_reply, &call);
+  release_unsent_request (session, rv, call.called, message);
+  /* A failed blocking dispatch can leave its stack callback registered.
+   * Fence all further requests before that callback storage goes out of
+   * scope. The UDS disconnect path drains without dispatching callbacks;
+   * explicit close still owns the context and its outstanding request. */
+  if (rv != VAPI_OK || !call.called) session->connected = 0;
   code = rv == VAPI_OK && call.called ? call.code : SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+done:
+  (void) pthread_mutex_unlock (&session->mutex);
+  return code;
+}
+
+typedef struct {
+  bool called;
+  uint64_t generation;
+  uint32_t stopped;
+  uint32_t code;
+} root_stop_call_t;
+
+static vapi_error_e
+root_stop_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
+                 bool is_last, vapi_payload_product_core_root_stop_reply *reply)
+{
+  (void) context;
+  (void) is_last;
+  root_stop_call_t *call = opaque;
+  call->called = true;
+  if (rv != VAPI_OK || !reply)
+    call->code = SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  else if (reply->generation != call->generation)
+    call->code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  else if (reply->retval != 0 || reply->stopped > 1)
+    call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH;
+  else
+    {
+      call->code = SAKAMOTO_PRODUCT_OK;
+      call->stopped = reply->stopped;
+    }
+  return VAPI_OK;
+}
+
+uint32_t
+sakamoto_product_session_stop_root (sakamoto_product_session_t *session,
+                                     uint64_t generation, uint32_t *out_stopped)
+{
+  if (out_stopped) *out_stopped = 0;
+  if (!session || !generation || !out_stopped)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex) != 0)
+    return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if (!session->connected || generation != session->generation) goto done;
+  code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if (!vapi_is_msg_available (session->context, vapi_msg_id_product_core_root_stop)
+      || !vapi_is_msg_available (session->context,
+                                vapi_msg_id_product_core_root_stop_reply))
+    goto done;
+  vapi_msg_product_core_root_stop *message =
+    vapi_alloc_product_core_root_stop (session->context);
+  code = SAKAMOTO_PRODUCT_ALLOCATION_FAILED;
+  if (!message) goto done;
+  message->payload.generation = generation;
+  root_stop_call_t call = { .generation = generation,
+                            .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
+  vapi_error_e rv = vapi_product_core_root_stop (
+    session->context, message, root_stop_reply, &call);
+  release_unsent_request (session, rv, call.called, message);
+  /* As with status/network callbacks, an incomplete dispatch must fence the
+   * context before this stack callback retires. No retry on that context. */
+  if (rv != VAPI_OK || !call.called) session->connected = 0;
+  code = rv == VAPI_OK && call.called ? call.code : SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  if (code == SAKAMOTO_PRODUCT_OK) *out_stopped = call.stopped;
 done:
   (void) pthread_mutex_unlock (&session->mutex);
   return code;
@@ -652,6 +736,8 @@ query_status (sakamoto_product_session_t *session,
                         .status = status};
   vapi_error_e rv = vapi_product_core_status (
     session->context, message, status_reply, &call);
+  release_unsent_request (session, rv, call.callback_called, message);
+  if (rv != VAPI_OK || !call.callback_called) session->connected = 0;
   if (rv == VAPI_OK && !call.callback_called)
     {
       sakamoto_product_status_error (status, SAKAMOTO_PRODUCT_QUERY_FAILED,
@@ -736,6 +822,8 @@ apply_policy_snapshot (sakamoto_product_session_t *session,
                        .status = status};
   vapi_error_e rv = vapi_product_core_policy_apply (
     session->context, message, policy_apply_reply, &call);
+  release_unsent_request (session, rv, call.callback_called, message);
+  if (rv != VAPI_OK || !call.callback_called) session->connected = 0;
   if (rv == VAPI_OK && !call.callback_called)
     {
       sakamoto_product_status_error (
@@ -1071,6 +1159,8 @@ sakamoto_product_session_apply_policy_bundle (
                 SAKAMOTO_PRODUCT_POLICY_MUTATION_FAULT_NONE;
               vapi_error_e rv = vapi_product_core_policy_bundle_apply (
                 session->context, message, policy_bundle_apply_reply, &call);
+              release_unsent_request (session, rv, call.callback_called, message);
+              if (rv != VAPI_OK || !call.callback_called) session->connected = 0;
               if (fault_mode
                   == SAKAMOTO_PRODUCT_POLICY_MUTATION_FAULT_OMIT_CALLBACK)
                 {
@@ -1148,7 +1238,7 @@ sakamoto_product_session_disconnect (sakamoto_product_session_t *session)
   if (pthread_mutex_lock (&session->mutex) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   vapi_error_e rv = VAPI_OK;
-  if (session->connected)
+  if (session->context != NULL)
     {
       session->connected = 0;
       rv = vapi_disconnect (session->context);

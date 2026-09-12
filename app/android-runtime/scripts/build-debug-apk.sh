@@ -15,8 +15,8 @@ bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_build_name="product_core_plugin.so"
 plugin_name="libproduct_core_plugin.so"
-expected_vpp_patch_series_count=18
-expected_vpp_patch_series_sha256=2f2b87b011cc131cada294ae31e6ebfb618ccdf3f303b303ff4b7f00b562af74
+expected_vpp_patch_series_count=19
+expected_vpp_patch_series_sha256=884aa3aac9457d8b34482f0d0c0faeb933831653f37e0f856fd8a6756a4ea400
 expected_vpp_core_patch_series_count="$(
   sed -n 's/^vpp.core.patch.count=//p' "$product_source_manifest"
 )"
@@ -691,6 +691,10 @@ build_native_stage() {
     done < <(find "$root" -type l -print0)
   }
   validate_product_stage_symlinks "$product_stage_candidate"
+  # Audit the distribution closure, not temporary compiler inputs. The pinned
+  # owner-inline HEV fork is linked into the allowlisted Product plugin; its
+  # source/archive build tree is not an APK payload or an external HEV DSO.
+  rm -rf -- "$build_root"
   forbidden_stage_path=""
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
@@ -700,7 +704,6 @@ build_native_stage() {
         ;;
     esac
   done < <(cd "$product_stage_candidate" && find . -mindepth 1 -print0)
-  rm -rf -- "$build_root"
   marker="$product_stage_candidate/.sakamoto-android-product-stage"
   printf '%s\n' 'sakamoto-android-product-stage/v1' >"$marker"
   cat >"$product_stage_candidate/product-stage.properties" <<EOF
@@ -1097,6 +1100,8 @@ build_apk_only() {
   dex_dir="$apk_build_dir/dex"
   mkdir -p -- "$payload_assets" "$payload_lib" "$classes_dir" "$dex_dir"
   install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
+  python3 "$repo_root/tools/product/hev-notices.py" --output "$payload_assets/hev-notices.txt"
+  install -m 0644 "$repo_root/src/product/NOTICE.tcp" "$payload_assets/product-tcp-notices.txt"
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"

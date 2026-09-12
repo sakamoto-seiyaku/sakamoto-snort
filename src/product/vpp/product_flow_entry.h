@@ -105,9 +105,9 @@ typedef struct
   uint64_t incarnation;
   uint64_t side_packets[2]; /* ORIG, REPLY */
   uint64_t side_bytes[2];
-  /* The key protocol is the tag; TCP/ICMP remain unimplemented placeholders. */
+  /* The key protocol is the tag; ICMP remains an unimplemented placeholder. */
   union {
-    struct { uint8_t initialized; } tcp;
+    product_tcp_state_t tcp;
     product_udp_state_t udp;
     struct { uint8_t initialized; } icmp;
   } protocol_state;
@@ -122,6 +122,7 @@ typedef struct
   uint8_t created;
   uint8_t reused;
   uint8_t revision_invalidated;
+  uint64_t previous_incarnation; /* nonzero only for synchronous tuple replacement */
   product_tracker_result_t tracker; /* NONE/UNKNOWN for unimplemented protocols */
 } product_flow_entry_observation_t;
 
@@ -147,6 +148,8 @@ typedef struct
     uint64_t creates;
     uint64_t hits;
     uint64_t capacity_misses;
+    uint64_t invalid_packets;
+    uint64_t closed;
   } protocol[3]; /* TCP, UDP, ICMP_QUERY, sharing one total capacity */
 } product_flow_runtime_snapshot_t;
 
@@ -164,6 +167,9 @@ product_flow_runtime_create (product_flow_runtime_t **runtime,
  * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment
  * on the caller's current-worker pool; there is no owner selector or remote
  * pool accessor here. TCP/UDP L4_PORTS and ICMP_QUERY share this runtime.
+ * OK with entry == NULL and INVALID CtFacts is a rejected new TCP candidate,
+ * not allocation failure or an implicit packet verdict. A closed TCP instance
+ * can be replaced synchronously while no cross-node FlowEnd consumer exists.
  */
 product_flow_entry_status_t
 product_flow_entry_observe (product_flow_runtime_t *pool,

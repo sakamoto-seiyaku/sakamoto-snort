@@ -2,6 +2,24 @@
 
 option version = "1.0.0";
 
+/* Supervisor-only lifecycle operation, distinct from disconnecting a query
+ * client. Each barrier-bounded step leaves workers free to drain between
+ * replies. stopped=1 means admitted native debt was zero before fd closure. */
+define product_core_root_stop
+{
+  u32 client_index;
+  u32 context;
+  u64 generation;
+};
+
+define product_core_root_stop_reply
+{
+  u32 context;
+  i32 retval;
+  u64 generation;
+  u32 stopped;
+};
+
 /**
  * Return the coarse control-plane identity for the current VPP generation.
  *

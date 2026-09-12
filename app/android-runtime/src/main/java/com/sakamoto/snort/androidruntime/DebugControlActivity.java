@@ -238,13 +238,36 @@ public class DebugControlActivity extends Activity {
         boolean handled = false;
         boolean debuggable = (getApplicationInfo().flags
                 & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-        if (debuggable && intent.getBooleanExtra("debugVpnGraphValidation", false)) {
+        if (debuggable && intent.getBooleanExtra("debugVpnHevValidation", false)) {
+            backend.startVpnHevValidation(this,
+                    intent.getBooleanExtra("debugVpnHevUnknownIdentity", false),
+                    intent.getBooleanExtra("debugVpnHevUnknownContext", false),
+                    intent.getStringExtra("debugVpnHevLimits"),
+                    intent.getIntExtra("debugVpnFlowEntries", 0));
+            handled = true;
+        } else if (debuggable && intent.getBooleanExtra("debugVpnGraphValidation", false)) {
             backend.startVpnGraphValidation(this);
             handled = true;
         }
         if (debuggable && intent.hasExtra("s213ProbeNonce")) {
             sendTunGraphProbe(intent.getStringExtra("s213ProbeNonce"),
                     intent.getIntExtra("s213ProbePort", 0));
+            handled = true;
+        }
+        if (debuggable && intent.hasExtra("s237ProbeNonce")) {
+            sendFlowStackProbe(intent.getStringExtra("s237ProbeNonce"),
+                    intent.getIntExtra("s237SourcePort", 0), intent.getStringExtra("s237Endpoint"),
+                    intent.getIntExtra("s237EndpointPort", 0), intent.getIntExtra("s237Packets", 1));
+            handled = true;
+        }
+        if (debuggable && intent.hasExtra("s239ProbeNonce")) {
+            FlowStackConcurrentProbe.start(this, intent.getStringExtra("s239ProbeNonce"),
+                    intent.getStringExtra("s239ProbePlan"));
+            handled = true;
+        }
+        if (debuggable && intent.hasExtra("s240ProbeNonce")) {
+            FlowStackTcpProbe.start(this, intent.getStringExtra("s240ProbeNonce"),
+                    intent.getStringExtra("s240ProbePlan"));
             handled = true;
         }
         if (debuggable && intent.hasExtra("s198ProbeNonce")) {
@@ -312,6 +335,60 @@ public class DebugControlActivity extends Activity {
             handled = true;
         }
         return handled;
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean flowStackProbeRunning =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    private void sendFlowStackProbe(String nonce, int sourcePort, String destination,
+                                    int destinationPort, int packets) {
+        if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}") || destination == null
+                || !(destination.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")
+                     || (destination.contains(":") && destination.matches("[0-9a-fA-F:]+")))
+                || destination.startsWith("127.") || sourcePort < 1024 || sourcePort > 65535
+                || destinationPort < 1 || destinationPort > 65535 || packets < 1 || packets > 8
+                || !flowStackProbeRunning.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            StringBuilder record = new StringBuilder("nonce=" + nonce + "\nsourcePort=" + sourcePort
+                    + "\nendpoint=" + destination + ":" + destinationPort + "\nuid="
+                    + android.os.Process.myUid() + "\n");
+            try (DatagramSocket socket = new DatagramSocket(sourcePort,
+                    InetAddress.getByName(destination.contains(":")
+                            ? VpnTunPlatformSession.IPV6_ADDRESS : VpnTunPlatformSession.IPV4_ADDRESS))) {
+                socket.setSoTimeout(1500);
+                InetAddress endpoint = InetAddress.getByName(destination);
+                if (endpoint.isLoopbackAddress() || endpoint.isAnyLocalAddress()
+                        || endpoint.isLinkLocalAddress() || endpoint.isMulticastAddress())
+                    throw new IllegalArgumentException("probe requires a unicast underlay endpoint");
+                socket.connect(endpoint, destinationPort);
+                for (int index = 0; index < packets; ++index) {
+                    byte[] sent = (nonce + ":" + index).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    socket.send(new DatagramPacket(sent, sent.length));
+                    String outcome;
+                    try {
+                        byte[] received = new byte[256];
+                        DatagramPacket reply = new DatagramPacket(received, received.length);
+                        socket.receive(reply);
+                        outcome = java.util.Arrays.equals(sent,
+                                java.util.Arrays.copyOf(received, reply.getLength())) ? "echo" : "wrong_reply";
+                    } catch (java.net.SocketTimeoutException timeout) { outcome = "timeout"; }
+                    record.append("packet.").append(index).append('=').append(outcome).append('\n');
+                }
+            } catch (Exception error) {
+                record.append("error=").append(error.getClass().getSimpleName()).append('\n');
+            } finally {
+                java.io.File result = new java.io.File(getFilesDir(), "product-state/s237-probe.properties");
+                try {
+                    result.getParentFile().mkdirs();
+                    try (java.io.FileOutputStream stream = new java.io.FileOutputStream(result)) {
+                        stream.write(record.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                } catch (java.io.IOException error) {
+                    android.util.Log.e("SakamotoFlowStackProbe", "probe record failed", error);
+                }
+                flowStackProbeRunning.set(false);
+            }
+        }, "s237-udp-probe").start();
     }
 
     private void sendTunGraphProbe(String nonce, int sourcePort) {

@@ -89,7 +89,7 @@ def udp_valid(p, body):
     assert checksum(pseudo+body) == 0, 'independent UDP checksum'
 
 
-def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoint):
+def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoint, product_reassembly=False):
     generation = str(case['generation'])
     nfq_rows = rows(trace,'s231 ')
     nfq, indexed = [], {}
@@ -104,6 +104,35 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
         if row['skb_info_known'] == '0': assert row['skb_info'] == '0', 'absent SKB flags fabricated'
         p['record'] = row; nfq.append(p); indexed[row['token']] = p
     assert nfq, 'no actual Product NFQUEUE observation'
+    fragment_ingress, fragment_publish, fragment_release, heads, fragment_heads = {}, {}, {}, {}, {}
+    if product_reassembly:
+        for event, table in (('fragment_ingress',fragment_ingress), ('completion_publish',fragment_publish),
+                             ('origin_release',fragment_release)):
+            for row in rows(trace,'s212 '):
+                if row.get('event') != event or row.get('kind') != '1': continue
+                token = row['token']
+                assert row['generation'] == generation and token in indexed and token not in table, 'fragment original identity'
+                assert row['buffer'] == indexed[token]['record']['buffer'] and row['refs'] == '1', 'exclusive original fragment buffer'
+                table[token] = row
+        assert set(fragment_ingress) == set(fragment_publish) == set(fragment_release), 'fragment original return conservation'
+        for row in rows(trace,'s229 '):
+            if row.get('event') != 'product_reassembled': continue
+            token = row['token']
+            assert row['generation'] == generation and token in fragment_ingress and token not in heads, 'one logical fragment survivor'
+            original = indexed[token]
+            group = {t:p for t,p in indexed.items() if p['fragmented'] and p['family'] == original['family']
+                     and p['id'] == original['id'] and p['source'] == original['source'] and p['destination'] == original['destination']}
+            assert len(group) == int(row['originals']) >= 2 and set(group) <= set(fragment_ingress), 'real NFQUEUE fragment bundle'
+            assert row['survivor'] == original['record']['buffer'] and original['offset'] == 0, 'original first-fragment survivor'
+            body = assemble(list(group.values())); udp_valid(original,body)
+            for member,piece in group.items():
+                ingress = fragment_ingress[member]
+                assert member not in fragment_heads and int(ingress['offset']) == piece['offset'] and int(ingress['more']) == int(piece['more']), 'fragment geometry identity'
+                assert ingress['lane'] == piece['record']['lane'] and ingress['packet'] == piece['record']['packet'], 'original NFQUEUE lane/packet'
+                fragment_heads[member] = token
+            heads[token] = (row, body)
+        assert set(fragment_heads) == set(fragment_ingress), 'all received fragments belong to completed bundles'
+    followers = set(fragment_ingress)-set(heads)
     tables = {}
     for name,prefix,filter_key,filter_value,key in (
         ('capture','s203 ','event','capture','obligation'), ('accept','s203 ','event','frame_accept','obligation'),
@@ -116,7 +145,11 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
             if row.get(filter_key) != filter_value: continue
             assert row[key] not in table, f'duplicate {name}'
             table[row[key]] = row
-        assert set(table) == set(indexed), f'{name} NFQ carrier conservation'
+        if product_reassembly and name == 'publish':
+            assert not set(table) & set(fragment_publish), 'duplicate normal/fragment completion publication'
+            table.update(fragment_publish)
+        expected = set(indexed)-followers if product_reassembly and name in ('admit','terminal') else set(indexed)
+        assert set(table) == expected, f'{name} NFQ carrier conservation'
         tables[name] = table
     policy_rows = [r for r in rows(trace,'s216 ') if r.get('stage') == 'policy']
     policy = {r['token']:r for r in policy_rows}
@@ -124,27 +157,39 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
     for token,p in indexed.items():
         original = p['record']
         for name in ('capture','accept','admit','terminal','publish','consume','origin','free'):
+            if token in followers and name in ('admit','terminal'): continue
             assert tables[name][token]['buffer'] == original['buffer'], 'native buffer identity'
         for name in ('capture','accept','publish','consume','origin','verdict'):
             r = tables[name][token]
             assert r['packet'] == original['packet'] and r['lane'] == original['lane'], 'original NFQ packet ID/lane'
         for name in ('accept','admit','terminal','publish','consume','origin','verdict'):
+            if token in followers and name in ('admit','terminal'): continue
             assert tables[name][token]['generation'] == generation, 'original generation'
         for name in ('capture','accept','consume','origin','verdict','free'):
             assert tables[name][token]['thread'] == original['thread'], 'origin lane thread'
-        admit = tables['admit'][token]
-        assert admit['raw'] == original['raw'], 'payload changed before graph admission'
-        assert admit['direction'] == original['hook'] and admit['provenance'] == '1' and admit['completion_kind'] == '1'
-        assert admit['queue_generation'] == generation and admit['packet_id'] == original['packet']
+        logical_token = fragment_heads.get(token, token)
+        admit = tables['admit'][logical_token]
+        if token in heads:
+            logical = packet(bytes.fromhex(admit['raw']))
+            assert not logical['fragmented'] and logical['body'] == heads[token][1], 'logical reassembly/sender correspondence'
+            assert len(logical['raw']) == int(heads[token][0]['bytes']) and admit['owner'] == heads[token][0]['owner'], 'logical reassembly length/owner'
+        elif token not in followers:
+            assert admit['raw'] == original['raw'], 'payload changed before graph admission'
+        if token not in followers:
+            assert admit['direction'] == original['hook'] and admit['provenance'] == '1' and admit['completion_kind'] == '1'
+            assert admit['queue_generation'] == generation and admit['packet_id'] == original['packet']
         assert int(original['queue']) == 176+int(original['lane'])
         assert int(original['thread']) == int(original['lane'])%2+1
-        intent = tables['terminal'][token]['intent']
+        intent = tables['terminal'][logical_token]['intent']
         assert intent in ('1','2'), 'unexpected capacity bypass in visibility test'
         for name in ('publish','consume','origin'): assert tables[name][token]['intent'] == intent
         verdict = '1' if intent == '1' else '0'
         assert tables['origin'][token]['verdict'] == tables['verdict'][token]['verdict'] == verdict
         p['verdict'] = int(verdict); p['drop_reason'] = int(tables['origin'][token]['drop_reason'])
-        if p['family'] == 4 and p['fragmented']:
+        if product_reassembly and p['fragmented']:
+            assert token in fragment_ingress and (token in policy) == (token in heads), 'one policy evaluation per fragment bundle'
+            assert policy[logical_token]['worker'] == admit['owner'], 'reassembled packet policy owner'
+        elif p['family'] == 4 and p['fragmented']:
             assert token not in policy and intent == '2' and p['drop_reason'] == 1, 'current IPv4 fragment rejection mislabeled policy'
         else:
             assert token in policy and policy[token]['worker'] == admit['owner'], 'actual policy owner'
@@ -240,6 +285,8 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
     for name, table in (('product-packet-admit',tables['admit']),('product-packet-policy',policy),
                         ('product-packet-terminal',tables['terminal']),('product-packet-origin-completi',tables['consume'])):
         expected = collections.Counter(r['thread'] for r in table.values())
+        if product_reassembly and name == 'product-packet-admit':
+            expected.update(r['thread'] for r in fragment_ingress.values())
         assert all(native[(str(t),name)] == expected[str(t)] for t in range(3)), 'native node/thread vectors '+name
     return dict(generation=generation,family=case['family'],hook=case['hook'],packets=len(nfq),raw=results,kernel_udp=kernel,
                 wire_records=record_count,ordinary_probes=len(case['probes']))

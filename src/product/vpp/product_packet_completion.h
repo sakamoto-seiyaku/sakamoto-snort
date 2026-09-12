@@ -20,7 +20,9 @@ typedef struct
   uint8_t runtime_drop_reason;
   uint8_t flags;
   uint8_t processing_bypass_reason;
-  uint8_t reserved[2];
+  /* Zero = no admission; otherwise Product Flow Stack input result + 1. */
+  uint8_t flow_stack_result;
+  uint8_t reserved;
 } product_packet_completion_frame_t;
 
 enum
@@ -31,6 +33,7 @@ enum
   PRODUCT_COMPLETION_FRAGMENT_PINNED = 1 << 3,
   /* Derived from shared PacketFacts before their terminal lifetime ends. */
   PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED = 1 << 4,
+  PRODUCT_COMPLETION_FLOW_STACK_RETURN = 1 << 5,
 };
 
 _Static_assert (sizeof (product_packet_completion_frame_t) == 32,

@@ -405,6 +405,13 @@ uint32_t sakamoto_product_session_publish_network(
     sakamoto_product_session_t *session, uint64_t expected_generation,
     const sakamoto_product_network_snapshot_t *snapshot);
 
+/* Explicit supervisor stop; ordinary session disconnect MUST NOT stop VPP.
+ * On OK, out_stopped is 0 (draining) or 1 (native debt zero and lanes closed).
+ * Callers bound the interval between the first step and process cleanup. */
+uint32_t sakamoto_product_session_stop_root(
+    sakamoto_product_session_t *session, uint64_t expected_generation,
+    uint32_t *out_stopped);
+
 uint32_t sakamoto_product_session_apply_policy_bundle(
     sakamoto_product_session_t *session, uint64_t expected_generation,
     const sakamoto_product_policy_bundle_t *bundle,

@@ -12,6 +12,7 @@
 #include "product_flow_entry.h"
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
+#include "product_vpn_flow_stack_driver.h"
 #include "product_network_snapshot.h"
 
 #include <vlib/vlib.h>
@@ -60,7 +61,9 @@ typedef struct
   u16 expected_owner;
   u8 primary_handoff_count;
   u8 corrective_handoff_count;
-  u8 key_kind, query_class, assignment_valid, reserved;
+  u8 key_kind, query_class;
+  u8 assignment_valid : 1, flow_stack_result : 3, reserved_bits : 4;
+  u8 reserved;
 } product_compact_owner_assignment_t;
 
 typedef union
@@ -79,7 +82,11 @@ typedef struct
     {
       u16 expected_owner;
       u8 primary_handoff_count, corrective_handoff_count;
-      u8 key_kind, query_class, assignment_valid, processing_bypass_reason;
+      u8 key_kind, query_class;
+      /* The result belongs to lifecycle metadata, never to TCP PacketFacts.
+       * Compact the existing boolean byte; no extra opaque storage or map. */
+      u8 assignment_valid : 1, flow_stack_result : 3, reserved_bits : 4;
+      u8 processing_bypass_reason;
     };
   };
   u32 fragment_bundle_head;
@@ -114,6 +121,7 @@ _Static_assert (sizeof (product_packet_completion_frame_t) <= sizeof (((vlib_buf
                 "completion carrier fits existing opaque2");
 _Static_assert (sizeof (product_compact_owner_assignment_t) == 8, "owner layout");
 _Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
+_Static_assert (PRODUCT_VPN_FLOW_STACK_FAILED + 1 < 8, "flow stack result bits");
 _Static_assert (PRODUCT_PACKET_METADATA_BYTES == 56, "packet layout");
 _Static_assert (PRODUCT_PACKET_METADATA_BYTES ==
                   sizeof (((vlib_buffer_t *) 0)->opaque2), "opaque2 capacity");
@@ -836,9 +844,14 @@ product_packet_event_clock_ns (void)
 static const char *
 product_packet_evidence_source (const product_packet_lease_t *lease)
 {
-  return lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED
-    ? "GRAPH_INJECTED" : lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN
-    ? "TUN_CAPTURED" : "NFQ_CAPTURED";
+  switch (lease->platform.provenance)
+    {
+    case PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED: return "GRAPH_INJECTED";
+    case PRODUCT_PACKET_PROVENANCE_VPN_TUN: return "TUN_CAPTURED";
+    case PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN: return "FLOW_STACK_RETURN";
+    case PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE: return "NFQ_CAPTURED";
+    default: return "UNKNOWN";
+    }
 }
 
 static void
@@ -1520,6 +1533,7 @@ VLIB_REGISTER_NODE (product_packet_owner_guard_node) = {
 enum
 {
   PRODUCT_POLICY_NEXT_TERMINAL,
+  PRODUCT_POLICY_NEXT_VPN_EGRESS,
   PRODUCT_POLICY_N_NEXT,
 };
 
@@ -1635,7 +1649,10 @@ VLIB_NODE_FN (product_packet_policy_node)
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_POLICY,
                          metadata.origin_obligation_id);
       vlib_buffer_enqueue_to_single_next (
-        vm, node, &buffer_index, PRODUCT_POLICY_NEXT_TERMINAL, 1);
+        vm, node, &buffer_index,
+        lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+          lease.terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME
+          ? PRODUCT_POLICY_NEXT_VPN_EGRESS : PRODUCT_POLICY_NEXT_TERMINAL, 1);
     }
   return frame->n_vectors;
 }
@@ -1649,7 +1666,45 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
   .n_next_nodes = PRODUCT_POLICY_N_NEXT,
   .next_nodes = {
     [PRODUCT_POLICY_NEXT_TERMINAL] = "product-packet-terminal",
+    [PRODUCT_POLICY_NEXT_VPN_EGRESS] = "product-vpn-egress",
   },
+};
+
+VLIB_NODE_FN(product_vpn_egress_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  u32 *from = vlib_frame_vector_args(frame);
+  for (u32 i = 0; i < frame->n_vectors; ++i) {
+    vlib_buffer_t *buffer = vlib_get_buffer(vm, from[i]);
+    product_buffer_metadata_t metadata;
+    product_packet_lease_t lease;
+    product_metadata_load(buffer, &metadata);
+    if (product_lease_from_metadata(&metadata, buffer, &lease) &&
+        lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+        lease.terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME &&
+        (lease.facts.ip_family == 4 || lease.facts.ip_family == 6) &&
+        (lease.facts.protocol == 6 || lease.facts.protocol == 17) &&
+        lease.facts.l4_status == PRODUCT_PACKET_L4_COMPLETE &&
+        product_vpn_flow_stack_driver_enabled()) {
+      product_vpn_flow_stack_input_result_t result = product_vpn_flow_stack_driver_input(
+        vm, vlib_buffer_get_current(buffer), buffer->current_length,
+        &lease.platform, metadata.generation);
+      metadata.flow_stack_result = 1 + result;
+      product_metadata_store(buffer, &metadata);
+      if (metadata.state_bits & PRODUCT_META_TRACE)
+        fprintf(stderr, "s237 event=input_copy node=%u thread=%u tls=%u owner=%u generation=%llu buffer=%u token=%llu bytes=%u result=%u\n",
+          node->node_index, vm->thread_index, vlib_get_thread_index(), metadata.expected_owner,
+          (unsigned long long)metadata.generation, from[i],
+          (unsigned long long)metadata.origin_obligation_id, buffer->current_length, result);
+    }
+    vlib_buffer_enqueue_to_single_next(vm, node, &from[i], 0, 1);
+  }
+  return frame->n_vectors;
+}
+VLIB_REGISTER_NODE(product_vpn_egress_node) = {
+  .name = "product-vpn-egress", .vector_size = sizeof(u32),
+  .type = VLIB_NODE_TYPE_INTERNAL, .n_next_nodes = 1,
+  .next_nodes = {[0] = "product-packet-terminal"},
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -1658,6 +1713,11 @@ _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
                   PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_CAPACITY
                   + 3 * PRODUCT_GRAPH_INJECTION_CAPACITY,
                 "return backlog covers every current admitted carrier");
+_Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
+                  PRODUCT_VPN_TUN_CAPTURE_CAPACITY +
+                  PRODUCT_VPN_RETURN_WORKERS * PRODUCT_VPN_RETURN_CAPACITY +
+                  3 * PRODUCT_GRAPH_INJECTION_CAPACITY,
+                "return backlog covers VPN capture and all owner return allowances");
 extern vlib_node_registration_t product_packet_completion_retry_node;
 typedef struct
 {
@@ -1671,6 +1731,7 @@ product_completion_return_try (vlib_main_t *vm, vlib_node_runtime_t *node,
                                 u32 bi, const product_packet_completion_frame_t *completion,
                                 int retry)
 {
+  if (product_vpn_tun_return_held(vm, completion)) return 0;
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u16 target = vlib_get_worker_thread_index (completion->obligation.origin_worker);
   u32 failed;
@@ -1716,7 +1777,7 @@ product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
       queue->count, PRODUCT_COMPLETION_RETURN_CAPACITY);
   clib_atomic_fetch_add_relax (&graph->completion_pending_returns, 1);
   clib_atomic_fetch_add_relax (&graph->completion_deferred, 1);
-  vlib_node_set_state (vm, product_packet_completion_retry_node.index, VLIB_NODE_STATE_POLLING);
+  vlib_node_set_interrupt_pending (vm, product_packet_completion_retry_node.index);
 }
 
 VLIB_NODE_FN (product_packet_completion_retry_node)
@@ -1728,11 +1789,21 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
   (void) frame;
   ASSERT (thread <= PRODUCT_GRAPH_WORKERS);
   product_completion_return_queue_t *queue = &product_completion_returns[thread];
-  while (queue->count && completed < 64)
+  u32 budget = clib_min(queue->count, 64);
+  while (queue->count && budget--)
     {
       u32 bi = queue->buffers[queue->head];
       product_packet_completion_frame_t completion;
       clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
+      /* Fault injection holds returns, not original-capture completions. Scan
+       * this existing bounded storage so the test does not accidentally fill
+       * the shared capture ledger behind a deliberately held return. */
+      if (product_vpn_tun_return_held(vm, &completion))
+        {
+          queue->head = (queue->head + 1) % PRODUCT_COMPLETION_RETURN_CAPACITY;
+          queue->buffers[(queue->head + queue->count - 1) % PRODUCT_COMPLETION_RETURN_CAPACITY] = bi;
+          continue;
+        }
       clib_atomic_fetch_add_relax (&graph->completion_retry_attempts, 1);
       if (!product_completion_return_try (vm, node, bi, &completion, 1))
         break;
@@ -1741,14 +1812,16 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
       clib_atomic_fetch_sub_relax (&graph->completion_pending_returns, 1);
       completed++;
     }
-  if (!queue->count)
-    vlib_node_set_state (vm, node->node_index, VLIB_NODE_STATE_DISABLED);
+  /* A full destination is dependency-blocked, not immediately runnable work.
+   * Retry on a bounded native deadline without occupying an idle CPU. */
+  if (queue->count && !vlib_node_is_scheduled(vm, node->node_index))
+    vlib_node_schedule(vm, node->node_index, 0.001);
   return completed;
 }
 VLIB_REGISTER_NODE (product_packet_completion_retry_node) = {
   .name = "product-completion-return",
-  .type = VLIB_NODE_TYPE_INPUT,
-  .state = VLIB_NODE_STATE_DISABLED,
+  .type = VLIB_NODE_TYPE_SCHED,
+  .state = VLIB_NODE_STATE_INTERRUPT,
 };
 #endif
 
@@ -1913,6 +1986,12 @@ VLIB_NODE_FN (product_packet_terminal_node)
         .processing_bypass_reason = lease.processing_bypass_reason,
         .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
       };
+      if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
+        completion.flags |= PRODUCT_COMPLETION_FLOW_STACK_RETURN;
+      if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+          (lease.facts.ip_family == 4 || lease.facts.ip_family == 6) &&
+          (lease.facts.protocol == 6 || lease.facts.protocol == 17))
+        completion.flow_stack_result = metadata.flow_stack_result;
       if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN
           && lease.terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
           && lease.facts.l3_status == PRODUCT_PACKET_L3_COMPLETE
@@ -1932,7 +2011,8 @@ VLIB_NODE_FN (product_packet_terminal_node)
           completion.obligation.packet_id, completion.obligation.origin_lane,
           completion.terminal_intent, (u32)sizeof (completion),
           clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
-      if (vm->thread_index == vlib_get_worker_thread_index (completion.obligation.origin_worker))
+      if (vm->thread_index == vlib_get_worker_thread_index (completion.obligation.origin_worker)
+          && !product_vpn_tun_return_held(vm, &completion))
         vlib_buffer_enqueue_to_single_next (vm, node, &buffer_index, 0, 1);
       else
         product_completion_return (vm, node, buffer_index, &completion);
@@ -2002,19 +2082,24 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
           (unsigned long long) product_packet_event_clock_ns ());
       /* Immutable AdapterObligation selects its native endpoint. No mutable
        * process-wide callback can redirect another adapter's completion. */
+      int valid_tun_completion = 0;
+      int root_buffer_returned = 0;
+      product_fragment_origin_check (vm, bi, &completion);
       switch (completion.obligation.kind)
         {
         case PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE:
-          product_root_nfqueue_complete_from_graph (vm, bi, &completion);
+          root_buffer_returned = product_root_nfqueue_complete_from_graph (vm, bi, &completion);
           break;
         case PRODUCT_ADAPTER_OBLIGATION_VPN_TUN:
-          product_vpn_tun_complete_from_graph (vm, bi, &completion);
+          valid_tun_completion = product_vpn_tun_complete_from_graph (vm, bi, &completion);
           break;
         default:
           break; /* GRAPH_INJECTED owns no native adapter operation. */
         }
-      product_fragment_origin_check (vm, bi, &completion);
-      vlib_buffer_free (vm, &bi, 1);
+      if (!root_buffer_returned)
+        vlib_buffer_free (vm, &bi, 1);
+      if (valid_tun_completion)
+        product_vpn_tun_return_freed(vm, bi, &completion);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, 1);
       if (!(completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE))
@@ -2052,11 +2137,13 @@ product_packet_graph_replay_completion (vlib_main_t *vm,
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u32 bi, failed;
-  u16 thread = vlib_get_worker_thread_index (0);
+  u16 thread;
   if (!vm || !completion || !graph->accepting || !graph->enabled
       || !(completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)
+      || completion->obligation.origin_worker >= PRODUCT_GRAPH_WORKERS
       || vlib_buffer_alloc (vm, &bi, 1) != 1)
     return 0;
+  thread = vlib_get_worker_thread_index (completion->obligation.origin_worker);
   vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
   buffer->current_data = 0; buffer->current_length = 0;
   clib_memcpy_fast (buffer->opaque2, completion, sizeof (*completion));
@@ -2414,7 +2501,7 @@ product_packet_graph_flow_observe (
     {
       /* Revision zero is the existing bootstrap default-pass view. It creates
        * flow facts but no cached policy decision before the first snapshot. */
-      if (packet.policy.revision != 0)
+      if (entry && packet.policy.revision != 0)
         status = product_flow_entry_set_decision (
           pool, entry, &packet.policy, PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,
           evaluation->rule_id, evaluation->reason_id);
@@ -2480,6 +2567,28 @@ product_packet_graph_flow_observe (
         observation.tracker.close_old_instance, observation.tracker.create_replacement,
         (unsigned long long) entry->side_packets[0],
         (unsigned long long) entry->side_packets[1]);
+    if (lease->facts.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP &&
+        observation.tracker.update != PRODUCT_CT_UPDATE_NONE)
+      {
+        const product_tcp_state_t empty = {0};
+        const product_tcp_state_t *tcp = entry ? &entry->protocol_state.tcp : &empty;
+        fprintf(stderr, "s222 event=tcp_update source=%s generation=%llu token=%llu buffer=%u thread=%u worker=%u owner=%u slot=%u incarnation=%llu previous_incarnation=%llu created=%u invalidated=%u ct_state=%u flow_dir=%u update=%u timeout=%u refresh=%u close=%u replacement=%u orig_state=%u reply_state=%u orig_seqlo=%u orig_seqhi=%u reply_seqlo=%u reply_seqhi=%u orig_maxwin=%u reply_maxwin=%u orig_scale=%u reply_scale=%u orig_flags=%u reply_flags=%u orig_packets=%llu reply_packets=%llu\n",
+          product_packet_evidence_source(lease), (unsigned long long)packet.policy.generation,
+          (unsigned long long)lease->origin_obligation_id, buffer_index, vm->thread_index,
+          worker, lease->assignment.execution_owner, observation.slot,
+          (unsigned long long)(entry ? entry->incarnation : 0),
+          (unsigned long long)observation.previous_incarnation, observation.created,
+          observation.revision_invalidated, observation.tracker.facts.state,
+          observation.tracker.facts.direction, observation.tracker.update, observation.tracker.timeout,
+          observation.tracker.refresh_deadline, observation.tracker.close_old_instance,
+          observation.tracker.create_replacement, tcp->peer[0].phase, tcp->peer[1].phase,
+          tcp->peer[0].seqlo, tcp->peer[0].seqhi, tcp->peer[1].seqlo, tcp->peer[1].seqhi,
+          tcp->peer[0].max_window, tcp->peer[1].max_window,
+          tcp->peer[0].window_scale, tcp->peer[1].window_scale,
+          tcp->peer[0].flags_history, tcp->peer[1].flags_history,
+          (unsigned long long)(entry ? entry->side_packets[0] : 0),
+          (unsigned long long)(entry ? entry->side_packets[1] : 0));
+      }
     }
 #else
   (void) buffer_index; (void) trace; (void) event;
@@ -3941,8 +4050,20 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
   u64 origin_obligation_id = obligation ? obligation->token : 0;
   vlib_frame_t *frame;
   u32 *to;
+  /* TUN return storage is created on its Flow Stack worker but completed by
+   * the single TUN lane. Its VPN-private packet_id names only the producing
+   * credit ledger; it never enters canonical assignment or policy facts. */
+  int vpn_return = vm && vm->thread_index && platform && obligation &&
+    obligation->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
+    platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
+    platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
+    obligation->origin_worker == 0 && obligation->origin_lane == 0 &&
+    obligation->packet_id == vlib_get_worker_index(vm->thread_index) + 1 &&
+    obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
   if (!vm || !obligation || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS
-      || vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker)
+      || (platform && platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return)
+      || (!vpn_return &&
+          vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker))
       || !origin_obligation_id || obligation->queue_generation != graph->generation
       || (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
@@ -6121,13 +6242,20 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
         worker, (unsigned long long) pool->generation, pool->capacity, pool->high_watermark,
         (unsigned long long) pool->allocated_bytes, (u32) sizeof (product_flow_entry_t),
         (unsigned long long) pool->capacity_rejection_count);
+      vlib_cli_output (vm, "flow.health worker=%u generation=%llu state=%s reason=%s capacity_misses=%llu retained_for_generation=1",
+        worker, (unsigned long long) pool->generation,
+        pool->capacity_rejection_count ? "error" : "ok",
+        pool->capacity_rejection_count ? "FLOW_CAPACITY" : "NONE",
+        (unsigned long long) pool->capacity_rejection_count);
       for (u32 protocol = 0; protocol < 3; protocol++)
-        vlib_cli_output (vm, "flow.protocol worker=%u protocol=%s active=%u creates=%llu hits=%llu capacity_misses=%llu",
+        vlib_cli_output (vm, "flow.protocol worker=%u protocol=%s active=%u creates=%llu hits=%llu capacity_misses=%llu invalid_packets=%llu closed=%llu",
           worker, protocol == 0 ? "tcp" : protocol == 1 ? "udp" : "icmp_query",
           pool->protocol[protocol].active,
           (unsigned long long) pool->protocol[protocol].creates,
           (unsigned long long) pool->protocol[protocol].hits,
-          (unsigned long long) pool->protocol[protocol].capacity_misses);
+          (unsigned long long) pool->protocol[protocol].capacity_misses,
+          (unsigned long long) pool->protocol[protocol].invalid_packets,
+          (unsigned long long) pool->protocol[protocol].closed);
       for (u32 slot = 0; slot < pool->capacity; slot++)
         {
           const product_flow_entry_t *e = product_flow_runtime_entry (g->flow_pools[worker], slot);
@@ -6150,6 +6278,16 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             vlib_cli_output (vm, "flow.udp worker=%u slot=%u incarnation=%llu phase=%u",
               worker, slot, (unsigned long long) e->incarnation,
               e->protocol_state.udp.phase);
+          if (e->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP)
+            {
+              const product_tcp_state_t *s = &e->protocol_state.tcp;
+              vlib_cli_output(vm, "flow.tcp worker=%u slot=%u incarnation=%llu initialized=%u orig_state=%u reply_state=%u orig_seqlo=%u orig_seqhi=%u reply_seqlo=%u reply_seqhi=%u orig_maxwin=%u reply_maxwin=%u orig_scale=%u reply_scale=%u orig_flags=%u reply_flags=%u timeout=%u",
+                worker, slot, (unsigned long long)e->incarnation, s->initialized,
+                s->peer[0].phase, s->peer[1].phase, s->peer[0].seqlo, s->peer[0].seqhi,
+                s->peer[1].seqlo, s->peer[1].seqhi, s->peer[0].max_window, s->peer[1].max_window,
+                s->peer[0].window_scale, s->peer[1].window_scale,
+                s->peer[0].flags_history, s->peer[1].flags_history, s->timeout);
+            }
         }
     }
   return 0;
@@ -6256,8 +6394,12 @@ product_packet_trace_limit_cli (vlib_main_t *vm, unformat_input_t *input,
   u32 limit;
   (void) command;
   if (!unformat (input, "%u", &limit) || limit < 256 || limit > 4096
-      || g->trace_packets || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
-    return clib_error_return (0, "trace limit 256..4096 must precede first packet");
+      || (g->trace_packets && limit < g->trace_limit)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    return clib_error_return (0, "trace limit 256..4096 may only increase after first packet");
+  /* VPN attachment can generate kernel control packets before CLI is ready.
+   * Increasing the cap under this CLI barrier does not reset the ordinal or
+   * retroactively trace packets omitted before the increase. */
   g->trace_limit = limit;
   vlib_cli_output (vm, "packet.trace_limit=%u", limit);
   return 0;

@@ -27,7 +27,8 @@ typedef struct {
   product_adapter_obligation_t obligation;
   product_platform_packet_facts_t platform;
   u32 next_range;
-  u32 reserved[2];
+  u32 reserved;
+  u8 flow_stack_result, terminal_reserved[3];
   u16 reserved_count, flags;
 } product_fragment_envelope_t;
 _Static_assert(sizeof(product_fragment_envelope_t) ==
@@ -130,10 +131,13 @@ product_fragment_emit (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi,
     .obligation = e.obligation, .producer_thread = vm->thread_index,
     .terminal_intent = intent, .runtime_drop_reason = drop_reason,
     .processing_bypass_reason = bypass_reason,
+    .flow_stack_result = e.flow_stack_result,
     .flags = PRODUCT_COMPLETION_FRAGMENT_MEMBER |
       ((e.flags & PRODUCT_FRAGMENT_TRACE) ? PRODUCT_COMPLETION_TRACE : 0) |
       ((e.flags & PRODUCT_FRAGMENT_PINNED) ? PRODUCT_COMPLETION_FRAGMENT_PINNED : 0),
   };
+  if (e.platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
+    completion.flags |= PRODUCT_COMPLETION_FLOW_STACK_RETURN;
   clib_memcpy_fast (b->opaque2, &completion, sizeof (completion));
   clib_atomic_fetch_add_relax (&g->lifecycle_completion_frames, 1);
   clib_atomic_fetch_add_relax (&g->lifecycle_terminal_intents, 1);
@@ -335,6 +339,11 @@ VLIB_NODE_FN(product_fragment_input_node)
       result == PRODUCT_FRAGMENT_BUNDLE_FULL ? PRODUCT_REASSEMBLY_ERROR_BUNDLE_CAPACITY :
       PRODUCT_REASSEMBLY_ERROR_FRAGMENT_CONFLICT);
   }
+  /* Expiry is deadline work, not a reason to keep an idle worker polling.
+   * Preserve the existing 50 ms scan cadence while contexts are live. */
+  if (product_fragment_main.tables[vm->thread_index].active &&
+      !vlib_node_is_scheduled(vm, product_fragment_expire_node.index))
+    vlib_node_schedule(vm, product_fragment_expire_node.index, 0.05);
   return frame->n_vectors;
 }
 VLIB_REGISTER_NODE(product_fragment_input_node) = {
@@ -348,11 +357,13 @@ VLIB_NODE_FN(product_fragment_expire_node)
   (void)frame;
   if (vm->thread_index && product_fragment_main.initialized)
     product_fragment_expire(vm, node, !product_fragment_main.accepting);
+  if (vm->thread_index && product_fragment_main.tables[vm->thread_index].active)
+    vlib_node_schedule(vm, node->node_index, 0.05);
   return 0;
 }
 VLIB_REGISTER_NODE(product_fragment_expire_node) = {
   .name = "product-reassembly-expire", .vector_size = sizeof(u32),
-  .type = VLIB_NODE_TYPE_INPUT, .state = VLIB_NODE_STATE_POLLING,
+  .type = VLIB_NODE_TYPE_SCHED, .state = VLIB_NODE_STATE_INTERRUPT,
 };
 
 static int
@@ -432,6 +443,10 @@ product_fragment_terminal (vlib_main_t *vm, vlib_node_runtime_t *node,
     .flags = PRODUCT_FRAGMENT_VALID |
       ((metadata->state_bits & PRODUCT_META_TRACE) ? PRODUCT_FRAGMENT_TRACE : 0),
   };
+  if (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+      (lease->facts.ip_family == 4 || lease->facts.ip_family == 6) &&
+      (lease->facts.protocol == 6 || lease->facts.protocol == 17))
+    first.flow_stack_result = metadata->flow_stack_result;
   u32 next = metadata->fragment_bundle_head;
   product_fragment_emit (vm, node, bi, first, lease->terminal_intent,
                          lease->runtime_drop_reason, lease->processing_bypass_reason);
@@ -442,6 +457,7 @@ product_fragment_terminal (vlib_main_t *vm, vlib_node_runtime_t *node,
       u32 member = next;
       product_fragment_envelope_t e = product_fragment_load (vm, member);
       next = e.next_range;
+      e.flow_stack_result = first.flow_stack_result;
       product_fragment_emit (vm, node, member, e, lease->terminal_intent,
                              lease->runtime_drop_reason, lease->processing_bypass_reason);
     }

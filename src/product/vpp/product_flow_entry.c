@@ -80,6 +80,24 @@ find_entry (product_flow_runtime_t *pool,
 }
 
 static void
+retire_slot (product_flow_runtime_t *pool, uint32_t slot, unsigned protocol)
+{
+  /* S222 stage: no asynchronous FlowEnd consumer retains a borrowed entry.
+   * Unlink before returning storage; S225 will replace this synchronous end
+   * with its native FlowEnd lifetime, not add a second protocol table. */
+  flow_slot_t *old = &pool->slots[slot];
+  uint32_t *link = &pool->buckets[bucket_for(pool, old->entry.canonical_hash)];
+  while (*link != slot) link = &pool->slots[*link].next;
+  *link = old->next;
+  memset(&old->entry, 0, sizeof(old->entry));
+  old->next = pool->free_head;
+  pool->free_head = slot;
+  --pool->stats.active_entries;
+  --pool->stats.protocol[protocol].active;
+  ++pool->stats.protocol[protocol].closed;
+}
+
+static void
 reset_storage (product_flow_runtime_t *pool)
 {
   memset (pool->slots, 0, sizeof (*pool->slots) * pool->stats.capacity);
@@ -188,13 +206,47 @@ product_flow_entry_observe (
   unsigned protocol = protocol_index (assignment);
   /* A tracker consumes the shared parser's facts, never a key-derived stand-in.
    * Missing/unavailable facts are an Interface error, not capacity bypass. */
-  if (protocol == 1
+  if (protocol <= 1
       && (!packet->facts || packet->facts->protocol != assignment->key.protocol
           || packet->facts->ip_family != assignment->key.ip_family
           || packet->facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
           || packet->facts->l4_status != PRODUCT_PACKET_L4_COMPLETE))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   uint32_t slot = find_entry (pool, assignment);
+  product_tcp_state_t tcp_candidate = {0};
+  product_tracker_result_t tcp_result = {0};
+  uint64_t previous_incarnation = 0;
+  if (protocol == 0)
+    {
+      product_flow_direction_t direction = PRODUCT_FLOW_DIRECTION_ORIG;
+      if (slot != NO_SLOT)
+        {
+          const product_flow_entry_t *old = &pool->slots[slot].entry;
+          tcp_candidate = old->protocol_state.tcp;
+          direction = assignment->source_is_a == old->origin_is_endpoint_a
+            ? PRODUCT_FLOW_DIRECTION_ORIG : PRODUCT_FLOW_DIRECTION_REPLY;
+        }
+      tcp_result = product_tcp_update(&tcp_candidate, packet->facts, direction);
+      if (tcp_result.update == PRODUCT_CT_UPDATE_INVALID)
+        {
+          ++pool->stats.protocol[protocol].invalid_packets;
+          if (slot == NO_SLOT)
+            {
+              observation->tracker = tcp_result;
+              observation->tracker.facts.direction = PRODUCT_FLOW_DIRECTION_UNKNOWN;
+              return PRODUCT_FLOW_ENTRY_STATUS_OK;
+            }
+        }
+      else if (tcp_result.create_replacement)
+        {
+          previous_incarnation = pool->slots[slot].entry.incarnation;
+          retire_slot(pool, slot, protocol);
+          slot = NO_SLOT;
+          tcp_candidate = (product_tcp_state_t){0};
+          tcp_result = product_tcp_update(&tcp_candidate, packet->facts, PRODUCT_FLOW_DIRECTION_ORIG);
+          tcp_result.close_old_instance = tcp_result.create_replacement = 1;
+        }
+    }
   if (slot == NO_SLOT)
     {
       slot = pool->free_head;
@@ -262,10 +314,16 @@ product_flow_entry_observe (
   observation->entry = entry;
   observation->slot = slot;
   observation->flow_direction = entry->last_flow_direction;
+  observation->previous_incarnation = previous_incarnation;
   unsigned side = entry->last_flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY;
   entry->side_packets[side]++;
   entry->side_bytes[side] += packet->packet_bytes;
-  if (protocol == 1)
+  if (protocol == 0)
+    {
+      entry->protocol_state.tcp = tcp_candidate;
+      observation->tracker = tcp_result;
+    }
+  else if (protocol == 1)
     observation->tracker = product_udp_update (
       &entry->protocol_state.udp, packet->facts, observation->flow_direction);
   return PRODUCT_FLOW_ENTRY_STATUS_OK;

@@ -22,7 +22,7 @@ a = p.parse_args()
 a.output = a.output.resolve(); a.artifact = a.artifact.resolve(); a.stage = a.stage.resolve()
 a.output.mkdir(parents=True, exist_ok=False)
 witness = dict(started_ns=time.time_ns(), **chain.source_snapshot(a.output))
-env = dict(os.environ, PYTHONPATH='/tmp/sakamoto-pydeps', VPP_HOST_STAGE_DIR=str(a.stage),
+env = dict(os.environ, PYTHONPATH=os.environ.get('PYTHONPATH', '/usr/lib/python3/dist-packages'), VPP_HOST_STAGE_DIR=str(a.stage),
            PRODUCT_ARTIFACT_DIR=str(a.artifact), SAKAMOTO_PRODUCT_HOST_EVIDENCE='OFF')
 with (a.output/'build.log').open('w') as log:
     subprocess.run(['bash', str(ROOT/'tools/product/build-host-artifact.sh')],

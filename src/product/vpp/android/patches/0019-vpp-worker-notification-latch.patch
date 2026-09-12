@@ -1,0 +1,199 @@
+--- a/src/vlib/file.c
++++ b/src/vlib/file.c
+@@ -71,12 +71,46 @@
+ static clib_error_t *
+ wake_read_fn (struct clib_file *f)
+ {
+-  u64 val, __clib_unused rv;
+-  rv = read ((int) f->file_descriptor, &val, sizeof (u64));
++  /* The owner drains its eventfd only at the next pre-wait acknowledgement.
++   * A callback must not consume a concurrent barrier/node/frame notification
++   * after that acknowledgement's final work check. */
++  (void) f;
+   return 0;
+ }
+ 
+ void
++vlib_thread_wakeup (clib_thread_index_t thread_index)
++{
++  vlib_main_t *vm = vlib_get_main_by_index (thread_index);
++  /* Every publication takes part, even if its syscall is coalesced. */
++  if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_SEQ_CST))
++    return;
++  u64 value = 1;
++  ssize_t rv;
++  do
++    rv = write (vm->wakeup_fd, &value, sizeof (value));
++  while (rv < 0 && errno == EINTR);
++  if (rv != sizeof (value) && !(rv < 0 && errno == EAGAIN))
++    clib_panic ("worker notification failed on thread %u: %d", thread_index, errno);
++}
++
++static void
++vlib_worker_wake_ack (vlib_main_t *vm)
++{
++  u64 value;
++  ssize_t rv;
++  /* One read consumes the normal eventfd counter at this instant. Later
++   * writers can leave readiness behind; LT does not require an unbounded
++   * drain-until-EAGAIN loop while senders continue publishing. */
++  do
++    rv = read (vm->wakeup_fd, &value, sizeof (value));
++  while (rv < 0 && errno == EINTR);
++  if (rv != sizeof (value) && !(rv < 0 && errno == EAGAIN))
++    clib_panic ("worker notification read failed on thread %u: %d", vm->thread_index, errno);
++  __atomic_exchange_n (&vm->wakeup_pending, 0, __ATOMIC_SEQ_CST);
++}
++
++void
+ vlib_file_poll_init (vlib_main_t *vm)
+ {
+   vm->epoll_fd = epoll_create (1);
+@@ -84,7 +118,7 @@
+   if (vm->epoll_fd < 0)
+     clib_panic ("failed to initialize epoll for thread %u", vm->thread_index);
+ 
+-  vm->wakeup_fd = eventfd (0, EFD_NONBLOCK);
++  vm->wakeup_fd = eventfd (0, EFD_NONBLOCK | EFD_CLOEXEC);
+ 
+   if (vm->wakeup_fd < 0)
+     clib_panic ("failed to initialize wakeup event for thread %u",
+@@ -117,6 +151,13 @@
+ #endif
+   u32 ticks;
+ 
++  /* Acknowledge BEFORE inspecting work. Publishers after this exchange elect
++   * a new notifier; publications before it are included in the recheck. */
++  vlib_worker_wake_ack (vm);
++  if (vec_len (nm->pending_frames) || vec_len (nm->sched_node_pending) ||
++      __atomic_load_n (&vm->check_frame_queues, __ATOMIC_ACQUIRE))
++    goto epoll;
++
+   /*
+    * If we've been asked for a fixed-sleep between main loop polls,
+    * do so right away.
+@@ -137,12 +178,9 @@
+   if (vlib_last_vectors_per_main_loop (vm) >= 2)
+     goto skip_loops;
+ 
+-  /* A cloned worker may sleep when only main-thread input needs polling. */
+-  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING]
+-#ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+-      && is_main
+-#endif
+-  )
++  /* An actual polling node requires progress. Deadline-only product work
++   * uses scheduled nodes instead of hiding polling work from this gate. */
++  if (nm->input_node_counts_by_state[VLIB_NODE_STATE_POLLING])
+     goto skip_loops;
+ 
+   /* pending APIs in the queue */
+@@ -192,7 +230,6 @@
+ 			    ARRAY_LEN (epoll_events), timeout_ms);
+ 
+   __atomic_store_n (&vm->thread_sleeps, 0, __ATOMIC_RELAXED);
+-  __atomic_store_n (&vm->wakeup_pending, 0, __ATOMIC_RELAXED);
+ 
+   if (n_fds_ready < 0)
+     {
+--- a/src/vlib/threads.h
++++ b/src/vlib/threads.h
+@@ -494,16 +494,8 @@
+  * Release barrier after workers sync
+  */
+ void vlib_workers_continue (void);
+-static_always_inline void
+-vlib_thread_wakeup (clib_thread_index_t thread_index)
+-{
+-  vlib_main_t *vm = vlib_get_main_by_index (thread_index);
+-  ssize_t __clib_unused rv;
+-  u64 val = 1;
+-
+-  if (__atomic_load_n (&vm->thread_sleeps, __ATOMIC_RELAXED))
+-    if (__atomic_exchange_n (&vm->wakeup_pending, 1, __ATOMIC_RELAXED) == 0)
+-      rv = write (vm->wakeup_fd, &val, sizeof (u64));
+-}
++/* Native publication notification, coalesced until the destination owner
++ * acknowledges before its complete work recheck. Not a sleep-flag hint. */
++void vlib_thread_wakeup (clib_thread_index_t thread_index);
+ 
+ #endif /* included_vlib_threads_h */
+--- a/src/vlib/buffer_funcs.c
++++ b/src/vlib/buffer_funcs.c
+@@ -322,7 +322,9 @@
+ 	hf->maybe_trace = 1;
+       hf->n_vectors = n_comp;
+       __atomic_store_n (&hf->valid, 1, __ATOMIC_RELEASE);
+-      vlib_get_main_by_index (thread_index)->check_frame_queues = 1;
++      __atomic_store_n (&vlib_get_main_by_index (thread_index)->check_frame_queues,
++                        1, __ATOMIC_RELEASE);
++      vlib_thread_wakeup (thread_index);
+     }
+   else
+     n_drop += n_comp;
+--- a/src/vlib/main.c
++++ b/src/vlib/main.c
+@@ -1510,15 +1510,16 @@
+       if (!is_main)
+ 	vlib_worker_thread_barrier_check ();
+ 
+-      if (PREDICT_FALSE (vm->check_frame_queues + frame_queue_check_counter))
++      uword queues_pending = __atomic_exchange_n (&vm->check_frame_queues, 0,
++                                                  __ATOMIC_ACQUIRE);
++      if (PREDICT_FALSE (queues_pending + frame_queue_check_counter))
+ 	{
+ 	  u32 processed = 0;
+ 	  vlib_frame_queue_dequeue_fn_t *fn;
+ 
+-	  if (vm->check_frame_queues)
++	  if (queues_pending)
+ 	    {
+ 	      frame_queue_check_counter = 100;
+-	      vm->check_frame_queues = 0;
+ 	    }
+ 
+ 	  vec_foreach (fqm, tm->frame_queue_mains)
+--- a/src/vlib/threads.c
++++ b/src/vlib/threads.c
+@@ -1289,17 +1289,10 @@
+   deadline = now + BARRIER_SYNC_TIMEOUT;
+   *vlib_worker_threads->wait_at_barrier = 1;
+ #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+-  /* Initial startup has no barrier hold-down protection either. A worker
+-   * can already be in file polling before main enters its first barrier.
+-   * Queue a wake even before the worker publishes its sleeping flag. */
++  /* Barrier state is published before the shared ordered notification. */
+   for (clib_thread_index_t ti = 1; ti < vlib_get_n_threads (); ti++)
+     {
+-      vlib_main_t *worker_vm = vlib_get_main_by_index (ti);
+-      u64 value = 1;
+-      ssize_t rv;
+-      do
+-        rv = write (worker_vm->wakeup_fd, &value, sizeof (value));
+-      while (rv < 0 && errno == EINTR);
++      vlib_thread_wakeup (ti);
+     }
+ #endif
+ 
+@@ -1412,18 +1405,9 @@
+   for (clib_thread_index_t ti = 1; ti < vlib_get_n_threads (); ti++)
+     {
+ #ifdef SAKAMOTO_VPP_ANDROID_IDLE_PROFILE
+-      /* A worker may pass its barrier check before publishing thread_sleeps.
+-       * The conditional wakeup can then miss it for the full Android idle
+-       * second, which is also BARRIER_SYNC_TIMEOUT.  Queue the barrier wake
+-       * unconditionally: eventfd retains it across entry into epoll_wait.
+-       * Keep the accepted idle timeout and ordinary packet wakeup unchanged.
+-       */
+-      vlib_main_t *worker_vm = vlib_get_main_by_index (ti);
+-      u64 value = 1;
+-      ssize_t rv;
+-      do
+-        rv = write (worker_vm->wakeup_fd, &value, sizeof (value));
+-      while (rv < 0 && errno == EINTR);
++      /* Coalesce through the same acknowledgement epoch as packet and node
++       * work; the pre-wait recheck includes wait_at_barrier. */
++      vlib_thread_wakeup (ti);
+ #else
+       vlib_thread_wakeup (ti);
+ #endif

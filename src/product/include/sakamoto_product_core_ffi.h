@@ -24,6 +24,10 @@ uint32_t sakamoto_product_core_publish_network(
     sakamoto_product_core_handle_t *handle, uint64_t generation,
     const sakamoto_product_network_snapshot_t *snapshot);
 
+uint32_t sakamoto_product_core_stop_root(
+    sakamoto_product_core_handle_t *handle, uint64_t generation,
+    uint32_t *out_stopped);
+
 uint32_t sakamoto_product_core_apply_empty_policy(
     sakamoto_product_core_handle_t *handle, uint64_t generation,
     sakamoto_product_bytes_t files_dir,

@@ -51,9 +51,36 @@ public final class RuntimeControlBackend {
     }
 
     public StartResult startVpnGraphValidation(Context context) {
+        return startVpnGraphValidation(context, false, false, false);
+    }
+
+    public StartResult startVpnHevValidation(Context context) {
+        return startVpnGraphValidation(context, true, false, false);
+    }
+
+    public StartResult startVpnHevValidation(Context context, boolean unknownIdentity, boolean unknownContext) {
+        return startVpnGraphValidation(context, true, unknownIdentity, unknownContext);
+    }
+
+    public StartResult startVpnHevValidation(Context context, boolean unknownIdentity,
+                                              boolean unknownContext, String limits, int flowEntries) {
+        return startVpnGraphValidation(context, true, unknownIdentity, unknownContext, limits, flowEntries);
+    }
+
+    private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity, boolean unknownContext) {
+        return startVpnGraphValidation(context, hev, unknownIdentity, unknownContext, null, 0);
+    }
+
+    private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity,
+                                                 boolean unknownContext, String limits, int flowEntries) {
         if (!RuntimeService.notificationsReady(context)) return StartResult.NOTIFICATION_REQUIRED;
         Intent intent = requestIntent(context, RuntimeControlRequest.start(RuntimeProfile.VPN));
         intent.putExtra("debugVpnGraphValidation", true);
+        intent.putExtra("debugVpnHevValidation", hev);
+        intent.putExtra("debugVpnHevUnknownIdentity", unknownIdentity);
+        intent.putExtra("debugVpnHevUnknownContext", unknownContext);
+        intent.putExtra("debugVpnHevLimits", limits);
+        intent.putExtra("debugVpnFlowEntries", flowEntries);
         context.startForegroundService(intent);
         return StartResult.ACCEPTED;
     }

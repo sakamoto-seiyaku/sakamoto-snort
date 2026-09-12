@@ -37,7 +37,7 @@ typedef double f64;
 typedef unsigned long uword;
 typedef struct { int unused; } vlib_node_runtime_t;
 typedef struct { int unused; } vlib_frame_t;
-typedef struct { uword (*function)(vlib_main_t *, vlib_node_runtime_t *, vlib_frame_t *); int type; const char *name; } test_node_t;
+typedef struct { uword (*function)(vlib_main_t *, vlib_node_runtime_t *, vlib_frame_t *); int type; const char *name; unsigned process_log2_n_stack_bytes; } test_node_t;
 #define VLIB_NODE_TYPE_PROCESS 1
 #define VLIB_REGISTER_NODE(name) test_node_t name
 #define VLIB_WORKER_INIT_FUNCTION(fn) clib_error_t *(*test_worker_init)(vlib_main_t *) = fn
@@ -106,6 +106,12 @@ EOF
 cat >"$work_dir/vlibapi/api.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_VLIBAPI_H
 #define SAKAMOTO_TEST_VLIBAPI_H
+static unsigned char sakamoto_test_thread_safe[256];
+static inline void *vlibapi_get_main(void) { return 0; }
+static inline void vl_api_set_msg_thread_safe(void *main, unsigned id, int safe) {
+  (void) main;
+  if (id < 256) sakamoto_test_thread_safe[id] = (unsigned char)safe;
+}
 #endif
 EOF
 cat >"$work_dir/vlibmemory/api.h" <<'EOF'
@@ -152,6 +158,11 @@ cat >"$work_dir/product_core.api_enum.h" <<'EOF'
 #define VL_API_PRODUCT_CORE_STATUS_REPLY 1
 #define VL_API_PRODUCT_CORE_POLICY_APPLY_REPLY 2
 #define VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY_REPLY 3
+#define VL_API_PRODUCT_CORE_POLICY_APPLY 4
+#define VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY 5
+#define VL_API_PRODUCT_CORE_NETWORK_PUBLISH_REPLY 6
+#define VL_API_PRODUCT_CORE_ROOT_STOP_REPLY 7
+#define VL_API_PRODUCT_CORE_ROOT_STOP 8
 #endif
 EOF
 cat >"$work_dir/product_core.api_types.h" <<'EOF'
@@ -379,6 +390,14 @@ typedef struct {
 typedef struct {
   int32_t retval;
 } vl_api_product_core_policy_bundle_apply_reply_t;
+typedef struct {
+  u64 generation, revision, event_elapsed_ns;
+  u32 count, reserved;
+  struct { u32 linux_ifindex, network_context; } entries[32];
+} vl_api_product_core_network_publish_t;
+typedef struct { int32_t retval; } vl_api_product_core_network_publish_reply_t;
+typedef struct { u64 generation; } vl_api_product_core_root_stop_t;
+typedef struct { int32_t retval; u64 generation; u32 stopped; } vl_api_product_core_root_stop_reply_t;
 #endif
 EOF
 cat >"$work_dir/product_core_identity.h" <<'EOF'
@@ -403,6 +422,8 @@ setup_message_id_table (void)
   (void) vl_api_product_core_status_t_handler;
   (void) vl_api_product_core_policy_apply_t_handler;
   (void) vl_api_product_core_policy_bundle_apply_t_handler;
+  (void) vl_api_product_core_network_publish_t_handler;
+  (void) vl_api_product_core_root_stop_t_handler;
   return sakamoto_test_message_id_base;
 }
 EOF
@@ -414,6 +435,7 @@ cat >"$work_dir/harness.c" <<EOF
 #include "vlib/vlib.h"
 #include "vlib/threads.h"
 #include "$repo_root/src/product/vpp/product_packet_graph.h"
+#include "$repo_root/src/product/vpp/product_network_snapshot.h"
 
 clib_error_t sakamoto_test_error;
 u16 sakamoto_test_message_id_base;
@@ -533,6 +555,19 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
 }
 
 int product_vpn_udp4_adapter_available (void) { return 0; }
+int product_vpn_tun_validation_enabled (void) { return 0; }
+int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
+  (void) vm; (void) generation; return 0;
+}
+u64 product_vpn_tun_attached (void) { return 0; }
+u64 product_vpn_tun_captured (void) { return 0; }
+int product_root_nfqueue_adapter_stop_step (vlib_main_t *vm, u64 generation) {
+  (void) vm; (void) generation; return 0;
+}
+int product_network_snapshot_publish (vlib_main_t *vm, u64 generation,
+  const sakamoto_product_network_snapshot_t *snapshot) {
+  (void) vm; (void) generation; (void) snapshot; return 0;
+}
 int product_vpn_udp4_adapter_protection_running (void) { return 0; }
 uint64_t product_vpn_udp4_adapter_tun_fd_attached (void) { return 0U; }
 uint64_t product_vpn_udp4_adapter_direct_socket_attached (void) { return 0U; }
@@ -636,7 +671,9 @@ main (void)
   sakamoto_test_error.message = NULL;
   error = sakamoto_test_init (&vm);
   if (error != NULL || product_core_main.core_ready == 0U
-      || product_core_main.msg_id_base != 42U)
+      || product_core_main.msg_id_base != 42U
+      || sakamoto_test_thread_safe[42U + VL_API_PRODUCT_CORE_ROOT_STOP] != 0
+      || product_core_start_adapters_node.process_log2_n_stack_bytes < 18)
     {
       fprintf (stderr, "available message-id setup did not reach ready\\n");
       return 1;

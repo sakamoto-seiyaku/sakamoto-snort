@@ -44,6 +44,37 @@ public final class RuntimeRecoveryPolicy {
                         + " after " + backoff + "ms" + detail(reason));
     }
 
+    /** ADR-0007: the VPN Flow Stack gets one fresh-generation retry, not
+     * the older generic supervisor's three-retry policy. Success does not
+     * replenish this budget; only an explicit user start does. */
+    public Decision afterVpnFlowStackFailure(int previousFailureCount, String reason) {
+        int count = Math.max(0, previousFailureCount);
+        if (count >= 1) {
+            return new Decision(false, true, 1, count, 0L,
+                    "runtime_recovery_intervention_required",
+                    "VPN protection stopped after one automatic restart"
+                            + detail(reason));
+        }
+        return new Decision(true, false, 1, 1, 1000L,
+                "runtime_auto_recovery_pending",
+                "VPN protection interrupted; one automatic restart in 1000ms"
+                        + detail(reason));
+    }
+
+    public boolean vpnFlowStackRecoverable(String code) {
+        return recoverable(code)
+                || "product_core_not_ready".equals(code)
+                || "product_core_allocation_failed".equals(code)
+                || "product_core_connect_failed".equals(code)
+                || "product_core_query_failed".equals(code)
+                || "product_core_disconnected".equals(code)
+                || "product_core_stale_handle".equals(code)
+                || "product_core_session_missing".equals(code)
+                || "vpn_socket_broker_failed".equals(code)
+                || "vpn_tun_abnormal_close".equals(code)
+                || "platform_network_publish_failed".equals(code);
+    }
+
     public boolean recoverable(String code) {
         if (code == null || code.trim().isEmpty()) {
             return true;

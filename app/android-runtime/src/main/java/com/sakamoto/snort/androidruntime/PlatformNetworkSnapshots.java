@@ -25,6 +25,8 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
     private final HandlerThread thread = new HandlerThread("sakamoto-network-events");
     private final Map<Network, Facts> networks = new HashMap<>();
     private long revision;
+    private long nextUnderlayEpoch;
+    private UnderlayListener underlayListener;
     private boolean active;
     private boolean registered;
     private boolean debugMissing;
@@ -32,6 +34,22 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
     private static final class Facts {
         int context;
         String interfaceName;
+        long epoch;
+        boolean eligible;
+    }
+
+    /** Binding incarnation, not a mutable default-network label or Android netId. */
+    static final class Underlay {
+        final Network network;
+        final long epoch;
+        final int context;
+        Underlay(Network network, long epoch, int context) {
+            this.network = network; this.epoch = epoch; this.context = context;
+        }
+    }
+
+    interface UnderlayListener {
+        void changed(Underlay selected, long invalidatedEpoch);
     }
 
     private final ConnectivityManager.NetworkCallback callback =
@@ -39,7 +57,8 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
         @Override public void onAvailable(Network network) {
             synchronized (PlatformNetworkSnapshots.this) {
                 if (!active) return;
-                networks.put(network, new Facts());
+                networks.computeIfAbsent(network, ignored -> new Facts());
+                notifyUnderlay(0);
                 publish("available");
             }
         }
@@ -48,7 +67,8 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
             synchronized (PlatformNetworkSnapshots.this) {
                 if (!active) return;
                 Facts facts = networks.computeIfAbsent(network, ignored -> new Facts());
-                facts.context = classify(capabilities);
+                long invalidated = updateCapabilities(facts, capabilities);
+                notifyUnderlay(invalidated);
                 publish("capabilities");
             }
         }
@@ -64,7 +84,8 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
         @Override public void onLost(Network network) {
             synchronized (PlatformNetworkSnapshots.this) {
                 if (!active) return;
-                networks.remove(network);
+                Facts lost = networks.remove(network);
+                notifyUnderlay(lost == null ? 0 : lost.epoch);
                 publish("lost");
             }
         }
@@ -89,12 +110,67 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
             NetworkRequest request = new NetworkRequest.Builder().clearCapabilities().build();
             manager.registerNetworkCallback(request, callback, new Handler(thread.getLooper()));
             registered = true;
+            // Seed before TUN admission. All later observations arrive through
+            // this same generation-owned subscription, never per packet.
+            for (Network network : manager.getAllNetworks()) {
+                NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+                if (capabilities == null) continue;
+                Facts facts = networks.computeIfAbsent(network, ignored -> new Facts());
+                updateCapabilities(facts, capabilities);
+                LinkProperties properties = manager.getLinkProperties(network);
+                if (properties != null) facts.interfaceName = properties.getInterfaceName();
+            }
+            publish("initial_networks");
         } catch (RuntimeException error) {
             Log.w(TAG, "s232 subscription_unavailable " + error.getClass().getSimpleName());
         }
     }
 
-    private static int classify(NetworkCapabilities capabilities) {
+    private long updateCapabilities(Facts facts, NetworkCapabilities capabilities) {
+        int context = classify(capabilities);
+        boolean eligible = !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                && (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    || context == 1 || context == 2 || context == 8);
+        long invalidated = facts.eligible && !eligible ? facts.epoch : 0;
+        if (!eligible) facts.epoch = 0;
+        else if (!facts.eligible) {
+            if (nextUnderlayEpoch == Long.MAX_VALUE)
+                throw new IllegalStateException("underlay epoch exhausted");
+            facts.epoch = ++nextUnderlayEpoch;
+        }
+        facts.eligible = eligible;
+        facts.context = context;
+        return invalidated;
+    }
+
+    synchronized Underlay currentUnderlay() {
+        if (!active || !registered) return null;
+        Underlay selected = null;
+        int best = Integer.MAX_VALUE;
+        for (Map.Entry<Network, Facts> entry : networks.entrySet()) {
+            Facts facts = entry.getValue();
+            if (!facts.eligible) continue;
+            int rank = facts.context == 1 ? 0 : facts.context == 8 ? 1 : facts.context == 2 ? 2 : 3;
+            if (rank < best || (rank == best && selected != null && facts.epoch < selected.epoch)) {
+                best = rank;
+                selected = new Underlay(entry.getKey(), facts.epoch, facts.context);
+            }
+        }
+        return selected;
+    }
+
+    synchronized void setUnderlayListener(UnderlayListener listener) {
+        if (!active || !registered || underlayListener != null || listener == null)
+            throw new IllegalStateException("underlay subscription unavailable or already attached");
+        underlayListener = listener;
+        notifyUnderlay(0); // Atomic subscribe-and-current before first TUN input.
+    }
+
+    private void notifyUnderlay(long invalidatedEpoch) {
+        if (underlayListener != null) underlayListener.changed(currentUnderlay(), invalidatedEpoch);
+    }
+
+    static int classify(NetworkCapabilities capabilities) {
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return 4;
         int context = 0;
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) context |= 1;
@@ -141,26 +217,31 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
         publish(missing ? "controlled_missing" : "controlled_restore");
     }
 
-    @Override public void close() {
+    boolean closeAndWait() {
         synchronized (this) {
-            if (!active) return;
+            boolean wasActive = active;
             active = false;
+            underlayListener = null;
             if (registered) {
-                try { manager.unregisterNetworkCallback(callback); }
+                try {
+                    manager.unregisterNetworkCallback(callback);
+                    registered = false;
+                }
                 catch (RuntimeException error) {
                     Log.w(TAG, "s232 unregister_failed " + error.getClass().getSimpleName());
                 }
-                registered = false;
             }
             networks.clear();
-            publish("stop_unknown");
+            if (wasActive) publish("stop_unknown");
             thread.quitSafely();
         }
-        try {
-            thread.join(2000);
-        } catch (InterruptedException error) {
-            Thread.currentThread().interrupt();
-        }
+        boolean exited = VpnSocketBroker.awaitExit(thread, 2000);
         Log.i(TAG, "s232 event=subscription_stopped thread_alive=" + thread.isAlive());
+        synchronized (this) { return exited && !registered; }
+    }
+
+    @Override public void close() {
+        if (!closeAndWait())
+            throw new IllegalStateException("network subscription remains live after close deadline");
     }
 }

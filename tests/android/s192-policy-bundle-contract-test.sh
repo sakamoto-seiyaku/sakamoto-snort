@@ -273,7 +273,7 @@ grep -Fq 'define product_core_policy_bundle_apply' "$api"
 grep -Fq 'vl_api_product_policy_rule_entry_t gate_entries[64]' "$api"
 grep -Fq 'vl_api_product_policy_rule_entry_t l4_entries[64]' "$api"
 grep -Fq 'product_core_policy_bundle_apply_reply' "$api"
-grep -Fq 'product_core.api/1.0.0@2e53fed5' "$artifact"
+grep -Fq 'product_core.api/1.0.0@7477ac3b' "$artifact"
 
 plugin="$repo_root/src/product/vpp/product_core_plugin.c"
 grep -Fq 'vl_api_product_core_policy_bundle_apply_t_handler' "$plugin"

@@ -135,6 +135,7 @@ def verify(directory,build_override=None):
                 completion_vectors=sum(value for (t,name),value in vectors.items() if t==worker+1 and name.startswith('product-packet-origin-completi'))
                 check(completion_vectors==origin_packets,'actual origin VLIB vectors')
             counts=Counter();protocol_counts=Counter();flow_ledger={};keys_by_slot={};coverage=set();bypasses=0
+            tcp_updates={x['token']:x for x in rows(trace,'s222 event=tcp_update ')}
             for token,observation in indexed['observe'].items():
                 facts=indexed['facts'][token];origin=indexed['origin'][token]
                 publish=indexed['publish'][token];consume=indexed['consume'][token];freed=indexed['free'][token]
@@ -159,6 +160,21 @@ def verify(directory,build_override=None):
                 else:
                     check(event=='observe' and observation['status']=='0','unexpected runtime mutation error')
                     check(origin['intent']=='1' and origin['verdict']=='1' and origin['drop_reason']==origin['bypass_reason']=='0','ordinary pass completion')
+                    if observation['slot']=='4294967295':
+                        # S222 rejects invalid new TCP candidates without a
+                        # table entry. This is neither a hit nor capacity miss.
+                        tcp=tcp_updates.get(token,{})
+                        flags=int(facts['tcp_flags'])
+                        invalid_new=bool((flags&2 and flags&(1|4)) or
+                            (not flags&2 and not flags&(16|4)) or
+                            (not flags&16 and flags&(1|8|32)) or (flags&18)==18)
+                        check(facts['protocol']=='6' and invalid_new,'missing entry is not a valid-new TCP rejection')
+                        check(tcp.get('ct_state')=='3' and tcp.get('update')=='3' and tcp.get('incarnation')=='0'
+                              and tcp.get('flow_dir')=='0' and tcp.get('refresh')=='0','INVALID candidate evidence')
+                        check(key not in flow_ledger and observation['created']==observation['reused']=='0'
+                              and observation['stored_hash']=='0' and observation['stored_kind']=='0','invalid new TCP fabricated storage')
+                        protocol_counts[worker,int(facts['protocol']),'invalid_new']+=1
+                        continue
                     slot=int(observation['slot']);check(0<=slot<capacity,'slot bounds')
                     check(observation['hash']==observation['stored_hash'] and int(observation['stored_kind'])==key[0],'stored typed identity')
                     created=observation['created']=='1';check(created!=(observation['reused']=='1'),'create/hit partition')
@@ -208,7 +224,7 @@ def verify(directory,build_override=None):
                 worker=int(counter['worker']);protocols={'tcp':(6,),'udp':(17,),'icmp_query':(1,58)}[counter['protocol']]
                 matching=[e for e in entries if int(e['worker'])==worker and int(e['protocol']) in protocols]
                 check(int(counter['active'])==int(counter['creates'])==len(matching),'per-protocol shared occupancy')
-                check(int(counter['hits'])==sum(protocol_counts[worker,p,'observe'] for p in protocols)-len(matching),'per-protocol hits')
+                check(int(counter['hits'])==sum(protocol_counts[worker,p,'observe']-protocol_counts[worker,p,'invalid_new'] for p in protocols)-len(matching),'per-protocol hits')
                 check(int(counter['capacity_misses'])==sum(protocol_counts[worker,p,'capacity_bypass'] for p in protocols),'per-protocol capacity misses')
             if label=='normal':
                 expected={(family,protocol,worker) for family in (4,6) for protocol in (6,17,1 if family==4 else 58) for worker in (0,1)}

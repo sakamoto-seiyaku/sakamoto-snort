@@ -11,6 +11,9 @@
 
 int product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation);
 void product_root_nfqueue_adapter_stop (vlib_main_t *vm);
+/* Caller holds the main-thread worker barrier. Never waits under it.
+ * Returns -1 for a stale generation, 0 draining, 1 completely closed. */
+int product_root_nfqueue_adapter_stop_step (vlib_main_t *vm, u64 generation);
 int product_root_nfqueue_adapter_available (void);
 uint32_t product_root_nfqueue_adapter_queue_id (void);
 uint32_t product_root_nfqueue_adapter_queue_last (void);
@@ -48,8 +51,9 @@ uint32_t product_root_nfqueue_adapter_last_uid (void);
 uint32_t product_root_nfqueue_adapter_last_queue_id (void);
 uint32_t product_root_nfqueue_adapter_last_packet_id (void);
 
-/* Invoked by the shared completion node on this obligation's origin worker. */
-void product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
+/* Invoked on this obligation's origin worker. True returns the carrier to
+ * this lane's fixed receive partition; the graph must not free it again. */
+int product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
   const product_packet_completion_frame_t *completion);
 
 #endif

@@ -109,6 +109,67 @@ fn one_connection_is_reused_for_two_serialized_queries_and_retired_on_stop() {
 }
 
 #[test]
+fn root_stop_ffi_fences_generation_and_fixture_cannot_claim_native_drain() {
+    use sakamoto_product_core::{
+        sakamoto_product_core_connect, sakamoto_product_core_destroy,
+        sakamoto_product_core_disconnect, sakamoto_product_core_stop_root, ProductBytes,
+        ProductStatus,
+    };
+    let _test_lock = lifecycle_test_lock();
+    let path = unique_socket("root-stop");
+    let listener = UnixListener::bind(&path).expect("Root stop FFI test needs a real UDS");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(request(&mut stream), (OP_CONNECT, 242));
+        stream.write_all(&response(242, 0, b"")).unwrap();
+        // A fixture must not invent a lifecycle packet or native drain proof.
+        assert_eq!(stream.read(&mut [0u8; 1]).unwrap(), 0);
+    });
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut handle = std::ptr::null_mut();
+    let mut status = std::mem::MaybeUninit::<ProductStatus>::uninit();
+    let mut stopped = 99;
+    unsafe {
+        assert_eq!(
+            sakamoto_product_core_connect(
+                ProductBytes {
+                    data: bytes.as_ptr(),
+                    length: bytes.len() as u32,
+                },
+                242,
+                &mut handle,
+                status.as_mut_ptr(),
+            ),
+            ErrorCode::Ok.raw()
+        );
+        assert_eq!(
+            sakamoto_product_core_stop_root(std::ptr::null_mut(), 242, &mut stopped),
+            ErrorCode::InvalidArgument.raw()
+        );
+        assert_eq!(stopped, 0);
+        assert_eq!(
+            sakamoto_product_core_stop_root(handle, 241, &mut stopped),
+            ErrorCode::StaleHandle.raw()
+        );
+        assert_eq!(stopped, 0);
+        assert_eq!(
+            sakamoto_product_core_stop_root(handle, 242, &mut stopped),
+            ErrorCode::ApiUnavailable.raw()
+        );
+        assert_eq!(stopped, 0);
+        assert_eq!(sakamoto_product_core_disconnect(handle), ErrorCode::Ok.raw());
+        assert_eq!(
+            sakamoto_product_core_stop_root(handle, 242, &mut stopped),
+            ErrorCode::StaleHandle.raw()
+        );
+        assert_eq!(stopped, 0);
+        assert_eq!(sakamoto_product_core_destroy(handle), ErrorCode::Ok.raw());
+    }
+    server.join().unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn a_reply_for_another_generation_is_rejected_at_connect() {
     let _test_lock = lifecycle_test_lock();
     let path = unique_socket("stale");

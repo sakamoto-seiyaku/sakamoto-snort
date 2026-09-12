@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
     r->enabled = 1;
     r->rule_id = 21700 + mode;
     r->reason_id = 217;
-    if (mode == 4) {
+    if (mode == 4 || mode == 5 || mode == 6) {
       bundle.gate_entry_count = 0;
       bundle.l4_rule_count = 2;
       for (unsigned i = 0; i < 2; i++) {
@@ -44,8 +44,9 @@ int main(int argc, char **argv) {
         sakamoto_product_policy_rule_entry_t *l4 = &bundle.l4_entries[i];
         l4->rule_kind = SAKAMOTO_PRODUCT_POLICY_RULE_KIND_L4;
         l4->ip_family = i ? 6 : 4;
-        l4->ip_protocol = 17;
-        l4->direction = SAKAMOTO_PRODUCT_POLICY_DIRECTION_OUTPUT;
+        l4->ip_protocol = mode == 6 ? 6 : 17;
+        l4->direction = mode == 5 || mode == 6 ? SAKAMOTO_PRODUCT_POLICY_DIRECTION_INPUT
+                                 : SAKAMOTO_PRODUCT_POLICY_DIRECTION_OUTPUT;
         l4->source_port_last = l4->destination_port_last = 65535;
         l4->rule_id += i;
       }

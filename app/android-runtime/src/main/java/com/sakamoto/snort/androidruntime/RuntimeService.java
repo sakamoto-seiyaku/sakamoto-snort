@@ -195,6 +195,20 @@ public final class RuntimeService extends VpnService {
     private PlatformNetworkSnapshots platformNetworkSnapshots;
     private boolean requestedVpnGraphValidation;
     private boolean vpnGraphValidation;
+    private boolean requestedVpnHevValidation;
+    private boolean vpnHevValidation;
+    private boolean requestedHevUnknownIdentity, requestedHevUnknownContext;
+    private boolean hevUnknownIdentity, hevUnknownContext;
+    private String requestedHevLimits, hevLimits;
+    private int requestedHevFlowEntries, hevFlowEntries;
+    // Matches the frozen native W2 layout; registration must succeed for both
+    // independent channels before the TUN can be attached.
+    private final VpnSocketBroker[] vpnSocketBrokers = new VpnSocketBroker[2];
+
+    private boolean hasVpnSocketBrokers() {
+        for (VpnSocketBroker broker : vpnSocketBrokers) if (broker != null) return true;
+        return false;
+    }
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
                 Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
@@ -207,6 +221,13 @@ public final class RuntimeService extends VpnService {
     private final AtomicLong healthQueryRevision = new AtomicLong();
     /** Reject delayed START/STOP intents before they can mutate lifecycle state. */
     private final RuntimeControlOrdering controlOrdering = new RuntimeControlOrdering();
+    // Explicit lifecycle intents invalidate delayed recovery, including a
+    // retry already queued on the serial lifecycle executor.
+    private final AtomicLong explicitRequestEpoch = new AtomicLong();
+    private final RuntimeRecoveryPolicy recoveryPolicy = new RuntimeRecoveryPolicy();
+    private long generationRequestEpoch;
+    private volatile long vpnRecoveryPendingEpoch;
+    private int vpnRecoveryFailureCount;
     private final RuntimeStateStore.PersistenceGate persistenceGate;
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
@@ -405,6 +426,13 @@ public final class RuntimeService extends VpnService {
                 && intent.getBooleanExtra(RuntimeControlProtocol.EXTRA_NETWORK_GATE_BLOCKED,
                         false);
 
+        final long requestEpoch;
+        if (ACTION_START.equals(action) || ACTION_PROTECTION_RESUME.equals(action)
+                || ACTION_STOP.equals(action) || ACTION_PROTECTION_PAUSE.equals(action)) {
+            requestEpoch = explicitRequestEpoch.incrementAndGet();
+            vpnRecoveryPendingEpoch = 0;
+        } else requestEpoch = explicitRequestEpoch.get();
+
         if (ACTION_START.equals(action) || ACTION_PROTECTION_RESUME.equals(action)) {
             // A user retry is an explicit new lifecycle transaction. Clear a
             // stale active error synchronously so queued health polls cannot
@@ -522,15 +550,26 @@ public final class RuntimeService extends VpnService {
         }
         if (ACTION_START.equals(action)) {
             final RuntimeProfile profile = requested == null ? activeProfile : requested;
+            final boolean hevValidation = intent != null
+                    && intent.getBooleanExtra("debugVpnHevValidation", false)
+                    && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             final boolean graphValidation = intent != null
-                    && intent.getBooleanExtra("debugVpnGraphValidation", false)
+                    && (intent.getBooleanExtra("debugVpnGraphValidation", false) || hevValidation)
                     && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
             if (!ensureForeground(profile)) {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
             enqueueLifecycle(() -> {
+                if (requestEpoch != explicitRequestEpoch.get()) return;
+                generationRequestEpoch = requestEpoch;
+                vpnRecoveryFailureCount = 0;
                 requestedVpnGraphValidation = graphValidation;
+                requestedVpnHevValidation = hevValidation;
+                requestedHevUnknownIdentity = hevValidation && intent.getBooleanExtra("debugVpnHevUnknownIdentity", false);
+                requestedHevUnknownContext = hevValidation && intent.getBooleanExtra("debugVpnHevUnknownContext", false);
+                requestedHevLimits = hevValidation ? intent.getStringExtra("debugVpnHevLimits") : null;
+                requestedHevFlowEntries = hevValidation ? intent.getIntExtra("debugVpnFlowEntries", 0) : 0;
                 startRuntime(profile);
             });
             return START_STICKY;
@@ -543,7 +582,11 @@ public final class RuntimeService extends VpnService {
                 return START_NOT_STICKY;
             }
             enqueueLifecycle(() -> {
+                if (requestEpoch != explicitRequestEpoch.get()) return;
+                generationRequestEpoch = requestEpoch;
+                vpnRecoveryFailureCount = 0;
                 requestedVpnGraphValidation = false;
+                requestedVpnHevValidation = false;
                 startRuntime(profile);
             });
             return START_STICKY;
@@ -776,7 +819,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private void startRuntime(RuntimeProfile requestedProfile) {
-        if (destroying) {
+        if (destroying || stopRequested || isSupersededServiceInstance()) {
             return;
         }
         startProductCoreRuntime(requestedProfile);
@@ -834,6 +877,11 @@ public final class RuntimeService extends VpnService {
         activeProfile = selected;
         initializeProfilePaths(selected);
         vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
+        vpnHevValidation = vpnGraphValidation && requestedVpnHevValidation;
+        hevUnknownIdentity = vpnHevValidation && requestedHevUnknownIdentity;
+        hevUnknownContext = vpnHevValidation && requestedHevUnknownContext;
+        hevLimits = vpnHevValidation ? requestedHevLimits : null;
+        hevFlowEntries = vpnHevValidation ? requestedHevFlowEntries : 0;
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(selected);
         if (!adapter.productLaunchAllowed && !vpnGraphValidation) {
@@ -967,6 +1015,12 @@ public final class RuntimeService extends VpnService {
             if (vpnGraphValidation) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
             }
+            if (vpnHevValidation) {
+                builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV", "1");
+                builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_TRACE", "1");
+                if (hevLimits != null && !hevLimits.isEmpty())
+                    builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_LIMITS", hevLimits);
+            }
             if (selected == RuntimeProfile.ROOT) {
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_QUEUE", "176");
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES",
@@ -1023,11 +1077,36 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             if (selected == RuntimeProfile.VPN && vpnGraphValidation) {
+                if (vpnHevValidation) {
+                    if (platformNetworkSnapshots == null || platformNetworkSnapshots.currentUnderlay() == null)
+                        throw new IOException("No subscribed underlay is available for Direct VPN handoff");
+                    final long brokerGeneration = generation;
+                    for (int shard = 0; shard < vpnSocketBrokers.length; ++shard) {
+                        vpnSocketBrokers[shard] = VpnSocketBroker.start(this, runtime.getPath(), generation, shard,
+                                hevUnknownContext,
+                                () -> enqueueLifecycle(() -> {
+                                    if (generation == brokerGeneration && vpnHevValidation
+                                            && currentMayBeActive()) {
+                                        failProductCoreGeneration("vpn_socket_broker_failed",
+                                                "Native socket authorization channel failed");
+                                    }
+                                }));
+                    }
+                    final VpnSocketBroker[] generationBrokers = vpnSocketBrokers.clone();
+                    platformNetworkSnapshots.setUnderlayListener((selectedUnderlay, invalidatedEpoch) -> {
+                        for (VpnSocketBroker broker : generationBrokers)
+                            broker.updateUnderlay(selectedUnderlay, invalidatedEpoch);
+                    });
+                }
                 vpnTunSession = pendingVpnTunSession;
                 pendingVpnTunSession = null;
                 if (vpnTunSession == null) throw new IOException("TUN validation session missing");
-                NativeTunFdClient.attach(runtime.getPath(), generation,
-                        vpnTunSession.releaseFd(), getApplicationInfo().uid);
+                if (hevUnknownIdentity) {
+                    NativeTunFdClient.attachUnknownIdentity(runtime.getPath(), generation, vpnTunSession.releaseFd());
+                } else {
+                    NativeTunFdClient.attach(runtime.getPath(), generation,
+                            vpnTunSession.releaseFd(), getApplicationInfo().uid);
+                }
                 closeVpnTunSessionAfterNativeHandoff();
                 status = session.query();
                 if (status.vpnTunFdAttached != 1 || status.adapterAvailable || status.protectionRunning) {
@@ -1149,6 +1228,8 @@ public final class RuntimeService extends VpnService {
                         repaired ? messageOf(error)
                                 : messageOf(error) + "; interrupted profile repair failed",
                         !repaired, ProductCoreLifecycle.UNKNOWN_PID);
+                if (recoverVpnFlowStackAfterFailure(repaired,
+                        "runtime_start_failed", messageOf(error))) return;
                 stopIfInactive();
                 return;
             }
@@ -4758,6 +4839,10 @@ public final class RuntimeService extends VpnService {
         closeVpnDirectUdp6SessionQuietly();
         closeVpnDirectUdp4SessionQuietly();
         RuntimeControlNative.Status closeStatus = closeProductCoreSession();
+        // An external crash may become observable while the bounded close
+        // runs. Distinguish it from a process we subsequently terminate due
+        // to a failed orderly drain; only the former is OS-reclaim evidence.
+        final boolean nativeExitedBeforeTermination = vppProcess != null && !vppProcess.isAlive();
         boolean closeFailed = closeStatus != null && closeStatus.code != 0;
         String closeCode = "";
         String closeDetail = "";
@@ -4768,9 +4853,12 @@ public final class RuntimeService extends VpnService {
         }
         boolean processStopped = terminateProductCoreProcess();
         boolean ownerStopped = terminateProductCoreOwnerProcess();
-        if (closeFailed && "unexpected_exit".equals(code)
-                && processStopped && ownerStopped) {
-            appendLog("product_core_close=ignored_after_unexpected_exit code=" + closeCode);
+        if (vpnHevValidation) archiveHevNativeLog("s237-last-failure.log");
+        if (closeFailed && nativeExitedBeforeTermination
+                && processStopped && ownerStopped && !hasVpnSocketBrokers()
+                && platformNetworkSnapshots == null) {
+            appendLog("product_core_close=os_reclaim_after_exit code=" + closeCode
+                    + " generation=" + generation + " native_drain_claimed=0");
             closeFailed = false;
         }
         if (closeFailed) {
@@ -4792,29 +4880,148 @@ public final class RuntimeService extends VpnService {
         publishError(clean ? code : "cleanup_failed",
                 clean ? message : code + ": " + message + "; generation cleanup failed",
                 !clean, ProductCoreLifecycle.UNKNOWN_PID);
+        if (recoverVpnFlowStackAfterFailure(clean, code, message)) return;
         stopIfInactive();
+    }
+
+    /** Runs only after old native/platform ownership has been settled. The
+     * timer merely enqueues work; all restart side effects stay serialized. */
+    private boolean recoverVpnFlowStackAfterFailure(boolean clean, String code, String message) {
+        final long requestEpoch = generationRequestEpoch;
+        if (!clean || activeProfile != RuntimeProfile.VPN || !vpnHevValidation
+                || !recoveryPolicy.vpnFlowStackRecoverable(code)
+                || stopRequested || destroying || !isCurrentServiceInstance()
+                || requestEpoch == 0 || requestEpoch != explicitRequestEpoch.get()
+                || persistenceGate.isPersistenceUnavailable()) return false;
+        RuntimeRecoveryPolicy.Decision decision = recoveryPolicy.afterVpnFlowStackFailure(
+                vpnRecoveryFailureCount, code + ": " + message);
+        vpnRecoveryFailureCount = decision.nextFailureCount;
+        publishError(decision.statusCode, decision.message, false, ProductCoreLifecycle.UNKNOWN_PID);
+        if (!decision.shouldRestart || persistenceGate.isPersistenceUnavailable()) return false;
+        final long failedGeneration = generation;
+        vpnRecoveryPendingEpoch = requestEpoch;
+        appendLog("s243 recovery=scheduled generation=" + failedGeneration
+                + " request_epoch=" + requestEpoch + " attempt=" + decision.attempt
+                + " old_resources_closed=1 cause=" + code);
+        boolean posted = new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (vpnRecoveryPendingEpoch != requestEpoch
+                    || requestEpoch != explicitRequestEpoch.get()
+                    || stopRequested || destroying || !isCurrentServiceInstance()) return;
+            if (!enqueueLifecycle(() -> {
+                if (vpnRecoveryPendingEpoch != requestEpoch
+                        || requestEpoch != explicitRequestEpoch.get()
+                        || generation != failedGeneration || stopRequested
+                        || destroying || !isCurrentServiceInstance()) return;
+                vpnRecoveryPendingEpoch = 0;
+                appendLog("s243 recovery=starting old_generation=" + failedGeneration
+                        + " request_epoch=" + requestEpoch);
+                startRuntime(RuntimeProfile.VPN);
+            })) {
+                vpnRecoveryPendingEpoch = 0;
+                publishError("runtime_recovery_intervention_required",
+                        "VPN protection stopped; automatic restart queue unavailable", false,
+                        ProductCoreLifecycle.UNKNOWN_PID);
+                stopIfInactive();
+            }
+        }, decision.backoffMillis);
+        if (!posted) {
+            vpnRecoveryPendingEpoch = 0;
+            publishError("runtime_recovery_intervention_required",
+                    "VPN protection stopped; automatic restart timer unavailable", false,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+        }
+        return posted;
+    }
+
+    private boolean drainProductRoot() {
+        long started = SystemClock.elapsedRealtime();
+        int result = -5;
+        RuntimeControlNative.Session session = productCoreSession;
+        if (session != null && session.isConnected()) {
+            // One VAPI step is nonblocking in VPP; its pinned UDS dispatch
+            // timeout is one second. Never wait while holding VPP's barrier.
+            do {
+                result = session.stopRootStep();
+                if (result != 0) break;
+                if (SystemClock.elapsedRealtime() - started >= 2000L) break;
+                try {
+                    Thread.sleep(10L);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            } while (processAlive(vppProcess));
+        }
+        appendLog("s242 native_root_drain=" + (result == 1)
+                + " generation=" + generation + " result=" + result
+                + " elapsed_ms=" + (SystemClock.elapsedRealtime() - started));
+        return result == 1;
     }
 
     private RuntimeControlNative.Status closeProductCoreSession() {
         boolean tunClosed = true;
-        if (platformNetworkSnapshots != null) {
-            platformNetworkSnapshots.close();
-            platformNetworkSnapshots = null;
+        boolean rootClosed = true;
+        if (activeProfile == RuntimeProfile.ROOT && processAlive(vppProcess)) {
+            rootClosed = drainProductRoot();
+            archiveHevNativeLog("s242-last-stop.log");
         }
-
+        for (VpnSocketBroker broker : vpnSocketBrokers) if (broker != null) broker.expectStop();
         if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation
                 && processAlive(vppProcess) && productCoreSession != null
                 && productCoreSession.isConnected()) {
             tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
             appendLog("s213 native_tun_drain=" + tunClosed);
+            if (vpnHevValidation) archiveHevNativeLog("s237-last-stop.log");
+        }
+        // Keep platform facts available until native ingress is quiesced and
+        // accepted return/completion work has drained. Publishing Unknown
+        // before that barrier must not change facts for still-admitted work.
+        if (platformNetworkSnapshots != null) {
+            if (platformNetworkSnapshots.closeAndWait()) {
+                platformNetworkSnapshots = null;
+                appendLog("s243 network_subscription_closed generation=" + generation
+                        + " native_tun_drain=" + tunClosed);
+            } else appendLog("s243 network_subscription_close_deadline_exceeded=1");
+        }
+        for (int owner = 0; owner < vpnSocketBrokers.length; ++owner) {
+            VpnSocketBroker broker = vpnSocketBrokers[owner];
+            if (broker == null) continue;
+            if (broker.closeAndWait()) vpnSocketBrokers[owner] = null;
+            else appendLog("s237 broker_close_deadline_exceeded=1 owner=" + owner);
         }
         RuntimeControlNative.Session session = productCoreSession;
         if (session != null) {
             RuntimeControlNative.Status closed = session.closeAndGetStatus();
+            if (platformNetworkSnapshots != null) return RuntimeControlNative.Status.adapterCloseFailure(
+                    closed, "Android network subscription remains live");
+            if (hasVpnSocketBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
+                    closed, "Android socket broker thread remains live");
+            if (!rootClosed) return RuntimeControlNative.Status.adapterCloseFailure(
+                    closed, "native Root bounded drain failed");
             return tunClosed ? closed : RuntimeControlNative.Status.adapterCloseFailure(
                     closed, "native TUN bounded drain failed");
         }
+        if (platformNetworkSnapshots != null) return RuntimeControlNative.Status.adapterCloseFailure(
+                null, "Android network subscription remains live");
+        if (hasVpnSocketBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
+                null, "Android socket broker thread remains live");
+        if (!rootClosed) return RuntimeControlNative.Status.adapterCloseFailure(
+                null, "native Root bounded drain failed");
         return null;
+    }
+
+    private void archiveHevNativeLog(String name) {
+        // Diagnostic evidence only; preserve before deleting the profile.
+        if (profileRoot == null) return;
+        try {
+            File source = new File(profileRoot, "logs/vpp-stdout.log");
+            File destination = new File(getFilesDir(), "product-state/" + name);
+            destination.getParentFile().mkdirs();
+            java.nio.file.Files.copy(source.toPath(), destination.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException error) {
+            appendLog("s237 native_evidence_archive_failed=" + name + ":" + messageOf(error));
+        }
     }
 
     private boolean terminateProductCoreProcess() {
@@ -5168,6 +5375,15 @@ public final class RuntimeService extends VpnService {
                 commands.append(tool).append(" -w -t mangle -A ").append(inputChain)
                         .append(match).append(" -j NFQUEUE --queue-balance ").append(range)
                         .append(" --queue-bypass; ");
+                // Check every installed rule, including its no-listener flag.
+                // Queue-full fail-open is independently ACKed on each native
+                // queue socket; --queue-bypass does not configure that case.
+                commands.append(tool).append(" -w -t mangle -C ").append(outputChain)
+                        .append(match).append(" -m owner --uid-owner ").append(uid)
+                        .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+                commands.append(tool).append(" -w -t mangle -C ").append(inputChain)
+                        .append(match).append(" -j NFQUEUE --queue-balance ").append(range)
+                        .append(" --queue-bypass; ");
             }
         }
         return commands.append(tool).append(" -w -t mangle -I OUTPUT -j ").append(outputChain)
@@ -5413,6 +5629,25 @@ public final class RuntimeService extends VpnService {
                 + "plugins {\n  path " + nativeLibraryPath
                 + "\n  plugin default { disable }\n  plugin "
                 + PRODUCT_PLUGIN_BINARY + " { enable }\n}\n";
+        if (vpnHevValidation) {
+            // Test-only reductions of actual startup capacity, not runtime
+            // resizing, production defaults, or manufactured fault counters.
+            if (hevLimits != null && !hevLimits.isEmpty()) {
+                if (!hevLimits.matches("[0-9]{1,5}(,[0-9]{1,5}){4}"))
+                    throw new IOException("invalid HEV validation limits");
+                String[] values = hevLimits.split(",");
+                int[] maximum = {256, 258, 256, 1024, 8192};
+                for (int i = 0; i < values.length; ++i) {
+                    int value = Integer.parseInt(values[i]);
+                    if (value < (i == 1 ? 3 : 1) || value > maximum[i])
+                        throw new IOException("HEV validation limit outside reduction range");
+                }
+            }
+            if (hevFlowEntries < 0 || hevFlowEntries > 1024)
+                throw new IOException("invalid FlowRuntime validation capacity");
+            if (hevFlowEntries != 0)
+                config += "product-flow-runtime { entries " + hevFlowEntries + " }\n";
+        }
         ProductCoreOwner.writeAtomic(new File(profile, "startup.conf"),
                 config.getBytes(StandardCharsets.UTF_8));
     }
@@ -5469,6 +5704,8 @@ public final class RuntimeService extends VpnService {
      * live/unknown ownership remains an explicit blocking error.
      */
     private void reconcileProductCoreRuntime(boolean forceHealthQuery, long queryRevision) {
+        if (vpnRecoveryPendingEpoch != 0
+                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get()) return;
         Process process = vppProcess;
         if (processAlive(process) && productCoreSession != null
                 && productCoreSession.isConnected()) {
@@ -5536,7 +5773,8 @@ public final class RuntimeService extends VpnService {
             return false;
         }
         if (!(productCoreSession != null && productCoreSession.isConnected())
-                && !processAlive(vppProcess)) {
+                && !processAlive(vppProcess) && !hasVpnSocketBrokers()
+                && platformNetworkSnapshots == null) {
             RuntimeProfile selected = snapshot == null || snapshot.profile == null
                     ? (activeProfile == null ? RuntimeProfile.ROOT : activeProfile)
                     : snapshot.profile;
@@ -5549,6 +5787,10 @@ public final class RuntimeService extends VpnService {
                         || (selected == RuntimeProfile.ROOT && rootCommandAvailable())) {
                     return stopProductCoreResidue(stopService);
                 }
+                boolean published = publish(destroying
+                        ? RuntimeSnapshot.stoppedAfter(snapshot)
+                        : RuntimeSnapshot.stopped(selected, generation));
+                stopRequested = false;
                 if (stopService && foregroundStarted
                         && !persistenceGate.isPersistenceUnavailable()) {
                     stopForeground(true);
@@ -5558,12 +5800,13 @@ public final class RuntimeService extends VpnService {
                         && !persistenceGate.isPersistenceUnavailable()) {
                     stopSelf();
                 }
-                return !persistenceGate.isPersistenceUnavailable();
+                return published && !persistenceGate.isPersistenceUnavailable();
             }
             return stopProductCoreResidue(stopService);
         }
         if ((productCoreSession != null && productCoreSession.isConnected())
-                || processAlive(vppProcess)) {
+                || processAlive(vppProcess) || hasVpnSocketBrokers()
+                || platformNetworkSnapshots != null) {
             RuntimeSnapshot current = snapshot == null
                     ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot;
             publish(RuntimeSnapshot.stopping(current));
@@ -6504,6 +6747,8 @@ public final class RuntimeService extends VpnService {
     }
 
     private void stopIfInactive(int startId) {
+        if (vpnRecoveryPendingEpoch != 0
+                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get()) return;
         if (persistenceGate.isPersistenceUnavailable()) {
             appendLog("runtime_state_persistence=service_retained pending_recovery");
             return;
@@ -6616,6 +6861,17 @@ public final class RuntimeService extends VpnService {
                     + (activeProfile == null ? "none" : activeProfile.wireName));
             return;
         }
+        if ("broker_close0".equals(normalized) || "broker_close1".equals(normalized)) {
+            int owner = "broker_close0".equals(normalized) ? 0 : 1;
+            VpnSocketBroker broker = vpnSocketBrokers[owner];
+            if (!vpnHevValidation || broker == null) {
+                appendLog("s243 broker_fault=ignored owner=" + owner + " generation=" + generation);
+                return;
+            }
+            appendLog("s243 broker_fault=channel_close owner=" + owner + " generation=" + generation);
+            broker.failChannelForTest();
+            return;
+        }
         if ("close_tun".equals(normalized)) {
             RuntimeControlFdClient.AttachResult result = RuntimeControlFdClient.callJson(
                     185, RuntimeControlFdClient.VPN_FAULT_CLOSE_TUN, new JSONObject());
@@ -6706,6 +6962,8 @@ public final class RuntimeService extends VpnService {
             case "close_tun":
             case "revoke":
             case "native_crash":
+            case "broker_close0":
+            case "broker_close1":
                 return value;
             default:
                 return "";
@@ -7692,6 +7950,15 @@ public final class RuntimeService extends VpnService {
 
     private void handleVpnAuthorizationRevoked(String source) {
         appendLog("vpn_authorization=revoked source=" + source);
+        if (activeProfile == RuntimeProfile.VPN && vpnRecoveryPendingEpoch != 0) {
+            explicitRequestEpoch.incrementAndGet();
+            vpnRecoveryPendingEpoch = 0;
+            publishError("vpn_authorization_revoked",
+                    "Android revoked VpnService authorization during recovery", false,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+            stopIfInactive();
+            return;
+        }
         if (activeProfile != RuntimeProfile.VPN
                 || snapshot == null
                 || snapshot.profile != RuntimeProfile.VPN
@@ -7719,6 +7986,8 @@ public final class RuntimeService extends VpnService {
         final boolean ownsServiceInstance = isCurrentServiceInstance();
         destroying = true;
         stopRequested = true;
+        explicitRequestEpoch.incrementAndGet();
+        vpnRecoveryPendingEpoch = 0;
         if (ownsServiceInstance && isCurrentServiceInstance()
                 && snapshot != null && snapshot.isActive()
                 && !RuntimeSnapshot.STATE_STOPPING.equals(snapshot.state)) {

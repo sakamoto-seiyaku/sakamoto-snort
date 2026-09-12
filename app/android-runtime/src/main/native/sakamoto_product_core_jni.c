@@ -1034,6 +1034,20 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeApplyL4PolicyR
 }
 
 JNIEXPORT jint JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeStopRoot (
+    JNIEnv *env, jclass clazz, jlong handle, jlong generation)
+{
+  (void) env;
+  (void) clazz;
+  if (!handle || generation <= 0) return -(jint) SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  uint32_t stopped = 0;
+  uint32_t code = sakamoto_product_core_stop_root (
+    (sakamoto_product_core_handle_t *) (intptr_t) handle,
+    (uint64_t) generation, &stopped);
+  return code == SAKAMOTO_PRODUCT_OK ? (jint) stopped : -(jint) code;
+}
+
+JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativePublishNetwork (
     JNIEnv *env, jclass clazz, jlong handle, jlong generation,
     jlong revision, jlong event_elapsed_ns, jintArray pairs)

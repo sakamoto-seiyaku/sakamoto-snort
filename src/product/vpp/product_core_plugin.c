@@ -1070,6 +1070,23 @@ vl_api_product_core_network_publish_t_handler (
                ({ rmp->retval = htonl (rv); }));
 }
 
+static void
+vl_api_product_core_root_stop_t_handler (vl_api_product_core_root_stop_t *mp)
+{
+  product_core_main_t *pcm = &product_core_main;
+  vl_api_product_core_root_stop_reply_t *rmp;
+  u64 generation = clib_net_to_host_u64 (mp->generation);
+  /* Default VPP API dispatch holds the worker barrier. No blocking wait
+   * here: the supervisor retries only after this reply releases workers. */
+  int stopped = product_core_profile_is_root () && generation == pcm->generation
+    ? product_root_nfqueue_adapter_stop_step (pcm->vlib_main, generation) : -1;
+  int rv = stopped < 0 ? -1 : 0;
+  REPLY_MACRO2 (VL_API_PRODUCT_CORE_ROOT_STOP_REPLY,
+    ({ rmp->retval = htonl (rv);
+       rmp->generation = clib_host_to_net_u64 (pcm->generation);
+       rmp->stopped = htonl (stopped == 1); }));
+}
+
 #include "product_core.api.c"
 
 static clib_error_t *
@@ -1139,6 +1156,11 @@ VLIB_REGISTER_NODE (product_core_start_adapters_node) = {
   .function = product_core_start_adapters,
   .type = VLIB_NODE_TYPE_PROCESS,
   .name = "product-adapter-start",
+  /* Match VPP's CLI control-process stack. Root startup now partitions real
+   * VPP buffers before opening listeners; forced-inline allocator/free code
+   * exceeds the default 32 KiB process stack in an unoptimized host build.
+   * This is one bounded control-plane stack, not packet receive storage. */
+  .process_log2_n_stack_bytes = 18,
 };
 
 VLIB_PLUGIN_REGISTER () = {

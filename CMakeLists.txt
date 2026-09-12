@@ -48,6 +48,7 @@ target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
 add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
   src/product/vpp/product_flow_udp.c
+  src/product/vpp/product_flow_tcp.c
 )
 target_include_directories(sakamoto_product_flow_entry PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
@@ -89,6 +90,14 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-root-receive-pool-test tests/host/product_root_receive_pool_test.c)
+target_include_directories(sakamoto-product-root-receive-pool-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-root-receive-pool-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-root-receive-pool-test COMMAND sakamoto-product-root-receive-pool-test)
+add_executable(sakamoto-product-flow-tcp-test tests/host/product_flow_tcp_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-flow-tcp-test PRIVATE sakamoto_product_flow_entry)
+target_compile_options(sakamoto-product-flow-tcp-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-flow-tcp-test COMMAND sakamoto-product-flow-tcp-test)
 add_test(NAME sakamoto-product-flow-udp-test COMMAND sakamoto-product-flow-udp-test)
 add_test(NAME sakamoto-product-host-fixture-abi-test
   COMMAND sakamoto-product-host-fixture-abi-test)
@@ -154,6 +163,8 @@ add_test(NAME sakamoto-product-host-residue-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_residue_contract.sh")
 add_test(NAME sakamoto-product-vapi-callback-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vapi_callback_contract.sh")
+add_test(NAME sakamoto-s242-packet-identity-contract
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s242_packet_identity_test.py")
 add_test(NAME sakamoto-product-host-vapi-build-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_host_vapi_build_contract.sh")

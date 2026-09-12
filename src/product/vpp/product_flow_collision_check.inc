@@ -20,6 +20,9 @@ product_flow_check_vectors (product_flow_runtime_t *runtime, u16 worker,
   product_packet_facts_t facts = {
     .l3_status = PRODUCT_PACKET_L3_COMPLETE,
     .l4_status = PRODUCT_PACKET_L4_COMPLETE,
+    /* A valid midstream TCP fact vector, not the old unimplemented placeholder. */
+    .tcp_flags = 16, .tcp_window = 8192,
+    .l4_header_length = 20, .transport_length = 20,
   };
   product_flow_entry_packet_t packet = {
     .facts = &facts,

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.tcp" DESTINATION share/licenses/sakamoto)
 project(sakamoto_product_core_plugin LANGUAGES C)
 
 include(GNUInstallDirs)
@@ -179,6 +180,11 @@ configure_file(
 include("${VPP_SOURCE_DIR}/src/cmake/VPPConfig.cmake")
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
+# Offline source-pinned HEV fork. Its public Product adapter exposes no
+# dependency types, and no experiment artifact enters this link closure.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/hev"
+                 "${CMAKE_CURRENT_BINARY_DIR}/hev")
+
 option(SAKAMOTO_PRODUCT_HOST_EVIDENCE
   "Build the Host-only installed Product graph evidence seam" OFF)
 set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE product_packet_graph.c)
@@ -212,8 +218,12 @@ add_vpp_plugin(product_core
     product_l4_policy.c
     product_flow_entry.c
     product_flow_udp.c
+    product_flow_tcp.c
     product_root_nfqueue_adapter.c
     product_vpn_tun_adapter.c
+    product_vpn_flow_stack_hev.c
+    product_vpn_flow_stack.c
+    product_vpn_socket_broker.c
     product_network_snapshot.c
     ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
@@ -228,11 +238,16 @@ target_include_directories(product_core_plugin PRIVATE
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
+target_link_libraries(product_core_plugin sakamoto_hev_owner)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)
 endif()
 if(ANDROID)
+  # Inline native timer scheduling must use the same 1 ms tick as the
+  # allowlisted Android VPP stage, not the upstream 10 us host default.
+  target_compile_definitions(product_core_plugin PRIVATE
+    SAKAMOTO_VPP_ANDROID_IDLE_PROFILE=1)
   # Keep these as direct NEEDED entries. bionic must load the VPP libraries
   # before resolving the plugin's vlibapi TLS symbol (my_api_main).
   target_link_libraries(product_core_plugin

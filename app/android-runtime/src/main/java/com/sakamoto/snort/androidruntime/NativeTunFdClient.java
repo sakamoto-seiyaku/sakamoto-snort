@@ -37,6 +37,12 @@ final class NativeTunFdClient {
         return false;
     }
 
+    static void attachUnknownIdentity(String runtimePath, long generation, int rawFd)
+            throws IOException {
+        if (call(runtimePath, generation, 4, rawFd, 0) != 0)
+            throw new IOException("native TUN unknown-identity handoff rejected");
+    }
+
     private static int call(String runtimePath, long generation, int command,
                             int rawFd, int uid) throws IOException {
         ParcelFileDescriptor descriptor = rawFd >= 0 ? ParcelFileDescriptor.adoptFd(rawFd) : null;

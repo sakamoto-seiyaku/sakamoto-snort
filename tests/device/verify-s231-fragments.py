@@ -26,7 +26,7 @@ def props(path):
     return dict(l.split('=',1) for l in path.read_text().splitlines() if '=' in l and not l.startswith('#'))
 
 
-def verify(out,build_file,platform):
+def verify(out,build_file,platform,product_reassembly=False):
     out,build_file=Path(out),Path(build_file)
     errors,summaries=[],[]
     build={}
@@ -82,7 +82,7 @@ def verify(out,build_file,platform):
                 running=props(out/(label+'.properties'))
                 assert running['generation']==str(case['generation']) and running['artifact']==stage['artifactId'] and running['version']==stage['vppRevision']
                 assert digest(path('wire.pcap'))==read('pcap-sha256.txt').strip(),'binary PCAP transfer'
-            summaries.append(oracle.verify_case(case,read('vpp.log'),read('runtime.txt'),path('wire.pcap').read_bytes(),read('capture.log'),sends,endpoint))
+            summaries.append(oracle.verify_case(case,read('vpp.log'),read('runtime.txt'),path('wire.pcap').read_bytes(),read('capture.log'),sends,endpoint,product_reassembly))
             hook_text=read('fragment-hooks.txt')
             assert not any(l.startswith('-A PREROUTING') and ('NFQUEUE' in l or 'SAKAMOTO' in l) for l in hook_text.splitlines()),'earlier Product hook'
             assert 's231rx' in hook_text and 'NFQUEUE' in hook_text
@@ -115,13 +115,14 @@ def verify(out,build_file,platform):
     except (AssertionError,OSError,KeyError,ValueError,IndexError,StopIteration) as error:
         errors.append(str(error) or repr(error))
     return dict(status='HOLD' if errors else 'PASS',errors=errors,source_sha256=build.get('source_sha256'),
-                cases=summaries,packets=sum(c['packets'] for c in summaries),
+                cases=summaries,packets=sum(c['packets'] for c in summaries),product_reassembly=product_reassembly,
                 verifier_sha256=digest(__file__),semantic_verifier_sha256=digest(ROOT/'tests/device/s231-fragment-verify.py'))
 
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('run',type=Path);p.add_argument('--build',type=Path,required=True)
     p.add_argument('--platform',choices=['linux','pixel'],required=True);p.add_argument('--output',type=Path)
-    a=p.parse_args();r=verify(a.run,a.build,a.platform);text=json.dumps(r,indent=2)+'\n'
+    p.add_argument('--product-reassembly',action='store_true')
+    a=p.parse_args();r=verify(a.run,a.build,a.platform,a.product_reassembly);text=json.dumps(r,indent=2)+'\n'
     if a.output:a.output.write_text(text)
     print(text);raise SystemExit(r['status']!='PASS')

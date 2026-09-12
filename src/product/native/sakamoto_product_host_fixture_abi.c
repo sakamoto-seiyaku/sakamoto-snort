@@ -42,6 +42,23 @@ struct sakamoto_product_session {
   pthread_mutex_t mutex;
 };
 
+uint32_t
+sakamoto_product_session_stop_root (sakamoto_product_session_t *session,
+                                     uint64_t generation, uint32_t *out_stopped)
+{
+  if (out_stopped) *out_stopped = 0;
+  if (!session || !generation || !out_stopped)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex) != 0)
+    return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  /* Keep the real lifecycle tombstone contract, but a socket fixture cannot
+   * prove native queue/graph retirement and must never report stopped. */
+  uint32_t code = session->connected && generation == session->generation
+    ? SAKAMOTO_PRODUCT_API_UNAVAILABLE : SAKAMOTO_PRODUCT_STALE_HANDLE;
+  (void) pthread_mutex_unlock (&session->mutex);
+  return code;
+}
+
 _Static_assert (offsetof (sakamoto_product_status_t, generation) == 16U,
                 "product status generation offset is part of the ABI");
 _Static_assert (offsetof (sakamoto_product_status_t, artifact_id) == 52U,

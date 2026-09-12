@@ -2,6 +2,11 @@
 set -euo pipefail
 
 # SAKAMOTO-179 Root fault/recovery/residue real-device acceptance entry point.
+# Historical oracle: its synthetic OUTCOME_UNKNOWN case and pre-Q2/W2
+# assumptions do not qualify current artifacts. S233 fail-open and S242
+# real-syscall/native+supervisor matrices are the current Root evidence.
+# S242 rejects verdict_outcome_unknown at startup; it never fabricates a
+# native operation result. Keep this older runner as evidence provenance.
 #
 # PASS means the installed debug APK starts the Root Product VPP on the
 # controlled Pixel 6a, S179 Root fault modes settle into the expected counters
@@ -44,7 +49,7 @@ Optional:
 Before running, grant Superuser permission for this debug APK in KernelSU
 Manager. ADB shell root alone is not APK root authorization evidence.
 
-Required final evidence:
+Historical S179 expectations (not the current S233/S242 acceptance gate):
   missing_identity records ingress_identity_missing with no graph lease/verdict
   no_listener_bypass records whether this device/kernel releases packets through --queue-bypass
   graph_submit_fail_open reaches the controlled LAN host and records fail-open

@@ -4,6 +4,9 @@ import threading
 import argparse, importlib.util, hashlib, os, selectors, json, re, shlex, subprocess, time, zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
+_cli_spec=importlib.util.spec_from_file_location('s233_cli',ROOT/'tests/device/s233-fail-open.py')
+_cli_module=importlib.util.module_from_spec(_cli_spec);_cli_spec.loader.exec_module(_cli_module)
+_cli_target=_cli_module.Target.__new__(_cli_module.Target);_cli_target.pixel=True
 SERIAL="28201JEGR0XPAJ"; PKG="com.sakamoto.snort.androidruntime"
 a=argparse.ArgumentParser();a.add_argument('--apk',type=Path,required=True);a.add_argument('--reference-run',type=Path);a.add_argument('--output',type=Path,required=True);args=a.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 def save(n,t): (args.output/n).write_text(t);return t
@@ -59,8 +62,7 @@ def root(command,check=True):
  command=re.sub(r'\b(ip6?tables) (?!-w(?: |$))',r'\1 -w 5 ',command)
  return adb('shell','su','-c',shlex.quote(command),check=check)
 def cli(label,commands):
- command="printf '%s\\n' "+' '.join(shlex.quote(c) for c in commands+['quit'])+' | toybox nc -U -w 2 -q 1 '+shlex.quote(BASE+'runtime/cli.sock')
- return save(label+'.txt',root(command))
+ return save(label+'.txt',_cli_target.cli(BASE+'runtime',commands))
 def rows(text,prefix):
  return [dict(x.split('=',1) for x in line.split()[1:] if '=' in x) for line in text.splitlines() if line.startswith(prefix)]
 def snapshot(label):
@@ -160,6 +162,7 @@ try:
  for family in (4,6):
   for hook in ('INPUT','OUTPUT'):
    index=len(result['cases']);label=f'g{index}';active=True;running=start(label)
+   save(label+'-production-hooks.txt',root('iptables-save -t mangle; ip6tables-save -t mangle'))
    generation=running['generation'];result['generations'].append(generation)
    assert 'packet.trace_limit=4096' in cli(label+'-trace-limit',['product packet-trace limit 4096'])
    initial=cli(label+'-initial',['show product root lanes','show product flows','show product primary','show threads'])
