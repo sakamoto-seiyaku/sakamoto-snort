@@ -50,6 +50,20 @@ public final class RuntimeControlBackend {
         context.startService(requestIntent(context, RuntimeControlRequest.stop()));
     }
 
+    /** Debug-only native allocator pressure; the service validates the request. */
+    public StartResult startBufferPressureValidation(Context context, RuntimeProfile profile,
+                                                       int buffers) {
+        if (!RuntimeService.notificationsReady(context)) return StartResult.NOTIFICATION_REQUIRED;
+        Intent intent = requestIntent(context, RuntimeControlRequest.start(profile));
+        intent.putExtra("debugNativeBuffers", buffers);
+        if (profile == RuntimeProfile.VPN) {
+            intent.putExtra("debugVpnGraphValidation", true);
+            intent.putExtra("debugVpnHevValidation", true);
+        }
+        context.startForegroundService(intent);
+        return StartResult.ACCEPTED;
+    }
+
     public StartResult startVpnGraphValidation(Context context) {
         return startVpnGraphValidation(context, false, false, false);
     }

@@ -238,7 +238,13 @@ public class DebugControlActivity extends Activity {
         boolean handled = false;
         boolean debuggable = (getApplicationInfo().flags
                 & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
-        if (debuggable && intent.getBooleanExtra("debugVpnHevValidation", false)) {
+        if (debuggable && intent.hasExtra("debugNativeBuffers")) {
+            backend.startBufferPressureValidation(this,
+                    "vpn".equals(intent.getStringExtra("runtimeProfile"))
+                            ? RuntimeProfile.VPN : RuntimeProfile.ROOT,
+                    intent.getIntExtra("debugNativeBuffers", 0));
+            handled = true;
+        } else if (debuggable && intent.getBooleanExtra("debugVpnHevValidation", false)) {
             backend.startVpnHevValidation(this,
                     intent.getBooleanExtra("debugVpnHevUnknownIdentity", false),
                     intent.getBooleanExtra("debugVpnHevUnknownContext", false),

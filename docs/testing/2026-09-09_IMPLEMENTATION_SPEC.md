@@ -466,6 +466,11 @@ FlowEnd allocation failure 停止 VPP 功能，走现有监督层有界清理与
 不跨 worker 借位，保留 Gate/L4 DROP。不得用“重启成功”替代“故障后及时撤销接管”的证据。
 禁止专用 retry/pending/emergency pool，也不能以静态 free 内存估算替代压力证据。
 
+[S234 实现事实] 已检查的 END allocator failure 记录明确原因后 `_exit(70)`，
+不走会触发系统 core capture 的 `clib_panic`。本次 Root 真机压力及新连接恢复证据见
+[S234 登记与证据](2026-09-12_S234_BUFFER_PRESSURE.md)。OS reclaim 与 orderly drain
+仍分开；Root 使用现有 supervisor 清理后显式新 START，不新增 automatic retry loop。
+
 ## 7. S226/S227/S236：统一 expiry
 
 ### 7.1 数据结构与 Interface

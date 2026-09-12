@@ -8,7 +8,8 @@
  * tracked protocols. It is independent of VPP, Android, Rust and the policy
  * ABI. Early DROP only records rejection; PASS_NEXT performs lookup/create.
  * Creation/destruction/flush require stopped or drained owner execution;
- * ordinary observe/decision calls allocate nothing and never access a peer.
+ * observe/decision never allocate heap or access a peer. Normal close/reuse
+ * delivers an END via the composition callback, which allocates a VPP buffer.
  */
 
 #include <stddef.h>

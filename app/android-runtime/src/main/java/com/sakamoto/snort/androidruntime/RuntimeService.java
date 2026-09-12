@@ -201,6 +201,7 @@ public final class RuntimeService extends VpnService {
     private boolean hevUnknownIdentity, hevUnknownContext;
     private String requestedHevLimits, hevLimits;
     private int requestedHevFlowEntries, hevFlowEntries;
+    private int requestedNativeBuffers, nativeBuffers;
     // Matches the frozen native W2 layout; registration must succeed for both
     // independent channels before the TUN can be attached.
     private final VpnSocketBroker[] vpnSocketBrokers = new VpnSocketBroker[2];
@@ -570,6 +571,9 @@ public final class RuntimeService extends VpnService {
                 requestedHevUnknownContext = hevValidation && intent.getBooleanExtra("debugVpnHevUnknownContext", false);
                 requestedHevLimits = hevValidation ? intent.getStringExtra("debugVpnHevLimits") : null;
                 requestedHevFlowEntries = hevValidation ? intent.getIntExtra("debugVpnFlowEntries", 0) : 0;
+                requestedNativeBuffers = intent != null
+                        && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        ? intent.getIntExtra("debugNativeBuffers", 0) : 0;
                 startRuntime(profile);
             });
             return START_STICKY;
@@ -587,6 +591,7 @@ public final class RuntimeService extends VpnService {
                 vpnRecoveryFailureCount = 0;
                 requestedVpnGraphValidation = false;
                 requestedVpnHevValidation = false;
+                requestedNativeBuffers = 0;
                 startRuntime(profile);
             });
             return START_STICKY;
@@ -882,6 +887,7 @@ public final class RuntimeService extends VpnService {
         hevUnknownContext = vpnHevValidation && requestedHevUnknownContext;
         hevLimits = vpnHevValidation ? requestedHevLimits : null;
         hevFlowEntries = vpnHevValidation ? requestedHevFlowEntries : 0;
+        nativeBuffers = requestedNativeBuffers;
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(selected);
         if (!adapter.productLaunchAllowed && !vpnGraphValidation) {
@@ -4854,6 +4860,8 @@ public final class RuntimeService extends VpnService {
         boolean processStopped = terminateProductCoreProcess();
         boolean ownerStopped = terminateProductCoreOwnerProcess();
         if (vpnHevValidation) archiveHevNativeLog("s237-last-failure.log");
+        if (activeProfile == RuntimeProfile.ROOT)
+            archiveHevNativeLog("root-last-failure.log");
         if (closeFailed && nativeExitedBeforeTermination
                 && processStopped && ownerStopped && !hasVpnSocketBrokers()
                 && platformNetworkSnapshots == null) {
@@ -5629,6 +5637,13 @@ public final class RuntimeService extends VpnService {
                 + "plugins {\n  path " + nativeLibraryPath
                 + "\n  plugin default { disable }\n  plugin "
                 + PRODUCT_PLUGIN_BINARY + " { enable }\n}\n";
+        // Real startup pool reduction for allocator-pressure validation.
+        // It is neither a runtime fault result override nor a release default.
+        if (nativeBuffers != 0) {
+            if (nativeBuffers < 512 || nativeBuffers > 4096 || nativeBuffers % 32 != 0)
+                throw new IOException("invalid native buffer validation capacity");
+            config += "buffers { buffers-per-numa " + nativeBuffers + " }\n";
+        }
         if (vpnHevValidation) {
             // Test-only reductions of actual startup capacity, not runtime
             // resizing, production defaults, or manufactured fault counters.

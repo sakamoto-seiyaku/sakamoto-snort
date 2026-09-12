@@ -4,6 +4,8 @@
 #include <vlib/threads.h>
 #include <vnet/buffer.h>
 #include <stdio.h>
+#include <time.h>
+#include <unistd.h>
 
 #define PRODUCT_FLOW_END_WORKERS 2
 enum { END_CONTROL_NONE, END_CONTROL_NOW, END_CONTROL_NEXT_PACKET };
@@ -19,7 +21,8 @@ typedef struct
   struct
   {
     u64 generation, incarnation;
-    u32 slot;
+    u32 slot, batch;
+    u16 udp_port;
     u8 kind, reason, early;
   } control;
 } product_flow_end_owner_t;
@@ -32,6 +35,33 @@ static struct
 } product_flow_end_main;
 extern vlib_node_registration_t product_flow_consumer_node;
 extern vlib_node_registration_t product_flow_end_control_node;
+
+/* Slow control/fatal evidence only. This does not run on ordinary packets. */
+static void
+trace_capacity (vlib_main_t *vm, const char *event, u32 requested, u32 closed)
+{
+  product_flow_end_owner_t *owner =
+    &product_flow_end_main.owners[vlib_get_worker_index (vm->thread_index)];
+  u8 index = vlib_buffer_pool_get_default_for_numa (vm, vm->numa_node);
+  vlib_buffer_pool_t *pool = vlib_get_buffer_pool (vm, index);
+  u32 available;
+  clib_spinlock_lock (&pool->lock);
+  available = pool->n_avail;
+  clib_spinlock_unlock (&pool->lock);
+  struct timespec now;
+  if (clock_gettime (CLOCK_MONOTONIC, &now))
+    clib_panic ("FlowEnd capacity clock unavailable");
+  product_flow_runtime_snapshot_t state = product_flow_runtime_snapshot (owner->runtime);
+  fprintf (stderr, "s234 event=%s thread=%u owner=%u generation=%llu monotonic_ns=%llu requested=%u closed=%u pool=%u total=%u available=%u owner_cached=%u entry_bytes=%u buffer_bytes=%u data_bytes=%u entries=%u linked=%u ending=%u end_allocated=%llu end_released=%llu\n",
+    event, vm->thread_index, vlib_get_worker_index (vm->thread_index),
+    (unsigned long long) owner->generation,
+    (unsigned long long) now.tv_sec * 1000000000ULL + now.tv_nsec,
+    requested, closed, index, pool->n_buffers, available,
+    pool->threads[vm->thread_index].n_cached,
+    (u32) sizeof (product_flow_entry_t), (u32) sizeof (vlib_buffer_t), pool->data_size,
+    state.active_entries, state.linked_entries, state.ending_entries,
+    (unsigned long long) owner->allocated, (unsigned long long) owner->released);
+}
 
 _Static_assert (offsetof (vnet_buffer_opaque2_t, unused[4]) <=
                   PRODUCT_FLOW_END_DISCRIMINANT_OFFSET, "upstream unused tail");
@@ -167,14 +197,18 @@ deliver_end (void *context, const product_flow_entry_t *entry, u32 slot,
   u32 bi;
   if (PREDICT_FALSE (vlib_buffer_alloc (vm, &bi, 1) != 1))
     {
-      fprintf (stderr, "s225 event=fatal_allocation_failure thread=%u owner=%u generation=%llu slot=%u incarnation=%llu reason=%u\n",
+      trace_capacity (vm, "allocator_returned_zero", 1, 0);
+      fprintf (stderr, "s225 event=fatal_allocation_failure thread=%u owner=%u generation=%llu slot=%u incarnation=%llu reason=%u exit_code=70\n",
         vm->thread_index, vlib_get_worker_index (vm->thread_index),
         (unsigned long long) owner->generation, slot,
         (unsigned long long) entry->incarnation, reason);
-      /* No pending/retry/emergency storage or direct normal finalization.
-       * The existing runtime supervisor owns fatal withdrawal/recovery; S234
-       * qualifies the real allocator-pressure and platform-exit behavior. */
-      clib_panic ("fatal FlowEnd buffer allocation failure");
+      /* This is a checked resource failure, not memory corruption. The pinned
+       * panic path aborts and enters system core capture, which can retain
+       * NFQUEUE descriptors during dump collection. Terminate all threads
+       * without that path so the OS releases native ownership promptly.
+       * No END finalizers/normal verdicts are claimed for this OS reclamation;
+       * the existing supervisor withdraws platform hooks/TUN and owns restart. */
+      _exit (70);
     }
   vlib_buffer_t *b = vlib_get_buffer (vm, bi);
   b->current_data = 0;
@@ -289,6 +323,32 @@ run_control (vlib_main_t *vm)
   u8 reason = owner->control.reason;
   owner->early_next = owner->control.early;
   owner->control.kind = END_CONTROL_NONE;
+  if (owner->control.batch)
+    {
+      /* One explicitly requested owner input invocation. No pending ENDs,
+       * reserve buffers, retry, implicit expiry or recurring scan. The UDP
+       * port limits controlled closes to the experiment's own endpoints. */
+      u32 requested = owner->control.batch, closed = 0;
+      u16 port = owner->control.udp_port;
+      owner->control.batch = 0;
+      trace_capacity (vm, "batch_begin", requested, 0);
+      product_flow_runtime_snapshot_t state = product_flow_runtime_snapshot (owner->runtime);
+      if (generation == state.generation)
+        for (u32 index = 0; index < state.capacity && closed < requested; index++)
+          {
+            const product_flow_entry_t *entry = product_flow_runtime_entry (owner->runtime, index);
+            if (!entry || !entry->linked || entry->key.kind != PRODUCT_OWNER_KEY_L4_PORTS ||
+                entry->key.protocol != PRODUCT_FLOW_ENTRY_PROTOCOL_UDP ||
+                (entry->key.transport.ports.a != port && entry->key.transport.ports.b != port))
+              continue;
+            if (product_flow_runtime_close (owner->runtime, index, generation,
+                  entry->incarnation, PRODUCT_FLOW_END_CLOSED) != PRODUCT_FLOW_ENTRY_STATUS_OK)
+              clib_panic ("owner-local controlled batch close rejected");
+            closed++;
+          }
+      trace_capacity (vm, "batch_end", requested, closed);
+      return;
+    }
   product_flow_entry_status_t status = product_flow_runtime_close (
     owner->runtime, slot, generation, incarnation, reason);
   if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
@@ -340,7 +400,7 @@ static clib_error_t *
 close_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command)
 {
   (void) command;
-  u32 worker = ~0, slot = ~0, early = 0, on_packet = 0;
+  u32 worker = ~0, slot = ~0, early = 0, on_packet = 0, batch = 0, port = 0;
   u64 generation = 0, incarnation = 0;
   u32 reason = PRODUCT_FLOW_END_CLOSED;
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
@@ -348,16 +408,23 @@ close_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command
       if (unformat (input, "owner %u", &worker) ||
           unformat (input, "slot %u", &slot) ||
           unformat (input, "generation %llu", &generation) ||
-          unformat (input, "incarnation %llu", &incarnation)) ;
+          unformat (input, "incarnation %llu", &incarnation) ||
+          unformat (input, "batch %u", &batch) ||
+          unformat (input, "udp-port %u", &port)) ;
       else if (unformat (input, "early")) early = 1;
       else if (unformat (input, "on-packet")) on_packet = 1;
       else if (unformat (input, "expire")) reason = PRODUCT_FLOW_END_EXPIRED;
       else return clib_error_return (0, "invalid FlowEnd close argument");
     }
-  if (worker >= PRODUCT_FLOW_END_WORKERS || !generation || !incarnation ||
+  if (worker >= PRODUCT_FLOW_END_WORKERS || !generation ||
+      (!batch && (!incarnation || port)) ||
+      (batch && (batch > 1024 || !port || port > 65535 || early ||
+                 reason != PRODUCT_FLOW_END_CLOSED || incarnation || slot != ~0U)) ||
       !product_packet_graph_accepting ())
-    return clib_error_return (0, "FlowEnd close requires running owner/slot/generation/incarnation");
+    return clib_error_return (0, "FlowEnd close requires owner/generation and slot/incarnation or batch 1..1024/udp-port");
   product_flow_end_owner_t *owner = &product_flow_end_main.owners[worker];
+  if (batch && generation != owner->generation)
+    return clib_error_return (0, "FlowEnd batch generation mismatch");
   if (owner->control.kind || owner->early_next)
     return clib_error_return (0, "owner already has a controlled close");
   owner->control.generation = generation;
@@ -365,13 +432,15 @@ close_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command
   owner->control.slot = slot;
   owner->control.reason = reason;
   owner->control.early = early;
+  owner->control.batch = batch;
+  owner->control.udp_port = port;
   owner->control.kind = on_packet ? END_CONTROL_NEXT_PACKET : END_CONTROL_NOW;
   if (!on_packet)
     vlib_node_set_state (vlib_get_main_by_index (vlib_get_worker_thread_index (worker)),
                          product_flow_end_control_node.index, VLIB_NODE_STATE_POLLING);
-  vlib_cli_output (vm, "flow-end.close=queued owner=%u slot=%u generation=%llu incarnation=%llu on_packet=%u early=%u",
+  vlib_cli_output (vm, "flow-end.close=queued owner=%u slot=%u generation=%llu incarnation=%llu on_packet=%u early=%u batch=%u udp_port=%u",
     worker, slot, (unsigned long long) generation,
-    (unsigned long long) incarnation, on_packet, early);
+    (unsigned long long) incarnation, on_packet, early, batch, port);
   return 0;
 }
 VLIB_CLI_COMMAND (product_flow_end_close_command, static) = {
