@@ -120,6 +120,12 @@ Direct socket 的 Sakamoto UID 误作原应用，也不拿当前全局网络覆�
 新包生成 PacketFacts 并执行策略，不继承输入包的解析结果或 verdict。回调与清理复用现有
 owner/generation；详细内存约定及实验边界见 ADR-0007 与 SAKAMOTO-237、245–247。
 
+2026-09-11 用户确认 UDP 身份冲突处理：同 tuple 的旧 transport 仍存活时，新输入的
+已知 UID 若与旧 session 的已知 UID 不同，记录冲突、禁止旧 session 再 forwarding，
+关闭旧 transport 并拒收触发包；旧会话清理完成后，后续包重新建立 transport 并重新
+bind/protect。不覆盖旧 UID，不复用旧 socket，不等待 FlowEntry 结束；unknown 不构成
+两个已知 UID 的冲突。
+
 ## Reference-fork boundary
 
 参考 fork 把完整 `flow_dissector_result` 放入扩大的 `opaque2`，把 NFQUEUE completion identity、

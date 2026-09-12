@@ -1,6 +1,6 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-09-11
+更新时间：2026-09-12
 
 状态：当前决策；按 ADR-0006/0007/0008 与 per-worker single-owner 主线刷新。
 
@@ -65,8 +65,10 @@ OVS 管理对象、巨大 debug blob 不进热 entry。将来确有 consumer 时
 seam 组织 attachments，不为潜在扩展预建通用管理框架。
 
 S221 建立统一 union；S223 已在其中增加单字节 UDP FIRST/MULTIPLE/BIDIR 状态，
-由独立的纯 C tracker 输出 CtFacts/update/timeout class。TCP、ICMP 分支仍为占位，
-不返回假 CtFacts；不会以 `created=true` 冒充 `ct.state=new`。
+S222 增加完整 TCP 双 peer 的 sequence/window/scale/phase 与 accepted flags history。
+两个纯 C tracker 输出 CtFacts/update/timeout class；ICMP 分支仍为占位，不返回假
+CtFacts。不会以 `created=true` 冒充 `ct.state=new`。TCP INVALID-new 不分配 entry，
+已有 entry 的 INVALID 只记观察计数，不提交候选协议状态或刷新意图。
 
 ## 4. 执行顺序与 policy cache
 
@@ -136,8 +138,9 @@ buffer、不访问 table/socket/clock，不拥有独立 expiry scheduler。
   对外规则形式仍服从当前控制面规格，不沿用旧 IPRULES 命令。
 
 TCP 源文件带 BSD two-clause 条款与对应作者归属；其余已核查 conntrack 文件主要为
-Apache-2.0。后续如发生源代码适配，须保留相应完整 notice/conditions/disclaimer，不能
-把 TCP 文件一概标为 Apache-only。此处只固定来源，不移植状态机。
+Apache-2.0。S222 已适配 TCP 协议核心，完整 notice/conditions/disclaimer 保留于
+`product_flow_tcp.c` 和 `src/product/NOTICE.tcp`，随 Linux 安装与 Android APK 分发，
+不能把 TCP 文件一概标为 Apache-only。
 
 ## 7. Timeout 与结束生命周期
 
@@ -168,6 +171,8 @@ Expiry 由 owner-local 统一调度负责，不是共享后台 cleaner、QSBR gr
 close 的既有 Adapter 生命周期，旧报文、borrowed pointer、timer/callback 不进入新 generation。
 
 S221 仅有 FREE/LINKED 与 stop 清空，不实施自动 expiry、正常 FlowEnd 或 timer。
+S222 在旧连接双 peer 关闭后遇新 SYN，会先解除旧索引，再同步回收并创建新 incarnation；
+这仅适用于当前没有跨 node FlowEnd consumer 持有旧槽的阶段，不替代 S225 的结束图。
 有限流量与 stop 清理的证据不能被升级成 idle-expiry、长时间 soak 或发行容量结论。
 
 ## 8. 验收与边界

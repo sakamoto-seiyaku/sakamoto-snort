@@ -30,10 +30,18 @@ bundle. They share complete-Linux-UID subject identity, one apply transaction, p
 references, diagnostics, and product attribution. They do not share predicate syntax or compare priorities
 across stages.
 
-The L4 classifier follows the useful organization of the inspected fork's `stellar_acl`: rules are grouped by
+**2026-09-11 scope clarification (user decision):** the current UID-grouped, priority-ordered
+bounded rule scan is retained for the present implementation phase. This phase requires correct static
+ACL matching, precedence, publication and stage behavior; implementing the mask/hash layout below is
+not a prerequisite for S229 or FlowRuntime work. ACL will receive a separate design review and refactor
+later. Existing retained design discussions may inform that review; ADR-0008 still excludes the removed
+C++ implementation from use as a source reference. The following mask/hash paragraphs describe the
+previously discussed design direction, not the current implementation or a frozen future choice.
+
+The previously discussed L4 classifier design groups rules by
 explicit priority level, lower numeric priority is evaluated first, and each level uses mask shapes, masked
-hash lookup, and residual port-range checks. The fork is a reference rather than code to copy: Sakamoto must
-add complete-Linux-UID and Android network context, immutable publication, deterministic same-level behavior,
+hash lookup, and residual port-range checks. Sakamoto requires
+complete-Linux-UID and Android network context, immutable publication, deterministic same-level behavior,
 and bounded worst-case probes. Physical mask or pool traversal order is not allowed to become an accidental
 policy tie-break. L4 precedence is fixed as `priority ascending -> explicit order ascending -> stable rule ID
 ascending`; match specificity is not an implicit precedence dimension.
@@ -67,17 +75,18 @@ For fragmented IP, FlowSteering hides the fork-inspired two-stage path: co-locat
 reassembly worker, retain the final owner computed from the first fragment's complete five-tuple, reconstruct
 one policy-ready packet, and hand it to that owner when the two workers differ. This explicit Fragment
 Steering transition is not a distribution error and does not consume the one Corrective Handoff allowance.
-Fragment identity is not a second FlowEntry key. Malformed, overlap/conflict, timeout, or reassembly-capacity
-failure follows the inspected VPP reassembly behavior and runtime-drops every retained packet obligation
-without producing a Policy Verdict; it is not an NFQUEUE fail-open path or a policy-rule drop.
+Fragment identity is not a second FlowEntry key. **SAKAMOTO-229 clarification, synchronized 2026-09-11:**
+malformed/conflicting fragments terminate as runtime faults; timeout ends an incomplete datagram without
+producing a Policy Verdict. Pure reassembly resource exhaustion uses processing bypass when original data
+and a safe normal return path remain, with one NF_ACCEPT attempt per complete NFQUEUE original identity.
+If return is unavailable, record no-return/transport failure and release owned resources. Already-decided
+policy DROP remains DROP. This replaces the earlier blanket capacity runtime-drop wording with the current
+S229 acceptance contract; an ACCEPT attempt does not establish delivery.
 
-This deliberately does not copy two details of the inspected fork. Its ordinary symmetric handoff hash omits
-IP protocol despite accepting an L4 mode, while Sakamoto's Canonical Flow Key includes protocol. Its
-`stellar_acl` executes before reassembly, while Sakamoto's port-aware L4 classifier must evaluate only after
+Sakamoto's Canonical Flow Key includes IP protocol. The port-aware L4 classifier evaluates only after
 successful reassembly and final-owner handoff so non-initial fragments cannot bypass port rules.
 
-Network Gate or L4 `DROP` occurs before full flow/session allocation, matching the fork's placement of
-`stellar_acl` before Session Manager. The hot path still updates exact per-app/per-rule packet and byte
+Network Gate or L4 `DROP` occurs before full flow/session allocation. The hot path updates exact per-app/per-rule packet and byte
 counters, then may coalesce bounded product evidence into a worker-private, loss-tolerant
 ActivityAccumulator. That accumulator has fixed capacity, carries no policy or protocol state, and may evict
 detail without changing verdicts or exact counters. Only `PASS_NEXT` traffic may create a worker-owned
@@ -130,8 +139,9 @@ invalidation mechanism are implementation decisions and are not fixed by this AD
   second-handoff mechanics in their Interfaces.
 - Match-set containment is useful for shadow/redundancy diagnostics and UI auto-placement, but is not a
   hidden cross-rule specificity rank.
-- The first release builds one L4 classifier based on the `stellar_acl` priority/mask/hash structure. A second
-  matcher is justified only by measured failure of that implementation, not as a parallel release deliverable.
+- Current implementation work retains one bounded static L4 matcher. Its later structural redesign may
+  revisit the priority/mask/hash discussions; the 2026-09-11 scope decision defers that work
+  without weakening matching correctness or introducing a parallel matcher now.
 - Stateless L4 matching does not own Sakamoto FlowEntry lifecycle and does not enable VPP ACL session or
   `permit+reflect` behavior.
 - Early Gate/L4 drops do not allocate FlowEntry; bounded ActivityAccumulator loss is an observability event,

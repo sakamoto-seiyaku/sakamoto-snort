@@ -354,7 +354,7 @@ S223 不实现自动 expiry；以有限流量和 stop 回收验收。
 `product_flow_udp.c::product_udp_update` 消费 parser facts 与 FlowRuntime 给出的方向。
 `product_flow_entry_packet_t.facts` 仅在同步 observe 中借用，entry 不保存该指针。
 UDP 必须具有完整 parser facts；缺失 facts 是 Interface error，不是容量 bypass。
-TCP/ICMP 尚未接入 tracker，observation 的 result 保持 NONE/UNKNOWN。
+S223 当时 TCP/ICMP 尚未接入 tracker；S222 现已接入 TCP，ICMP 的 result 仍保持 NONE/UNKNOWN。
 状态仍在现有 tagged union 中，entry 大小未因本项增加；没有新增 table/timer。
 逐分支映射与实际 Linux/Pixel 验收见
 [`2026-09-11_S223_UDP_TRACKER.md`](2026-09-11_S223_UDP_TRACKER.md)。
@@ -376,6 +376,15 @@ Implementation 包含两个 peer 的最小状态、窗口/序号边界、wscale 
 FIN 双向、RST、相同 tuple 新连接都要覆盖。Host vectors 辅助边界，Linux/Pixel 真包证明图接线。
 S222 在 S225 尚未实现时不声称 FlowEnd graph 已完成；slot reuse 的同步清理只允许没有
 跨 node consumer 持有旧槽的阶段，S225 接入后正常 close 必须统一进入 FlowEnd。
+
+[2026-09-12 S222 实现] `product_flow_tcp.c` 在上述固定 OVS pin 上适配完整协议核心，
+双 peer 状态置于现有 union。INVALID 使用候选状态回滚；INVALID-new 不造 entry 或
+隐式 DROP。双 peer closed 后的新 SYN 由 FlowRuntime 同步替换 incarnation，并重置
+ORIG、policy cache 和 accounting。BSD two-clause notice 随 Linux/Android 产物分发。
+逐分支映射、131,072 步差分、真实 Linux/Pixel Root 双栈握手/重传/midstream/非法窗口/
+FIN/RST/reuse 与 stop/restart 证据见
+[`2026-09-12_S222_TCP_TRACKER.md`](2026-09-12_S222_TCP_TRACKER.md)。
+这是观测 tracker，不是 S240 的 lwIP TCP transport，也不声称 S225/S236 已交付。
 
 ### 5.4 ICMP Echo（S224）
 
@@ -577,8 +586,12 @@ S237 初始单 owner 不删除 S214 remote wiring；S239 才宣称 W2 transport 
 
 session 保存 UID/known 和创建 transport 时的 underlay binding/epoch 必要值。
 输入 unknown 时不猜测 UID；已有 reliable identity 不用 Direct socket 自身 UID 覆盖。
-同 transport 后续可靠身份冲突时记录明确诊断并按既有身份契约处理，不新建 identity manager。
-未被既有契约解决的冲突先列最小案例审视，禁止静默 last-write-wins。
+2026-09-11 用户确认：旧 UDP transport 尚存活时，同一 tuple 的后续输入若携带与 session
+不同的已知 UID，记录身份冲突，立即禁止旧会话继续 forwarding，关闭旧 transport 并拒收
+触发冲突的这一个包；后续包在旧会话清理完成后重新建会话并重新 bind/protect。
+不得覆盖旧 UID、借用旧 socket 或在清理期间接受该 tuple 的新输入。该关闭不依赖
+VPP FlowEntry 的生命周期，不新增 identity manager。unknown 不等同于一个不同的已知 UID。
+其他未被契约解决的身份冲突仍先列最小案例审视，禁止静默 last-write-wins。
 
 Android broker 处理 bind/protect，并返回同一 generation/session 请求的结果。
 fd 经 SCM_RIGHTS 转交时区分原 fd/duplicate，close 每个拥有的引用一次。
@@ -605,7 +618,35 @@ fd 经 SCM_RIGHTS 转交时区分原 fd/duplicate，close 每个拥有的引用�
 | S239 | 每个 owner 独立 shard，event routing 与 TUN origin return | 双 owner 同时双栈，实际 callback TLS，停止一条不影响另一条 | 全局 core lock、spill、迁移 |
 | S240 | 真 HEV/lwIP TCP 接同一 copy/provenance Interface | TCP4/6 handshake/data/retransmit/FIN/RST/refusal，UDP 回归 | 自写 TCP bridge，CT tracker 代替 transport |
 | S241 | 分类 capacity/bind/protect/connect 结果与 health | 新 flow capacity/current packet credit 分开，故障后恢复 | eviction、未保护 fallback、把 transport 错误写成 policy DROP |
-| S243 | underlay invalidation、停止、旧 callback/broker reply 清理 | W2 TCP/UDP 活动时 switch/stop/crash/restart，TUN/FD/pbuf/credits | TCP 字节流透明重连、未决定的 UDP mapping migration |
+| S243 | underlay invalidation、停止、旧 callback/broker reply 清理 | W2 TCP/UDP 活动时 switch/stop/crash/restart，同 tuple UDP 清理后新建，TUN/FD/pbuf/credits | TCP 字节流透明重连、UDP 旧队列重放或新旧有效会话并存 |
+
+2026-09-12 S240 执行证据见
+[`2026-09-12_S240_TCP_DIRECT.md`](2026-09-12_S240_TCP_DIRECT.md)：当前 APK 的双 owner
+TCP4/6 handshake、字节流、真实重传、FIN/RST/refusal、return DROP 后同会话恢复与
+stop/restart 已独立核验，并运行 UDP4/6 回归。该证据不替代 S241/S243/S248 的范围，
+debug validation 仍不宣称 release protection readiness。
+
+2026-09-12 S241 执行证据见
+[`2026-09-12_S241_CAPACITY_AND_FAILURES.md`](2026-09-12_S241_CAPACITY_AND_FAILURES.md)：
+当前 APK 的 W2 TCP/UDP 双栈 44 组真实 capacity/transport/DROP-completion 场景已独立核验，
+保留既有 transport、未求值 bypass 不伪造 ALLOW、压力解除后新流恢复，全部 native 责任结清；
+正常 TCP 全矩阵与 1,000 包双栈 UDP 回归通过。不替代 S243 lifecycle 或 S248 性能验收。
+
+2026-09-12 S243 部分生命周期证据见
+[`2026-09-12_S243_LIFECYCLE_CHECKPOINT.md`](2026-09-12_S243_LIFECYCLE_CHECKPOINT.md)：
+当前 APK 的 W2 活动 TCP/UDP 双栈 Stop、两个 owner 的 broker channel failure、真实进程
+crash、一次重启上限、取消重试与 VPN 撤销后的普通连通已核验。2026-09-12 已确认 UDP
+旧 transport 清理后，同 tuple 的后续新包可经最新 underlay 新建 protected/bound socket；
+不重放、不迁移，不联动结束 VPP FlowEntry，见 ADR-0007。当时的生命周期证据不含该切网
+链路的实施/验收，**不能据此将 S243 标为完成**。
+
+2026-09-12 S243 后续完整证据见
+[`2026-09-12_S243_UNDERLAY.md`](2026-09-12_S243_UNDERLAY.md)：同一最终 artifact L
+已验证真实 Wi-Fi Network 失效/新建、W2 双栈同应用 UDP socket 继续使用、新旧 transport
+替换而 VPP FlowEntry incarnation 保持、无 underlay 明确失败、切网后 DROP/解除 DROP，
+并重新通过活动 stop/crash/两 owner broker failure、一次重启上限/取消、VPN 撤销后的普通
+连通及 12 组 protect/bind/DROP 回归。全部 native 资源责任核验完成；无 SIM，不声明
+移动数据或公网 IPv6 实测。S243 的上述验收范围已闭合，不扩大对外 readiness。
 
 生命周期固定为 RUNNING → QUIESCING → DRAINING → CLOSED；STARTING 失败也必须走已拥有
 资源的清理。不要新建第二套全局 supervisor 状态机，映射到现有 RuntimeService 状态。
@@ -625,11 +666,29 @@ normal/reserve 都从既有 VPP pool 启动时固定划分到 lane，lane 独占
 NFQ 包进入用户态前身份未知时，不能在临时 heap 接收再声称 single materialization。
 实际 buffer/recv 形态沿当前 Adapter 核对，必要改动保持每 packet 一次用户态物化。
 
+2026-09-12 S233 已由同一源码 artifact B 闭合，见
+[`2026-09-12_S233_NFQUEUE_FAIL_OPEN.md`](2026-09-12_S233_NFQUEUE_FAIL_OPEN.md)。
+每 lane 固定 64 normal + 8 reserve VPP buffer；双平台分别通过三种独立放行来源、
+两种明确 loss、新流 policy 恢复和 queue/socket/hook/loan 清理核验。Linux/Pixel 主矩阵
+94/76 个端点用例、各 14 个反向篡改检查，以及 120/114 个 native NFQ 分片回归包通过。
+Pixel 普通 RuntimeService 四次安装的全部 16 条规则均核对含 `--queue-bypass`。
+该证据不替代 S242 的完整生命周期范围，也不扩大 readiness 或声称零丢包。
+
 S242 按四条 lane 记录 generation、fd、queue family/ID、pending、completion ledger；
 部分 lane 打开失败要逆序撤销已经建立的本 runtime 资源，不清除系统其他规则。
 stop 先撤 ingress/停止接收，保持 verdict channel 直到 bounded drain，再解绑/关 fd/移除私有 hook。
 真实 syscall 非负只表示 terminal operation 成功，不等于 endpoint 收到；失败不再物理重试。
 S210 的 return-ring retry 仍可使用，不新增 verdict retry。
+
+2026-09-12 S242 当前产物验收完成：typed Root stop 从 RuntimeService/JNI 经
+Rust/C/VAPI 到 VPP barrier 内的非阻塞 step；先 quiesce ingress，保留 completion
+fd 排空，再释放 graph/flow/pool 与四条 lane。Linux/Pixel 各五阶段主矩阵、各
+25 个语义反例，以及 Pixel 四代真实 supervisor/15 个反例通过；每 lane 的故障是
+同一真实 fd 上 `sendto(MSG_OOB)=-1/EOPNOTSUPP`，没有物理 retry 或合成 unknown。
+正常 native zero 与异常 OS reclaim 分列；内核延后回收旧 TCP 包的等待不计作
+Product 成功 verdict，也不放宽 2 秒 native drain 预算。当前同源 S233/S231
+回归通过；不扩大 readiness。完整 source/artifact/原始证据与保留失败见
+[`2026-09-12_S242_ROOT_LIFECYCLE.md`](2026-09-12_S242_ROOT_LIFECYCLE.md)。
 
 验证表包含：无监听、queue-full、normal pool 耗尽、reserve 耗尽、无 mandatory identity、
 partial lane start failure、持续 local/remote 双栈 stop、definite verdict failure、

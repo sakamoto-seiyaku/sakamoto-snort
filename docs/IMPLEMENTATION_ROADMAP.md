@@ -247,7 +247,9 @@ archived runtime 或创建孤立的数据面实现任务。
 - [NOTE] Android L4 Product Release 的完整范围同时包含 app Wi-Fi/Mobile/VPN Network Gate
   和 advanced Basic IPRULES（双栈 CIDR、五元组、端口范围、方向与接口）；这些表达能力不再
   拆成后续 CIDR/Ports 产品版本。vertical slice 仍按最小端到端场景逐步交付。
-- [NEXT] `stellar_acl`-style L4PolicyMatcher：只实现一个 priority-tiered stateless classifier，
+- [NOTE] L4PolicyMatcher 当前保留 UID 分组内按优先级有界扫描，保证静态匹配正确；结构重构
+  延后独立设计，不是 S229/FlowRuntime 前置条件。以下是此前讨论的布局方向，不是当前实现
+  或冻结的后续选择：只实现一个 priority-tiered stateless classifier，
   只按 complete Linux UID 建外层 SubjectView，内含 network Gate bit mask 与独立 IPv4/IPv6
   classifier；direction/network/interface/protocol/CIDR/port 保留为桶内 matcher 维度。在 priority
   level 内使用 mask shape、masked hash 和 bounded port-range residual check；按 `priority asc,

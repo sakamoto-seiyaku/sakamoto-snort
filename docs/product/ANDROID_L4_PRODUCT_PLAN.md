@@ -132,7 +132,9 @@ IP protocol。
 
 #### L4 classifier 基线
 
-第一阶段只建设一个 L4PolicyMatcher implementation，按 fork `stellar_acl` 的分级组织参考实现：
+第一阶段只建设一个 L4PolicyMatcher implementation。2026-09-11 校准：当前保留 UID 分组内
+按优先级有界扫描，结构重构以后独立设计，不是 S229/FlowRuntime 前置条件。下列 mask/hash
+布局仅为此前讨论的设计方向，不是已实现或冻结的未来方案；匹配和 precedence 契约不变：
 
 - 先按 complete Linux UID 查一次 L4 SubjectView；其中包含 Wi-Fi/Mobile/VPN blocked bit mask 和
   独立 IPv4/IPv6 classifier，缺少 SubjectView 时返回 `PASS_NEXT`；

@@ -181,12 +181,20 @@ CPU/context activity 比 canonical return 更差。选定的 hybrid topology 保
 只对 mismatch 使用 bounded canonical processing + Canonical Return。POC 中 32/128 descriptor depth
 只证明 credit sizing 是一等容量参数，不构成生产常量。
 
-Conditional wake 方向继续保持 HOLD。P5 早期诊断曾观察到 sleep-confirmed publish-to-terminal p99 约
+历史 P5/P6 conditional-wake 实现继续保持 HOLD。P5 早期诊断曾观察到 sleep-confirmed publish-to-terminal p99 约
 44% 改善，但 P6d final campaign-21 的 32 个 formal arms 全部有效后，idle C-A 单侧 95% 上界仍为
 `+0.091950 pp`（门槛 `<=+0.05 pp`，失败），sleep-confirmed p99 改善下界为 `-3.110%`（门槛
 `>=20%`，失败）；p50 回归上界约 `+0.054%` 通过，功耗因无外部功率仪 inconclusive。当前 wake
 patch 和 mode3 persistent wake 都不得进入 release；只有新的机制假设、新 hashed artifact 和新的
 预注册 idle/latency campaign 同时通过，才可更新本决策的调度实现。
+
+2026-09-12 用户确认新的完整通知合并协议进入实现及真机验证，见
+[ADR-0006 的事件驱动通知决定](../adr/0006-vpp-native-packet-io-adapters.md#2026-09-12-event-driven-worker-notification-decision)。
+继续固定 VPP 26.02，复用 native frame、现有 worker eventfd 与 LT，并用有序 pending
+latch 合并通知；确认通知后复查 remote/local runnable work，已有本地待执行帧不得阻塞休眠。
+该决定不恢复旧 wake 补丁，不要求可选内核 membarrier，不改变 owner/copy/credit 约束。
+第一轮必须完整覆盖竞争、故障和生命周期；更极端的优化等待真实热点，不凭经验预判热点。
+设计批准与 Pixel/性能验收分别记录，不能以本次共识将旧 P6 失败改写为通过。
 
 IP 分片采用 fork VPP handoff 的两阶段结构，但不照抄其 hash 实现：
 

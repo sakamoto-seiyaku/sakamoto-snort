@@ -42,7 +42,7 @@ throwaway live-buffer ownership evidence: single-message direct materialization,
 completion, and native return passed on host and Android, while multi-message datagrams were safely rejected
 before admission rather than materialized as independent no-copy obligations.
 
-Conditional worker wake is not accepted as part of this ADR. An early P5 diagnostic observed about 44%
+The historical P5/P6 conditional-worker-wake implementation was not accepted. An early P5 diagnostic observed about 44%
 sleeping-worker publish-to-terminal p99 improvement, but that result was not a product acceptance result.
 The final P6d campaign-21 completed all 32 formal arms validly and still failed the pre-registered gates:
 idle C-A one-sided 95% upper `+0.091950 pp` exceeded `+0.05 pp`, while sleep-confirmed p99 improvement
@@ -52,7 +52,72 @@ and persistent/per-packet wake remains diagnostic-only. A future adoption discus
 hypothesis, independently hashed artifact, and a fresh pre-registered campaign that passes both idle and
 sleep-confirmed latency gates.
 
+## 2026-09-12 Event-driven worker notification decision
+
+The S239 Product artifact exposed seconds-long cross-worker dispatch delays
+under the Android idle profile. The user accepts a complete coalesced
+notification and sleep protocol for the existing VPP 26.02 baseline, informed
+by the [Linux notification investigation](../reviews/LINUX_EVENTFD_EPOLL_COALESCING_CONTRACT.md)
+and [implementation/race analysis](../reviews/LINUX_WAKE_COALESCING_IMPLEMENTATION_RESEARCH.md).
+This authorizes implementation and fresh Pixel qualification; it does not
+restore the rejected historical patch or claim the new artifact has passed.
+
+- Keep VPP 26.02 pinned. Do not adopt the newer development-line handoff queue
+  merely for version freshness. Reconsider an upgrade only for demonstrated
+  benefit and acceptable migration/verification cost.
+- Reuse native frame batches and the per-worker nonblocking, non-semaphore
+  eventfd with level-triggered EPOLLIN. Combine kernel notification retention
+  and event aggregation with a single ordered user-space pending latch that
+  suppresses redundant writes. ET/ONESHOT is not required for coalescing.
+- Publish native work before notification. Every publication participates in
+  the ordered latch operation, including coalesced publications. The consumer
+  acknowledges before rechecking authoritative remote and local runnable work;
+  it cannot block with already-dequeued graph frames or other immediately
+  executable work remaining. Concrete atomics and queue predicates must have
+  a complete ordering argument, not a two-location acquire/release sketch.
+- Integrate all existing users of the worker wake fd, including node interrupts
+  and lifecycle barriers. Do not stack independent flags or drain callbacks
+  whose interactions can consume another wake cause without checking its work.
+  Preserve bounded dispatch, partial-publication progress, notification errors,
+  delayed publishers, shutdown and descriptor-generation lifetime.
+- Future timer deadlines and dependency-blocked work are not reasons for
+  permanent polling; they require appropriate bounded wait/progress sources.
+  Correct notification never depends on a later packet, unrelated CLI barrier,
+  or a long periodic timeout rescuing missed work.
+- Do not require optional kernel membarrier capabilities, custom kernels or
+  device-specific power instructions. Use supported baseline system interfaces
+  and correctly ordered C/ARM64 atomics; NDK build success is not device proof.
+- Retain the existing packet ownership, per-owner capacity and two-copy
+  contracts. Notification is neither packet ownership transfer nor delivery
+  acknowledgement. No additional packet queue, payload copy or transport-state
+  sharing is introduced for waking workers.
+
+The first implementation must be complete for these correctness and lifecycle
+requirements, not a temporary "works in a smoke test" version. Established
+notification coalescing belongs in this baseline. More aggressive suppression,
+spin tails or upstream queue upgrades wait for an observed Product bottleneck;
+copy or policy-engine costs are possible hotspots, not measured conclusions.
+
+Fresh Pixel tests must cover isolated sleeping-worker packets, publish/ack/wait
+races, local pending frames, both owners and IP families, load-to-idle recovery,
+timer/completion progress and stop/restart. Measure idle CPU and latency as well
+as resource conservation; pre-register gates and retain the prior P6 results
+as historical counter-evidence, never silently relabel them PASS. Any changed
+performance gate needs an explicit decision before measurements. Acceptance
+of this design does not waive product or release performance qualification.
+
 ## Consequences
+
+### 2026-09-12 Qualification task boundary
+
+The user explicitly separates formal CPU/p99 comparison into SAKAMOTO-248.
+SAKAMOTO-239 closes W2 ownership, reliable notification, fault settlement and
+lifecycle correctness using its current Product/Pixel evidence. This task
+split does not approve a new performance comparator or waive the existing
+pre-registration, historical P6 non-GO, idle/tail-latency or release gates.
+SAKAMOTO-248 retains the formal comparison and qualification requirements;
+it does not block subsequent functional implementation merely because those
+performance measurements are pending.
 
 - ADR-0008 removes the former Snort C++ daemon, host model, test suite, NDK artifact, and archive. None may be restored, translated, or used as a compatibility fallback for this Adapter. The active product implementation target remains VPP-native C only.
 - Packet bytes and live VPP buffer ownership do not cross the Rust compatibility boundary.

@@ -162,6 +162,38 @@ synchronization machinery.
 
 ## Android socket and lifecycle boundary
 
+### 2026-09-11 Worker-isolated return capacity
+
+Return-packet capacity is reserved separately for each canonical worker and
+fixed for the runtime. One worker cannot borrow or consume another worker's
+return allowance. Exhausting one worker's allowance therefore does not consume
+the capacity reserved for another worker, although both still share the single
+TUN I/O lane and its physical throughput limit.
+
+This selects isolation over a shared, work-conserving return-capacity pool:
+unused allowance on one worker may remain idle while another has exhausted its
+own. It extends the established per-worker ownership and no-spill principles
+to return admission without changing flow ownership or TUN write ownership.
+The decision does not select a new queue, per-packet map, credit implementation,
+or completion-notification mechanism. Those implementation details must retain
+the existing copy, native scheduling and exactly-once settlement contracts.
+
+The return allowance covers the lifetime of the VPP-owned return buffer,
+including native graph and completion-lane transit. It is released when that
+buffer is settled and freed, not merely when a frame is submitted, and not
+after a later kernel/application delivery event. The generating worker does
+not synchronously wait for the TUN lane to finish. Ordinary synchronous
+nonblocking TUN write borrows the bytes only for the duration of the call;
+no subsequent delivery acknowledgement extends the VPP buffer lifetime.
+
+The design session retains the two VPP/lwIP ownership copies and native
+buffer-index transfer within VPP, without adding a TUN-lane payload copy.
+Historical S125 measurements support keeping this engineering baseline rather
+than reopening zero-copy or lwIP storage redesign. Implement the complete W2
+ownership and lifecycle path first; use evidence from that Product path to
+prioritize later performance work. This does not relax bounded admission,
+per-worker isolation, nonblocking execution or exactly-once reclamation.
+
 Every Direct TCP/UDP socket is associated with the current Android underlay snapshot, bound to that underlay,
 and successfully protected before `connect()` or first send. Bind or protect failure closes the socket; there
 is no unprotected retry or fallback. The failure is an Infrastructure Fault and failed Transport Outcome, not
@@ -169,8 +201,24 @@ a Policy `DROP`.
 
 The socket's underlay epoch is fixed at creation. New flows use the latest snapshot. Sakamoto does not
 transparently migrate or reconnect a live TCP byte stream across Wi-Fi/mobile changes; invalidation ends the
-transport flow and the application may reconnect. Any future UDP mapping rebuild across underlays requires
-explicit tested semantics and cannot silently reuse the old socket.
+transport flow and the application may reconnect.
+
+### 2026-09-12 UDP replacement after underlay invalidation
+
+Invalidation closes the old owner-local UDP transport, including its PCB, protected socket and unsent
+queue. Closing gates further input and socket I/O before bounded task cleanup; a datagram arriving while
+that tuple is still closing may be rejected without blocking the VPP worker. After cleanup, a later
+policy-permitted datagram may create a fresh transport for the same canonical five-tuple, using the latest
+available underlay and a newly protected/bound socket. The application may keep its original UDP socket.
+There is no old-queue replay, proactive mapping migration, simultaneous active replacement transport for
+the same tuple, or promise that the remote application protocol continues across an address/port change.
+No invalid-tuple tombstone or application-socket-lifetime inference is required.
+
+Replacing a transport does not itself end or duplicate the VPP FlowEntry. Its policy/accounting state and
+normal expiry remain independent of the HEV/lwIP transport lifetime. Old callbacks are fenced by the
+existing owner, Adapter generation and unique transport-session identity; an old underlay binding cannot
+authorize a new session. Network invalidation is delivered to that owner, not executed on Android's
+network callback thread. A missing underlay rejects socket authorization without an unprotected fallback.
 
 Stop, crash recovery, and Runtime Profile switching preserve the existing Adapter teardown barrier: quiesce
 new admission, keep return/completion paths alive for a bounded drain, close or abort shard sessions and
