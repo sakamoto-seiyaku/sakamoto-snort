@@ -134,6 +134,8 @@ logical_expiry (void)
   assert (observe (runtime, 0, 60000000).reused);
   product_flow_entry_observation_t next = observe (runtime, 0, 60000001);
   assert (next.created && next.slot != slot && ends.count == 1);
+  assert (next.expired_before_observe && next.previous_slot == slot);
+  assert (next.previous_incarnation == incarnation && next.previous_deadline_us == 60000001);
   assert (first.entry->incarnation == incarnation && !first.entry->linked);
   assert (!product_flow_runtime_snapshot (runtime).timer_entries);
   assert (product_flow_runtime_set_deadline (runtime, slot, 226, incarnation,

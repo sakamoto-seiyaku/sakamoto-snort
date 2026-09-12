@@ -90,6 +90,11 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-flow-timeout-test tests/host/product_flow_timeout_test.c)
+target_include_directories(sakamoto-product-flow-timeout-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-flow-timeout-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-flow-timeout-test COMMAND sakamoto-product-flow-timeout-test)
+
 add_executable(sakamoto-product-diagnostic-hex-test tests/host/product_diagnostic_hex_test.c)
 target_include_directories(sakamoto-product-diagnostic-hex-test PRIVATE src/product/vpp)
 target_compile_options(sakamoto-product-diagnostic-hex-test PRIVATE -Wall -Wextra -Werror -pedantic)

@@ -2573,11 +2573,12 @@ product_packet_graph_flow_observe (
     product_flow_end_before_observe (vm);
   product_flow_entry_status_t status = product_flow_entry_observe (
     pool, &lease->assignment, &packet, stage_verdict, &observation);
+  if (status == PRODUCT_FLOW_ENTRY_STATUS_OK || status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED)
+    product_flow_expiry_observed (vm, &observation, packet.timestamp);
   const product_flow_entry_t *entry = observation.entry;
   const char *event = "observe";
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK)
     {
-      product_flow_expiry_observed (vm, &observation, packet.timestamp);
       /* Revision zero is the existing bootstrap default-pass view. It creates
        * flow facts but no cached policy decision before the first snapshot. */
       if (entry && packet.policy.revision != 0)
@@ -6361,6 +6362,10 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             vlib_cli_output (vm, "flow.udp worker=%u slot=%u incarnation=%llu phase=%u",
               worker, slot, (unsigned long long) e->incarnation,
               e->protocol_state.udp.phase);
+          if (e->deadline_us)
+            vlib_cli_output (vm, "flow.timer worker=%u slot=%u incarnation=%llu deadline_us=%llu timeout=%u heap_position=%u",
+              worker, slot, (unsigned long long) e->incarnation,
+              (unsigned long long) e->deadline_us, e->timeout_class, e->heap_position);
           if (e->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP)
             {
               const product_tcp_state_t *s = &e->protocol_state.tcp;

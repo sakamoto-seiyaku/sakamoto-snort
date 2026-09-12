@@ -231,6 +231,12 @@ SAKAMOTO-226 第一轮 A/B 接受正常负载下到期后 **约 1 秒内完成�
 nearest-deadline/interrupt wake 的选择仍由 S226 真机 A/B 决定，S227 消费其结果；本目标不重开
 全局 packet conditional-wake 决策。
 
+2026-09-13 实施补充：上述实验现已完成，S226 选择 owner-local one-shot deadline wake，
+S227 将其接入正常 UDP runtime。索引每 entry 至多一项，批量最多 100 END、间隔至少
+100 ms；空表 disarm，generation 关闭先 quiesce timer，再 drain。这个补充记录实测选择，
+不把原实验目标改写为发行保证。见 [S226](../testing/2026-09-12_S226_EXPIRY_AB.md) 与
+[S227](../testing/2026-09-13_S227_UDP_EXPIRY.md)；TCP/ICMP 完整矩阵仍在 S236 范围。
+
 ## Consequences
 
 - queue ID、INPUT/OUTPUT 拆分或 Packet Capture Adapter 拓扑不能代替 flow ownership；

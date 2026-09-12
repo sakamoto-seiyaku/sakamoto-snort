@@ -1,6 +1,6 @@
 # L4 Conntrack：工作决策与原则
 
-更新时间：2026-09-12
+更新时间：2026-09-13
 
 状态：当前决策；按 ADR-0006/0007/0008 与 per-worker single-owner 主线刷新。
 
@@ -159,8 +159,12 @@ TCP CLOSING、FIN_WAIT 的 policy 名称也不能按同名字面配对。是否�
 不能把所有被接受的 TCP 包一概视为刷新。
 
 Expiry 由 owner-local 统一调度负责，不是共享后台 cleaner、QSBR grace period 或每协议
-一套 timer。Min-heap 是候选结构，不是必须照搬外部参考的既定实现；具体选择在 S226
-结合实际容量、更新频率和真机预算确定。报文路径不承担无界 sweep 或等待其他线程。
+一套 timer。S226 实际验证了每 owner 一个预分配 indexed binary min-heap，并选择
+one-shot deadline wake；S227 已将其接入正常空 runtime 绑定和 UDP observation。
+每 entry 最多一个索引元素，refresh 原位重排；每批最多 100 END，批次间隔至少 100 ms。
+由既有 worker file polling 接收本 owner 的 timerfd 通知，空表 disarm，不增 timer thread。
+报文路径不承担无界 sweep 或等待其他线程。具体实验预算不是发行 SLO，见
+[S226 选择证据](../testing/2026-09-12_S226_EXPIRY_AB.md)。
 
 结束顺序保持：从 table/timer 解除可见性，交付 FlowEndSignal 给本 owner 的共享 consumers，
 最后在其 buffer/free 生命周期完成时回收 slot。等待 FlowEnd 回收的 entry 仍占容量；
@@ -176,8 +180,14 @@ S221 最初仅有 FREE/LINKED 与 stop 清空。S225 现已加入 UNLINKED_WITH_
 S222 的 TCP reuse 已接入这一关闭路径：旧连接双 peer 关闭后遇新 SYN，先产生 REPLACED
 END，新 incarnation 只能占另一个空闲槽；无空槽保持 capacity bypass，不能覆盖旧 entry。
 consumer 提前 free 与正常 terminal 共用最终清理；管理 flush 遇到 pending END 会拒绝。
-自动 expiry/timer 尚未接入，受控 expire 命令只验证结束路径，不证明实际时间到期。
-有限流量与 stop 清理的证据不能被升级成 idle-expiry、长时间 soak 或发行容量结论。
+S227 已接入 UDP 默认 FIRST/MULTIPLE 60 s、BIDIR 30 s 的自动到期；真实 Linux NFQUEUE
+与 Pixel Root 验证无新包到期、合法续期/缩短和正常 backlog 中的逻辑过期重查。
+逻辑到期即解除旧 entry 可见性，新 incarnation 不抢占旧 END 持有的槽；最终 END free
+才归还旧槽。TCP/ICMP 的默认到期映射仍由 S236 接入，不由 UDP 证据推导。
+受控 expire 命令只验证结束路径，不能替代这些真实期限证据；旧 generation callback
+拒绝向量也明确为受控通知，不伪称自然内核事件。详见
+[S227 实测与边界](../testing/2026-09-13_S227_UDP_EXPIRY.md)。
+有限矩阵不升级成长时间 soak、深度休眠硬实时或发行容量结论。
 
 ## 8. 验收与边界
 

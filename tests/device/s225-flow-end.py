@@ -74,6 +74,7 @@ class Campaign:
         else:
             self.target.run('mkdir -p '+shlex.quote(runtime+'/shm'))
         log = self.target.temporary+'/'+label+'-vpp.log'
+        isolation = 'product-flow-expiry { experiment }\n' if getattr(self.args, 'isolate_controlled_end', False) else ''
         if self.target.pixel:
             config = f'''plugin_path {self.target.native}
 cpu {{ main-core 0 corelist-workers 1-2 }}
@@ -83,6 +84,7 @@ api-segment {{ prefix sakamoto-s225-{generation} }}
 statseg {{ socket-name {runtime}/stats.sock }}
 plugins {{ path {self.target.native} plugin default {{ disable }} plugin libproduct_core_plugin.so {{ enable }} }}
 product-flow-runtime {{ entries 32 }}
+{isolation}\
 '''
             save(out/'startup.conf', config)
             self.target.adb('push', out/'startup.conf', runtime+'/startup.conf')
@@ -94,6 +96,7 @@ socksvr {{ socket-name {runtime}/api.sock }}
 statseg {{ socket-name {runtime}/stats.sock }}
 plugins {{ path {self.target.artifact}/lib/vpp_plugins plugin default {{ disable }} plugin product_core_plugin.so {{ enable }} }}
 product-flow-runtime {{ entries 32 }}
+{isolation}\
 '''
             save(out/'startup.conf', config)
             argv = [str(self.target.artifact/'bin/vpp'), '-c', str(out/'startup.conf')]
@@ -232,31 +235,35 @@ product-flow-runtime {{ entries 32 }}
         self.remove_rules()
         out = self.args.output/record['label']
         save(out/'hooks-after.txt', self.hooks())
-        if self.target.alive(record['pid']):
-            before = self.snapshot(record, 'drain-before-stop')
-            deadline = time.monotonic()+5
-            while time.monotonic() < deadline:
-                response = self.cli(record, 'stop', 'product root stop')
-                if 'root.stop=ok' in response: break
-                time.sleep(.02)
-            else: raise RuntimeError('Root did not stop')
-            after = self.snapshot(record, 'closed')
-            assert all(e['entries'] == '0' for e in rows(after, 'flow.pool '))
-            assert 'flow-end.buffers=0' in after
-            assert sum(int(e['allocated']) for e in rows(before, 'flow-end.owner=')) == \
-                sum(int(e['allocated']) for e in rows(after, 'flow-end.owner='))
-            assert all(e['ending'] == '0' and e['active_entries'] == '0' for e in rows(after, 'flow-end.owner='))
-            self.target.queue_witness(out, 'closed')
-            save(out/'fds-closed.txt', self.target.run('ls -l /proc/'+str(record['pid'])+'/fd').stdout)
-        save(out/'vpp.log', self.target.read(record['log']))
-        record['process_closed'] = self.target.stop_process(record['pid'])
-        assert record['process_closed']
+        try:
+            if self.target.alive(record['pid']):
+                before = self.snapshot(record, 'drain-before-stop')
+                deadline = time.monotonic()+5
+                while time.monotonic() < deadline:
+                    response = self.cli(record, 'stop', 'product root stop')
+                    if 'root.stop=ok' in response: break
+                    time.sleep(.02)
+                else: raise RuntimeError('Root did not stop')
+                after = self.snapshot(record, 'closed')
+                assert all(e['entries'] == '0' for e in rows(after, 'flow.pool '))
+                assert 'flow-end.buffers=0' in after
+                assert sum(int(e['allocated']) for e in rows(before, 'flow-end.owner=')) == \
+                    sum(int(e['allocated']) for e in rows(after, 'flow-end.owner='))
+                assert all(e['ending'] == '0' and e['active_entries'] == '0' for e in rows(after, 'flow-end.owner='))
+                self.target.queue_witness(out, 'closed')
+                save(out/'fds-closed.txt', self.target.run('ls -l /proc/'+str(record['pid'])+'/fd').stdout)
+        finally:
+            save(out/'vpp.log', self.target.read(record['log']))
+            record['process_closed'] = self.target.stop_process(record['pid'])
+            assert record['process_closed']
 
     def cleanup(self):
         self.remove_rules()
+        errors = []
         for record in self.processes:
             if self.target.alive(record['pid']):
-                self.stop(record)
+                try: self.stop(record)
+                except Exception as error: errors.append(repr(error))
         for pid, logfile in self.endpoints:
             save(self.args.output/Path(logfile).name, self.target.read(logfile))
             assert self.target.stop_process(pid)
@@ -264,6 +271,7 @@ product-flow-runtime {{ entries 32 }}
             self.target.run(f'ip -6 addr del {address}/128 dev lo')
         save(self.args.output/'hooks-after.txt', self.hooks())
         save(self.args.output/'addresses-after.txt', self.target.run('ip -6 addr show dev lo').stdout)
+        if errors: raise RuntimeError('cleanup assertions failed after process cleanup: '+repr(errors))
 
 
 def main():
@@ -273,6 +281,8 @@ def main():
     parser.add_argument('--helpers', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--vppctl', type=Path)
+    parser.add_argument('--isolate-controlled-end', action='store_true',
+                        help='Use the explicit expiry experiment startup without enabling an arm; controlled END only.')
     args = parser.parse_args()
     for name in ('build', 'helpers', 'output'):
         setattr(args, name, getattr(args, name).resolve())

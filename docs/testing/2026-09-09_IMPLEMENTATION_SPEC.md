@@ -473,6 +473,16 @@ FlowEnd allocation failure 停止 VPP 功能，走现有监督层有界清理与
 
 ## 7. S226/S227/S236：统一 expiry
 
+2026-09-13 实施补充：S226 已完成登记和两平台真实矩阵，选择 B（owner-local one-shot
+deadline wake）；所验证容器为预分配 indexed binary min-heap。S227 已接入正常 UDP
+observation，启动不需要实验 arm 或端口白名单。下文候选/待验表述保留原规格时间语境，
+当前实现与结果以 [S226](2026-09-12_S226_EXPIRY_AB.md) 和
+[S227](2026-09-13_S227_UDP_EXPIRY.md) 为证据。TCP/ICMP mapping 仍由 S236 接入同一调度器。
+每 owner 100 END/batch、至少 100 ms 间隔，due backlog 由 heap minimum 与当前时间判断，
+同时报告剩余 timer 总量；不为计算“精确到期总数”扫描全表。两个 owner 各有原始 timerfd
+及 clib 接管的 dup，空表 disarm，stop 关闭两份 FD 后 drain。期限用 owner vlib time
+微秒，内核 one-shot 相对等待使用 CLOCK_MONOTONIC，唤醒后仍在 owner 复核实际期限。
+
 ### 7.1 数据结构与 Interface
 
 [候选方案；2026-09-11 用户校准] 定时索引可采用每 owner 一个预分配 indexed binary min-heap。

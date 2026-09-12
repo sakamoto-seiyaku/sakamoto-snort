@@ -387,6 +387,7 @@ product_flow_entry_observe (
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   observation->owner_worker = pool->stats.worker_index;
   observation->slot = NO_SLOT;
+  observation->previous_slot = NO_SLOT;
   if (!assignment_is_eligible (assignment)
       || (packet->device_direction != PRODUCT_PACKET_DIRECTION_UNKNOWN
           && packet->device_direction != PRODUCT_FLOW_ENTRY_DIRECTION_INPUT
@@ -423,22 +424,27 @@ product_flow_entry_observe (
           || packet->facts->l4_status != PRODUCT_PACKET_L4_COMPLETE))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   uint32_t slot = find_entry (pool, assignment);
+  uint64_t previous_incarnation = 0;
   if (slot != NO_SLOT && pool->slots[slot].entry.deadline_us &&
       pool->slots[slot].entry.deadline_us <= packet->timestamp)
     {
       /* Logical expiry is immediate even while a bounded cleanup batch is
        * still pending. The old END retains its slot; normal capacity rules
        * apply to the new instance. Early policy DROP never reaches lookup. */
+      previous_incarnation = pool->slots[slot].entry.incarnation;
+      observation->previous_slot = slot;
+      observation->previous_deadline_us = pool->slots[slot].entry.deadline_us;
       product_flow_entry_status_t status = product_flow_runtime_close (
         pool, slot, pool->stats.generation, pool->slots[slot].entry.incarnation,
         PRODUCT_FLOW_END_EXPIRED);
       if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
         return status;
+      observation->expired_before_observe = 1;
+      observation->previous_incarnation = previous_incarnation;
       slot = NO_SLOT;
     }
   product_tcp_state_t tcp_candidate = {0};
   product_tracker_result_t tcp_result = {0};
-  uint64_t previous_incarnation = 0;
   if (protocol == 0)
     {
       product_flow_direction_t direction = PRODUCT_FLOW_DIRECTION_ORIG;

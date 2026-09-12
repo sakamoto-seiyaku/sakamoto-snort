@@ -159,6 +159,7 @@ static u32
 buffers_freed (vlib_main_t *vm, u8 pool_index, u32 *buffers, u32 count)
 {
   (void) pool_index;
+  u32 ended = 0;
   for (u32 i = 0; i < count; i++)
     {
       vlib_buffer_t *b = vlib_get_buffer (vm, buffers[i]);
@@ -187,8 +188,10 @@ buffers_freed (vlib_main_t *vm, u8 pool_index, u32 *buffers, u32 count)
       if (report_expiry)
         product_flow_expiry_released (vm, &expired_snapshot, metadata.flow_index);
       owner->released++;
+      ended++;
       clib_atomic_fetch_sub_relax (&product_flow_end_main.buffers, 1);
     }
+  if (ended) product_flow_expiry_changed (vm);
   return count;
 }
 
@@ -269,8 +272,7 @@ product_flow_end_start (u64 generation, product_flow_runtime_t **runtimes,
           != PRODUCT_FLOW_ENTRY_STATUS_OK)
         return 0;
     }
-  product_flow_expiry_bind (generation, runtimes);
-  return 1;
+  return product_flow_expiry_bind (generation, runtimes);
 }
 
 u32
@@ -284,7 +286,7 @@ product_flow_end_unbind (void)
 {
   if (PREDICT_FALSE (product_flow_end_buffer_debt ()))
     clib_panic ("cannot replace a runtime referenced by FlowEnd");
-  product_flow_expiry_bind (0, NULL);
+  (void) product_flow_expiry_bind (0, NULL);
   for (u32 i = 0; i < PRODUCT_FLOW_END_WORKERS; i++)
     product_flow_end_main.owners[i].runtime = 0;
 }

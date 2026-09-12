@@ -52,6 +52,8 @@ def main():
         ('missing_orderly_stop', 'normal/vpp.log', lambda t: re.sub(r'^s242 event=stop_native_zero [^\n]*\n', '', t, count=1, flags=re.M)),
         ('capture_verdict_became_drop', 'normal/vpp.log', lambda t: change(t, 's242 event=verdict_syscall ', 'verdict', '0')),
         ('entry_from_old_runtime', 'normal/initial.txt', lambda t: change(t, 'flow.runtime ', 'generation', '1')),
+        ('obsolete_runtime_entry_layout', 'normal/initial.txt', lambda t: change(t, 'flow.runtime ', 'entry_bytes', '216')),
+        ('obsolete_pressure_entry_layout', 'normal/vpp.log', lambda t: change(t, 's234 event=batch_begin ', 'entry_bytes', '216')),
         ('missing_endpoint_echo', 'udp-4.log', lambda t: re.sub(r'^received [^\n]*\n', '', t, count=1, flags=re.M)),
         ('request_not_after_fatal', 'fatal/trigger-and-recovery.txt', lambda t: change(t, 'traffic ', 'begin_ns', '1')),
         ('new_request_recovery_too_late', 'fatal/trigger-and-recovery.txt', lambda t: re.sub(r'\bend_ns=\d+', 'end_ns='+str(stamp+3_000_000_000), t)),

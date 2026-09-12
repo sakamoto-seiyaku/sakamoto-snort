@@ -12,6 +12,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 UDP = 40634
+# Current Product ABI includes S226's indexed-expiry entry fields. Authority
+# above/below binds every run to that source; never infer this from the log.
+FLOW_ENTRY_BYTES = 232
 
 
 def module(name, relative):
@@ -133,8 +136,8 @@ def verify(directory):
         need(pool['used'] == 4*72 and pool['data'] == 2048 and pool['size'] == 256+2048, 'actual buffer layout and Root fixed receive budget')
         need(pool_state(seeded) == pool and usable == record['usable'], 'available pool changed during true UDP creation')
         runtime = rows(initial, 'flow.runtime ')
-        need(len(runtime) == 2 and all(e['capacity'] == '1024' and e['entry_bytes'] == '216'
-             and int(e['allocated_bytes']) > 1024*216 for e in runtime), 'actual FlowRuntime allocation budget')
+        need(len(runtime) == 2 and all(e['capacity'] == '1024' and int(e['entry_bytes']) == FLOW_ENTRY_BYTES
+             and int(e['allocated_bytes']) > 1024*FLOW_ENTRY_BYTES for e in runtime), 'actual FlowRuntime allocation budget')
         need(all(e['generation'] == str(record['generation']) for e in runtime), 'new generation inherited runtime')
         rss = re.findall(r'^VmRSS:\s+(\d+) kB', read('memory.txt'), re.M)
         need(len(rss) == 1 and int(rss[0]) > 0 and 'Rss:' in read('memory.txt'), 'actual native RSS/smaps')
@@ -211,7 +214,7 @@ def verify(directory):
         need(begin['requested'] == str(count) and begin['closed'] == '0' and
              int(begin['available'])+int(begin['owner_cached']) == usable and begin['end_allocated'] == begin['end_released'] == '0', 'pre-batch actual allocation budget')
         need(all(e['owner'] == '0' and e['thread'] == '1' and int(e['generation']) == record['generation'] and
-                 int(e['total']) == pool['total'] and e['entry_bytes'] == '216' and e['buffer_bytes'] == '256' and e['data_bytes'] == '2048' for e in pressure), 'owner-local pressure identity/layout')
+                 int(e['total']) == pool['total'] and int(e['entry_bytes']) == FLOW_ENTRY_BYTES and e['buffer_bytes'] == '256' and e['data_bytes'] == '2048' for e in pressure), 'owner-local pressure identity/layout')
         ends = [e for e in events if e.get('event') == 'unlink_allocate']
         need(len(ends) == count-int(fatal) and len({e['buffer'] for e in ends}) == len(ends), 'one new native buffer per pending END')
         need(not ({e['buffer'] for e in ends} & {e['buffer'] for e in captures}), 'END borrowed a retained packet buffer')

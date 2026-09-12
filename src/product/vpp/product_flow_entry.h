@@ -138,6 +138,9 @@ typedef struct
   uint8_t created;
   uint8_t reused;
   uint8_t revision_invalidated;
+  uint8_t expired_before_observe;
+  uint32_t previous_slot;
+  uint64_t previous_deadline_us;
   uint64_t previous_incarnation; /* old instance retained by its FlowEnd */
   product_tracker_result_t tracker; /* NONE/UNKNOWN for unimplemented protocols */
 } product_flow_entry_observation_t;
