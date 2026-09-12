@@ -374,17 +374,17 @@ Implementation 包含两个 peer 的最小状态、窗口/序号边界、wscale 
 → 测试 ID。排除 dp_packet/NAT/ALG/zone/锁/管理字段，保留状态机本身。
 正常 handshake/data、同向和反向重传、window scale 缺失/0/边界、32-bit wrap、midstream、
 FIN 双向、RST、相同 tuple 新连接都要覆盖。Host vectors 辅助边界，Linux/Pixel 真包证明图接线。
-S222 在 S225 尚未实现时不声称 FlowEnd graph 已完成；slot reuse 的同步清理只允许没有
-跨 node consumer 持有旧槽的阶段，S225 接入后正常 close 必须统一进入 FlowEnd。
+S222 原始阶段的 slot reuse 使用同步清理；S225 已将它替换为统一 FlowEnd 关闭，
+新实例使用另一 free slot，不能覆盖跨 node consumer 仍持有的旧槽。
 
 [2026-09-12 S222 实现] `product_flow_tcp.c` 在上述固定 OVS pin 上适配完整协议核心，
 双 peer 状态置于现有 union。INVALID 使用候选状态回滚；INVALID-new 不造 entry 或
-隐式 DROP。双 peer closed 后的新 SYN 由 FlowRuntime 同步替换 incarnation，并重置
+隐式 DROP。双 peer closed 后的新 SYN 由 FlowRuntime 结束旧实例并新建 incarnation，重置
 ORIG、policy cache 和 accounting。BSD two-clause notice 随 Linux/Android 产物分发。
 逐分支映射、131,072 步差分、真实 Linux/Pixel Root 双栈握手/重传/midstream/非法窗口/
 FIN/RST/reuse 与 stop/restart 证据见
 [`2026-09-12_S222_TCP_TRACKER.md`](2026-09-12_S222_TCP_TRACKER.md)。
-这是观测 tracker，不是 S240 的 lwIP TCP transport，也不声称 S225/S236 已交付。
+这是观测 tracker，不是 S240 的 lwIP TCP transport；TCP 默认自动 expiry 仍由 S236 接入。
 
 ### 5.4 ICMP Echo（S224）
 
@@ -410,10 +410,17 @@ packet 的 addresses/transport/obligation overlay。保留 `generation/flow_inde
 优先复用这个现成 seam，不为 S225 重新增加 callback 框架或 core patch。
 注册在已有 callback 非空时返回 1：必须检查返回值，不能覆盖另一消费者。启动时统一注册
 一次，profile restart 只变 generation/state；不能每次 start 重复注册。
-需继续核对回调实际调用点与 ref_count/chain 路径，FlowEnd 仅允许独占单 buffer；
+S225 已核对回调实际调用点与 ref_count/chain 路径，FlowEnd 仅允许独占单 buffer；
 pool free callback 不是任意 `vlib_buffer_free` 调用都已完成最后引用释放的承诺。
 `VLIB_BUFFER_FLAG_USER` 位同时被 VNET 使用，名字带 USER 不等于可以随意占位。
 不扩大 buffer、加 opaque3 或引入全局 token table。
+
+[S225 实现事实] native free 在 callback 前重置 64-byte template（含 flags/opaque），
+所以采用 callback-safe 的 `opaque2[55]` bit 7，而非 USER flag。packet drop-reason、
+fragment flags、completion overlay 保持此位不冲突；alloc 对所有 buffers 清位。
+END 独立 56-byte overlay 另含 incarnation，free 验证当前 owner、generation、slot、
+incarnation、allocated/unlinked 与 reason；完整审计与证据见
+[S225](2026-09-12_S225_FLOW_END.md)。没有增加任何 upstream core patch。
 
 `product_flow_end.c` 管理 allocation/free callbacks 和图入口；`product_flow_entry.c` 管理
 unlink/release。common flow consumer 入口供 packet 和 FlowEnd 共用；初始没有消费者时

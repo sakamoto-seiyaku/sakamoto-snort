@@ -115,7 +115,11 @@ grep -q 'PRODUCT_OWNER_GUARD_NEXT_POLICY' "$graph_source"
 grep -q '\[PRODUCT_OWNER_GUARD_NEXT_POLICY\] = "product-packet-policy"' \
   "$graph_source"
 grep -q '\.name = "product-packet-policy"' "$graph_source"
-grep -q '\[PRODUCT_POLICY_NEXT_TERMINAL\] = "product-packet-terminal"' \
+grep -q '\[PRODUCT_POLICY_NEXT_CONSUMER\] = "product-flow-consumer"' \
+  "$graph_source"
+grep -q '\[PRODUCT_CONSUMER_NEXT_TERMINAL\] = "product-packet-terminal"' \
+  "$graph_source"
+grep -q '\[PRODUCT_CONSUMER_NEXT_VPN_EGRESS\] = "product-vpn-egress"' \
   "$graph_source"
 
 stage_definition_count="$(grep -c '^product_packet_graph_policy_stage (' "$graph_source")"

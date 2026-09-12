@@ -71,6 +71,29 @@ SAKAMOTO-235 定义对应 Linux 真机验收。分类选择已收口；具体事
   通用 side table。若固定 inline envelope 无法容纳必要的当前事实，应先去除重复状态并重新审视
   stage transition；不能用未来路由器需求为当前常驻成本辩护。
 
+### FlowEnd overlay — 2026-09-12
+
+S225 的 END 是新分配、长度为零的独占 native buffer，不借用首包、不带
+AdapterObligation。它在本 owner 的 `product-flow-consumer` 与普通包共用入口，
+但跳过 packet parser、selector、policy、handoff、Flow Stack 与所有网络输出。
+正常 terminal 或 consumer 提前 free 都只调用 native free；最终 entry 清理由已注册的
+pool free callback 执行。剩余管理清理仍须等待 graph drain。
+
+pinned VPP 的 `vlib_buffer_free_inline` 在 pool callback 前重置整个 64-byte template，
+其中包括 `flags` 和 `opaque`。因此不能把最终回收标记放在普通 USER flag 中。
+独立 typed END overlay 仍为 56 bytes，`is_flow_end` 占 `opaque2[55]` 的 bit 7；
+generation、incarnation、flow_index、owner、reason 保留到该 callback。
+普通 packet 同字节为小于 128 的 runtime-drop reason，fragment envelope 同位保留，
+completion overlay 不触及该字节；写入点与布局有编译期/运行期 guard。
+upstream `vnet_buffer_opaque2_t` 的对应字节位于 `unused[4]`，当前接线不经过占用它的
+其他消费者。所有 native allocation 都先清该位，非 END free 不触碰 FlowRuntime。
+回调在 plugin init 注册一次，冲突即初始化失败，profile restart 不重复注册。
+
+END graph 不调用 clone/copy/attach 或增加 ref_count，并在消费与 terminal 检查独占、
+零 payload、无 chain 和当前 owner/generation/incarnation。不是对任意第三方 VPP graph
+的兼容承诺；新增 graph 消费者须重新审计。完整 flag 分配、callback 时序及真流量验证见
+[S225 证据](../testing/2026-09-12_S225_FLOW_END.md)。
+
 ## Reassembled platform facts — 2026-09-05 KISS rule
 
 重组后的 Platform Packet Facts 以 **fragment offset=0 首片**为准，不是最先到达片。

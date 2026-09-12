@@ -55,7 +55,16 @@ typedef enum
   PRODUCT_FLOW_ENTRY_STATUS_INVALID_DECISION,
   PRODUCT_FLOW_ENTRY_STATUS_ALLOCATION_FAILED,
   PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION,
+  PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE,
 } product_flow_entry_status_t;
+
+typedef enum
+{
+  PRODUCT_FLOW_END_NONE = 0,
+  PRODUCT_FLOW_END_CLOSED,
+  PRODUCT_FLOW_END_EXPIRED,
+  PRODUCT_FLOW_END_REPLACED,
+} product_flow_end_reason_t;
 
 /* Identity of the immutable snapshot acquired by this packet. Revision/hash
  * zero is the bootstrap view; generation is always the running generation. */
@@ -90,7 +99,8 @@ typedef struct
   uint8_t last_device_direction;
   uint8_t last_flow_direction;
   uint8_t decision;
-  uint16_t reserved;
+  uint8_t linked;
+  uint8_t end_reason;
   uint32_t uid;
   uint32_t network_context;
   uint64_t first_seen;
@@ -122,7 +132,7 @@ typedef struct
   uint8_t created;
   uint8_t reused;
   uint8_t revision_invalidated;
-  uint64_t previous_incarnation; /* nonzero only for synchronous tuple replacement */
+  uint64_t previous_incarnation; /* old instance retained by its FlowEnd */
   product_tracker_result_t tracker; /* NONE/UNKNOWN for unimplemented protocols */
 } product_flow_entry_observation_t;
 
@@ -135,6 +145,10 @@ typedef struct
   uint32_t capacity;
   uint32_t high_watermark;
   uint32_t active_entries;
+  uint32_t linked_entries;
+  uint32_t ending_entries; /* allocated but no longer searchable */
+  uint64_t release_count;
+  uint64_t administrative_release_count;
   uint64_t allocation_count;
   uint64_t reuse_count;
   uint64_t early_drop_count;
@@ -155,6 +169,14 @@ typedef struct
 
 typedef struct product_flow_runtime product_flow_runtime_t;
 
+/* One composition callback, not a subscriber list. Called synchronously on
+ * the owner after unlink; it must deliver one FlowEnd and leave entry alive.
+ * In the product it allocates/enqueues a native empty buffer or exits fatally.
+ * It must not release/reenter the runtime before returning. */
+typedef void (*product_flow_end_callback_t) (
+  void *context, const product_flow_entry_t *entry, uint32_t slot,
+  product_flow_end_reason_t reason);
+
 /* Allocate once before admission. *runtime must be NULL; failure leaves it NULL.
  * Capacity is explicit, immutable until destruction, and has no protocol quota.
  * generation is immutable; no entry or borrowed pointer survives recreation. */
@@ -163,13 +185,30 @@ product_flow_runtime_create (product_flow_runtime_t **runtime,
                              uint16_t worker_index, uint16_t worker_count,
                              uint64_t generation, uint32_t capacity);
 
+/* Set once on an empty runtime before admission. There is no synchronous
+ * cleanup fallback when the product FlowEnd composition is absent. */
+product_flow_entry_status_t product_flow_runtime_set_end_callback (
+  product_flow_runtime_t *runtime, product_flow_end_callback_t callback,
+  void *context);
+
+/* Owner-local close hides the entry before delivering its end signal. The
+ * slot remains allocated and immutable until release_end from native free.
+ * Generation/incarnation reject stale commands and already-recycled slots. */
+product_flow_entry_status_t product_flow_runtime_close (
+  product_flow_runtime_t *runtime, uint32_t slot, uint64_t generation,
+  uint64_t incarnation, product_flow_end_reason_t reason);
+product_flow_entry_status_t product_flow_runtime_release_end (
+  product_flow_runtime_t *runtime, uint32_t slot, uint64_t generation,
+  uint64_t incarnation, product_flow_end_reason_t reason);
+
 /*
  * DROP precedes lookup/allocation. PASS_NEXT consumes the validated assignment
  * on the caller's current-worker pool; there is no owner selector or remote
  * pool accessor here. TCP/UDP L4_PORTS and ICMP_QUERY share this runtime.
  * OK with entry == NULL and INVALID CtFacts is a rejected new TCP candidate,
- * not allocation failure or an implicit packet verdict. A closed TCP instance
- * can be replaced synchronously while no cross-node FlowEnd consumer exists.
+ * not allocation failure or an implicit packet verdict. TCP tuple replacement
+ * closes the old instance through FlowEnd before looking for another free slot;
+ * the still-allocated old slot cannot satisfy the new allocation.
  */
 product_flow_entry_status_t
 product_flow_entry_observe (product_flow_runtime_t *pool,
@@ -186,8 +225,8 @@ product_flow_entry_set_decision (product_flow_runtime_t *pool,
                                  uint8_t decision, uint64_t winner_rule_id,
                                  uint32_t reason_id);
 
-/* Stop/profile boundary: clear every slot without changing pool capacity. */
-void product_flow_runtime_flush (product_flow_runtime_t *pool);
+/* Stop/profile boundary after graph drain. Refuse to invalidate a live END. */
+product_flow_entry_status_t product_flow_runtime_flush (product_flow_runtime_t *pool);
 void product_flow_runtime_destroy (product_flow_runtime_t *pool);
 /* Diagnostics require the current owner or a drained/control worker barrier. */
 product_flow_runtime_snapshot_t product_flow_runtime_snapshot (

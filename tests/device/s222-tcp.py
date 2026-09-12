@@ -129,16 +129,21 @@ class Backend:
         import select
         text=b''
         try:
-            process.stdin.write(('\n'.join(['set terminal pager off',*commands,'echo '+marker])+'\n').encode());process.stdin.flush()
+            # Match the current native CLI helper: VPP's initial Telnet
+            # negotiation may consume commands sent before the first prompt.
+            sent=False
             deadline=time.monotonic()+25
             while time.monotonic()<deadline:
+                if not sent and b'vpp# ' in text:
+                    process.stdin.write(('\n'+'\n'.join(['set terminal pager off',*commands,'echo '+marker])+'\n').encode())
+                    process.stdin.flush();sent=True
                 if not select.select([process.stdout],[],[],.2)[0]: continue
                 chunk=os.read(process.stdout.fileno(),65536)
                 if not chunk: break
                 text+=chunk
                 if b'\n'+marker.encode()+b'\n' in text.replace(b'\r',b''): break
             else: raise RuntimeError('CLI deadline')
-            assert marker.encode() in text,'CLI response truncated'
+            assert b'\n'+marker.encode()+b'\n' in text.replace(b'\r',b''),'CLI response truncated'
             process.stdin.write(b'quit\n');process.stdin.flush();rest,_=process.communicate(timeout=5);text+=rest
             return text.decode(errors='replace').replace('\r','')
         finally:

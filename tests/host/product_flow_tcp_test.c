@@ -103,6 +103,16 @@ static void permissive_and_invalid(void)
     assert(!memcmp(&s,&before,sizeof s));
   }
 }
+static uint32_t closed_slot;
+static uint64_t closed_incarnation;
+static void end_callback(void *context, const product_flow_entry_t *entry,
+                         uint32_t slot, product_flow_end_reason_t reason)
+{
+  (void) context;
+  assert(entry->in_use && !entry->linked && reason==PRODUCT_FLOW_END_REPLACED);
+  closed_slot=slot;
+  closed_incarnation=entry->incarnation;
+}
 static void runtime(void)
 {
   product_packet_facts_t p=packet(SYN|ACK,100,200,0);
@@ -111,7 +121,8 @@ static void runtime(void)
   product_worker_layout_t layout={2,123}; product_owner_assignment_t key;
   assert(product_owner_assign(&layout,&p,&key)==PRODUCT_PACKET_OK);
   product_flow_runtime_t *pool=NULL;
-  assert(product_flow_runtime_create(&pool,key.execution_owner,2,1,1)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_create(&pool,key.execution_owner,2,1,2)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_set_end_callback(pool,end_callback,NULL)==PRODUCT_FLOW_ENTRY_STATUS_OK);
   product_flow_entry_packet_t observed={.facts=&p,.policy={1,1,100},
     .uid=10001,.packet_bytes=40,.device_direction=3};
   product_flow_entry_observation_t o;
@@ -142,7 +153,13 @@ static void runtime(void)
   assert(o.entry->origin_is_endpoint_a==key.source_is_a && o.flow_direction==PRODUCT_FLOW_DIRECTION_ORIG);
   assert(o.tracker.close_old_instance && o.tracker.create_replacement);
   product_flow_runtime_snapshot_t stats=product_flow_runtime_snapshot(pool);
-  assert(stats.capacity==1 && stats.active_entries==1 && stats.allocation_count==2);
+  assert(stats.capacity==2 && stats.active_entries==2 && stats.allocation_count==2);
+  assert(stats.linked_entries==1 && stats.ending_entries==1);
+  assert(closed_slot!=o.slot && closed_incarnation==incarnation);
+  assert(product_flow_runtime_entry(pool,closed_slot)->incarnation==incarnation);
+  assert(product_flow_runtime_release_end(pool,closed_slot,1,incarnation,
+    PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_snapshot(pool).active_entries==1);
   assert(stats.protocol[0].closed==1 && stats.protocol[0].invalid_packets==2);
   observed.facts=NULL;
   assert(product_flow_entry_observe(pool,&key,&observed,0,&o)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);

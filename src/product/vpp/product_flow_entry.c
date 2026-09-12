@@ -18,6 +18,8 @@ struct product_flow_runtime {
   uint32_t bucket_count;
   uint32_t free_head;
   uint64_t next_incarnation;
+  product_flow_end_callback_t end_callback;
+  void *end_context;
 };
 
 static int
@@ -72,29 +74,115 @@ find_entry (product_flow_runtime_t *pool,
        index != NO_SLOT; index = pool->slots[index].next)
     {
       const product_flow_entry_t *entry = &pool->slots[index].entry;
-      if (entry->in_use && entry->canonical_hash == assignment->canonical_hash
+      if (entry->linked && entry->canonical_hash == assignment->canonical_hash
           && key_equal (&entry->key, &assignment->key))
         return index;
     }
   return NO_SLOT;
 }
 
-static void
-retire_slot (product_flow_runtime_t *pool, uint32_t slot, unsigned protocol)
+static unsigned
+entry_protocol (const product_flow_entry_t *entry)
 {
-  /* S222 stage: no asynchronous FlowEnd consumer retains a borrowed entry.
-   * Unlink before returning storage; S225 will replace this synchronous end
-   * with its native FlowEnd lifetime, not add a second protocol table. */
+  return entry->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY ? 2
+    : entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP ? 0 : 1;
+}
+
+static void
+release_slot (product_flow_runtime_t *pool, uint32_t slot)
+{
   flow_slot_t *old = &pool->slots[slot];
-  uint32_t *link = &pool->buckets[bucket_for(pool, old->entry.canonical_hash)];
-  while (*link != slot) link = &pool->slots[*link].next;
-  *link = old->next;
-  memset(&old->entry, 0, sizeof(old->entry));
+  unsigned protocol = entry_protocol (&old->entry);
+  /* Common cleanup for native END free and drained administrative cleanup.
+   * Current entries own only inline state: there are no attachment objects or
+   * retained packets to free. Future actual attachments belong at this seam. */
+  if (old->entry.linked)
+    --pool->stats.linked_entries;
+  else
+    --pool->stats.ending_entries;
+  memset (&old->entry, 0, sizeof (old->entry));
   old->next = pool->free_head;
   pool->free_head = slot;
   --pool->stats.active_entries;
   --pool->stats.protocol[protocol].active;
-  ++pool->stats.protocol[protocol].closed;
+  ++pool->stats.release_count;
+}
+
+product_flow_entry_status_t
+product_flow_runtime_set_end_callback (
+  product_flow_runtime_t *pool, product_flow_end_callback_t callback,
+  void *context)
+{
+  if (!pool || !callback)
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
+  if (pool->stats.active_entries || pool->end_callback)
+    return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+  pool->end_callback = callback;
+  pool->end_context = context;
+  return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
+
+static product_flow_entry_status_t
+validate_end_identity (const product_flow_runtime_t *pool, uint32_t slot,
+                       uint64_t generation, uint64_t incarnation,
+                       product_flow_end_reason_t reason)
+{
+  if (!pool || reason <= PRODUCT_FLOW_END_NONE || reason > PRODUCT_FLOW_END_REPLACED)
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
+  if (pool->stats.generation != generation)
+    return PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION;
+  if (slot >= pool->stats.capacity || !pool->slots[slot].entry.in_use
+      || pool->slots[slot].entry.incarnation != incarnation)
+    return PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND;
+  return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
+
+product_flow_entry_status_t
+product_flow_runtime_close (product_flow_runtime_t *pool, uint32_t slot,
+                            uint64_t generation, uint64_t incarnation,
+                            product_flow_end_reason_t reason)
+{
+  product_flow_entry_status_t status = validate_end_identity (
+    pool, slot, generation, incarnation, reason);
+  if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
+    return status;
+  flow_slot_t *old = &pool->slots[slot];
+  if (!old->entry.linked || !pool->end_callback)
+    return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+  uint32_t *link = &pool->buckets[bucket_for (pool, old->entry.canonical_hash)];
+  while (*link != slot)
+    {
+      if (*link == NO_SLOT)
+        return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+      link = &pool->slots[*link].next;
+    }
+  *link = old->next;
+  old->next = NO_SLOT;
+  old->entry.linked = 0;
+  old->entry.end_reason = reason;
+  --pool->stats.linked_entries;
+  ++pool->stats.ending_entries;
+  ++pool->stats.protocol[entry_protocol (&old->entry)].closed;
+  /* The unified timer, when present, is detached here before END delivery.
+   * S225 has no scheduler or timer handle to detach. */
+  pool->end_callback (pool->end_context, &old->entry, slot, reason);
+  return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
+
+product_flow_entry_status_t
+product_flow_runtime_release_end (product_flow_runtime_t *pool, uint32_t slot,
+                                  uint64_t generation, uint64_t incarnation,
+                                  product_flow_end_reason_t reason)
+{
+  product_flow_entry_status_t status = validate_end_identity (
+    pool, slot, generation, incarnation, reason);
+  if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
+    return status;
+  const product_flow_entry_t *entry = &pool->slots[slot].entry;
+  if (entry->linked || entry->end_reason != reason)
+    return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+  release_slot (pool, slot);
+  return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 
 static void
@@ -240,7 +328,11 @@ product_flow_entry_observe (
       else if (tcp_result.create_replacement)
         {
           previous_incarnation = pool->slots[slot].entry.incarnation;
-          retire_slot(pool, slot, protocol);
+          product_flow_entry_status_t close_status = product_flow_runtime_close (
+            pool, slot, pool->stats.generation, previous_incarnation,
+            PRODUCT_FLOW_END_REPLACED);
+          if (close_status != PRODUCT_FLOW_ENTRY_STATUS_OK)
+            return close_status;
           slot = NO_SLOT;
           tcp_candidate = (product_tcp_state_t){0};
           tcp_result = product_tcp_update(&tcp_candidate, packet->facts, PRODUCT_FLOW_DIRECTION_ORIG);
@@ -263,6 +355,7 @@ product_flow_entry_observe (
       entry = &pool->slots[slot].entry;
       memset (entry, 0, sizeof (*entry));
       entry->in_use = 1U;
+      entry->linked = 1U;
       entry->incarnation = ++pool->next_incarnation;
       entry->key = assignment->key;
       entry->canonical_hash = assignment->canonical_hash;
@@ -277,6 +370,7 @@ product_flow_entry_observe (
       entry->policy_revision = packet->policy.revision;
       entry->policy_snapshot_hash = packet->policy.snapshot_hash;
       pool->stats.active_entries++;
+      pool->stats.linked_entries++;
       if (pool->stats.active_entries > pool->stats.high_watermark)
         pool->stats.high_watermark = pool->stats.active_entries;
       pool->stats.allocation_count++;
@@ -340,7 +434,7 @@ product_flow_entry_set_decision (product_flow_runtime_t *pool,
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   uintptr_t address = (uintptr_t) borrowed, begin = (uintptr_t) pool->slots;
   if (address < begin || address - begin >= sizeof (*pool->slots) * pool->stats.capacity
-      || (address - begin) % sizeof (*pool->slots) != 0 || !borrowed->in_use)
+      || (address - begin) % sizeof (*pool->slots) != 0 || !borrowed->linked)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   product_flow_entry_t *entry = &pool->slots[(address - begin) / sizeof (*pool->slots)].entry;
   if (!policy_identity_valid (policy) || policy->revision == 0)
@@ -358,16 +452,22 @@ product_flow_entry_set_decision (product_flow_runtime_t *pool,
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 
-void
+product_flow_entry_status_t
 product_flow_runtime_flush (product_flow_runtime_t *pool)
 {
   if (pool == NULL)
-    return;
+    return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
+  if (pool->stats.ending_entries)
+    return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+  for (uint32_t slot = 0; slot < pool->stats.capacity; slot++)
+    if (pool->slots[slot].entry.in_use)
+      {
+        release_slot (pool, slot);
+        ++pool->stats.administrative_release_count;
+      }
   reset_storage (pool);
-  pool->stats.active_entries = 0U;
-  for (unsigned i = 0; i < 3; i++)
-    pool->stats.protocol[i].active = 0;
   pool->stats.flush_count++;
+  return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 
 void
@@ -375,6 +475,11 @@ product_flow_runtime_destroy (product_flow_runtime_t *pool)
 {
   if (!pool)
     return;
+  /* Destruction is only legal after the native graph has drained. */
+  if (pool->stats.ending_entries)
+    abort ();
+  if (pool->slots && pool->buckets)
+    (void) product_flow_runtime_flush (pool);
   free (pool->slots);
   free (pool->buckets);
   free (pool);

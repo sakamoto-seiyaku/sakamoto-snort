@@ -1456,7 +1456,7 @@ product_root_nfqueue_adapter_stop_step (vlib_main_t *vm, u64 generation)
       lane->draining = 1;
     }
   nm->available = 0;
-  product_packet_graph_quiesce_reassembly (vm);
+  product_packet_graph_quiesce (vm);
   if (nm->pending_count || product_packet_graph_buffer_debt ()
       || product_packet_graph_obligation_debt ()
       || product_packet_graph_handoff_debt ()

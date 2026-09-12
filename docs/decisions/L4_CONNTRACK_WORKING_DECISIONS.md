@@ -159,20 +159,24 @@ TCP CLOSING、FIN_WAIT 的 policy 名称也不能按同名字面配对。是否�
 不能把所有被接受的 TCP 包一概视为刷新。
 
 Expiry 由 owner-local 统一调度负责，不是共享后台 cleaner、QSBR grace period 或每协议
-一套 timer。Min-heap 是候选结构，不是必须照搬外部参考的既定实现；具体选择在 S225
+一套 timer。Min-heap 是候选结构，不是必须照搬外部参考的既定实现；具体选择在 S226
 结合实际容量、更新频率和真机预算确定。报文路径不承担无界 sweep 或等待其他线程。
 
 结束顺序保持：从 table/timer 解除可见性，交付 FlowEndSignal 给本 owner 的共享 consumers，
-最后在其 buffer/free 生命周期完成时回收 slot。未完成的 FlowEnd obligation 仍占容量。
+最后在其 buffer/free 生命周期完成时回收 slot。等待 FlowEnd 回收的 entry 仍占容量；
+END 自身不携带 AdapterObligation。
 不新增跨 owner 的引用计数/回收广播或另一套通用 token manager。
 
 真实 allocation/infrastructure fault 不能按普通 full pool 处理；由 Product supervisor
 先恢复连接可用性，再做有界重启。Stop/profile/generation 切换沿用 quiesce、drain、
 close 的既有 Adapter 生命周期，旧报文、borrowed pointer、timer/callback 不进入新 generation。
 
-S221 仅有 FREE/LINKED 与 stop 清空，不实施自动 expiry、正常 FlowEnd 或 timer。
-S222 在旧连接双 peer 关闭后遇新 SYN，会先解除旧索引，再同步回收并创建新 incarnation；
-这仅适用于当前没有跨 node FlowEnd consumer 持有旧槽的阶段，不替代 S225 的结束图。
+S221 最初仅有 FREE/LINKED 与 stop 清空。S225 现已加入 UNLINKED_WITH_END_BUFFER，
+普通 close 统一 unlink 后交付本 owner 的共享 consumer；free callback 才归还旧槽。
+S222 的 TCP reuse 已接入这一关闭路径：旧连接双 peer 关闭后遇新 SYN，先产生 REPLACED
+END，新 incarnation 只能占另一个空闲槽；无空槽保持 capacity bypass，不能覆盖旧 entry。
+consumer 提前 free 与正常 terminal 共用最终清理；管理 flush 遇到 pending END 会拒绝。
+自动 expiry/timer 尚未接入，受控 expire 命令只验证结束路径，不证明实际时间到期。
 有限流量与 stop 清理的证据不能被升级成 idle-expiry、长时间 soak 或发行容量结论。
 
 ## 8. 验收与边界
@@ -185,6 +189,6 @@ S221 的共同存储要求包括完整 typed key、双向复用、受控 hash �
 已有 flow hit、新流 processing bypass、policy identity 与清理。完整 64-bit hash
 碰撞向量和真实端点自然 bucket 碰撞是不同证据，报告必须分别说明。
 
-后续协议、expiry、FlowEnd、stateful rules、VPN transport 与联合发布验收仍按 Plane
+后续协议、expiry、stateful rules 与其他验收仍按 Plane
 对应任务推进。本文件不建立独立的开放任务状态表，也不将当前内部能力宣传为已开放的
 完整 stateful firewall 或 VPN forwarding readiness。

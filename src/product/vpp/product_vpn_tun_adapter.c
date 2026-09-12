@@ -380,7 +380,7 @@ static int tun_stop (void) {
   __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE);
   clib_memset(return_hold_until, 0, sizeof(return_hold_until));
   product_vpn_flow_stack_driver_quiesce();
-  product_packet_graph_quiesce_reassembly (tun.vm);
+  product_packet_graph_quiesce (tun.vm);
   for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
     if (product_vpn_return_credit_used(&returns[i].credit)) return 1;
   if (tun.pending || product_packet_graph_buffer_debt ()

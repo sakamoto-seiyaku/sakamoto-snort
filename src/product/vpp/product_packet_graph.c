@@ -10,6 +10,7 @@
 #include "product_packet.h"
 #include "product_packet_graph.h"
 #include "product_flow_entry.h"
+#include "product_flow_end.h"
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
 #include "product_vpn_flow_stack_driver.h"
@@ -119,6 +120,11 @@ typedef struct
 
 _Static_assert (sizeof (product_packet_completion_frame_t) <= sizeof (((vlib_buffer_t *) 0)->opaque2),
                 "completion carrier fits existing opaque2");
+_Static_assert (sizeof (product_packet_completion_frame_t) <=
+                  PRODUCT_FLOW_END_DISCRIMINANT_OFFSET,
+                "completion does not overwrite the END discriminant");
+_Static_assert (PRODUCT_PACKET_DROP_REASSEMBLY_NO_RETURN <
+                  PRODUCT_FLOW_END_DISCRIMINANT, "packet drop reasons are disjoint");
 _Static_assert (sizeof (product_compact_owner_assignment_t) == 8, "owner layout");
 _Static_assert (sizeof (product_transport_metadata_t) == 12, "transport layout");
 _Static_assert (PRODUCT_VPN_FLOW_STACK_FAILED + 1 < 8, "flow stack result bits");
@@ -139,6 +145,9 @@ _Static_assert (offsetof (product_buffer_platform_metadata_t, platform) == 24,
                 "platform offset");
 _Static_assert (offsetof (product_buffer_metadata_t, state_bits) == 54,
                 "packet lifecycle offset");
+_Static_assert (offsetof (product_buffer_metadata_t, runtime_drop_reason) ==
+                  PRODUCT_FLOW_END_DISCRIMINANT_OFFSET,
+                "ordinary packet shares the discriminant byte");
 _Static_assert (_Alignof (product_buffer_metadata_t) == 8, "metadata alignment");
 _Static_assert (_Alignof (product_buffer_platform_metadata_t) == 8, "platform overlay alignment");
 _Static_assert (offsetof (product_platform_packet_facts_t, availability) == 12,
@@ -607,6 +616,8 @@ static void
 product_metadata_store (vlib_buffer_t *buffer,
                         const product_buffer_metadata_t *metadata)
 {
+  if (PREDICT_FALSE (metadata->runtime_drop_reason & PRODUCT_FLOW_END_DISCRIMINANT))
+    clib_panic ("packet drop reason overlaps FlowEnd discriminant");
   clib_memcpy_fast (buffer->opaque2, metadata, PRODUCT_PACKET_METADATA_BYTES);
   clib_memcpy_fast (buffer->opaque, &metadata->origin_obligation_id, sizeof (u64));
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -1532,8 +1543,7 @@ VLIB_REGISTER_NODE (product_packet_owner_guard_node) = {
 
 enum
 {
-  PRODUCT_POLICY_NEXT_TERMINAL,
-  PRODUCT_POLICY_NEXT_VPN_EGRESS,
+  PRODUCT_POLICY_NEXT_CONSUMER,
   PRODUCT_POLICY_N_NEXT,
 };
 
@@ -1649,10 +1659,7 @@ VLIB_NODE_FN (product_packet_policy_node)
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_POLICY,
                          metadata.origin_obligation_id);
       vlib_buffer_enqueue_to_single_next (
-        vm, node, &buffer_index,
-        lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
-          lease.terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME
-          ? PRODUCT_POLICY_NEXT_VPN_EGRESS : PRODUCT_POLICY_NEXT_TERMINAL, 1);
+        vm, node, &buffer_index, PRODUCT_POLICY_NEXT_CONSUMER, 1);
     }
   return frame->n_vectors;
 }
@@ -1665,8 +1672,59 @@ VLIB_REGISTER_NODE (product_packet_policy_node) = {
   .flags = VLIB_NODE_FLAG_TRACE_SUPPORTED,
   .n_next_nodes = PRODUCT_POLICY_N_NEXT,
   .next_nodes = {
-    [PRODUCT_POLICY_NEXT_TERMINAL] = "product-packet-terminal",
-    [PRODUCT_POLICY_NEXT_VPN_EGRESS] = "product-vpn-egress",
+    [PRODUCT_POLICY_NEXT_CONSUMER] = "product-flow-consumer",
+  },
+};
+
+enum
+{
+  PRODUCT_CONSUMER_NEXT_TERMINAL,
+  PRODUCT_CONSUMER_NEXT_VPN_EGRESS,
+  PRODUCT_CONSUMER_N_NEXT,
+};
+
+/* Both packets after conntrack and owner-created ENDs enter here. Packet-only
+ * consumers are bypassed explicitly, not fed an empty pseudo IP packet. */
+VLIB_NODE_FN (product_flow_consumer_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  u32 *from = vlib_frame_vector_args (frame);
+  for (u32 i = 0; i < frame->n_vectors; i++)
+    {
+      u32 bi = from[i], next = PRODUCT_CONSUMER_NEXT_TERMINAL;
+      vlib_buffer_t *b = vlib_get_buffer (vm, bi);
+      if (product_buffer_is_flow_end (b))
+        {
+          if (product_flow_end_consume (vm, node, bi))
+            continue;
+        }
+      else
+        {
+          product_buffer_metadata_t metadata;
+          product_packet_lease_t lease;
+          product_metadata_load (b, &metadata);
+          product_lease_from_metadata (&metadata, b, &lease);
+          if (product_packet_graph_get_platform_facts (b, metadata.generation,
+                                                       &lease.platform) &&
+              lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+              lease.terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME)
+            next = PRODUCT_CONSUMER_NEXT_VPN_EGRESS;
+          if (metadata.state_bits & PRODUCT_META_TRACE)
+            fprintf (stderr, "s225 event=consumer_packet node=%u thread=%u owner=%u generation=%llu buffer=%u token=%llu next=%u is_flow_end=0\n",
+              node->node_index, vm->thread_index, metadata.expected_owner,
+              (unsigned long long) metadata.generation, bi,
+              (unsigned long long) metadata.origin_obligation_id, next);
+        }
+      vlib_buffer_enqueue_to_single_next (vm, node, &bi, next, 1);
+    }
+  return frame->n_vectors;
+}
+VLIB_REGISTER_NODE (product_flow_consumer_node) = {
+  .name = "product-flow-consumer", .vector_size = sizeof (u32),
+  .type = VLIB_NODE_TYPE_INTERNAL, .n_next_nodes = PRODUCT_CONSUMER_N_NEXT,
+  .next_nodes = {
+    [PRODUCT_CONSUMER_NEXT_TERMINAL] = "product-packet-terminal",
+    [PRODUCT_CONSUMER_NEXT_VPN_EGRESS] = "product-vpn-egress",
   },
 };
 
@@ -1844,6 +1902,11 @@ VLIB_NODE_FN (product_packet_terminal_node)
     {
       u32 buffer_index = from[index];
       vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      if (product_buffer_is_flow_end (buffer))
+        {
+          product_flow_end_terminal (vm, node, buffer_index);
+          continue;
+        }
       product_buffer_metadata_t metadata;
       product_packet_lease_t lease;
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -2175,6 +2238,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   if (clib_atomic_load_acq_n (&graph->enabled)
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_buffers) != 0
+      || product_flow_end_buffer_debt () != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_completion_frames) != 0)
     return 0;
@@ -2216,7 +2280,9 @@ void
 product_packet_graph_stop_external (vlib_main_t *vm)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  (void) vm;
+  product_flow_end_quiesce (vm);
+  if (PREDICT_FALSE (product_packet_graph_buffer_debt ()))
+    clib_panic ("cannot stop graph with live packet/FlowEnd buffers");
   clib_atomic_store_rel_n (&graph->accepting, 0);
   clib_atomic_store_rel_n (&graph->enabled, 0);
   product_packet_graph_policy_writer_lock (graph);
@@ -2269,7 +2335,8 @@ product_packet_graph_obligation_debt (void)
 uint64_t
 product_packet_graph_buffer_debt (void)
 {
-  return clib_atomic_load_acq_n (&product_packet_graph_main.lifecycle_buffers);
+  return clib_atomic_load_acq_n (&product_packet_graph_main.lifecycle_buffers)
+    + product_flow_end_buffer_debt ();
 }
 
 uint64_t
@@ -2306,6 +2373,9 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
 
   if (graph == 0)
     return 0;
+  if (product_flow_end_buffer_debt ())
+    return 0;
+  product_flow_end_unbind ();
   clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
   clib_memset (graph->policy_workers, 0, sizeof (graph->policy_workers));
   graph->policy_packet_lock_acquisitions = 0;
@@ -2332,6 +2402,9 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
           }
         return 0;
       }
+  if (!product_flow_end_start (graph->generation, graph->flow_pools,
+                               PRODUCT_GRAPH_WORKERS))
+    return 0;
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
   clib_atomic_store_rel_n (&graph->flow_active_snapshot_hash, 0);
   clib_atomic_store_rel_n (&graph->flow_flush_count, 0);
@@ -2349,7 +2422,9 @@ product_packet_graph_flow_pools_flush (product_packet_graph_main_t *graph)
     return;
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     {
-      product_flow_runtime_flush (graph->flow_pools[worker]);
+      if (PREDICT_FALSE (product_flow_runtime_flush (graph->flow_pools[worker]) !=
+                        PRODUCT_FLOW_ENTRY_STATUS_OK))
+        clib_panic ("FlowRuntime flush attempted before END graph drain");
 
     }
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
@@ -2493,6 +2568,8 @@ product_packet_graph_flow_observe (
   product_flow_entry_observation_t observation = { 0 };
   u8 stage_verdict = evaluation->verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP
     ? PRODUCT_FLOW_ENTRY_VERDICT_DROP : PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT;
+  if (stage_verdict == PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT)
+    product_flow_end_before_observe (vm);
   product_flow_entry_status_t status = product_flow_entry_observe (
     pool, &lease->assignment, &packet, stage_verdict, &observation);
   const product_flow_entry_t *entry = observation.entry;
@@ -4428,6 +4505,7 @@ product_packet_graph_enable_cli (vlib_main_t *vm, unformat_input_t *input,
   if (graph->generation == UINT16_MAX
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_buffers) != 0
+      || product_flow_end_buffer_debt () != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0)
     return clib_error_return (0, "graph lifecycle is not clean");
   graph->generation++;
@@ -6088,15 +6166,18 @@ product_packet_graph_disable_cli (vlib_main_t *vm, unformat_input_t *input,
   if (!clib_atomic_load_acq_n (&graph->enabled))
     return clib_error_return (0, "graph is not enabled");
   clib_atomic_store_rel_n (&graph->accepting, 0);
+  product_flow_end_quiesce (vm);
   deadline = vlib_time_now (vm) + 2.0;
   while ((clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
           || clib_atomic_load_acq_n (&graph->lifecycle_buffers) != 0
+          || product_flow_end_buffer_debt () != 0
           || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0
           || product_packet_graph_all_frame_queue_occupancy () != 0)
          && vlib_time_now (vm) < deadline)
     vlib_process_suspend (vm, 0.001);
   if (clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_buffers) != 0
+      || product_flow_end_buffer_debt () != 0
       || clib_atomic_load_acq_n (&graph->lifecycle_handoffs) != 0
       || product_packet_graph_all_frame_queue_occupancy () != 0
       || clib_atomic_load_acq_n (&graph->buffer_debt) != 0
@@ -6638,6 +6719,9 @@ product_packet_graph_init (vlib_main_t *vm)
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u32 worker;
   graph->vlib_main = vm;
+  clib_error_t *flow_end_error = product_flow_end_init (vm);
+  if (flow_end_error)
+    return flow_end_error;
   /* Storage belongs to an Adapter generation and is allocated at start. */
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     clib_atomic_store_rel_n (&graph->handoff_credits[worker],

@@ -33,6 +33,9 @@ typedef struct {
 } product_fragment_envelope_t;
 _Static_assert(sizeof(product_fragment_envelope_t) ==
   sizeof(((vlib_buffer_t *)0)->opaque2), "fragment overlay");
+_Static_assert (offsetof (product_fragment_envelope_t, flags) == 54,
+                "fragment high flags byte shares the END discriminant byte");
+_Static_assert (PRODUCT_FRAGMENT_VALID < (1 << 15), "fragment/END flags disjoint");
 typedef struct {
   u64 ingress, pins, duplicate_pins, success, error_groups;
   u64 completions, pinned_completions, resource_bypasses;
@@ -91,6 +94,9 @@ static void
 product_fragment_store (vlib_main_t *vm, u32 bi,
                          const product_fragment_envelope_t *envelope)
 {
+  if (PREDICT_FALSE (((const u8 *) envelope)[PRODUCT_FLOW_END_DISCRIMINANT_OFFSET]
+                    & PRODUCT_FLOW_END_DISCRIMINANT))
+    clib_panic ("fragment flags overlap FlowEnd discriminant");
   clib_memcpy_fast (vlib_get_buffer (vm, bi)->opaque2, envelope,
                     sizeof (*envelope));
 }
@@ -534,8 +540,10 @@ product_fragment_start (vlib_main_t *vm)
 }
 
 void
-product_packet_graph_quiesce_reassembly (vlib_main_t *vm)
+product_packet_graph_quiesce (vlib_main_t *vm)
 {
+  product_flow_end_quiesce (vm);
+  clib_atomic_store_rel_n (&product_packet_graph_main.accepting, 0);
   product_fragment_main.accepting = 0;
   if (product_fragment_main.initialized)
     for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++) {
