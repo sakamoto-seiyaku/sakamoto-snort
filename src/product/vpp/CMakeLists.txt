@@ -220,6 +220,7 @@ add_vpp_plugin(product_core
     product_flow_end.c
     product_flow_expiry.c
     product_flow_udp.c
+    product_flow_icmp.c
     product_flow_tcp.c
     product_root_nfqueue_adapter.c
     product_vpn_tun_adapter.c

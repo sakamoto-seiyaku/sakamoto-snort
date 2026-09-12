@@ -23,7 +23,7 @@ int main (void)
       assert (!product_flow_deadline (classes[i], 1, NULL));
     }
   uint64_t unchanged = 999;
-  for (unsigned i = PRODUCT_CT_TIMEOUT_TCP_FIRST_PACKET; i <= PRODUCT_CT_TIMEOUT_TCP_CLOSED; i++)
+  for (unsigned i = PRODUCT_CT_TIMEOUT_TCP_FIRST_PACKET; i <= PRODUCT_CT_TIMEOUT_ICMP_REPLY; i++)
     {
       assert (!product_flow_timeout_us ((product_ct_timeout_t) i));
       assert (!product_flow_deadline ((product_ct_timeout_t) i, 1, &unchanged));

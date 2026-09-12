@@ -121,11 +121,11 @@ typedef struct
   uint64_t deadline_us;
   uint32_t heap_position;
   uint8_t timeout_class;
-  /* The key protocol is the tag; ICMP remains an unimplemented placeholder. */
+  /* The typed key is the protocol tag; every tracker shares this one pool. */
   union {
     product_tcp_state_t tcp;
     product_udp_state_t udp;
-    struct { uint8_t initialized; } icmp;
+    product_icmp_state_t icmp;
   } protocol_state;
 } product_flow_entry_t;
 
@@ -142,7 +142,7 @@ typedef struct
   uint32_t previous_slot;
   uint64_t previous_deadline_us;
   uint64_t previous_incarnation; /* old instance retained by its FlowEnd */
-  product_tracker_result_t tracker; /* NONE/UNKNOWN for unimplemented protocols */
+  product_tracker_result_t tracker; /* NONE/UNKNOWN when no observation occurs */
 } product_flow_entry_observation_t;
 
 typedef struct

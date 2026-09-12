@@ -32,6 +32,7 @@ assignment_is_eligible (const product_owner_assignment_t *assignment)
               && (assignment->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP
                   || assignment->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP))
              || (assignment->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY
+                 && assignment->key.query_class == PRODUCT_ICMP_QUERY_ECHO
                  && ((assignment->key.ip_family == 4 && assignment->key.protocol == 1)
                      || (assignment->key.ip_family == 6 && assignment->key.protocol == 58))));
 }
@@ -417,11 +418,13 @@ product_flow_entry_observe (
   unsigned protocol = protocol_index (assignment);
   /* A tracker consumes the shared parser's facts, never a key-derived stand-in.
    * Missing/unavailable facts are an Interface error, not capacity bypass. */
-  if (protocol <= 1
-      && (!packet->facts || packet->facts->protocol != assignment->key.protocol
+  if (!packet->facts || packet->facts->protocol != assignment->key.protocol
           || packet->facts->ip_family != assignment->key.ip_family
           || packet->facts->l3_status != PRODUCT_PACKET_L3_COMPLETE
-          || packet->facts->l4_status != PRODUCT_PACKET_L4_COMPLETE))
+          || packet->facts->l4_status != (protocol == 2
+               ? PRODUCT_PACKET_L4_OTHER_TERMINAL : PRODUCT_PACKET_L4_COMPLETE)
+          || (protocol == 2 && (!packet->facts->icmp_identity_known
+              || packet->facts->icmp_identifier != assignment->key.transport.query.identifier)))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   uint32_t slot = find_entry (pool, assignment);
   uint64_t previous_incarnation = 0;
@@ -445,6 +448,8 @@ product_flow_entry_observe (
     }
   product_tcp_state_t tcp_candidate = {0};
   product_tracker_result_t tcp_result = {0};
+  product_icmp_state_t icmp_candidate = {0};
+  product_tracker_result_t icmp_result = {0};
   if (protocol == 0)
     {
       product_flow_direction_t direction = PRODUCT_FLOW_DIRECTION_ORIG;
@@ -478,6 +483,28 @@ product_flow_entry_observe (
           tcp_candidate = (product_tcp_state_t){0};
           tcp_result = product_tcp_update(&tcp_candidate, packet->facts, PRODUCT_FLOW_DIRECTION_ORIG);
           tcp_result.close_old_instance = tcp_result.create_replacement = 1;
+        }
+    }
+  if (protocol == 2)
+    {
+      product_flow_direction_t direction = PRODUCT_FLOW_DIRECTION_ORIG;
+      if (slot != NO_SLOT)
+        {
+          const product_flow_entry_t *old = &pool->slots[slot].entry;
+          icmp_candidate = old->protocol_state.icmp;
+          direction = assignment->source_is_a == old->origin_is_endpoint_a
+            ? PRODUCT_FLOW_DIRECTION_ORIG : PRODUCT_FLOW_DIRECTION_REPLY;
+        }
+      icmp_result = product_icmp_update (&icmp_candidate, packet->facts, direction);
+      if (icmp_result.update == PRODUCT_CT_UPDATE_INVALID)
+        {
+          ++pool->stats.protocol[protocol].invalid_packets;
+          if (slot == NO_SLOT)
+            {
+              observation->tracker = icmp_result;
+              observation->tracker.facts.direction = PRODUCT_FLOW_DIRECTION_UNKNOWN;
+              return PRODUCT_FLOW_ENTRY_STATUS_OK;
+            }
         }
     }
   if (slot == NO_SLOT)
@@ -562,6 +589,11 @@ product_flow_entry_observe (
   else if (protocol == 1)
     observation->tracker = product_udp_update (
       &entry->protocol_state.udp, packet->facts, observation->flow_direction);
+  else
+    {
+      entry->protocol_state.icmp = icmp_candidate;
+      observation->tracker = icmp_result;
+    }
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 

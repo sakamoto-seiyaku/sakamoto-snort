@@ -98,7 +98,7 @@ S229 → S221 → S223 → S237 → S238 → S239 → S222 → S240 → S241 →
 src/product/vpp/product_flow_tracker.h
 src/product/vpp/product_flow_tracker_udp.c       # S223
 src/product/vpp/product_flow_tracker_tcp.c       # S222
-src/product/vpp/product_flow_tracker_icmp.c      # S224
+src/product/vpp/product_flow_icmp.c              # S224 实际模块
 src/product/vpp/product_flow_end.c/.h            # S225，VPP wiring/回调
 src/product/vpp/product_flow_expiry.c/.h         # S226 最小实验，S227 生产调度
 src/product/vpp/product_vpn_flow_stack.c/.h      # S237，产品 C Interface
@@ -354,7 +354,7 @@ S223 不实现自动 expiry；以有限流量和 stop 回收验收。
 `product_flow_udp.c::product_udp_update` 消费 parser facts 与 FlowRuntime 给出的方向。
 `product_flow_entry_packet_t.facts` 仅在同步 observe 中借用，entry 不保存该指针。
 UDP 必须具有完整 parser facts；缺失 facts 是 Interface error，不是容量 bypass。
-S223 当时 TCP/ICMP 尚未接入 tracker；S222 现已接入 TCP，ICMP 的 result 仍保持 NONE/UNKNOWN。
+S223 当时 TCP/ICMP 尚未接入 tracker；S222 已接入 TCP，S224 已接入 Echo（见 §5.4）。
 状态仍在现有 tagged union 中，entry 大小未因本项增加；没有新增 table/timer。
 逐分支映射与实际 Linux/Pixel 验收见
 [`2026-09-11_S223_UDP_TRACKER.md`](2026-09-11_S223_UDP_TRACKER.md)。
@@ -392,6 +392,15 @@ FIN/RST/reuse 与 stop/restart 证据见
 用首见 packet 固定 ORIG，同时保存是否见过 request/reply 两个事实，不能将首见 reply
 错误地标成 request。连续 sequence 共用一个 entry；新 identifier 为新 entry。
 不实施 ICMP error/embedded tuple/RELATED，不把 Root ICMP PASS 扩为 VPN transport 支持。
+
+[2026-09-13 S224 实现] `product_flow_icmp.c::product_icmp_update` 使用 shared parser 的
+OTHER_TERMINAL Echo facts 和 FlowRuntime 已确定的 ORIG/REPLY。沿用 pinned FIRST/REPLY
+phase/timeout class，独立记录三字节 phase/seen_request/seen_reply；首见 reply 为 ORIG、
+FIRST、仅 seen_reply，反向 observation 才推进 REPLY。packet kind 不重选 direction。
+ICMP union 已接入，整体 entry 仍为 232 bytes；invalid-new 不分配，已有 invalid 不提交
+候选状态。Linux/Pixel 两代各 200 包、36 session 的真实 Echo/系统 ping 完整核验及
+48 项 raw semantic negatives 见 [S224](2026-09-13_S224_ICMP_TRACKER.md)。
+当前只输出 ICMP_FIRST/ICMP_REPLY refresh 意图，不建立自动 timer；S236 接入同一调度器。
 
 ## 6. S225/S234：FlowEnd 与回收
 

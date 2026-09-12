@@ -37,6 +37,8 @@ typedef enum {
   PRODUCT_CT_TIMEOUT_TCP_CLOSING,
   PRODUCT_CT_TIMEOUT_TCP_FIN_WAIT,
   PRODUCT_CT_TIMEOUT_TCP_CLOSED,
+  PRODUCT_CT_TIMEOUT_ICMP_FIRST,
+  PRODUCT_CT_TIMEOUT_ICMP_REPLY,
 } product_ct_timeout_t;
 
 typedef struct {
@@ -60,6 +62,17 @@ enum {
   PRODUCT_UDP_BIDIR,
 };
 typedef struct { uint8_t phase; } product_udp_state_t;
+
+enum {
+  PRODUCT_ICMP_EMPTY = 0,
+  PRODUCT_ICMP_FIRST,
+  PRODUCT_ICMP_REPLY,
+};
+typedef struct {
+  uint8_t phase;
+  uint8_t seen_request;
+  uint8_t seen_reply;
+} product_icmp_state_t;
 
 /* Ordering follows the pinned OVS/pf peer-state vocabulary. This is not the
  * socket transport state and is never inferred from endpoint port ordering. */
@@ -92,6 +105,12 @@ product_tracker_result_t product_udp_update (
  * requests leave its accepted state unchanged; FlowRuntime owns replacement. */
 product_tracker_result_t product_tcp_update (
   product_tcp_state_t *state, const product_packet_facts_t *packet,
+  product_flow_direction_t direction);
+
+/* Echo only. First observation defines ORIG even for a reply-first pickup;
+ * packet type is recorded separately and never substitutes for direction. */
+product_tracker_result_t product_icmp_update (
+  product_icmp_state_t *state, const product_packet_facts_t *packet,
   product_flow_direction_t direction);
 
 #endif

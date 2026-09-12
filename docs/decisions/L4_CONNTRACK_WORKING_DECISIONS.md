@@ -66,8 +66,11 @@ seam 组织 attachments，不为潜在扩展预建通用管理框架。
 
 S221 建立统一 union；S223 已在其中增加单字节 UDP FIRST/MULTIPLE/BIDIR 状态，
 S222 增加完整 TCP 双 peer 的 sequence/window/scale/phase 与 accepted flags history。
-两个纯 C tracker 输出 CtFacts/update/timeout class；ICMP 分支仍为占位，不返回假
-CtFacts。不会以 `created=true` 冒充 `ct.state=new`。TCP INVALID-new 不分配 entry，
+S224 增加 Echo FIRST/REPLY 与独立 seen_request/seen_reply，三个纯 C tracker 均输出
+CtFacts/update/timeout class。首见 Echo reply 可建立 ORIG midstream entry，但不会被记成
+request；sequence 不入 identity。这个 pickup 是已定 Product 范围，不声称与 upstream
+new-query 限定完全等价。见 [S224 实测](../testing/2026-09-13_S224_ICMP_TRACKER.md)。
+不会以 `created=true` 冒充 `ct.state=new`。TCP/ICMP INVALID-new 不分配 entry，
 已有 entry 的 INVALID 只记观察计数，不提交候选协议状态或刷新意图。
 
 ## 4. 执行顺序与 policy cache

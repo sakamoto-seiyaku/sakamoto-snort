@@ -49,6 +49,7 @@ add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
+  src/product/vpp/product_flow_icmp.c
 )
 target_include_directories(sakamoto_product_flow_entry PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
@@ -90,6 +91,11 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-flow-icmp-test tests/host/product_flow_icmp_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-flow-icmp-test PRIVATE sakamoto_product_flow_entry)
+target_compile_options(sakamoto-product-flow-icmp-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-flow-icmp-test COMMAND sakamoto-product-flow-icmp-test)
+
 add_executable(sakamoto-product-flow-timeout-test tests/host/product_flow_timeout_test.c)
 target_include_directories(sakamoto-product-flow-timeout-test PRIVATE src/product/vpp)
 target_compile_options(sakamoto-product-flow-timeout-test PRIVATE -Wall -Wextra -Werror -pedantic)

@@ -32,6 +32,11 @@ static void observe(product_flow_runtime_t *pool,const product_owner_assignment_
   /* These storage vectors deliberately inject assigned identities, including
    * full-hash collisions. Supply corresponding decoded-facts fixtures too. */
   product_packet_facts_t f=facts(a->key.ip_family,a->key.protocol,0);
+  if(a->key.kind==PRODUCT_OWNER_KEY_ICMP_QUERY) {
+    f.l4_status=PRODUCT_PACKET_L4_OTHER_TERMINAL;
+    f.icmp_identity_known=1;f.icmp_identifier=a->key.transport.query.identifier;
+    f.icmp_type=a->key.ip_family==4?8:128;
+  }
   p.facts=&f;
   assert(product_flow_entry_observe(pool,a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
 }
@@ -69,6 +74,11 @@ static void mixed_capacity(void) {
     else miss.key.transport.ports.a++;
     product_flow_entry_packet_t p=packet(3,64,3);
     product_packet_facts_t f=facts(miss.key.ip_family,miss.key.protocol,0);
+    if(protocol==2) {
+      f.l4_status=PRODUCT_PACKET_L4_OTHER_TERMINAL;
+      f.icmp_identity_known=1;f.icmp_identifier=miss.key.transport.query.identifier;
+      f.icmp_type=128;
+    }
     p.facts=&f;
     assert(product_flow_entry_observe(runtime,&miss,&p,0,&o)==PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED);
     assert(!o.entry && !o.created);

@@ -2647,6 +2647,25 @@ product_packet_graph_flow_observe (
         observation.tracker.close_old_instance, observation.tracker.create_replacement,
         (unsigned long long) entry->side_packets[0],
         (unsigned long long) entry->side_packets[1]);
+    if (lease->assignment.key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY &&
+        observation.tracker.update != PRODUCT_CT_UPDATE_NONE)
+      {
+        const product_icmp_state_t empty = {0};
+        const product_icmp_state_t *icmp = entry ? &entry->protocol_state.icmp : &empty;
+        fprintf (stderr, "s224 event=icmp_update source=%s generation=%llu token=%llu buffer=%u thread=%u worker=%u owner=%u slot=%u incarnation=%llu created=%u invalidated=%u family=%u protocol=%u type=%u code=%u identifier=%u sequence=%u phase=%u seen_request=%u seen_reply=%u ct_state=%u flow_dir=%u update=%u timeout=%u refresh=%u close=%u replacement=%u orig_packets=%llu reply_packets=%llu\n",
+          product_packet_evidence_source (lease), (unsigned long long) packet.policy.generation,
+          (unsigned long long) lease->origin_obligation_id, buffer_index, vm->thread_index,
+          worker, lease->assignment.execution_owner, observation.slot,
+          (unsigned long long) (entry ? entry->incarnation : 0), observation.created,
+          observation.revision_invalidated, lease->facts.ip_family, lease->facts.protocol,
+          lease->facts.icmp_type, lease->facts.icmp_code, lease->facts.icmp_identifier,
+          lease->facts.icmp_sequence, icmp->phase, icmp->seen_request, icmp->seen_reply,
+          observation.tracker.facts.state, observation.tracker.facts.direction,
+          observation.tracker.update, observation.tracker.timeout, observation.tracker.refresh_deadline,
+          observation.tracker.close_old_instance, observation.tracker.create_replacement,
+          (unsigned long long) (entry ? entry->side_packets[0] : 0),
+          (unsigned long long) (entry ? entry->side_packets[1] : 0));
+      }
     if (lease->facts.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP &&
         observation.tracker.update != PRODUCT_CT_UPDATE_NONE)
       {
@@ -6348,7 +6367,8 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             worker, slot, e->key.kind, e->key.ip_family, e->key.protocol,
             (unsigned long long)e->canonical_hash,
             format_hex_bytes, e->key.address_a, 16, format_hex_bytes, e->key.address_b, 16,
-            e->key.transport.ports.a, e->key.transport.ports.b, e->origin_is_endpoint_a,
+            e->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? e->key.transport.ports.a : 0,
+            e->key.kind == PRODUCT_OWNER_KEY_L4_PORTS ? e->key.transport.ports.b : 0, e->origin_is_endpoint_a,
             e->flow_origin_device_direction, e->last_device_direction, e->last_flow_direction,
             e->uid, e->network_context, (unsigned long long)e->packets, (unsigned long long)e->bytes,
             (unsigned long long)e->first_seen, (unsigned long long)e->last_seen,
@@ -6366,6 +6386,11 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             vlib_cli_output (vm, "flow.timer worker=%u slot=%u incarnation=%llu deadline_us=%llu timeout=%u heap_position=%u",
               worker, slot, (unsigned long long) e->incarnation,
               (unsigned long long) e->deadline_us, e->timeout_class, e->heap_position);
+          if (e->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY)
+            vlib_cli_output (vm, "flow.icmp worker=%u slot=%u incarnation=%llu phase=%u seen_request=%u seen_reply=%u",
+              worker, slot, (unsigned long long) e->incarnation,
+              e->protocol_state.icmp.phase, e->protocol_state.icmp.seen_request,
+              e->protocol_state.icmp.seen_reply);
           if (e->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP)
             {
               const product_tcp_state_t *s = &e->protocol_state.tcp;
