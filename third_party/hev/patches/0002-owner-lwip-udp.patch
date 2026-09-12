@@ -1,0 +1,152 @@
+--- a/third-part/lwip/src/include/lwip/ip.h
++++ b/third-part/lwip/src/include/lwip/ip.h
+@@ -136,7 +136,8 @@
+   /** Destination IP address of current_header */
+   ip_addr_t current_iphdr_dest;
+ };
+-extern struct ip_globals ip_data;
++struct ip_globals *hev_lwip_ip_data(void);
++#define ip_data (*hev_lwip_ip_data())
+ 
+ 
+ /** Get the interface that accepted the current packet.
+--- a/third-part/lwip/src/include/lwip/udp.h
++++ b/third-part/lwip/src/include/lwip/udp.h
+@@ -113,7 +113,8 @@
+   void *recv_arg;
+ };
+ /* udp_pcbs export for external reference (e.g. SNMP agent) */
+-extern struct udp_pcb *udp_pcbs;
++struct udp_pcb **hev_lwip_udp_pcbs(void);
++#define udp_pcbs (*hev_lwip_udp_pcbs())
+ 
+ /* The following functions is the application layer interface to the
+    UDP code. */
+--- a/third-part/lwip/src/include/lwip/netif.h
++++ b/third-part/lwip/src/include/lwip/netif.h
+@@ -425,11 +425,13 @@
+ #define NETIF_FOREACH(netif) if (((netif) = netif_default) != NULL)
+ #else /* LWIP_SINGLE_NETIF */
+ /** The list of network interfaces. */
+-extern struct netif *netif_list;
++struct netif **hev_lwip_netif_list(void);
++#define netif_list (*hev_lwip_netif_list())
+ #define NETIF_FOREACH(netif) for ((netif) = netif_list; (netif) != NULL; (netif) = (netif)->next)
+ #endif /* LWIP_SINGLE_NETIF */
+ /** The default network interface. */
+-extern struct netif *netif_default;
++struct netif **hev_lwip_netif_default(void);
++#define netif_default (*hev_lwip_netif_default())
+ 
+ void netif_init(void);
+ 
+--- a/third-part/lwip/src/core/ip.c
++++ b/third-part/lwip/src/core/ip.c
+@@ -61,7 +61,7 @@
+ #include "lwip/ip.h"
+ 
+ /** Global data for both IPv4 and IPv6 */
+-struct ip_globals ip_data;
++/* Current packet state is stored in the bound HEV owner context. */
+ 
+ #if LWIP_IPV4 && LWIP_IPV6
+ 
+--- a/third-part/lwip/src/core/netif.c
++++ b/third-part/lwip/src/core/netif.c
+@@ -110,12 +110,12 @@
+ #endif
+ 
+ #if !LWIP_SINGLE_NETIF
+-struct netif *netif_list;
++/* Interface lists are stored in the bound HEV owner context. */
+ #endif /* !LWIP_SINGLE_NETIF */
+-struct netif *netif_default;
+ 
+ #define netif_index_to_num(index)   ((index) - 1)
+-static u8_t netif_num;
++u8_t *hev_lwip_netif_num(void);
++#define netif_num (*hev_lwip_netif_num())
+ 
+ #if LWIP_NUM_NETIF_CLIENT_DATA > 0
+ static u8_t netif_client_id;
+--- a/third-part/lwip/src/core/ipv4/ip4.c
++++ b/third-part/lwip/src/core/ipv4/ip4.c
+@@ -104,7 +104,8 @@
+ #endif /* LWIP_DHCP */
+ 
+ /** The IP header ID of the next outgoing IP packet */
+-static u16_t ip_id;
++u16_t *hev_lwip_ip_id(void);
++#define ip_id (*hev_lwip_ip_id())
+ 
+ #if LWIP_MULTICAST_TX_OPTIONS
+ /** The default netif used for multicast */
+--- a/third-part/lwip/src/core/udp.c
++++ b/third-part/lwip/src/core/udp.c
+@@ -74,11 +74,12 @@
+ #endif
+ 
+ /* last local UDP port */
+-static u16_t udp_port = UDP_LOCAL_PORT_RANGE_START;
++u16_t *hev_lwip_udp_port(void);
++#define udp_port (*hev_lwip_udp_port())
+ 
+ /* The list of UDP PCBs */
+ /* exported in udp.h (was static) */
+-struct udp_pcb *udp_pcbs;
++/* PCB list is stored in the bound HEV owner context. */
+ 
+ /**
+  * Initialize this module.
+@@ -260,7 +261,10 @@
+     LWIP_DEBUGF(UDP_DEBUG, (", %"U16_F")\n", pcb->remote_port));
+ 
+     if (pcb->pretend_netif_idx != NETIF_NO_INDEX) {
+-      if ((pcb->remote_port == src) && ip_addr_cmp(&pcb->remote_ip, ip_current_src_addr())) {
++      if ((pcb->flags & UDP_FLAGS_CONNECTED) &&
++          (pcb->remote_port == src) && (pcb->local_port == dest) &&
++          ip_addr_cmp(&pcb->remote_ip, ip_current_src_addr()) &&
++          ip_addr_cmp(&pcb->local_ip, ip_current_dest_addr())) {
+         break;
+       }
+       prev = pcb;
+@@ -411,8 +415,6 @@
+       if (pcb->recv != NULL) {
+         /* now the recv function is responsible for freeing p */
+         if (pcb->pretend_netif_idx != NETIF_NO_INDEX) {
+-          ip_addr_set_ipaddr(&pcb->local_ip, ip_current_dest_addr());
+-          pcb->local_port = dest;
+           pcb->recv(pcb->recv_arg, pcb, p, ip_current_src_addr(), src);
+         } else {
+           pcb->recv(pcb->recv_arg, pcb, p, ip_current_src_addr(), src);
+@@ -447,8 +449,11 @@
+           ((pcb->flags & UDP_FLAGS_CONNECTED) == 0) &&
+           (pcb->recv != NULL) &&
+           IP_ADDR_PCB_VERSION_MATCH(pcb, ip_current_dest_addr())) {
+-        struct udp_pcb *npcb = udp_new_ip_type(pcb->local_ip.type);
++        struct udp_pcb *npcb = udp_new_ip_type(IP_GET_TYPE(&pcb->local_ip));
+         if (npcb != NULL) {
++          struct udp_pcb *accepted;
++          ip_addr_set_ipaddr(&npcb->local_ip, ip_current_dest_addr());
++          npcb->local_port = dest;
+           ip_addr_set_ipaddr(&npcb->remote_ip, ip_current_src_addr());
+           npcb->remote_port = src;
+           npcb->flags |= UDP_FLAGS_CONNECTED;
+@@ -456,6 +461,17 @@
+           npcb->next = udp_pcbs;
+           udp_pcbs = npcb;
+           pcb->recv(pcb->recv_arg, npcb, p, ip_current_dest_addr(), dest);
++          /* Creation callback borrows p and either installs a receiver or
++           * removes the rejected PCB. Do not dereference a rejected PCB or
++           * retry allocation forever when the owner has no session capacity. */
++          for (accepted = udp_pcbs; accepted != NULL; accepted = accepted->next) {
++            if (accepted == npcb) {
++              break;
++            }
++          }
++          if (accepted == NULL) {
++            break;
++          }
+           goto again;
+         }
+         break;

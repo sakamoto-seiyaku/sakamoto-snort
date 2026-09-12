@@ -1,0 +1,440 @@
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -9,6 +9,8 @@
+ 
+ #include <errno.h>
+ #include <string.h>
++#include <sys/socket.h>
++#include <sys/uio.h>
+ 
+ #include <lwip/tcp.h>
+ 
+@@ -27,6 +29,7 @@
+ 
+ #include "hev-socks5-session-tcp.h"
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+ task_io_yielder (HevTaskYieldType type, void *data)
+ {
+@@ -41,6 +44,8 @@
+     return res;
+ }
+ 
++#endif
++
+ static int
+ tcp_splice_f (HevSocks5SessionTCP *self)
+ {
+@@ -49,6 +54,8 @@
+     int iovc = 0;
+     int res = 1;
+ 
++    if (self->direct_tx_eof)
++        return -1;
+     if (self->queue) {
+         for (p = self->queue; p && (iovc < 64); p = p->next, iovc++) {
+             iov[iovc].iov_base = p->payload;
+@@ -61,13 +68,17 @@
+     }
+ 
+     if (iovc) {
++        struct msghdr message = { 0 };
++        message.msg_iov = iov;
++        message.msg_iovlen = iovc;
++        ssize_t s = sendmsg (HEV_SOCKS5 (self)->fd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
+-        ssize_t s = writev (HEV_SOCKS5 (self)->fd, iov, iovc);
+         if (0 >= s) {
++            if ((0 > s) && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+-            if ((0 > s) && (EAGAIN == errno))
+                 res = 0;
+             else
++                res = -2;
+-                res = -1;
+         } else {
++            self->direct_sent_bytes += (uint64_t)s;
+             hev_task_mutex_lock (self->mutex);
+             self->queue = pbuf_free_header (self->queue, s);
+             if (self->pcb)
+@@ -76,7 +87,9 @@
+             res = 1;
+         }
+     } else if (res < 0) {
++        if (shutdown (HEV_SOCKS5 (self)->fd, SHUT_WR) < 0)
++            return -2;
++        self->direct_tx_eof = 1;
+-        shutdown (HEV_SOCKS5 (self)->fd, SHUT_WR);
+     }
+ 
+     return res;
+@@ -85,49 +98,71 @@
+ static int
+ tcp_splice_b (HevSocks5SessionTCP *self)
+ {
++    /* Keep HEV's receive ring and lwIP no-copy tcp_write lifetime: ring bytes
++     * become writable only when tcp_sent releases their acknowledged range.
++     * A temporary sndbuf/pbuf shortage must not advance the ring or abort TCP. */
+     struct iovec iov[2];
++    int res = 0, iovc;
++    if (!self->pcb)
++        return -2;
++    if (!self->direct_rx_eof) {
++        iovc = hev_ring_buffer_writing (self->buffer, iov);
++        if (iovc) {
++            ssize_t s = readv (HEV_SOCKS5 (self)->fd, iov, iovc);
++            if (s < 0) {
++                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
++                    return -2;
++            } else if (s == 0) {
++                self->direct_rx_eof = 1;
++            } else {
++                self->direct_received_bytes += (uint64_t)s;
++                hev_ring_buffer_write_finish (self->buffer, s);
++                res = 1;
++            }
+-    err_t err = ERR_OK;
+-    int res = 1, iovc;
+-
+-    iovc = hev_ring_buffer_writing (self->buffer, iov);
+-    if (iovc) {
+-        ssize_t s = readv (HEV_SOCKS5 (self)->fd, iov, iovc);
+-        if (0 >= s) {
+-            if ((0 > s) && (EAGAIN == errno))
+-                res = 0;
+-            else
+-                res = -1;
+-        } else {
+-            hev_ring_buffer_write_finish (self->buffer, s);
+         }
+-    } else {
+-        res = 0;
+     }
+-
+     hev_task_mutex_lock (self->mutex);
++    iovc = hev_ring_buffer_reading (self->buffer, iov);
++    for (int i = 0; i < iovc; ++i) {
++        size_t length = iov[i].iov_len;
++        if (length > tcp_sndbuf (self->pcb))
++            length = tcp_sndbuf (self->pcb);
++        /* tcp_write is transactional for its whole byte range. Bound each
++         * commit to one negotiated MSS, so a large ring span cannot require
++         * more segment/pbuf credit than can ever become available at once. */
++        if (length > tcp_mss (self->pcb))
++            length = tcp_mss (self->pcb);
++        if (!length)
++            break;
++        err_t err = tcp_write (self->pcb, iov[i].iov_base, (u16_t)length, 0);
++        if (err != ERR_OK) {
++            self->direct_write_error = err;
++            self->direct_deferred_bytes = length;
++            if (err != ERR_MEM)
++                res = -2;
++            break;
+-    if (self->pcb) {
+-        iovc = hev_ring_buffer_reading (self->buffer, iov);
+-        if (iovc) {
+-            ssize_t s = 0;
+-            int i;
+-            for (i = 0; i < iovc; i++) {
+-                void *ptr = iov[i].iov_base;
+-                size_t len = iov[i].iov_len;
+-                err |= tcp_write (self->pcb, ptr, len, 0);
+-                s += len;
+-            }
+-            hev_ring_buffer_read_finish (self->buffer, s);
+-            err |= tcp_output (self->pcb);
+-            res = 1;
+-        } else if (res < 0) {
+-            tcp_shutdown (self->pcb, 0, 1);
+         }
++        hev_ring_buffer_read_finish (self->buffer, length);
++        res = 1;
++        if (length != iov[i].iov_len)
++            break;
+     }
++    /* Callback rejection is one output-submission result. lwIP retains its
++     * segment for retry; later VPP Policy DROP is not even reported here. */
++    if (self->pcb && res != -2)
++        (void)tcp_output (self->pcb);
++    if (self->pcb && self->direct_rx_eof && !self->buffer->rda_size &&
++        !self->direct_fin_sent) {
++        err_t err = tcp_shutdown (self->pcb, 0, 1);
++        if (err == ERR_OK)
++            self->direct_fin_sent = 1;
++        else if (err != ERR_MEM)
++            res = -2;
++    }
+     hev_task_mutex_unlock (self->mutex);
++    if (res == -2)
++        return res;
++    return self->direct_fin_sent ? -1 : res;
+-    if (!self->pcb || (err != ERR_OK))
+-        res = -1;
+-
+-    return res;
+ }
+ 
+ static err_t
+@@ -139,8 +174,8 @@
+         if (!self->queue) {
+             self->queue = p;
+         } else {
++            if ((u32_t)self->queue->tot_len + p->tot_len > TCP_WND_MAX (pcb))
++                return ERR_MEM;
+-            if (self->queue->tot_len > TCP_WND_MAX (pcb))
+-                return ERR_WOULDBLOCK;
+             pbuf_cat (self->queue, p);
+         }
+     } else {
+@@ -171,7 +206,72 @@
+     hev_socks5_session_terminate (HEV_SOCKS5_SESSION (self));
+ }
+ 
++
++static err_t
++tcp_poll_handler (void *arg, struct tcp_pcb *pcb)
++{
++    HevSocks5SessionTCP *self = arg;
++    (void)pcb;
++    hev_task_wakeup (self->data.task);
++    return ERR_OK;
++}
++
+ HevSocks5SessionTCP *
++hev_socks5_session_tcp_direct_new (struct tcp_pcb *pcb, HevTaskMutex *mutex,
++                                  unsigned int buffer_bytes)
++{
++    if (!pcb || !mutex || !buffer_bytes || buffer_bytes > 65535)
++        return NULL;
++    HevSocks5SessionTCP *self = hev_malloc0 (sizeof (*self));
++    if (!self)
++        return NULL;
++    /* The real client/session inheritance still owns the descriptor. Direct
++     * neither constructs a SOCKS address nor reads a global tunnel config. */
++    if (hev_socks5_client_construct (HEV_SOCKS5_CLIENT (self), HEV_SOCKS5_TYPE_TCP) < 0) {
++        hev_free (self);
++        return NULL;
++    }
++    self->buffer = hev_malloc0 (sizeof (*self->buffer) + buffer_bytes);
++    if (!self->buffer) {
++        hev_free (self);
++        return NULL;
++    }
++    self->buffer->max_size = buffer_bytes;
++    self->direct = 1;
++    HEV_OBJECT (self)->klass = HEV_SOCKS5_SESSION_TCP_TYPE;
++    self->pcb = pcb;
++    self->mutex = mutex;
++    self->data.self = self;
++    tcp_arg (pcb, self);
++    tcp_recv (pcb, tcp_recv_handler);
++    tcp_sent (pcb, tcp_sent_handler);
++    tcp_err (pcb, tcp_err_handler);
++    tcp_poll (pcb, tcp_poll_handler, 2);
++    return self;
++}
++
++int hev_socks5_session_tcp_direct_send (HevSocks5SessionTCP *self)
++{ return tcp_splice_f (self); }
++int hev_socks5_session_tcp_direct_receive (HevSocks5SessionTCP *self)
++{ return tcp_splice_b (self); }
++
++void hev_socks5_session_tcp_direct_detach (HevSocks5SessionTCP *self)
++{
++    /* Graceful FIN state continues in lwIP. Its ext-arg retains the owner's
++     * minimal return facts until actual PCB destruction, not this task stack. */
++    if (self->pcb) {
++        tcp_arg (self->pcb, NULL);
++        tcp_recv (self->pcb, NULL);
++        tcp_sent (self->pcb, NULL);
++        tcp_err (self->pcb, NULL);
++        tcp_poll (self->pcb, NULL, 0);
++        self->pcb = NULL;
++    }
++}
++
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
++
++HevSocks5SessionTCP *
+ hev_socks5_session_tcp_new (struct tcp_pcb *pcb, HevTaskMutex *mutex)
+ {
+     HevSocks5SessionTCP *self;
+@@ -238,6 +338,8 @@
+     }
+ }
+ 
++#endif
++
+ static HevTask *
+ hev_socks5_session_tcp_get_task (HevSocks5Session *base)
+ {
+@@ -262,6 +364,7 @@
+     return &self->data.node;
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ int
+ hev_socks5_session_tcp_construct (HevSocks5SessionTCP *self,
+                                   struct tcp_pcb *pcb, HevTaskMutex *mutex)
+@@ -293,6 +396,8 @@
+     return 0;
+ }
+ 
++#endif
++
+ void
+ hev_socks5_session_tcp_destruct (HevObject *base)
+ {
+@@ -305,6 +410,7 @@
+         tcp_recv (self->pcb, NULL);
+         tcp_sent (self->pcb, NULL);
+         tcp_err (self->pcb, NULL);
++        tcp_poll (self->pcb, NULL, 0);
+         tcp_abort (self->pcb);
+     }
+ 
+@@ -312,6 +418,8 @@
+         pbuf_free (self->queue);
+     hev_task_mutex_unlock (self->mutex);
+ 
++    if (self->direct)
++        hev_free (self->buffer);
+     HEV_SOCKS5_CLIENT_TCP_TYPE->destruct (base);
+ }
+ 
+@@ -334,7 +442,9 @@
+     HevObjectClass *okptr = HEV_OBJECT_CLASS (kptr);
+ 
+     if (!okptr->name) {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         HevSocks5Class *skptr;
++#endif
+         HevSocks5SessionIface *siptr;
+         void *ptr;
+ 
+@@ -345,11 +455,15 @@
+         okptr->destruct = hev_socks5_session_tcp_destruct;
+         okptr->iface = hev_socks5_session_tcp_iface;
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         skptr = HEV_SOCKS5_CLASS (kptr);
+         skptr->binder = hev_socks5_session_bind;
++#endif
+ 
+         siptr = &kptr->session;
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         siptr->splicer = hev_socks5_session_tcp_splice;
++#endif
+         siptr->get_task = hev_socks5_session_tcp_get_task;
+         siptr->set_task = hev_socks5_session_tcp_set_task;
+         siptr->get_node = hev_socks5_session_tcp_get_node;
+--- a/src/hev-socks5-session-tcp.h
++++ b/src/hev-socks5-session-tcp.h
+@@ -11,6 +11,9 @@
+ #define __HEV_SOCKS5_SESSION_TCP_H__
+ 
+ #include <hev-ring-buffer.h>
++#include <hev-task-mutex.h>
++#include <lwip/tcp.h>
++#include <stdint.h>
+ #include <hev-socks5-client-tcp.h>
+ 
+ #include "hev-socks5-session.h"
+@@ -33,6 +36,10 @@
+     HevTaskMutex *mutex;
+     HevRingBuffer *buffer;
+     int pcb_eof;
++    int direct, direct_tx_eof, direct_rx_eof, direct_fin_sent;
++    int direct_write_error;
++    unsigned int direct_deferred_bytes;
++    uint64_t direct_sent_bytes, direct_received_bytes;
+ };
+ 
+ struct _HevSocks5SessionTCPClass
+@@ -50,4 +57,14 @@
+ HevSocks5SessionTCP *hev_socks5_session_tcp_new (struct tcp_pcb *pcb,
+                                                  HevTaskMutex *mutex);
+ 
++/* Dependency-private, owner-driven Direct operations on the upstream session.
++ * Splice results: 1 work, 0 would-block, -1 half-close, -2 fatal socket/PCB error.
++ * Descriptor creation/broker/connect belong to the owner; the inherited
++ * destructor still closes that descriptor and any attached PCB/queue. */
++HevSocks5SessionTCP *hev_socks5_session_tcp_direct_new (
++    struct tcp_pcb *pcb, HevTaskMutex *mutex, unsigned int buffer_bytes);
++int hev_socks5_session_tcp_direct_send (HevSocks5SessionTCP *self);
++int hev_socks5_session_tcp_direct_receive (HevSocks5SessionTCP *self);
++void hev_socks5_session_tcp_direct_detach (HevSocks5SessionTCP *self);
++
+ #endif /* __HEV_SOCKS5_SESSION_TCP_H__ */
+--- a/src/core/src/hev-socks5-tcp.c
++++ b/src/core/src/hev-socks5-tcp.c
+@@ -7,6 +7,7 @@
+  ============================================================================
+  */
+ 
++#include <stddef.h>
+ #include "hev-socks5.h"
+ #include "hev-socks5-misc-priv.h"
+ #include "hev-socks5-logger-priv.h"
+@@ -15,6 +16,7 @@
+ 
+ #define task_io_yielder hev_socks5_task_io_yielder
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+ hev_socks5_tcp_splicer (HevSocks5TCP *self, int fd)
+ {
+@@ -46,11 +48,17 @@
+     return iface->splicer (self, fd);
+ }
+ 
++#endif
++
+ void *
+ hev_socks5_tcp_iface (void)
+ {
+     static HevSocks5TCPIface type = {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         .splicer = hev_socks5_tcp_splicer,
++#else
++        .splicer = NULL,
++#endif
+     };
+ 
+     return &type;
+--- a/src/core/src/hev-socks5-client-tcp.c
++++ b/src/core/src/hev-socks5-client-tcp.c
+@@ -16,6 +16,7 @@
+ 
+ #include "hev-socks5-client-tcp.h"
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ HevSocks5ClientTCP *
+ hev_socks5_client_tcp_new_name (const char *name, int port)
+ {
+@@ -85,6 +86,8 @@
+     return self;
+ }
+ 
++#endif
++
+ static HevSocks5Addr *
+ hev_socks5_client_tcp_get_upstream_addr (HevSocks5Client *base)
+ {
+@@ -104,6 +107,7 @@
+     return 0;
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ int
+ hev_socks5_client_tcp_construct (HevSocks5ClientTCP *self,
+                                  const HevSocks5Addr *addr)
+@@ -135,6 +139,8 @@
+     return 0;
+ }
+ 
++#endif
++
+ static void
+ hev_socks5_client_tcp_destruct (HevObject *base)
+ {

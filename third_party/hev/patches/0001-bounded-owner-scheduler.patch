@@ -1,0 +1,132 @@
+diff --git a/third-part/hev-task-system/src/kern/core/hev-task-system-private.h b/third-part/hev-task-system/src/kern/core/hev-task-system-private.h
+index 51e4fcd..83decc4 100644
+--- a/third-part/hev-task-system/src/kern/core/hev-task-system-private.h
++++ b/third-part/hev-task-system/src/kern/core/hev-task-system-private.h
+@@ -54,6 +54,13 @@ struct _HevTaskSystemContext
+     jmp_buf kernel_context;
+ 
+     HevList all_tasks;
++
++    /* Product external driver: one bounded nonblocking scheduling turn. */
++    unsigned int external_active;
++    unsigned int external_budget;
++    unsigned int external_quanta;
++    unsigned int external_events_more;
++    uint64_t external_deadline_ns;
+ };
+ 
+ void hev_task_system_schedule (HevTaskYieldType type);
+@@ -65,5 +72,7 @@ void hev_task_system_wakeup_task_with_context (HevTaskSystemContext *ctx,
+                                                HevTask *task);
+ 
+ HevTaskSystemContext *hev_task_system_get_context (void);
++int hev_task_system_set_context (HevTaskSystemContext *context);
++unsigned int hev_task_system_step (unsigned int budget, unsigned int max_us);
+ 
+ #endif /* __HEV_TASK_SYSTEM_PRIVATE_H__ */
+diff --git a/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c b/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c
+index 18ea1eb..6ac2b3b 100644
+--- a/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c
++++ b/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c
+@@ -165,7 +165,10 @@ hev_task_system_io_poll (HevTaskSystemContext *ctx, int timeout)
+     if (timeout < 0)
+         timeout = hev_task_timer_get_timeout (ctx->timer);
+ 
+-    count = hev_task_io_reactor_wait (ctx->reactor, events, 1024, timeout);
++    int limit = ctx->external_active ? 32 : 1024;
++    count = hev_task_io_reactor_wait (ctx->reactor, events, limit, timeout);
++    if (ctx->external_active)
++        ctx->external_events_more = count == limit;
+     for (i = 0; i < count; i++) {
+         HevTaskSchedEntity *sched_entity;
+ 
+@@ -235,6 +238,18 @@ hev_task_system_schedule (HevTaskYieldType type)
+         return;
+     }
+ 
++    if (ctx->external_active) {
++        struct timespec now;
++        ctx->current_task = NULL;
++        hev_task_system_io_poll (ctx, 0);
++        clock_gettime (CLOCK_MONOTONIC, &now);
++        uint64_t ns = (uint64_t)now.tv_sec * 1000000000ULL + now.tv_nsec;
++        if (!ctx->running_task_count || ctx->external_quanta >= ctx->external_budget
++            || ns >= ctx->external_deadline_ns)
++            return;
++        ctx->external_quanta++;
++    }
++
+     /* pick a task */
+     hev_task_system_pick_current_task (ctx);
+ 
+@@ -245,6 +260,25 @@ hev_task_system_schedule (HevTaskYieldType type)
+     _longjmp (ctx->current_task->context, 1);
+ }
+ 
++unsigned int
++hev_task_system_step (unsigned int budget, unsigned int max_us)
++{
++    HevTaskSystemContext *ctx = hev_task_system_get_context ();
++    struct timespec now;
++    if (!ctx || ctx->current_task || ctx->external_active || !budget || !max_us)
++        return 0;
++    clock_gettime (CLOCK_MONOTONIC, &now);
++    ctx->external_active = 1;
++    ctx->external_budget = budget;
++    ctx->external_quanta = 0;
++    ctx->external_events_more = 0;
++    ctx->external_deadline_ns = (uint64_t)now.tv_sec * 1000000000ULL
++        + now.tv_nsec + (uint64_t)max_us * 1000;
++    hev_task_system_schedule (HEV_TASK_RUN_SCHEDULER);
++    ctx->external_active = 0;
++    return ctx->external_quanta;
++}
++
+ void
+ hev_task_system_wakeup_task (HevTask *task)
+ {
+diff --git a/third-part/hev-task-system/src/kern/core/hev-task-system.c b/third-part/hev-task-system/src/kern/core/hev-task-system.c
+index f5806db..18582c3 100644
+--- a/third-part/hev-task-system/src/kern/core/hev-task-system.c
++++ b/third-part/hev-task-system/src/kern/core/hev-task-system.c
+@@ -31,10 +31,11 @@ pthread_key_creator (void)
+ HevTaskSystemContext *
+ hev_task_system_get_context (void)
+ {
++    pthread_once (&key_once, pthread_key_creator);
+     return pthread_getspecific (key);
+ }
+ 
+-static inline int
++int
+ hev_task_system_set_context (HevTaskSystemContext *context)
+ {
+     return pthread_setspecific (key, context);
+@@ -62,7 +63,7 @@ hev_task_system_init (void)
+     if (!context)
+         goto exit;
+ 
+-    if (hev_task_system_set_context (context) < 0)
++    if (hev_task_system_set_context (context) != 0)
+         goto free_context;
+ 
+     context->reactor = hev_task_io_reactor_new ();
+diff --git a/third-part/hev-task-system/src/kern/io/hev-task-io-reactor-epoll.c b/third-part/hev-task-system/src/kern/io/hev-task-io-reactor-epoll.c
+index e4e7ad2..2bd4db5 100644
+--- a/third-part/hev-task-system/src/kern/io/hev-task-io-reactor-epoll.c
++++ b/third-part/hev-task-system/src/kern/io/hev-task-io-reactor-epoll.c
+@@ -34,12 +34,14 @@ hev_task_io_reactor_new (void)
+ 
+     flags = fcntl (self->fd, F_GETFD);
+     if (flags < 0) {
++        close (self->fd);
+         hev_free (self);
+         return NULL;
+     }
+ 
+     flags |= FD_CLOEXEC;
+     if (fcntl (self->fd, F_SETFD, flags) < 0) {
++        close (self->fd);
+         hev_free (self);
+         return NULL;
+     }

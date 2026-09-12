@@ -1,0 +1,9 @@
+--- a/third-part/lwip/src/ports/unix/include/cc.h
++++ b/third-part/lwip/src/ports/unix/include/cc.h
+@@ -70,3 +70,4 @@
+-#if defined(LWIP_UNIX_ANDROID) && defined(FD_SET) && !defined(FD_SET_DEFINED)
+-typedef __kernel_fd_set fd_set;
++/* The supported Product NDK uses bionic's public fd_set definition. */
++#if defined(LWIP_UNIX_ANDROID)
++#include <sys/select.h>
+ #endif

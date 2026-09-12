@@ -1,0 +1,69 @@
+--- a/third-part/lwip/src/core/ipv6/nd6.c
++++ b/third-part/lwip/src/core/ipv6/nd6.c
+@@ -88,32 +88,10 @@
+-/* Router tables. */
+-struct nd6_neighbor_cache_entry neighbor_cache[LWIP_ND6_NUM_NEIGHBORS];
+-struct nd6_destination_cache_entry destination_cache[LWIP_ND6_NUM_DESTINATIONS];
+-struct nd6_prefix_list_entry prefix_list[LWIP_ND6_NUM_PREFIXES];
+-struct nd6_router_list_entry default_router_list[LWIP_ND6_NUM_ROUTERS];
+-
+-/* Default values, can be updated by a RA message. */
+-u32_t reachable_time = LWIP_ND6_REACHABLE_TIME;
+-u32_t retrans_timer = LWIP_ND6_RETRANS_TIMER; /* @todo implement this value in timer */
+-
+-#if LWIP_ND6_QUEUEING
+-static u8_t nd6_queue_size = 0;
+-#endif
+-
+-/* Index for cache entries. */
+-static netif_addr_idx_t nd6_cached_destination_index;
+-
+-/* Multicast address holder. */
+-static ip6_addr_t multicast_address;
+-
+-static u8_t nd6_tmr_rs_reduction;
+-
+-/* Static buffer to parse RA packet options */
+-union ra_options {
+-  struct lladdr_option  lladdr;
+-  struct mtu_option     mtu;
+-  struct prefix_option  prefix;
+-#if LWIP_ND6_RDNSS_MAX_DNS_SERVERS
+-  struct rdnss_option   rdnss;
+-#endif
+-};
+-static union ra_options nd6_ra_buffer;
++#include "hev-lwip-context.h"
++#define neighbor_cache (hev_lwip_context_current()->neighbors)
++#define destination_cache (hev_lwip_context_current()->destinations)
++#define prefix_list (hev_lwip_context_current()->prefixes)
++#define default_router_list (hev_lwip_context_current()->routers)
++#define nd6_queue_size (hev_lwip_context_current()->nd6_queued)
++#define nd6_cached_destination_index (hev_lwip_context_current()->nd6_cached_destination)
++#define multicast_address (hev_lwip_context_current()->nd6_multicast)
++#define nd6_tmr_rs_reduction (hev_lwip_context_current()->nd6_rs_reduction)
++#define nd6_ra_buffer (hev_lwip_context_current()->nd6_ra)
+@@ -432,1 +410,1 @@
+-      neighbor_cache[i].counter.reachable_time = reachable_time;
++      neighbor_cache[i].counter.reachable_time = hev_lwip_context_current()->nd6_reachable;
+@@ -632,1 +610,1 @@
+-      retrans_timer = lwip_htonl(ra_hdr->retrans_timer);
++      hev_lwip_context_current()->nd6_retransmit = lwip_htonl(ra_hdr->retrans_timer);
+@@ -635,1 +613,1 @@
+-      reachable_time = lwip_htonl(ra_hdr->reachable_time);
++      hev_lwip_context_current()->nd6_reachable = lwip_htonl(ra_hdr->reachable_time);
+@@ -698,1 +676,1 @@
+-          default_router_list[i].neighbor_entry->counter.reachable_time = reachable_time;
++          default_router_list[i].neighbor_entry->counter.reachable_time = hev_lwip_context_current()->nd6_reachable;
+@@ -1701,1 +1679,1 @@
+-  static s8_t last_router;
++  #define last_router (hev_lwip_context_current()->nd6_last_router)
+@@ -2392,1 +2370,1 @@
+-  neighbor_cache[i].counter.reachable_time = reachable_time;
++  neighbor_cache[i].counter.reachable_time = hev_lwip_context_current()->nd6_reachable;
+--- a/third-part/lwip/src/core/ipv6/ip6_addr.c
++++ b/third-part/lwip/src/core/ipv6/ip6_addr.c
+@@ -220,1 +220,2 @@
+-  static char str[40];
++  extern char *hev_lwip_address_text(void);
++  char *str = hev_lwip_address_text();

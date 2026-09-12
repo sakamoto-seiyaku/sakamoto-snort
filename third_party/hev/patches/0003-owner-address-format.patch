@@ -1,0 +1,11 @@
+--- a/third-part/lwip/src/core/ipv4/ip4_addr.c
++++ b/third-part/lwip/src/core/ipv4/ip4_addr.c
+@@ -268,7 +268,8 @@
+ char *
+ ip4addr_ntoa(const ip4_addr_t *addr)
+ {
+-  static char str[IP4ADDR_STRLEN_MAX];
++  extern char *hev_lwip_address_text(void);
++  char *str = hev_lwip_address_text();
+   return ip4addr_ntoa_r(addr, str, IP4ADDR_STRLEN_MAX);
+ }

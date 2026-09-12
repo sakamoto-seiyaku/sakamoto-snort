@@ -1,0 +1,11 @@
+--- a/third-part/lwip/src/core/ipv6/ip6.c
++++ b/third-part/lwip/src/core/ipv6/ip6.c
+@@ -474,1 +474,7 @@
+-    if (netif_is_flag_set(netif, NETIF_FLAG_PRETEND) && ((IP6H_NEXTH(ip6hdr) == IP6_NEXTH_TCP) || (IP6H_NEXTH(ip6hdr) == IP6_NEXTH_UDP))) {
++    /* Admit extension headers to the existing native IPv6 parser. It still
++     * validates the chain and dispatches the terminal transport below. */
++    if (netif_is_flag_set(netif, NETIF_FLAG_PRETEND) &&
++        (IP6H_NEXTH(ip6hdr) == IP6_NEXTH_TCP || IP6H_NEXTH(ip6hdr) == IP6_NEXTH_UDP ||
++         IP6H_NEXTH(ip6hdr) == IP6_NEXTH_HOPBYHOP ||
++         IP6H_NEXTH(ip6hdr) == IP6_NEXTH_ROUTING ||
++         IP6H_NEXTH(ip6hdr) == IP6_NEXTH_DESTOPTS)) {

@@ -1,0 +1,303 @@
+--- a/src/hev-socks5-session-udp.h
++++ b/src/hev-socks5-session-udp.h
+@@ -55,8 +55,9 @@
+                                                  HevTaskMutex *mutex);
+ 
+ /* Dependency-private Direct operations: owner task only. The descriptor is
+- * installed in base.fd only after successful broker completion. Once installed
+- * it is closed by the inherited destructor, including error/stop paths. */
++ * installed in base.fd at creation, before the broker request, and is closed
++ * by the inherited destructor, including error/stop paths. The owner calls
++ * send/receive only after successful broker completion and Direct connect. */
+ HevSocks5SessionUDP *hev_socks5_session_udp_direct_new (
+     struct udp_pcb *pcb, HevTaskMutex *mutex, unsigned int frame_limit);
+ /* 1 = one datagram consumed, 0 = would block/no work, -1 = socket failure.
+--- a/src/hev-socks5-session-udp.c
++++ b/src/hev-socks5-session-udp.c
+@@ -40,6 +40,7 @@
+     struct pbuf *data;
+ };
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+ task_io_yielder (HevTaskYieldType type, void *data)
+ {
+@@ -168,6 +169,8 @@
+     return 1;
+ }
+ 
++#endif
++
+ static void
+ udp_recv_handler (void *arg, struct udp_pcb *pcb, struct pbuf *p,
+                   const ip_addr_t *addr, u16_t port)
+@@ -180,8 +183,12 @@
+         return;
+     }
+ 
+-    if (self->frames >= (self->direct_frame_limit ?
+-                        (int) self->direct_frame_limit : UDP_POOL_SIZE)) {
++    unsigned int frame_limit = self->direct_frame_limit;
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
++    if (!frame_limit)
++        frame_limit = UDP_POOL_SIZE;
++#endif
++    if ((unsigned int) self->frames >= frame_limit) {
+         pbuf_free (p);
+         return;
+     }
+@@ -200,7 +207,9 @@
+         memcpy (frame->addr.ipv4.addr, &ip_2_ip4 (&pcb->local_ip)->addr, 4);
+         frame->addr.ipv4.port = lwip_htons (pcb->local_port);
+     } else {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         hev_socks5_addr_from_lwip (&frame->addr, &pcb->local_ip, pcb->local_port);
++#endif
+     }
+ 
+     if (frame->addr.atype == HEV_SOCKS5_ADDR_TYPE_NAME) {
+@@ -316,6 +325,7 @@
+     return 1;
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ HevSocks5SessionUDP *
+ hev_socks5_session_udp_new (struct udp_pcb *pcb, HevTaskMutex *mutex)
+ {
+@@ -408,6 +418,8 @@
+     }
+ }
+ 
++#endif
++
+ static HevTask *
+ hev_socks5_session_udp_get_task (HevSocks5Session *base)
+ {
+@@ -432,6 +444,7 @@
+     return &self->data.node;
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ int
+ hev_socks5_session_udp_construct (HevSocks5SessionUDP *self,
+                                   struct udp_pcb *pcb, HevTaskMutex *mutex)
+@@ -462,6 +475,8 @@
+     return 0;
+ }
+ 
++#endif
++
+ void
+ hev_socks5_session_udp_destruct (HevObject *base)
+ {
+@@ -509,8 +524,10 @@
+     HevObjectClass *okptr = HEV_OBJECT_CLASS (kptr);
+ 
+     if (!okptr->name) {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         HevSocks5Class *skptr;
+         HevSocks5ClientClass *ckptr;
++#endif
+         HevSocks5SessionIface *siptr;
+         void *ptr;
+ 
+@@ -521,14 +538,18 @@
+         okptr->destruct = hev_socks5_session_udp_destruct;
+         okptr->iface = hev_socks5_session_udp_iface;
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         skptr = HEV_SOCKS5_CLASS (kptr);
+         skptr->binder = hev_socks5_session_bind;
+ 
+         ckptr = HEV_SOCKS5_CLIENT_CLASS (kptr);
+         ckptr->set_upstream_addr = hev_socks5_session_udp_set_upstream_addr;
++#endif
+ 
+         siptr = &kptr->session;
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         siptr->splicer = hev_socks5_session_udp_splice;
++#endif
+         siptr->get_task = hev_socks5_session_udp_get_task;
+         siptr->set_task = hev_socks5_session_udp_set_task;
+         siptr->get_node = hev_socks5_session_udp_get_node;
+--- a/src/hev-socks5-session.c
++++ b/src/hev-socks5-session.c
+@@ -16,6 +16,7 @@
+ 
+ #include "hev-socks5-session.h"
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ void
+ hev_socks5_session_run (HevSocks5Session *self)
+ {
+@@ -50,6 +51,8 @@
+     iface->splicer (self);
+ }
+ 
++#endif
++
+ void
+ hev_socks5_session_terminate (HevSocks5Session *self)
+ {
+@@ -80,6 +83,7 @@
+     return iface->get_node (self);
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ int
+ hev_socks5_session_bind (HevSocks5 *self, int fd, const struct sockaddr *dest)
+ {
+@@ -104,6 +108,8 @@
+     return 0;
+ }
+ 
++#endif
++
+ void *
+ hev_socks5_session_iface (void)
+ {
+--- a/src/core/src/hev-socks5-client.c
++++ b/src/core/src/hev-socks5-client.c
+@@ -22,6 +22,7 @@
+ 
+ #define task_io_yielder hev_socks5_task_io_yielder
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+ hev_socks5_client_write_auth_methods (HevSocks5Client *self)
+ {
+@@ -431,6 +432,8 @@
+     self->auth.pass = pass;
+ }
+ 
++#endif
++
+ int
+ hev_socks5_client_construct (HevSocks5Client *self, HevSocks5Type type)
+ {
+--- a/src/core/src/hev-socks5-client-udp.c
++++ b/src/core/src/hev-socks5-client-udp.c
+@@ -43,6 +43,7 @@
+     return self;
+ }
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static HevSocks5Addr *
+ hev_socks5_client_udp_get_upstream_addr (HevSocks5Client *base)
+ {
+@@ -123,6 +124,8 @@
+     return 0;
+ }
+ 
++#endif
++
+ static int
+ hev_socks5_client_udp_get_fd (HevSocks5UDP *self)
+ {
+@@ -191,7 +194,9 @@
+     HevObjectClass *okptr = HEV_OBJECT_CLASS (kptr);
+ 
+     if (!okptr->name) {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         HevSocks5ClientClass *ckptr;
++#endif
+         HevSocks5UDPIface *uiptr;
+ 
+         memcpy (kptr, HEV_SOCKS5_CLIENT_TYPE, sizeof (HevSocks5ClientClass));
+@@ -200,9 +205,11 @@
+         okptr->destruct = hev_socks5_client_udp_destruct;
+         okptr->iface = hev_socks5_client_udp_iface;
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         ckptr = HEV_SOCKS5_CLIENT_CLASS (kptr);
+         ckptr->get_upstream_addr = hev_socks5_client_udp_get_upstream_addr;
+         ckptr->set_upstream_addr = hev_socks5_client_udp_set_upstream_addr;
++#endif
+ 
+         uiptr = &kptr->udp;
+         memcpy (uiptr, HEV_SOCKS5_UDP_TYPE, sizeof (HevSocks5UDPIface));
+--- a/src/core/src/hev-socks5-udp.c
++++ b/src/core/src/hev-socks5-udp.c
+@@ -25,6 +25,7 @@
+ 
+ #define UDP_BUF_SIZE 1500
+ 
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+ task_io_yielder (HevTaskYieldType type, void *data)
+ {
+@@ -497,11 +498,17 @@
+     return iface->splicer (self, fd);
+ }
+ 
++#endif
++
+ void *
+ hev_socks5_udp_iface (void)
+ {
+     static HevSocks5UDPIface type = {
++#ifndef SAKAMOTO_HEV_DIRECT_ONLY
+         .splicer = hev_socks5_udp_splicer,
++#else
++        .splicer = NULL,
++#endif
+     };
+ 
+     return &type;
+--- a/src/misc/hev-logger.h
++++ b/src/misc/hev-logger.h
+@@ -10,6 +10,18 @@
+ #ifndef __HEV_LOGGER_H__
+ #define __HEV_LOGGER_H__
+ 
++#ifdef SAKAMOTO_HEV_DIRECT_ONLY
++/* Product emits owner-local structured events; no process-global logger fd. */
++#define LOG_D(...) ((void) 0)
++#define LOG_I(...) ((void) 0)
++#define LOG_W(...) ((void) 0)
++#define LOG_E(...) ((void) 0)
++#define LOG_ON() 0
++#define LOG_ON_D() 0
++#define LOG_ON_I() 0
++#define LOG_ON_W() 0
++#define LOG_ON_E() 0
++#else
+ #define LOG_D(fmt...) hev_logger_log (HEV_LOGGER_DEBUG, fmt)
+ #define LOG_I(fmt...) hev_logger_log (HEV_LOGGER_INFO, fmt)
+ #define LOG_W(fmt...) hev_logger_log (HEV_LOGGER_WARN, fmt)
+@@ -20,6 +32,7 @@
+ #define LOG_ON_I() hev_logger_enabled (HEV_LOGGER_INFO)
+ #define LOG_ON_W() hev_logger_enabled (HEV_LOGGER_WARN)
+ #define LOG_ON_E() hev_logger_enabled (HEV_LOGGER_ERROR)
++#endif
+ 
+ typedef enum
+ {
+--- a/src/core/src/hev-socks5-logger-priv.h
++++ b/src/core/src/hev-socks5-logger-priv.h
+@@ -16,6 +16,17 @@
+ extern "C" {
+ #endif
+ 
++#ifdef SAKAMOTO_HEV_DIRECT_ONLY
++#define LOG_D(...) ((void) 0)
++#define LOG_I(...) ((void) 0)
++#define LOG_W(...) ((void) 0)
++#define LOG_E(...) ((void) 0)
++#define LOG_ON() 0
++#define LOG_ON_D() 0
++#define LOG_ON_I() 0
++#define LOG_ON_W() 0
++#define LOG_ON_E() 0
++#else
+ #define LOG_D(fmt...) hev_socks5_logger_log (HEV_SOCKS5_LOGGER_DEBUG, fmt)
+ #define LOG_I(fmt...) hev_socks5_logger_log (HEV_SOCKS5_LOGGER_INFO, fmt)
+ #define LOG_W(fmt...) hev_socks5_logger_log (HEV_SOCKS5_LOGGER_WARN, fmt)
+@@ -26,6 +37,7 @@
+ #define LOG_ON_I() hev_socks5_logger_enabled (HEV_SOCKS5_LOGGER_INFO)
+ #define LOG_ON_W() hev_socks5_logger_enabled (HEV_SOCKS5_LOGGER_WARN)
+ #define LOG_ON_E() hev_socks5_logger_enabled (HEV_SOCKS5_LOGGER_ERROR)
++#endif
+ 
+ int hev_socks5_logger_enabled (HevSocks5LoggerLevel level);
+ void hev_socks5_logger_log (HevSocks5LoggerLevel level, const char *fmt, ...);

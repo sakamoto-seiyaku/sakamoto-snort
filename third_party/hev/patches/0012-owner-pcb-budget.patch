@@ -1,0 +1,36 @@
+--- a/third-part/lwip/src/core/memp.c
++++ b/third-part/lwip/src/core/memp.c
+@@ -49,6 +49,7 @@
+ #include "lwip/sys.h"
+ #include "lwip/stats.h"
+ 
++#include "hev-lwip-context.h"
+ #include <string.h>
+ 
+ /* Make sure we include everything we need for size calculation required by memp_std.h */
+@@ -344,6 +345,9 @@
+   void *memp;
+   LWIP_ERROR("memp_malloc: type < MEMP_MAX", (type < MEMP_MAX), return NULL;);
+ 
++  if (!hev_lwip_pcb_admit(type))
++    return NULL;
++
+ #if MEMP_OVERFLOW_CHECK >= 2
+   memp_overflow_check_all();
+ #endif /* MEMP_OVERFLOW_CHECK >= 2 */
+@@ -355,6 +359,7 @@
+   memp = do_memp_malloc_pool_fn(memp_pools[type], file, line);
+ #endif
+ 
++  hev_lwip_pcb_allocated(type, memp);
+   return memp;
+ }
+ 
+@@ -437,6 +442,7 @@
+   old_first = *memp_pools[type]->tab;
+ #endif
+ 
++  hev_lwip_pcb_freed(type, mem);
+   do_memp_free_pool(memp_pools[type], mem);
+ 
+ #ifdef LWIP_HOOK_MEMP_AVAILABLE

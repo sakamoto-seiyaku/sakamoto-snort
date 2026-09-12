@@ -1,0 +1,61 @@
+[
+  {
+    "file": "0001-bounded-owner-scheduler.patch",
+    "purpose": "Bounded nonblocking HEV scheduling, explicit owner-context binding, reactor failure cleanup",
+    "regression": "tests/host/hev_owner_scheduler_test.c"
+  },
+  {
+    "file": "0002-owner-lwip-udp.patch",
+    "purpose": "Explicit owner-local IPv4 UDP state, full-tuple pretend PCB lookup, bounded creation rejection",
+    "regression": "tests/host/hev_owner_lwip_test.c"
+  },
+  {
+    "file": "0003-owner-address-format.patch",
+    "purpose": "Remove the remaining shared mutable IPv4 address-format buffer",
+    "regression": "tests/host/hev_owner_lwip_test.c"
+  },
+  {
+    "file": "0004-direct-udp-session.patch",
+    "purpose": "Direct UDP operations on the real HEV session queue, PCB and inherited descriptor ownership; per-datagram output rejection",
+    "regression": "tests/host/hev_direct_receive_test.c"
+  },
+  {
+    "file": "0005-direct-only-build.patch",
+    "purpose": "Product-selected Direct-only build retains real session and parent lifetimes without SOCKS handshake, tunnel configuration or global logger dependencies"
+  },
+  {
+    "file": "0006-owner-pbuf-budget.patch",
+    "purpose": "Bound actual live pbuf allocations per owner and count pool/RAM/reference allocation and final-free paths separately",
+    "regression": "tests/host/hev_owner_lwip_test.c"
+  },
+  {
+    "file": "0009-ipv6-pretend-extension-input.patch",
+    "purpose": "Let the real IPv6 parser validate extension chains before UDP dispatch on the pretend interface",
+    "regression": "tests/host/product_vpn_flow_stack_test.c ipv6-extension"
+  },
+  {
+    "file": "0008-owner-ipv6-state.patch",
+    "purpose": "Owner-local IPv6 neighbor discovery caches, router selection and address formatting",
+    "regression": "tests/host/hev_owner_lwip_test.c; tests/host/hev_lwip_state_audit.py"
+  },
+  {
+    "file": "0010-owner-tcp-state.patch",
+    "purpose": "Owner-local TCP PCB lists, timer/input/sequence/extension state and synchronous output PCB identity; no allocation-driven connection eviction",
+    "regression": "tests/host/hev_lwip_state_audit.py; tests/host/hev_owner_lwip_test.c"
+  },
+  {
+    "file": "0011-direct-tcp-session.patch",
+    "purpose": "Owner-driven Direct on the pinned HEV TCP splice queue/ring/PCB/socket lifecycle, bounded backpressure and half-close; no SOCKS handshake/config globals",
+    "regression": "tests/host/hev_owner_tcp_test.c"
+  },
+  {
+    "file": "0012-owner-pcb-budget.patch",
+    "purpose": "Fixed owner-local TCP/UDP/listener PCB admission and release accounting at real memp allocation; no cross-owner borrowing or allocation retry",
+    "regression": "tests/host/hev_owner_capacity_test.c; tests/host/hev_owner_lwip_test.c"
+  },
+  {
+    "file": "0007-bionic-system-fd-set.patch",
+    "purpose": "Use bionic's public fd_set in the supported Product NDK instead of a conflicting historical kernel typedef",
+    "regression": "app/android-runtime/scripts/build-debug-apk.sh --stage-only"
+  }
+]

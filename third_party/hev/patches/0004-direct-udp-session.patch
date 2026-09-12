@@ -1,0 +1,185 @@
+--- a/src/hev-socks5-session-udp.h
++++ b/src/hev-socks5-session-udp.h
+@@ -11,6 +11,7 @@
+ #define __HEV_SOCKS5_SESSION_UDP_H__
+ 
+ #include <hev-socks5-client-udp.h>
++#include <hev-task-mutex.h>
+ 
+ #include "hev-socks5-session.h"
+ 
+@@ -33,6 +34,9 @@
+     int frames;
+     int addr;
+     int port;
++    /* Product Direct sessions retain this class's PCB, frame queue and fd
++     * ownership. Zero preserves the upstream SOCKS configuration path. */
++    unsigned int direct_frame_limit;
+ };
+ 
+ struct _HevSocks5SessionUDPClass
+@@ -50,4 +54,17 @@
+ HevSocks5SessionUDP *hev_socks5_session_udp_new (struct udp_pcb *pcb,
+                                                  HevTaskMutex *mutex);
+ 
++/* Dependency-private Direct operations: owner task only. The descriptor is
++ * installed in base.fd only after successful broker completion. Once installed
++ * it is closed by the inherited destructor, including error/stop paths. */
++HevSocks5SessionUDP *hev_socks5_session_udp_direct_new (
++    struct udp_pcb *pcb, HevTaskMutex *mutex, unsigned int frame_limit);
++/* 1 = one datagram consumed, 0 = would block/no work, -1 = socket failure.
++ * An output callback error consumes only that return datagram; it does not
++ * disable reception. output_result is meaningful only when receive returns 1.
++ * scratch must hold at least the configured maximum UDP payload. */
++int hev_socks5_session_udp_direct_send (HevSocks5SessionUDP *self);
++int hev_socks5_session_udp_direct_receive (HevSocks5SessionUDP *self,
++    void *scratch, unsigned int capacity, int *output_result);
++
+ #endif /* __HEV_SOCKS5_SESSION_UDP_H__ */
+--- a/src/hev-socks5-session-udp.c
++++ b/src/hev-socks5-session-udp.c
+@@ -9,6 +9,8 @@
+ 
+ #include <errno.h>
+ #include <string.h>
++#include <sys/socket.h>
++#include <sys/uio.h>
+ 
+ #include <lwip/udp.h>
+ 
+@@ -178,7 +180,8 @@
+         return;
+     }
+ 
+-    if (self->frames > UDP_POOL_SIZE) {
++    if (self->frames >= (self->direct_frame_limit ?
++                        (int) self->direct_frame_limit : UDP_POOL_SIZE)) {
+         pbuf_free (p);
+         return;
+     }
+@@ -191,7 +194,14 @@
+ 
+     frame->data = p;
+     memset (&frame->node, 0, sizeof (frame->node));
+-    hev_socks5_addr_from_lwip (&frame->addr, &pcb->local_ip, pcb->local_port);
++    if (self->direct_frame_limit) {
++        memset (&frame->addr, 0, sizeof (frame->addr));
++        frame->addr.atype = HEV_SOCKS5_ADDR_TYPE_IPV4;
++        memcpy (frame->addr.ipv4.addr, &ip_2_ip4 (&pcb->local_ip)->addr, 4);
++        frame->addr.ipv4.port = lwip_htons (pcb->local_port);
++    } else {
++        hev_socks5_addr_from_lwip (&frame->addr, &pcb->local_ip, pcb->local_port);
++    }
+ 
+     if (frame->addr.atype == HEV_SOCKS5_ADDR_TYPE_NAME) {
+         self->addr = ip_2_ip4 (&pcb->local_ip)->addr;
+@@ -204,6 +214,109 @@
+ }
+ 
+ HevSocks5SessionUDP *
++hev_socks5_session_udp_direct_new (struct udp_pcb *pcb, HevTaskMutex *mutex,
++                                  unsigned int frame_limit)
++{
++    HevSocks5SessionUDP *self;
++
++    if (!pcb || !mutex || !frame_limit || frame_limit > 0x7fffffffU)
++        return NULL;
++    self = hev_malloc0 (sizeof (*self));
++    if (!self)
++        return NULL;
++    /* Parent construction creates no socket and reads no tunnel config. */
++    if (hev_socks5_client_udp_construct (&self->base,
++                                        HEV_SOCKS5_TYPE_UDP_IN_UDP) < 0) {
++        hev_free (self);
++        return NULL;
++    }
++    HEV_OBJECT (self)->klass = HEV_SOCKS5_SESSION_UDP_TYPE;
++    self->pcb = pcb;
++    self->mutex = mutex;
++    self->data.self = self;
++    self->direct_frame_limit = frame_limit;
++    udp_recv (pcb, udp_recv_handler, self);
++    return self;
++}
++
++int
++hev_socks5_session_udp_direct_send (HevSocks5SessionUDP *self)
++{
++    struct iovec spans[64];
++    struct msghdr msg = { 0 };
++    HevSocks5UDPFrame *frame;
++    HevListNode *node;
++    struct pbuf *p;
++    ssize_t result;
++    unsigned int count = 0;
++
++    if (!self->direct_frame_limit || self->base.fd < 0)
++        return -1;
++    node = hev_list_first (&self->frame_list);
++    if (!node)
++        return 0;
++    frame = container_of (node, HevSocks5UDPFrame, node);
++    for (p = frame->data; p; p = p->next) {
++        if (count == sizeof (spans) / sizeof (spans[0]))
++            return -1;
++        spans[count].iov_base = p->payload;
++        spans[count++].iov_len = p->len;
++    }
++    msg.msg_iov = spans;
++    msg.msg_iovlen = count;
++    result = sendmsg (self->base.fd, &msg, MSG_DONTWAIT | MSG_NOSIGNAL);
++    if (result < 0) {
++        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
++            return 0;
++        return -1;
++    }
++    if ((size_t) result != frame->data->tot_len)
++        return -1;
++    hev_list_del (&self->frame_list, node);
++    pbuf_free (frame->data);
++    hev_free (frame);
++    self->frames--;
++    return 1;
++}
++
++int
++hev_socks5_session_udp_direct_receive (HevSocks5SessionUDP *self,
++    void *scratch, unsigned int capacity, int *output_result)
++{
++    struct iovec span = { scratch, capacity };
++    struct msghdr msg = { 0 };
++    struct pbuf *packet;
++    ssize_t result;
++
++    if (!self->direct_frame_limit || self->base.fd < 0 || !scratch ||
++        !capacity || capacity > 65507 || !output_result)
++        return -1;
++    msg.msg_iov = &span;
++    msg.msg_iovlen = 1;
++    result = recvmsg (self->base.fd, &msg, MSG_DONTWAIT | MSG_TRUNC);
++    if (result < 0) {
++        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
++            return 0;
++        return -1;
++    }
++    if ((msg.msg_flags & MSG_TRUNC) || (size_t) result > capacity) {
++        *output_result = ERR_BUF;
++        return 1;
++    }
++    packet = pbuf_alloc_reference (scratch, result, PBUF_REF);
++    if (!packet) {
++        *output_result = ERR_MEM;
++        return 1;
++    }
++    hev_task_mutex_lock (self->mutex);
++    *output_result = udp_sendfrom (self->pcb, packet, &self->pcb->local_ip,
++                                   self->pcb->local_port);
++    hev_task_mutex_unlock (self->mutex);
++    pbuf_free (packet);
++    return 1;
++}
++
++HevSocks5SessionUDP *
+ hev_socks5_session_udp_new (struct udp_pcb *pcb, HevTaskMutex *mutex)
+ {
+     HevSocks5SessionUDP *self;
