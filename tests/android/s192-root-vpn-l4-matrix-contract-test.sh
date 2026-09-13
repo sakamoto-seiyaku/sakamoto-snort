@@ -9,6 +9,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 device_runner="$repo_root/tests/device/s192-root-vpn-l4-matrix-product.sh"
 graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
 host_graph_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
+host_fixtures="$repo_root/src/product/vpp/product_packet_graph_host_fixtures.inc"
 abi_header="$repo_root/src/product/include/sakamoto_product_abi.h"
 api_source="$repo_root/src/product/vpp/product_core.api"
 plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
@@ -22,6 +23,7 @@ test -f "$device_runner"
 test -x "$device_runner"
 test -f "$graph_source"
 test -f "$host_graph_source"
+test -f "$host_fixtures"
 for source in "$abi_header" "$api_source" "$plugin_source" "$vapi_source" \
   "$rust_source" "$jni_source" "$java_status" "$java_service"; do
   test -f "$source"
@@ -37,11 +39,11 @@ for symbol in \
   'l4_typed_match_subject_key' \
   'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_SAME_PROBE' \
   'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_SAME_SUBJECT' \
-  'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_UNRELATED' \
-  'product_packet_graph_policy_association_fixture_cli'; do
+  'PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_UNRELATED'; do
   grep -Fq "$symbol" "$graph_source" ||
     { echo "S192 graph evidence seam missing: $symbol" >&2; exit 1; }
 done
+grep -Fq 'product_packet_graph_policy_association_fixture_cli' "$host_fixtures"
 grep -Fq 'run-policy-association-fixture' "$host_graph_source"
 for field in \
   'policy_l4_typed_match_policy_key' 'policy_l4_typed_match_probe_key' \

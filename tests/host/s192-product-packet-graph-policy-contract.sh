@@ -5,6 +5,7 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
 graph_header="$repo_root/src/product/vpp/product_packet_graph.h"
 host_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
+fixture_source="$repo_root/src/product/vpp/product_packet_graph_host_fixtures.inc"
 abi_header="$repo_root/src/product/include/sakamoto_product_abi.h"
 api_source="$repo_root/src/product/vpp/product_core.api"
 plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
@@ -19,7 +20,7 @@ fail() {
   exit 1
 }
 
-[[ -f "$graph_source" && -f "$graph_header" && -f "$host_source" &&
+[[ -f "$graph_source" && -f "$graph_header" && -f "$host_source" && -f "$fixture_source" &&
    -f "$abi_header" && -f "$api_source" && -f "$plugin_source" &&
    -f "$vapi_source" && -f "$rust_source" && -f "$jni_source" &&
    -f "$java_status" && -f "$java_service" ]] ||
@@ -29,7 +30,7 @@ fail() {
 # acquire an ABI, Rust/JNI, historical Snort, or alternate classifier input.
 for forbidden in 'product_core.api' 'POLICY.EVALUATE' 'sucre-snort' \
   'SnortConfig' 'nfq_q_handle' 'jni.h' 'extern "C"'; do
-  if grep -Fq "$forbidden" "$graph_source" "$graph_header" "$host_source"; then
+  if grep -Fq "$forbidden" "$graph_source" "$graph_header" "$host_source" "$fixture_source"; then
     fail "forbidden dependency or historical policy path: $forbidden"
   fi
 done
@@ -88,12 +89,12 @@ for flow_status in flow_allocation_count flow_reuse_count \
   flow_early_drop_count flow_capacity_rejection_count \
   flow_revision_invalidation_count flow_revision_mismatch_count \
   flow_flush_count; do
-  grep -q "$flow_status" "$graph_source" "$graph_header" ||
+  grep -q "$flow_status" "$graph_source" "$graph_header" "$fixture_source" ||
     fail "graph FlowEntry status omits $flow_status"
 done
 for flow_fixture_token in lazy_revision_ok flow_revision_invalidation_count \
   flow_active_entries flow_early_drop_count; do
-  grep -q "$flow_fixture_token" "$graph_source" ||
+  grep -q "$flow_fixture_token" "$fixture_source" ||
     fail "Host graph fixture omits FlowEntry evidence: $flow_fixture_token"
 done
 grep -q 'flow_active_snapshot_hash' "$graph_source" "$graph_header" ||
@@ -203,7 +204,7 @@ bundle_fixture_body="$(awk '
   /^product_packet_graph_policy_fixture_cli \(/ { in_fixture = 1 }
   in_fixture { print }
   in_fixture && /^}/ { exit }
-' "$graph_source")"
+' "$fixture_source")"
 printf '%s\n' "$bundle_fixture_body" |
   grep -q 'product_packet_graph_publish_policy_bundle' ||
   fail "host policy fixture does not publish a typed bundle"
@@ -299,17 +300,17 @@ for association_symbol in \
   grep -q "$association_symbol" "$graph_source" ||
     fail "graph lacks bounded typed-match evidence association: $association_symbol"
 done
-grep -q 'product_packet_graph_policy_association_fixture_cli' "$graph_source" ||
+grep -q 'product_packet_graph_policy_association_fixture_cli' "$fixture_source" ||
   fail "host graph lacks typed-match evidence association fixture"
 grep -q 'run-policy-association-fixture' "$host_source" ||
   fail "host evidence source does not expose association fixture command"
-grep -q 'product_packet_graph_gate_table_fixture_cli' "$graph_source" ||
+grep -q 'product_packet_graph_gate_table_fixture_cli' "$fixture_source" ||
   fail "host graph lacks bounded GateTable fixture"
 grep -q 'run-gate-table-fixture' "$host_source" ||
   fail "host evidence source does not expose GateTable fixture command"
 for gate_vector in drop_ok range_ok ipv6_ok address_ok ifindex_ok \
   unavailable_ok unknown_uid_ok wildcard_ok unknown_context_ok; do
-  grep -q "$gate_vector" "$graph_source" ||
+  grep -q "$gate_vector" "$fixture_source" ||
     fail "GateTable fixture omits vector: $gate_vector"
 done
 grep -q 'gate_table_last_match_action' "$graph_source"

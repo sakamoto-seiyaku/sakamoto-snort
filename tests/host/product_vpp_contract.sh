@@ -9,6 +9,7 @@ packet_source="$repo_root/src/product/vpp/product_packet.c"
 packet_header="$repo_root/src/product/vpp/product_packet.h"
 graph_source="$repo_root/src/product/vpp/product_packet_graph.c"
 host_graph_source="$repo_root/src/product/vpp/product_packet_graph_host_evidence.c"
+host_fixtures="$repo_root/src/product/vpp/product_packet_graph_host_fixtures.inc"
 manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 launcher="$repo_root/tools/product/run-host-vpp.sh"
 builder="$repo_root/tools/product/build-host-artifact.sh"
@@ -89,6 +90,25 @@ test -f "$packet_source"
 test -f "$packet_header"
 test -f "$graph_source"
 test -f "$host_graph_source"
+test -f "$host_fixtures"
+# Fixtures retain the original conditional and translation-unit visibility.
+# They must not become an unconditional include or a separate compiled source.
+python3 - "$graph_source" "$host_graph_source" "$host_fixtures" "$plugin_cmake" <<'PY'
+from pathlib import Path
+import sys
+
+graph, wrapper, fixtures, cmake = (Path(p).read_text() for p in sys.argv[1:])
+include = '#include "product_packet_graph_host_fixtures.inc"'
+assert graph.count(include) == 1, 'Host fixture include must occur exactly once'
+assert '#ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE\n' + include + '\n#endif' in graph
+assert '#define SAKAMOTO_PRODUCT_HOST_EVIDENCE 1' in wrapper
+assert '#include "product_packet_graph.c"' in wrapper
+assert 'product_packet_graph_host_fixtures.inc' not in cmake
+for definition in ('product_ipv4_fixture (', 'product_packet_graph_policy_fixture_cli (',
+                   'product_packet_graph_disable_cli ('):
+    assert '\n' + definition in fixtures, 'missing Host definition: ' + definition
+    assert '\n' + definition not in graph, 'Host definition still in main graph: ' + definition
+PY
 if grep -Eq 's174-valid-dual-stack-v1|product packet-graph run-fixture' \
     "$graph_source"; then
   echo "Android-default Product graph source contains the Host evidence seam" >&2
