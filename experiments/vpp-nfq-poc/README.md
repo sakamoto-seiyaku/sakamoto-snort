@@ -1,214 +1,49 @@
-# VPP NFQUEUE POC
+# VPP/NFQUEUE experiment archive and evidence map
 
-Status: throwaway experiment.
+Status: **historical experiment lane, not the Product mainline**. Original source,
+patches, registrations and raw records are retained for provenance; C/VPP POC source
+must not be imported into Product code. Use [current mainline](../../docs/current/README.md)
+for implemented behavior and [Product testing](../../docs/testing/README.md) for acceptance.
 
-Question: before touching VPP, can this Linux/Docker environment reliably route packets through NFQUEUE and receive deterministic userspace verdicts (`ACCEPT`, `DROP`, partial drop)?
+The old [one-command README](archive/README_ORIGINAL.md) and
+[status/known-gaps table](archive/POC_STATUS_ORIGINAL.md) are archived intact.
+Their “current”, “next” and PASS/HOLD wording refers to the recorded campaign,
+not today's Product or Plane state. Do not execute a historical recipe merely
+because it appears in those documents.
 
-This directory is intentionally isolated from the production daemon. The first milestone is a plain C `nfq-smoke` program. VPP build/plugin work comes after this smoke layer proves that Docker, netns, iptables, and libnetfilter_queue are usable.
+## Directory roles
 
-## One-command entry points
+| Location | Retained purpose |
+| --- | --- |
+| [src](src/), [overlay](overlay/), [minimal-runtime](minimal-runtime/) | Historical NFQUEUE/TUN/external-driver C/VPP implementations, not Product sources |
+| [patches](patches/) | Experimental HEV patch lineage; not the Product patch series |
+| [clients](clients/), [configs](configs/) | Historical control clients and startup/traffic recipes |
+| [android/vpn-lite](android/vpn-lite/README.md) | POC Android shell and staging; not the Product RuntimeService |
+| [android/a2-traffic-adapter](android/a2-traffic-adapter/README.md) | POC-only two-UID traffic generator |
+| [prototypes](prototypes/) | Owner-inline OI1/2/4/5, UID attribution, conditional-wake and A2 state/litmus experiments |
+| [scripts](scripts/), [tests](tests/) | Historical collectors, builders, verifiers and fixtures; no default Product gate |
+| [evidence](evidence/), [results](results/) | Dated evidence, including failed attempts; do not purge or relabel |
+| Root journals, plans and handoffs | Campaign history; select a dated record, not an accumulated default reading list |
 
-From this directory:
+## Later focused observations
 
-```sh
-make docker-shell
-```
+- [S245/S246 registration](s245-s246/README.md) and [results](s245-s246/RESULTS.md):
+  single-owner UDP4 input/output copy lifetimes and controlled failure cells.
+- [S247 registration](s247/README.md) and [results](s247/RESULTS.md): simultaneous
+  pbuf/native-buffer/credit limits. It does not establish W2, full network transition,
+  release performance or general transport behavior.
 
-Inside the container:
+These directories and their verifier/build dependencies keep their bytes and paths.
+The Product joint matrix is separate and is linked from the current testing map.
 
-```sh
-make build-smoke
-make smoke-accept
-make smoke-drop
-make smoke-ratio
-make idle-cpu
-make vpp-idle-cpu
-make vpp-nfqueue-cli-check
-make vpp-nfqueue-accept
-make vpp-nfqueue-drop
-make vpp-nfqueue-ratio
-make vpp-nfqueue-idle-cpu
-make vpp-tun-poc-build
-make vpp-tun-poc-api-status-smoke
-make vpp-tun-poc-api-policy-smoke
-make vpp-tun-poc-api-policy-transaction-smoke
-make vpp-tun-poc-vapi-c-status-smoke
-make vpp-tun-poc-rust-shim-status-smoke
-make vpp-tun-poc-rust-shim-policy-smoke
-make vpp-tun-poc-rust-shim-sdk-smoke
-make vpp-tun-poc-rust-shim-persistent-smoke
-make vpp-tun-poc-rust-shim-reconnect-smoke
-make vpp-tun-poc-rust-shim-serialized-smoke
-```
+## Known retained references
 
-Fetch upstream VPP `v26.02` into this experiment directory:
+The older `tests/android/android-runtime-hardening-contract-test.sh` still examines
+`android/vpn-lite/scripts/stage-vpp-runtime.sh`; the old S55 device harness points
+to `scripts/android-build-socks5-smoke-server.sh`. Their targets remain in place.
+Neither old consumer is a current root CTest/device acceptance entry. The catalog
+records these compatibility references without promoting them to Product dependencies.
 
-```sh
-DOCKER_NETWORK=bridge ./scripts/run-container.sh make fetch-vpp
-```
-
-Build VPP after optionally installing upstream dependencies:
-
-```sh
-DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default ./scripts/run-container.sh env VPP_INSTALL_DEPS=1 JOBS=4 make build-vpp
-```
-
-The VPP source tree defaults to:
-
-```text
-experiments/vpp-nfq-poc/work/vpp
-```
-
-Override with `VPP_WORK_ROOT` or `VPP_DIR`.
-
-The smoke scripts create a temporary veth pair:
-
-```text
-root netns: nfq-host 10.200.42.1/24
-peer netns: nfq-peer0 10.200.42.2/24
-```
-
-Only ICMP packets from root netns to `10.200.42.2` through `nfq-host` are queued:
-
-```text
-OUTPUT -o nfq-host -p icmp -d 10.200.42.2 -j NFQUEUE --queue-num 42
-```
-
-Cleanup:
-
-```sh
-make cleanup-netns
-```
-
-The container run path uses:
-
-```text
---network none
---cap-drop ALL
---cap-add NET_ADMIN
---cap-add NET_RAW
---cap-add SYS_ADMIN
---security-opt apparmor=unconfined
---security-opt seccomp=unconfined
---tmpfs /run
-```
-
-`SYS_ADMIN` is needed by `ip netns add` in Docker because it performs mount namespace setup under `/run/netns`.
-
-If a later step needs network access inside the container to fetch VPP, run:
-
-```sh
-DOCKER_NETWORK=bridge make docker-shell
-```
-
-## Current Milestone
-
-Required before VPP:
-
-- `accept-all`: ping succeeds.
-- `drop-all`: ping fails.
-- `drop-ratio=50`: ping shows partial loss.
-- `nfq-smoke` logs exactly one verdict per queued packet.
-- Metadata presence is visible in logs: packet id, hook, payload length, mark, ifindex, UID/GID, timestamp.
-- `idle-cpu`: `nfq-smoke` stays near 0% CPU when no packet is queued.
-
-## Baseline Result
-
-Last run: 2026-06-21, Docker image `sakamoto-vpp-nfq-poc:dev`.
-
-Observed:
-
-- `make build-smoke`: passed inside Docker.
-- `make smoke-accept`: 20 transmitted, 20 received, `seen=20 accept=20 drop=0`.
-- `make smoke-drop`: 20 transmitted, 0 received, `seen=20 accept=0 drop=20`.
-- `make smoke-ratio`: 20 transmitted, 10 received, `seen=20 accept=10 drop=10`.
-- `make idle-cpu`: `nfq-smoke` sampled at `0.0%` CPU before and after traffic.
-
-Observed metadata in this container:
-
-- packet id: present.
-- hook: present, value `3` for root namespace `OUTPUT`.
-- payload: present, 84-byte ICMP packet.
-- output ifindex: present; concrete value depends on container network setup.
-- UID/GID: present, both `0` because ping ran as root inside the container.
-- timestamp: not present through the current libnetfilter_queue configuration.
-
-This proves the Linux/Docker NFQUEUE harness is viable enough to proceed to a VPP adapter POC. It does not yet prove anything about VPP plugin correctness.
-
-## VPP Build Result
-
-Last run: 2026-06-21, upstream VPP `v26.02`.
-
-Observed:
-
-- `make build-vpp`: passed inside Docker with `DOCKER_NETWORK=bridge DOCKER_CAP_PROFILE=default VPP_INSTALL_DEPS=1 JOBS=4`.
-- `bin/vpp` was linked and installed.
-- `snort_plugin.so`, `af_packet_plugin.so`, `af_xdp_plugin.so`, `tap_plugin.so`, and `dpdk_plugin.so` were linked.
-- `vpp -v` works on the host from the install tree.
-
-Installed binary:
-
-```text
-experiments/vpp-nfq-poc/work/vpp/build-root/install-vpp-native/vpp/bin/vpp
-```
-
-Version output:
-
-```text
-vpp v26.02-release built by root on f2a0f575d39a at 2026-06-21T14:45:41
-```
-
-This proves upstream VPP can be built in this experiment lane. It still does not prove VPP can own NFQUEUE verdicts.
-
-## VPP Minimal Startup / Idle Result
-
-Minimal config:
-
-```text
-experiments/vpp-nfq-poc/configs/minimal-startup.conf
-```
-
-Run:
-
-```sh
-make vpp-idle-cpu
-```
-
-Observed with `poll-sleep-usec 1000`:
-
-```text
-vpp_main idle instantaneous CPU: about 1% on this host
-```
-
-This proves the minimal VPP process is not a DPDK-style single-core 100% busy loop in this configuration. It still needs to be re-tested after adding the NFQUEUE input path.
-
-## VPP NFQUEUE Verdict Result
-
-Last run: 2026-06-21, upstream VPP `v26.02` with local `nfqueue_poc` overlay.
-
-Observed:
-
-- `make vpp-nfqueue-cli-check`: VPP loaded `nfqueue_poc_plugin.so`; `show nfqueue-poc` CLI worked.
-- `make vpp-nfqueue-accept`: ping 20/20, `seen=20 accept=20 drop=0`.
-- `make vpp-nfqueue-drop`: ping 0/20, `seen=20 accept=0 drop=20`.
-- `make vpp-nfqueue-ratio`: ping 10/20, `seen=20 accept=10 drop=10`.
-- `make vpp-nfqueue-idle-cpu`: with queue 42 enabled and no traffic, `vpp_main` sampled around 0-2% CPU in this container.
-
-This proves VPP can own the NFQUEUE fd and return userspace verdicts in this Linux POC. The current plugin verdicts directly from a `clib_file` read callback. It does not yet allocate `vlib_buffer_t`, enter the VPP graph, expose packet metadata, or prove multi-worker behavior.
-
-## Notes
-
-- Run this in Docker first. Running NFQUEUE experiments directly on a host can affect local networking if the rule is changed incorrectly.
-- The smoke program does not call `nfq_unbind_pf()` unless explicitly passed `--unbind-existing`.
-- The VPP source tree, build output, core files, and packet captures must not be committed here.
-- Raw chronological experiment notes are kept in `EXPERIMENT_LOG.md`.
-- `vpp-tun-poc-api-status-smoke` starts local VPP with `socksvr` and calls the generated `tun_poc_status` binary API through Python PAPI. It does not open TUN fds or require Android.
-- `vpp-tun-poc-api-policy-smoke` uses the same binary API path to set POC owner-policy knobs and confirm them through typed status.
-- `vpp-tun-poc-api-policy-transaction-smoke` stages owner-policy knobs, verifies active status is unchanged before commit, rolls back, then commits a staged policy.
-- `vpp-tun-poc-vapi-c-status-smoke` compiles a small C client against generated VAPI headers and calls `tun_poc_status` through VPP `socksvr`.
-- `vpp-tun-poc-rust-shim-status-smoke` compiles a thin C ABI shim plus a Rust FFI client, then calls `tun_poc_status` through VPP `socksvr`.
-- `vpp-tun-poc-rust-shim-policy-smoke` uses the same Rust FFI shim path to set owner-policy knobs and confirm the mutation through typed status.
-- `vpp-tun-poc-rust-shim-sdk-smoke` stages the shim header/lib plus VPP client runtime libs into a local SDK, verifies staged linkage with `LD_LIBRARY_PATH`, then runs the Rust policy smoke.
-- `vpp-tun-poc-rust-shim-persistent-smoke` opens one C-shim client handle and reuses one VAPI connection for status, policy set, status, policy clear, and status.
-- `vpp-tun-poc-rust-shim-reconnect-smoke` stops VPP under a persistent client, verifies the stale handle fails, restarts VPP, and verifies a fresh handle can read status.
-- `vpp-tun-poc-rust-shim-serialized-smoke` shares one persistent C-shim client behind a Rust `Mutex` and runs serialized status calls from four threads.
+See the [complete experiment map](../README.md) and [machine-readable catalog](../catalog.json).
+New replay work requires explicit scope and fresh provenance; this organization
+does not restart old device campaigns or the deferred 24-hour test.

@@ -14,6 +14,11 @@ ENTRIES = (
     "docs/README.md",
     "docs/reference/README.md",
     "docs/reference/NAMING_AND_PROVENANCE.md",
+    "experiments/README.md",
+    "experiments/vpp-nfq-poc/README.md",
+    "experiments/vpp-nfq-poc/POC_STATUS.md",
+    "experiments/vpp-nfq-poc/archive/README.md",
+    "tools/protocol_identification/README.md",
     "docs/current/README.md",
     "docs/INTERFACE_SPECIFICATION.md",
     "docs/agents/domain.md",
@@ -36,6 +41,7 @@ ENTRIES = (
     "tests/archive/pre-vpp/README.md",
     "tests/archive/retired-contracts/README.md",
     "docs/maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md",
+    "docs/maintenance/2026-09-13_REFERENCE_AND_POC_ORGANIZATION.md",
 )
 RETIRED_CONTRACTS = (
     "s176-root-nfqueue-output", "s189-root-network-gate",

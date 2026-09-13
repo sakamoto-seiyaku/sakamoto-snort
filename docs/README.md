@@ -24,9 +24,10 @@ dated acceptance evidence. Older “not implemented” statements may describe a
 earlier phase. Product plans likewise do not establish current readiness.
 
 [Reviews](reviews/), [reference studies](reference/), [archived docs](archived/)
-and [POCs](../experiments/) are supporting evidence, not implementation templates.
+and [POCs](../experiments/README.md) are supporting evidence, not implementation templates.
 OpenSpec under `archive/openspec/` is historical only; inspect it only when requested.
 Open work belongs to Plane ([tracker rules](agents/issue-tracker.md)).
 
-See the [2026-09-13 organization record](maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
-for this cleanup's path and preservation decisions.
+See the [reference/POC organization record](maintenance/2026-09-13_REFERENCE_AND_POC_ORGANIZATION.md)
+and the [preceding repository cleanup](maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
+for path, naming and preservation decisions.

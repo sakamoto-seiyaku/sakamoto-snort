@@ -39,5 +39,6 @@ commands and ticket links, but not a competing TODO/unchecked backlog.
 
 Old SNORT identifiers and point-in-time “unfinished” statements are historical;
 do not copy them into new issues without checking current source and Plane state.
-See the [organization record](../maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
-for the latest separation of current navigation and preserved material.
+See the [reference/POC organization record](../maintenance/2026-09-13_REFERENCE_AND_POC_ORGANIZATION.md)
+and [preceding cleanup](../maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
+for the separation of current navigation and preserved material.

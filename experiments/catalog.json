@@ -1,0 +1,235 @@
+{
+  "schema": "sakamoto-experiment-catalog/v1",
+  "organized_on": "2026-09-13",
+  "work_item": "SAKAMOTO-250",
+  "intake_commit": "d4e5e6506a0b99bbe3237b57dea19d89643f6d04",
+  "intake_counts": {
+    "experiments": 528,
+    "reference_tools": 12
+  },
+  "policy": {
+    "product_import_allowed": false,
+    "default_product_gate": false,
+    "matching": "first matching group; exact navigation/retirement entries precede directory groups",
+    "classification_is_execution_evidence": false,
+    "raw_evidence_deletion": false
+  },
+  "groups": [
+    {
+      "id": "experiment_navigation",
+      "files": [
+        "experiments/README.md",
+        "experiments/catalog.json",
+        "experiments/vpp-nfq-poc/README.md",
+        "experiments/vpp-nfq-poc/POC_STATUS.md"
+      ],
+      "classification": "maintained_navigation",
+      "purpose": "Current navigation only; no Product readiness claims."
+    },
+    {
+      "id": "reference_tool_navigation",
+      "files": [
+        "tools/protocol_identification/README.md"
+      ],
+      "classification": "maintained_navigation",
+      "purpose": "Supported reference-only tools versus retired C++ gates."
+    },
+    {
+      "id": "retired_reference_gates",
+      "files": [
+        "tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh",
+        "tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh",
+        "tools/protocol_identification/run_s61_reference_probes.sh"
+      ],
+      "classification": "retired_fail_closed",
+      "purpose": "Historical names reject before side effects; removed C++ model is not archived or restored."
+    },
+    {
+      "id": "campaign_original_entries",
+      "directories": [
+        "experiments/vpp-nfq-poc/archive"
+      ],
+      "classification": "historical_documents",
+      "purpose": "Original README/status bytes; old relative paths mean the former campaign root."
+    },
+    {
+      "id": "handcrafted_bridge",
+      "directories": [
+        "experiments/handcrafted-direct-bridge"
+      ],
+      "classification": "archived_in_place",
+      "purpose": "S200-isolated handcrafted C bridge and original recipes; not HEV/lwIP, not Product execution."
+    },
+    {
+      "id": "copy_characterization",
+      "directories": [
+        "experiments/vpp-nfq-poc/s245-s246"
+      ],
+      "classification": "frozen_characterization",
+      "purpose": "Single-owner UDP4 copy and failure registration/results; source/helper identity retained."
+    },
+    {
+      "id": "resource_characterization",
+      "directories": [
+        "experiments/vpp-nfq-poc/s247"
+      ],
+      "classification": "frozen_characterization",
+      "purpose": "Single-owner pbuf/buffer/credit registration/results; no general W2 or release claim."
+    },
+    {
+      "id": "campaign_raw_evidence",
+      "directories": [
+        "experiments/vpp-nfq-poc/evidence",
+        "experiments/vpp-nfq-poc/results"
+      ],
+      "classification": "raw_evidence",
+      "purpose": "Dated tracked records plus ignored local raw runs; success/failure observations are not rewritten."
+    },
+    {
+      "id": "uid_traffic_application",
+      "directories": [
+        "experiments/vpp-nfq-poc/android/a2-traffic-adapter"
+      ],
+      "classification": "historical_poc_application",
+      "purpose": "Separate two-UID Android traffic generator, not Product UI or RuntimeService."
+    },
+    {
+      "id": "vpn_lite_shell",
+      "directories": [
+        "experiments/vpp-nfq-poc/android/vpn-lite"
+      ],
+      "classification": "historical_poc_application",
+      "purpose": "POC Android shell, staging and native probes; original paths retained, no Product packaging."
+    },
+    {
+      "id": "poc_overlay",
+      "directories": [
+        "experiments/vpp-nfq-poc/overlay"
+      ],
+      "classification": "historical_poc_source",
+      "purpose": "NFQUEUE/TUN/external-driver VPP experiments; evidence inputs, never source to import."
+    },
+    {
+      "id": "minimal_runtime",
+      "directories": [
+        "experiments/vpp-nfq-poc/minimal-runtime"
+      ],
+      "classification": "historical_poc_source",
+      "purpose": "Experimental minimal VPP entry, not the Product runtime build."
+    },
+    {
+      "id": "nfqueue_smoke",
+      "directories": [
+        "experiments/vpp-nfq-poc/src"
+      ],
+      "classification": "historical_poc_source",
+      "purpose": "Original standalone C Linux NFQUEUE smoke program."
+    },
+    {
+      "id": "experimental_patches",
+      "directories": [
+        "experiments/vpp-nfq-poc/patches"
+      ],
+      "classification": "historical_patch_lineage",
+      "purpose": "Experimental HEV patch history, not the Product patch series."
+    },
+    {
+      "id": "poc_clients",
+      "directories": [
+        "experiments/vpp-nfq-poc/clients"
+      ],
+      "classification": "historical_control_clients",
+      "purpose": "Generated-API/C-shim/Rust control experiments, not the Product control ABI."
+    },
+    {
+      "id": "poc_configs",
+      "directories": [
+        "experiments/vpp-nfq-poc/configs"
+      ],
+      "classification": "historical_recipes",
+      "purpose": "Original startup, traffic and container recipes; not supported current deployment defaults."
+    },
+    {
+      "id": "poc_prototypes",
+      "directories": [
+        "experiments/vpp-nfq-poc/prototypes"
+      ],
+      "classification": "historical_models_and_litmus",
+      "purpose": "OI1/2/4/5, A2, UID and conditional-wake reasoning models; not Product implementation."
+    },
+    {
+      "id": "poc_scripts",
+      "directories": [
+        "experiments/vpp-nfq-poc/scripts"
+      ],
+      "classification": "historical_harness_and_verifier",
+      "purpose": "Original builders, collectors, helper sources, verifiers and verifier tests; no default Product gate."
+    },
+    {
+      "id": "poc_tests",
+      "directories": [
+        "experiments/vpp-nfq-poc/tests"
+      ],
+      "classification": "historical_fixtures_and_tests",
+      "purpose": "C POC semantic tests and parser fixtures; dated outcomes remain scoped."
+    },
+    {
+      "id": "campaign_documents",
+      "children": [
+        "experiments/vpp-nfq-poc"
+      ],
+      "classification": "historical_campaign_documents_and_recipes",
+      "purpose": "Root journals, plans, handoffs, Makefile/Dockerfile and ignore rules; Plane owns current work."
+    },
+    {
+      "id": "external_reference_tools",
+      "children": [
+        "tools/protocol_identification"
+      ],
+      "classification": "reference_only_opt_in",
+      "purpose": "Retained source/corpus inventories, intake gate, external Android library probes and output helpers; no Product provider enablement."
+    }
+  ],
+  "retained_references": [
+    {
+      "consumer": "tests/android/android-runtime-hardening-contract-test.sh",
+      "target": "experiments/vpp-nfq-poc/android/vpn-lite/scripts/stage-vpp-runtime.sh",
+      "kind": "historical_static_consumer",
+      "reason": "Older hardening check reads this staging recipe; not registered in current root CTest.",
+      "target_blob": "86218f58c053dc95446581c841b4bd69cc4e9bbb"
+    },
+    {
+      "consumer": "tests/device/s55-product-vpn-transport-matrix.sh",
+      "target": "experiments/vpp-nfq-poc/scripts/android-build-socks5-smoke-server.sh",
+      "kind": "historical_device_consumer",
+      "reason": "Old S55 recipe names this helper; not a current Product acceptance collector.",
+      "target_blob": "54291c0b480051b33f6119b848e3aeadda9f674e"
+    },
+    {
+      "consumer": "tests/android/s180-vpn-udp4-direct-egress-contract-test.sh",
+      "target": "experiments/handcrafted-direct-bridge/README.md",
+      "kind": "retirement_redirect",
+      "reason": "S200 fail-closed entry points readers to the isolated historical bridge.",
+      "target_blob": "480f8dc7161b9cad4e98ab8272c0a6e5772e104d"
+    }
+  ],
+  "retired_entrypoints": [
+    "tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh",
+    "tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh",
+    "tools/protocol_identification/run_s61_reference_probes.sh",
+    "tests/android/s61-vpp-reference-inventory-contract-test.sh"
+  ],
+  "local_ignored_material": {
+    "action": "retain in place; no cache purge",
+    "mixed_artifacts_and_evidence": [
+      "experiments/vpp-nfq-poc/build/",
+      "experiments/vpp-nfq-poc/work/",
+      "experiments/vpp-nfq-poc/runtime/",
+      "experiments/vpp-nfq-poc/results/",
+      "experiments/vpp-nfq-poc/evidence/",
+      "experiments/vpp-nfq-poc/android/vpn-lite/build/",
+      "experiments/vpp-nfq-poc/android/a2-traffic-adapter/build/"
+    ],
+    "rebuildable_cache": "Python __pycache__ directories; retained, not promoted to evidence"
+  }
+}

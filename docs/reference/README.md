@@ -32,3 +32,5 @@ The Host payload/PCAP probes describe the removed C++ recognition seam; do not
 restore it to replay them. Tool names in the dated records identify historical
 commands, not current runnable Product gates. Check source prerequisites before
 any explicitly requested reference-only inventory or standalone third-party probe.
+The [reference tool map](../../tools/protocol_identification/README.md) separates
+retained inventories from the now fail-closed C++-dependent entrypoints.

@@ -16,3 +16,7 @@ current verification; preserve their names and bytes unless changing that contra
 The removed C++ daemon/model is not a fixture or implementation reference.
 Device operations must use [`dev/adb`](../dev/adb) and an explicitly scoped device.
 Host PASS is not Product/device/release PASS.
+
+POC source, historical recipes and reference-tool retirement are classified in
+the [experiment catalog](../experiments/README.md). Its checks inspect paths and
+guards only; they do not run historical experiments.
