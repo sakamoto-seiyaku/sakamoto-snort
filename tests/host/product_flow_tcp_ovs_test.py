@@ -178,7 +178,10 @@ with tempfile.TemporaryDirectory(prefix='s222-ovs-') as temporary:
                         str(source),'-o',str(args.library_output)],check=True)
         raise SystemExit(0)
     source.write_text(prefix + core + suffix)
-    subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+    # This throwaway host checker avoids the environment's PIE ASan startup
+    # mmap fault. Product binaries and the independent shared replay oracle
+    # keep their existing build/hardening settings.
+    subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', '-no-pie',
                     '-I' + str(ROOT / 'src/product/vpp'), str(source),
                     str(ROOT / 'src/product/vpp/product_flow_tcp.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=15)

@@ -74,6 +74,8 @@ class Campaign(native.Campaign):
                 break
             assert time.monotonic() < deadline, 'previous RuntimeService has not retired'
             time.sleep(.1)
+        save(out/'network-before.log', self.target.adb(
+            'logcat', '-d', '-s', 'SakamotoNetwork:I', '*:S').stdout)
         save(out/'start.txt', self.action('--ez', 'runtimeStart', 'true', '--es', 'runtimeProfile', 'root'))
         state = self.wait_state(record, 'running', lambda s: s.get('state') == 'running'
             and s.get('protectionRunning') == 'true' and not s.get('errorCode'))
@@ -116,15 +118,15 @@ class Campaign(native.Campaign):
         save(out/'before-stop-clock.txt', self.target.run(clock).stdout)
         if abnormal:
             self.cli(record, 'hold-next', 'product policy hold-next 0 500000', 'product policy hold-next 1 500000')
-            deadline = time.monotonic()+2
-            while 's209 event=hold_begin ' not in self.target.read(record['logfile']):
-                assert time.monotonic() < deadline, 'no live policy work before native death'
-                time.sleep(.01)
             # Freeze this exact owned native process before archiving its
             # last complete log. SIGKILL then proves OS reclamation, never
             # graceful zero or an assumed native syscall result.
             saved = self.target.temporary+'/'+record['label']+'-crash.log'
-            command = 'kill -STOP '+str(record['pid'])+' && cp '+shlex.quote(record['logfile'])+' '+shlex.quote(saved)
+            # Observe and freeze on the device. Pulling a large active trace
+            # over adb before SIGSTOP can outlast the bounded policy hold.
+            command = 's242_waits=0; while ! grep -q '+shlex.quote('s209 event=hold_begin ')+' '+shlex.quote(record['logfile'])
+            command += '; do s242_waits=$((s242_waits+1)); test "$s242_waits" -lt 200 || exit 1; sleep 0.01; done; '
+            command += 'kill -STOP '+str(record['pid'])+' && cp '+shlex.quote(record['logfile'])+' '+shlex.quote(saved)
             command += ' && '+clock+' && kill -KILL '+str(record['pid'])+' && '+clock
             save(out/'kill-clock.txt', self.target.run(command).stdout)
             record['termination'] = 'SIGKILL_OS_RECLAIM'
@@ -143,6 +145,8 @@ class Campaign(native.Campaign):
             save(out/'vpp.log', self.app('files/product-state/s242-last-stop.log'))
             record['native_log_source'] = 'RuntimeService-stop-archive'
         save(out/'service.log', self.app('files/logs/runtime-service.log'))
+        save(out/'network-events.log', self.target.adb(
+            'logcat', '-d', '-s', 'SakamotoNetwork:I', '*:S').stdout)
         save(out/'cleanup.properties', self.app('files/product-state/s176-root-nfqueue-cleanup.properties'))
         record['process_absent'] = not self.target.alive(record['pid'])
         assert record['process_absent']

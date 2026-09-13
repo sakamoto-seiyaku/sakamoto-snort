@@ -500,7 +500,18 @@ def verify(build_path, directory, ovs):
     for name, value in run['test_inputs'].items():
         assert digest(directory / 'test-source' / name) == value
     assert digest(directory / 'tcp-endpoint') == run['endpoint_sha256']
-    assert run['policy_helper_sha256'] == build['s221_helpers']['helpers/s217-policy']
+    if 'policy_helper_witness' in run:
+        witness_path = Path(run['policy_helper_witness']['path'])
+        assert digest(witness_path) == run['policy_helper_witness']['sha256']
+        witness = json.loads(witness_path.read_text())
+        assert witness['platform'] == 'pixel' and witness['build_sha256'] == digest(build_path)
+        assert witness['source_sha256'] == build['source_sha256']
+        assert run['policy_helper_sha256'] == witness['files']['s217-policy']
+        assert digest(witness_path.parent / 's217-policy') == run['policy_helper_sha256']
+        for name, expected in witness['sources'].items():
+            assert digest(ROOT / name) == expected
+    else:
+        assert run['policy_helper_sha256'] == build['s221_helpers']['helpers/s217-policy']
     peers = records((directory / 'endpoint.log').read_text())
     one(peers, event='stopped', live_sockets=0)
     connections = {}

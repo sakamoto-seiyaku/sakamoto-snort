@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--ipv4', required=True)
     parser.add_argument('--ipv6', required=True)
+    parser.add_argument('--helpers', type=Path, help='separate current-build S242 helper witness')
     parser.add_argument('--case', choices=['smoke', 'matrix'], default='matrix')
     args = parser.parse_args()
     addresses = {4: str(ipaddress.IPv4Address(args.ipv4)), 6: str(ipaddress.IPv6Address(args.ipv6))}
@@ -259,8 +260,19 @@ def main():
         save('network.txt', adb('shell', 'ip', 'address'))
         result['uid'] = int(adb('shell', 'run-as', PKG, 'id', '-u').strip())
         remote_policy = '/data/local/tmp/s240-policy-' + str(result['started_ns'])
-        helper = args.build.resolve().parent / 'helpers/s217-policy'
-        assert chain.digest(helper) == build['s221_helpers']['helpers/s217-policy']
+        if args.helpers:
+            witness = json.loads(args.helpers.read_text())
+            assert witness['platform'] == 'pixel' and witness['build_sha256'] == chain.digest(args.build)
+            assert witness['source_sha256'] == build['source_sha256']
+            helper = args.helpers.resolve().parent / 's217-policy'
+            assert chain.digest(helper) == witness['files']['s217-policy']
+            for name, expected in witness['sources'].items():
+                assert chain.digest(ROOT / name) == expected
+            result['policy_helper_witness'] = dict(path=str(args.helpers.resolve()),
+                                                  sha256=chain.digest(args.helpers))
+        else:
+            helper = args.build.resolve().parent / 'helpers/s217-policy'
+            assert chain.digest(helper) == build['s221_helpers']['helpers/s217-policy']
         save('policy-push.txt', adb('push', str(helper), remote_policy))
         adb('shell', 'chmod', '755', remote_policy)
         assert adb('shell', 'sha256sum', remote_policy).split()[0] == chain.digest(helper)

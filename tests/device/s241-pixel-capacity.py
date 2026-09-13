@@ -50,8 +50,10 @@ def main():
     p.add_argument('--protocol', choices=['tcp', 'udp', 'both'], default='both')
     p.add_argument('--owner', type=int, choices=[0, 1], default=0)
     p.add_argument('--completion-slots', type=int, choices=[2, 128], default=128)
+    p.add_argument('--completion-burst-packets', type=int, choices=[16, 32], default=16)
     args = p.parse_args()
     assert args.completion_slots == 128 or (args.case == 'drop' and args.protocol == 'udp' and args.owner == 1)
+    assert args.completion_burst_packets == 16 or args.completion_slots == 2
     chain = module('chain241', 'tests/evidence/product_chain.py')
     oracle = module('owner241', 'tests/device/s207-owner-oracle.py')
     args.build = args.build.resolve()
@@ -221,6 +223,7 @@ def main():
         label = f'{protocol}{family}-{case}'
         current = dict(label=label, case=case, family=family, protocol=protocol, probes=[],
                        completion_slots=args.completion_slots,
+                       completion_burst_packets=args.completion_burst_packets,
                        expected=dict(fault=FAULTS.get(case, 'NONE'), owner=args.owner,
                            no_spill=True, preserve_existing=True, policy_drop=case == 'drop',
                            processing_bypass=case == 'flow-capacity', zero_residue=True))
@@ -351,7 +354,9 @@ def main():
             address = unreachable_route(family, True) if case == 'unreachable' else None
             candidate = flow(family, 'udp', args.owner, address=address)
             if args.completion_slots == 2:
-                candidate.update(packets=16, burst=True, intervalMs=0)
+                # Stay within the 32 primary credits while allowing a denser
+                # real app burst to exercise the separate two-slot return ring.
+                candidate.update(packets=args.completion_burst_packets, burst=True, intervalMs=0)
             if case in ('protect', 'bind'):
                 cli(current['label'] + '/broker-fault', [f'product flow-stack broker-fault owner {args.owner} {case} after 1'])
             if case == 'drop': policy(17, candidate['source'])
