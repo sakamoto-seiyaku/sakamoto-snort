@@ -131,10 +131,19 @@ attach_timer (expiry_owner_t *owner, u32 index)
 static int
 matches (const expiry_owner_t *owner, const product_flow_entry_t *entry)
 {
-  return entry && entry->linked && entry->key.kind == PRODUCT_OWNER_KEY_L4_PORTS &&
-    entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP &&
-    (!experimental_startup || entry->key.transport.ports.a == owner->port ||
-     entry->key.transport.ports.b == owner->port);
+  if (!entry || !entry->linked) return 0;
+  /* The retained S226 A/B initializer reads UDP state. Its explicit test
+   * scope must stay UDP-only; production consumes every supported tracker. */
+  if (experimental_startup)
+    return entry->key.kind == PRODUCT_OWNER_KEY_L4_PORTS &&
+      entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP &&
+      (entry->key.transport.ports.a == owner->port ||
+       entry->key.transport.ports.b == owner->port);
+  return (entry->key.kind == PRODUCT_OWNER_KEY_L4_PORTS &&
+          (entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP ||
+           entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP)) ||
+    (entry->key.kind == PRODUCT_OWNER_KEY_ICMP_QUERY &&
+     (entry->key.protocol == 1 || entry->key.protocol == 58));
 }
 
 static void

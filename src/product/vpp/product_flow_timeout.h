@@ -5,7 +5,7 @@
 #include "product_flow_tracker.h"
 
 /* OVS 3c2bea086ef8912d57331173af266f21d36740a0 default policy, in us.
- * S227 enables UDP only; the same map will acquire TCP/ICMP in S236.
+ * One shared policy for the UDP, TCP and ICMP Echo trackers.
  * No tracker or caller gets an independently configurable timeout policy. */
 static inline uint64_t
 product_flow_timeout_us (product_ct_timeout_t timeout)
@@ -13,8 +13,16 @@ product_flow_timeout_us (product_ct_timeout_t timeout)
   switch (timeout)
     {
     case PRODUCT_CT_TIMEOUT_OTHER_FIRST:
-    case PRODUCT_CT_TIMEOUT_OTHER_MULTIPLE: return UINT64_C (60000000);
-    case PRODUCT_CT_TIMEOUT_OTHER_BIDIR: return UINT64_C (30000000);
+    case PRODUCT_CT_TIMEOUT_OTHER_MULTIPLE:
+    case PRODUCT_CT_TIMEOUT_ICMP_FIRST: return UINT64_C (60000000);
+    case PRODUCT_CT_TIMEOUT_OTHER_BIDIR:
+    case PRODUCT_CT_TIMEOUT_TCP_FIRST_PACKET:
+    case PRODUCT_CT_TIMEOUT_TCP_OPENING:
+    case PRODUCT_CT_TIMEOUT_TCP_CLOSED:
+    case PRODUCT_CT_TIMEOUT_ICMP_REPLY: return UINT64_C (30000000);
+    case PRODUCT_CT_TIMEOUT_TCP_ESTABLISHED: return UINT64_C (86400000000);
+    case PRODUCT_CT_TIMEOUT_TCP_CLOSING: return UINT64_C (900000000);
+    case PRODUCT_CT_TIMEOUT_TCP_FIN_WAIT: return UINT64_C (45000000);
     default: return 0;
     }
 }

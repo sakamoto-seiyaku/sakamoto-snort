@@ -245,7 +245,7 @@ product_flow_runtime_set_deadline (
   if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
     return status;
   if (!deadline_us || timeout_class <= PRODUCT_CT_TIMEOUT_NONE ||
-      timeout_class > PRODUCT_CT_TIMEOUT_TCP_CLOSED)
+      timeout_class > PRODUCT_CT_TIMEOUT_ICMP_REPLY)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   product_flow_entry_t *entry = &pool->slots[slot].entry;
   if (!entry->linked)
