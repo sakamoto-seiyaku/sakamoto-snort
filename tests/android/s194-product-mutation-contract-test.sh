@@ -12,6 +12,7 @@ protocol="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androi
 backend="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlBackend.java"
 activity="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
+formatter="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeEvidenceFormatter.java"
 jni="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 device_runner="$repo_root/tests/device/s194-product-mutation-product.sh"
 
@@ -73,13 +74,17 @@ grep -Fq 'ApplicationInfo.FLAG_DEBUGGABLE' "$service" \
   || fail "typed fault seam is not debug-only"
 grep -Fq 'writeS194ProductMutationStatus' "$service" \
   || fail "RuntimeService has no S194 mutation evidence"
-grep -Fq 'reconcile_no_replay' "$service" \
+grep -Fq 'RuntimeEvidenceFormatter.productMutation(' "$service" \
+  || fail "RuntimeService does not use the S194 formatter"
+grep -Fq 'RuntimeEvidenceFormatter.policyMutationFault(' "$service" \
+  || fail "RuntimeService does not use the S194 fault formatter"
+grep -Fq 'reconcile_no_replay' "$formatter" \
   || fail "RuntimeService does not publish no-replay evidence"
 grep -Fq 'reconciliationReadbackOnly' "$service" \
   || fail "RuntimeService does not preserve fresh reconcile resolution state"
 grep -Fq 'appendLog(reconciliationDetail)' "$service" \
   || fail "RuntimeService does not log fresh reconcile resolution"
-grep -Fq 'isUnknownPolicyMutationReadbackDetail(errorMessage)' "$service" \
+grep -Fq 'isUnknownPolicyMutationReadbackDetail(errorMessage)' "$formatter" \
   || fail "S194 status bridge drops preserved readback-only resolution detail"
 
 test -x "$device_runner" || fail "S194 device runner is missing or not executable"

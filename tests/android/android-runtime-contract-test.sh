@@ -14,6 +14,7 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeProfile.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeProfileInitializationPlan.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/BoundedText.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeEvidenceFormatter.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationSubjectId.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationProtocolCatalog.java" \
@@ -52,8 +53,10 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreOwner.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/VppHealthHandshake.java" \
   "$repo_root/tests/android/AndroidRuntimeContractTest.java" \
-  "$repo_root/tests/android/WorkerCpuPlacementTest.java"
+  "$repo_root/tests/android/WorkerCpuPlacementTest.java" \
+  "$repo_root/tests/android/RuntimeEvidenceFormatterTest.java"
 java -cp "$out_dir" AndroidRuntimeContractTest
 java -cp "$out_dir" WorkerCpuPlacementTest
+java -cp "$out_dir" com.sakamoto.snort.androidruntime.RuntimeEvidenceFormatterTest
 
 echo "android runtime contract seam: PASS"
