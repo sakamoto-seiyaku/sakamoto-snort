@@ -79,3 +79,15 @@ does not collect new device observations or erase its release/24-hour/hardware l
 
 Large RuntimeService/packet-graph decomposition is deliberately outside this
 organization change. No 24-hour test or device operation is started here.
+
+## Delivery identity
+
+Organization/test implementation commit:
+`2995c7dc89d9e4abc2c8ad12e9cb1880e3499291`.
+The final complete 41-test run, including the new negative witnesses, is retained
+as `build-output/s249-20260913/host-tests-final.xml`, SHA-256
+`f04d2071ec3fc33ad504d577fe83f27db9622526b6ef62c4173699d09aa4ad22`.
+Archive origin/destination/blob identities are retained locally in
+`build-output/s249-20260913/organization-integrity.json`.
+After the implementation commit, Git status contained exactly the same 23
+pre-existing changes, with no staged user documents or Product source edits.
