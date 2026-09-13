@@ -1484,7 +1484,7 @@ public final class RuntimeService extends VpnService {
         }
         String reconciliationDetail = status.errorDetail == null ? "" : status.errorDetail;
         boolean reconciliationReadbackOnly =
-                isUnknownPolicyMutationReadbackDetail(reconciliationDetail);
+                RuntimeEvidenceFormatter.isUnknownPolicyMutationReadbackDetail(reconciliationDetail);
         if (status.policyActiveRevision <= 0L) {
             status = session.applyEmptyPolicy(getFilesDir().getAbsolutePath());
             if (status == null || status.code != 0) {

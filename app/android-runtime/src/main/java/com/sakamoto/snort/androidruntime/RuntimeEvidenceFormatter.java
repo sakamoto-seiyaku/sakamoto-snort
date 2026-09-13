@@ -58,7 +58,7 @@ final class RuntimeEvidenceFormatter {
         return text;
     }
 
-    private static boolean isUnknownPolicyMutationReadbackDetail(String value) {
+    static boolean isUnknownPolicyMutationReadbackDetail(String value) {
         return value != null
                 && (value.contains("unknown policy mutation reconciled")
                 || value.contains("unknown policy mutation discarded"));

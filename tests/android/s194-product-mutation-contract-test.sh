@@ -84,6 +84,8 @@ grep -Fq 'reconcile_no_replay' "$formatter" \
   || fail "RuntimeService does not publish no-replay evidence"
 grep -Fq 'reconciliationReadbackOnly' "$service" \
   || fail "RuntimeService does not preserve fresh reconcile resolution state"
+grep -Fq 'RuntimeEvidenceFormatter.isUnknownPolicyMutationReadbackDetail(reconciliationDetail)' "$service" \
+  || fail "RuntimeService does not use the shared readback classification"
 grep -Fq 'appendLog(reconciliationDetail)' "$service" \
   || fail "RuntimeService does not log fresh reconcile resolution"
 grep -Fq 'isUnknownPolicyMutationReadbackDetail(errorMessage)' "$formatter" \
