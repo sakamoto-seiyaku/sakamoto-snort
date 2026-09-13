@@ -1,5 +1,7 @@
 # Protocol Identification VPP Reference Inventory
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: reference inventory for SAKAMOTO-61 and later Protocol Identification
@@ -10,7 +12,7 @@ Identification into the Android L4 Product Release gate.
 
 Reference repository:
 
-- `/home/js/backup/backup/Git/vpp`
+- `<reference-root>`
 - branch observed: `dev-26.03...origin/dev-26.03`
 - local state observed: dirty reference checkout with many deleted upstream
   external packaging files and an untracked `test/` copy; treat paths as
@@ -139,10 +141,10 @@ Repo-local wrapper inventory evidence:
 The reference repo has real packet-capture material that this repository
 currently lacks:
 
-- all reference packet captures under `/home/js/backup/backup/Git/vpp/test`:
+- all reference packet captures under `<reference-root>/test`:
   `756` files total, split as `751` `.pcap`, `5` `.pcapng`, and `0` `.cap`
 - LPI batch corpus under
-  `/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap`: `85`
+  `<reference-root>/test/decoders/stellar_lpi/test_pcap`: `85`
 - LPI batch expected JSON files under the same tree: `7`
 
 LPI corpus groups observed:
@@ -168,7 +170,7 @@ Group-level shape observed on 2026-08-12:
 | `socks_pcap` | 16 | 1 | 37 | DHCP, DNS, FTP, HTTP, NETBIOS, POP3, RDP, SMTP, SOCKS, SSL | useful for ordered multi-result behavior such as SOCKS plus inner protocol |
 
 The fork runner for this corpus is
-`/home/js/backup/backup/Git/vpp/test/test_stellar_lpi.py::test_lpi_batch`.
+`<reference-root>/test/test_stellar_lpi.py::test_lpi_batch`.
 It discovers the `test_pcap` subdirectories, replays every `.pcap` through
 `stellar-flow-dissector` and `stellar-lpi`, extracts event-logger
 `LPI TRACE SESSION` JSON, and compares the ordered actual results with each
@@ -182,7 +184,7 @@ Repo-local expected-result alias inventory:
 - command:
   `tools/protocol_identification/vpp_lpi_expected_alias_inventory.py`
 - source:
-  `/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap`
+  `<reference-root>/test/decoders/stellar_lpi/test_pcap`
 - policy: `policy.copiesExpectedJsonIntoRepo=false`
 - current baseline: `7` expected JSON files, `267` expected sessions, `23`
   unique normalized `APP_NAME` values.

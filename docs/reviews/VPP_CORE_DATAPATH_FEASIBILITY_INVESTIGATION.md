@@ -1,5 +1,7 @@
 # VPP Core Datapath 可行性调查
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 日期：2026-06-21
 状态：调查报告 / 讨论输入。本文不是 ADR，也不是实现任务列表。
 
@@ -59,7 +61,7 @@ Platform egress
 参考仓库为：
 
 ```text
-/home/js/backup/backup/Git/vpp
+<reference-root>
 ```
 
 不是 `POC/vpp`。
@@ -69,7 +71,7 @@ Platform egress
 本地已有 NFQUEUE -> VPP graph 的原型插件：
 
 ```text
-/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/
+<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/
 ```
 
 它证明了 NFQUEUE packet 可以进入 VPP：
@@ -85,9 +87,9 @@ Platform egress
 
 关键文件：
 
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/device.c`
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/node.c`
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/main.c`
+- `<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/device.c`
+- `<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/node.c`
+- `<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/main.c`
 
 当前插件是原型状态，不是可直接作为 Snort 生产 Adapter 的实现。
 

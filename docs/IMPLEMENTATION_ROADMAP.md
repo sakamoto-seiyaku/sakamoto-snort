@@ -267,7 +267,7 @@ archived runtime 或创建孤立的数据面实现任务。
   graph facts 影响当前 packet verdict 的消费路径尚未实现。异步结果仍只能影响后续 packet。
   SAKAMOTO-61 已完成 provider-neutral pre-decision work：ApplicationProtocolCatalog、disabled
   provider seam、FlowEntry recognition state、Activity projection、VPP reference inventory、
-  libprotoident/stellar_lpi probes、selected PCAP smoke 和 provider-source decision inputs。仍未
+  libprotoident/识别封装探针、selected PCAP smoke 和 provider-source decision inputs。仍未
   开始/未能声明完成的是 provider source/license/corpus/runtime enablement、real Android provider
   evidence、ProtocolRule enforcement 与 product verdict consumption。
 - [NEXT] VPN Direct Egress evidence frontier：按 SAKAMOTO-114 → 115 → 116 → 117 依次证明真实

@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 ENTRIES = (
     "README.md",
     "docs/README.md",
+    "docs/reference/README.md",
+    "docs/reference/NAMING_AND_PROVENANCE.md",
     "docs/current/README.md",
     "docs/INTERFACE_SPECIFICATION.md",
     "docs/agents/domain.md",
@@ -20,6 +22,7 @@ ENTRIES = (
     "docs/decisions/SNORT_10_MAINLINE_RECONSTRUCTION.md",
     "docs/decisions/RESETALL_RUNTIME_CONCURRENCY.md",
     "docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md",
+    "docs/reference/PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md",
     "docs/archived/pre-vpp/README.md",
     "docs/testing/README.md",
     "docs/tooling/README.md",

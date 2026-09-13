@@ -192,6 +192,9 @@ add_test(NAME sakamoto-android-runtime-teardown-contract
 add_test(NAME sakamoto-repository-navigation-contract
   COMMAND python3
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/repository_navigation_test.py")
+add_test(NAME sakamoto-reference-naming-contract
+  COMMAND python3
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/reference_naming_test.py")
 add_test(NAME sakamoto-product-host-query-identity-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_query_identity_contract.sh")
 add_test(NAME sakamoto-product-host-residue-contract

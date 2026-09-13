@@ -1,5 +1,7 @@
 # Protocol Identification VPP LPI Corpus Manifest
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: reference-only manifest for SAKAMOTO-61 and later Protocol
@@ -9,7 +11,7 @@ Android L4 Product Release gate.
 
 Source corpus:
 
-- `/home/js/backup/backup/Git/vpp/test/decoders/stellar_lpi/test_pcap`
+- `<reference-root>/test/decoders/stellar_lpi/test_pcap`
 - repeatable local inventory command:
   `bash tools/protocol_identification/vpp_lpi_corpus_inventory.sh`
 - repeatable APP_NAME/provider-alias coverage command:

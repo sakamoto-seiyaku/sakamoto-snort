@@ -1,5 +1,7 @@
 # Protocol Identification VPP LPI Control and Runner Contract
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: `reference_only` contract for SAKAMOTO-61. This document records the
@@ -11,10 +13,10 @@ plan, or an Android L4 Product Release approval.
 
 The facts below are read from the following files in the local reference tree:
 
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi.api`
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi_test.c`
-- `/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/stellar_lpi_plugin.c`
-- `/home/js/backup/backup/Git/vpp/test/test_stellar_lpi.py`
+- `<reference-root>/src/plugins/stellar_lpi/stellar_lpi.api`
+- `<reference-root>/src/plugins/stellar_lpi/stellar_lpi_test.c`
+- `<reference-root>/src/plugins/stellar_lpi/stellar_lpi_plugin.c`
+- `<reference-root>/test/test_stellar_lpi.py`
 
 The runner also reads its adjacent reference corpus at
 `test/decoders/stellar_lpi/test_pcap` when that checkout is exercised. No
@@ -37,11 +39,12 @@ work has started.
 
 ## Reference path and default overrides
 
-The default reference root used by the repo-local VPP inventories and probes is
-`/home/js/backup/backup/Git/vpp`. The wrapper and corpus paths are derived as:
+`<reference-root>` below abstracts the machine-specific checkout path recorded
+at the time. For an explicitly requested inventory, supply the real checkout
+through `VPP_REFERENCE_ROOT`; the exact wrapper and corpus suffixes remain:
 
 ```text
-referenceRoot=${VPP_REFERENCE_ROOT:-/home/js/backup/backup/Git/vpp}
+referenceRoot=${VPP_REFERENCE_ROOT:?set the external reference checkout path}
 wrapperRoot=${VPP_STELLAR_LPI_ROOT:-${referenceRoot}/src/plugins/stellar_lpi}
 corpusRoot=${VPP_LPI_CORPUS_ROOT:-${referenceRoot}/test/decoders/stellar_lpi/test_pcap}
 ```
@@ -58,7 +61,7 @@ and writes only to an explicit `--output-root PATH` (or its build-output
 default). Missing reference paths are reported as unavailable reference-only
 evidence by default; strict inventory mode may make an unavailable root fail.
 
-The VPP Python runner is different: `/home/js/backup/backup/Git/vpp/test/test_stellar_lpi.py`
+The VPP Python runner is different: `<reference-root>/test/test_stellar_lpi.py`
 derives its corpus from the directory containing that file, so its
 `test_base_dir` is the runner checkout's
 `test/decoders/stellar_lpi/test_pcap`. The repo-local inventories/probes must

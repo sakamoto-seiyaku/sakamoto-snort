@@ -1,24 +1,34 @@
-# Reference Docs
+# Reference docs
 
-This directory contains background and lineage material.
+These are focused comparisons and dated evidence, not default Product context.
+Use [current mainline](../current/README.md) for implementation and readiness.
 
-Reference docs are not default agent context. They can help compare `sucre-snort` with prior codebases or recover old risk categories, but old line numbers, bug lists, and implementation notes are not current facts unless confirmed against the active code and docs.
+[Reference naming rules](NAMING_AND_PROVENANCE.md): mainline prose uses Sakamoto
+terms; external filenames/API/CLI/output identities stay exact for provenance.
+Machine-specific roots may be abstracted, not the technical identifiers below them.
 
-## Focused References
+## Pinned current semantic reference
 
-- [Android VPP POC 技术复盘](ANDROID_VPP_POC_TECHNICAL_RETROSPECTIVE.md)：按实验顺序整理 Android VPP 的构建、root/NFQUEUE、VPN/TUN/HEV、体积裁剪和 idle CPU 优化过程。
-- [Protocol Identification VPP Reference Inventory](PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md)：盘点 `/home/js/backup/backup/Git/vpp` 中的 `stellar_lpi`、libprotoident、decoder/enforcer 和 PCAP 语料，作为 SAKAMOTO-61/S63 的参考输入。
-- [Protocol Identification VPP LPI Control and Runner Contract](PROTOCOL_IDENTIFICATION_VPP_LPI_CONTROL_AND_RUNNER_CONTRACT.md)：基于 backup VPP 的 `stellar_lpi.api`、VAT client、`stellar_lpi_plugin.c` 与 `test/test_stellar_lpi.py`，记录 reference path/default override、enable/disable API、TCP/UDP feature arcs、debug/max-detect-pkts、event JSON 与 runner-generated `LPI_RESULT_i`；明确 `reference_only`、不导入 source/corpus、`realProviderEnabled=not_claimed`、`protocolRule=out_of_scope`。
-- `tools/protocol_identification/vpp_stellar_lpi_wrapper_inventory.sh`：机器可读地清点 modified VPP `stellar_lpi` wrapper 的 C boundary、调用顺序、source/build/license 形状；不复制源码、不决定 provider source strategy。
-- `tools/protocol_identification/vpp_lpi_source_shape_inventory.sh`：安全的 S61 reference-only source-shape inventory，写入 `build-output/protocol-identification/source-shape`（或 `--output-root`），输出 `sourceShapeEvidence=reference_only` 以及 availability/git/key-file/count/hash/license/corpus-excluded markers；缺失 backup path 默认只记录 unavailable/skip，不复制源码/PCAP/expected JSON/license、不声明 real provider 或 ProtocolRule。
-- `tools/protocol_identification/run_s61_reference_probes.sh`：非默认、显式运行的 S61 reference probe 聚合入口，串起 source/corpus/alias/wrapper inventory 与 Android/host build/PCAP probes，统一写入 `build-output/protocol-identification/s61-reference-probes`（或 `--output-root`）和顶层 `s61-reference-probes.properties`；支持 `--continue-on-fail` 记录 PASS/FAIL/UNAVAILABLE，不复制源码/PCAP/expected JSON/license、不声明 real provider 或 ProtocolRule。
-- [Protocol Identification VPP LPI Corpus Manifest](PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md)：记录 modified VPP `stellar_lpi` PCAP corpus 的 group/count/expected JSON 形态，以及 expected `APP_NAME` 对当前 Sakamoto provider alias catalog 的覆盖；不复制样本或 expected JSON，不替代 license/privacy review。
-- [Protocol Identification libprotoident Reference Audit](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md)：记录 backup VPP vendored `libprotoident` 的 license/build/API/Android 风险事实；不作为法律结论或 vendoring 决策。
-- [Protocol Identification libprotoident NDK Probe](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md)：提供只读 Android/NDK build probe，验证 backup VPP vendored `libprotoident` 当前能否在本地 NDK toolchain 下编译。
-- [Protocol Identification stellar_lpi Wrapper Inventory](PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md)：记录 modified VPP `stellar_lpi_core` wrapper 的 C API、source/build shape、VPP-tree dependency 和 fork-local mapping 风险；不复制源码或决定 provider source strategy。
-- [Protocol Identification Provider Source Decision Input](PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_DECISION_INPUT.md)：汇总 S61 provider source/runtime wiring 的已证据事实、source shape options、license/provenance gaps、默认禁用 wiring seam、decision 前可做/必须等待事项和 exact decision questions；不选择策略、不提供法律建议、不启动 ProtocolRule。
-- [Protocol Identification Provider Source Package Evidence Requirements](PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_PACKAGE_CHECKLIST.md)：S61 pre-decision source-package evidence and decision requirements catalog，覆盖 source pin/checksum/manifest、license/NOTICE/provenance、LGPL source/relink posture、`stellar_lpi_core`/`stellar_lpi_extend` wrapper provenance、corpus privacy/import、Android ABI/API/NDK matrix、packaging choice、warning policy、runtime enablement、Root/VPN evidence、release artifact evidence 和 decision records；不是 tracker/checklist 或 open-work ledger，Plane 仍是 open work 的 source of truth；不选择策略、不批准 vendoring/distribution、不启用 real provider、不启动 ProtocolRule。
-- `tools/protocol_identification/lpi_provider_source_intake_gate.sh`：S61 pre-decision intake gate，用 `source-package.properties`、source manifest、license/NOTICE/provenance files、Android ABI/API/NDK、warning policy、disabled runtime enablement、no-corpus import 和 ProtocolRule out-of-scope markers 检查候选 provider source package evidence；只输出 `providerSourceEvidence=predecision_intake_only` / `realProviderEnabled=not_claimed`，不批准 vendoring/distribution、不复制 backup source 或 corpus、不启用 real provider。
-- `tools/protocol_identification/stellar_lpi_wrapper_android_build_probe.sh`：只读 Android/NDK compile-link probe，验证 modified VPP `stellar_lpi_core.c + stellar_lpi_extend.c` 能否和 backup vendored `libprotoident` 一起编译链接；只写 `build-output`，不复制源码、不启用 runtime provider。
-- `tools/protocol_identification/stellar_lpi_wrapper_host_payload_probe.sh`：只读 host compile-link-run probe，用 synthetic HTTP/DNS/SOCKS5 payload 通过 modified VPP `stellar_lpi_core.c + stellar_lpi_extend.c` wrapper lifecycle，并通过生成的 provider adapter 驱动 Sakamoto `LpiRecognitionPipeline -> LpiRecognitionAdapter -> BoundedFlowTable` seam；只写 `build-output`，不复制源码/PCAP、不启用 runtime provider。
-- `tools/protocol_identification/stellar_lpi_wrapper_host_pcap_probe.sh`：只读 host compile-link-run probe，原地读取 backup VPP `mixed_pcap` 中选定 HTTP/DNS/QUIC PCAP、UNKNOWN/no-result `mixed_pcap/39-pop3-mistake-redis.pcap` 的 `192.168.40.82:41450-192.168.44.230:7002-6-0` flow，和 `socks_pcap/1-socks45-http-example.pcap` 的 `10.180.156.185:53535-10.180.156.249:1080-6-0` flow，并以 `selectedExpectedJsonValidation=PASS` 锁定 session address、`APP_NAME`/missing `APP_NAME`、`APP_ID`/`UNKNOWN`、PCAP filename 的 row-level match；解析 classic PCAP Ethernet/IPv4/TCP/UDP payload，经真实 wrapper provider 驱动 Sakamoto recognition seam，证明选定 mapped + no-result + unmapped/compound smoke（UNKNOWN 提交 4 个 payload-bearing target packets 且无 app id/name/alias、无 `lpi:unknown`；`SOCKS`/`8005` 先作为 `lpi:socks` unmapped，随后 `HTTP`/`67` 作为 `lpi:http` mapped）；只写 `build-output`，不复制源码/PCAP/expected JSON、不声明完整 corpus accuracy、不决定 provider runtime wiring/source strategy 或 ProtocolRule。
+- [OVS Conntrack Semantic Baseline](OVS_CONNTRACK_BASELINE.md): S221's pinned
+  TCP/UDP/ICMP userspace baseline, commit/file hashes, timeout mapping and license
+  attribution. This is not one of the historical provider probes below.
+
+## Historical engineering evidence
+
+- [Android VPP POC retrospective](ANDROID_VPP_POC_TECHNICAL_RETROSPECTIVE.md).
+- [Fork AppID number origin](FORK_VPP_APPID_NUMBER_ORIGIN.md).
+- [VPP reference inventory](PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md).
+- [LPI control and runner record](PROTOCOL_IDENTIFICATION_VPP_LPI_CONTROL_AND_RUNNER_CONTRACT.md).
+- [LPI corpus manifest](PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md).
+- [libprotoident audit](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md).
+- [libprotoident NDK probe](PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md).
+- [Reference wrapper inventory](PROTOCOL_IDENTIFICATION_REFERENCE_LPI_WRAPPER_INVENTORY.md).
+- [Provider source decision inputs](PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_DECISION_INPUT.md).
+- [Provider source package requirements](PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_PACKAGE_CHECKLIST.md).
+
+S61/S63 observations retain their original scope. They do not approve source
+import, provider runtime enablement, ProtocolRule enforcement or release readiness.
+The Host payload/PCAP probes describe the removed C++ recognition seam; do not
+restore it to replay them. Tool names in the dated records identify historical
+commands, not current runnable Product gates. Check source prerequisites before
+any explicitly requested reference-only inventory or standalone third-party probe.

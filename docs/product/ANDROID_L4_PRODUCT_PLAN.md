@@ -212,7 +212,7 @@ AppID、不进入 Protocol Policy，也不增加 `unsupported protocol` 等产�
 终态仍没有任何已映射结果，统一显示“未识别”。后续只根据真实用户需求和流量证据向 Catalog
 追加协议，不为长尾协议预先投入分类、文案、规则和测试成本。
 
-ProtocolRule 参考 fork VPP 的两层策略思路，而不是退化成 AppID-only 开关：`stellar_acl` 类的
+ProtocolRule 使用两阶段策略，而不是退化成 AppID-only 开关：
 早期 Network Gate/L4 stage 先处理只需要静态 packet facts 的规则；识别结果出现后，Protocol
 Policy stage 的复合规则以精确协议或 category selector 为必选条件，并可同时约束当时已经存在的
 application subject，以及 FlowEntry 上归一化、稳定的 ORIG/REPLY endpoint IPv4/IPv6 CIDR、

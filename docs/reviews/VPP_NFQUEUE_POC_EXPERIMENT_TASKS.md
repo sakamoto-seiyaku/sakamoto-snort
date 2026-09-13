@@ -1,5 +1,7 @@
 # VPP NFQUEUE POC 实验任务
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 日期：2026-06-21
 分支：`research/vpp-nfq-poc`
 状态：第一阶段 Linux / Docker POC 已完成 Case A-D。本文先保留原始任务定义，并在末尾记录当前实验结果。
@@ -281,4 +283,4 @@ experiments/vpp-nfq-poc/EXPERIMENT_LOG.md
 - FDio VPP upstream: https://github.com/FDio/vpp
 - FDio VPP tags: https://github.com/FDio/vpp/tags
 - Linux netfilter queue project: https://netfilter.org/projects/libnetfilter_queue/
-- 本地历史参考：`/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/`
+- 本地历史参考：`<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/`

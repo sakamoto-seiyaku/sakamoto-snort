@@ -1,5 +1,7 @@
 # Protocol Identification Provider Source Decision Input
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: concise decision input for SAKAMOTO-61 provider source and runtime
@@ -11,7 +13,7 @@ Primary reference inputs:
 
 - `docs/reference/PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md`
-- `docs/reference/PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md`
+- `docs/reference/PROTOCOL_IDENTIFICATION_REFERENCE_LPI_WRAPPER_INVENTORY.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md`
 - `tools/protocol_identification/vpp_lpi_source_shape_inventory.sh`
@@ -28,7 +30,7 @@ Contract guardrails:
 ## Current Proven Evidence
 
 - The backup reference tree is
-  `/home/js/backup/backup/Git/vpp`, observed on branch
+  `<reference-root>`, observed on branch
   `dev-26.03...origin/dev-26.03`. It is a deeply modified VPP gateway tree,
   not plain upstream VPP.
 - The relevant recognizer lineage is `src/plugins/stellar_lpi/`, with

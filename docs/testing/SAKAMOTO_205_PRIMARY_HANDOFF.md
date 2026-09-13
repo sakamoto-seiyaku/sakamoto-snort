@@ -25,8 +25,9 @@ compiled only for Host evidence. The installed Product plugin does not register
 pure C historical test helper does not constitute a product graph route.
 
 The reference fork's `src/vnet/handoff.c` computes a worker and passes its thread
-index to the native handoff queue. Its `stellar_session_manager` selects runtime
-from `vlib_get_thread_index()`. These were read as behavioral references. No fork
+index to the native handoff queue. Its `stellar_session_manager` (the external
+plugin's actual name, not a Product module) selects runtime from
+`vlib_get_thread_index()`. These were read as behavioral references. No fork
 implementation, expanded overlay, exdata, POC source or removed C++ code was
 imported.
 

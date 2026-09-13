@@ -1,5 +1,7 @@
 # Protocol Identification Provider Source Package Evidence Requirements
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: S61 pre-decision source-package evidence and decision requirements
@@ -18,10 +20,10 @@ Reference inputs only:
 - `docs/reference/PROTOCOL_IDENTIFICATION_PROVIDER_SOURCE_DECISION_INPUT.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_VPP_REFERENCE_INVENTORY.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_REFERENCE_AUDIT.md`
-- `docs/reference/PROTOCOL_IDENTIFICATION_STELLAR_LPI_WRAPPER_INVENTORY.md`
+- `docs/reference/PROTOCOL_IDENTIFICATION_REFERENCE_LPI_WRAPPER_INVENTORY.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_LIBPROTOIDENT_NDK_PROBE.md`
 - `docs/reference/PROTOCOL_IDENTIFICATION_VPP_LPI_CORPUS_MANIFEST.md`
-- backup VPP reference path: `/home/js/backup/backup/Git/vpp` reference only;
+- backup VPP reference path: `<reference-root>` reference only;
   do not copy, link, vendor, or import backup source, vendored
   `libprotoident`, PCAP files, or expected JSON from that tree by using this
   checklist.

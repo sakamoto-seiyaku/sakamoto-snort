@@ -379,7 +379,7 @@ A startup-fixed, worker-local, bounded set of VPP-owned ingress buffers reserved
 _Avoid_: one shared contended reserve, whole-frame reservation, general-purpose packet pool, policy evaluation on reserve packets, unbounded emergency allocation, blocking for reserve capacity, claiming guaranteed fail-open delivery
 
 **L4 Priority Level**:
-The `stellar_acl`-style ordering band used only by the stateless L4 classifier. Lower numeric values are evaluated before higher values. Within one level, lower explicit rule order wins, followed by lower stable rule ID. Rules may be compiled into multiple mask/hash partitions, but partition traversal must not alter this precedence.
+The ordering band used only by the stateless L4 classifier. Lower numeric values are evaluated before higher values. Within one level, lower explicit rule order wins, followed by lower stable rule ID. Rules may be compiled into multiple mask/hash partitions, but partition traversal must not alter this precedence.
 _Avoid_: comparing L4 priority with Protocol Policy priority, mask specificity as hidden priority, one lookup context per product stage
 
 **L4 WinnerRank**:
@@ -435,7 +435,7 @@ The performance goal of minimizing payload copies while preserving bounded indep
 _Avoid_: absolute zero-copy contract, copy-free marketing claim, unmeasured copying, async borrowed pointer, unbounded buffer loan, ownership complexity pursued without measured benefit, treating every copy as an architecture violation
 
 **VPP Packet Byte-Movement Contract**:
-The in-graph rule that normal parsing, policy, observation, Primary Software Distribution, and owner handoff move only VPP buffer indexes/ownership and side metadata, never copy, clone, or reserialize complete packet bytes between workers or nodes. Explicit protocol-required consumers may perform bounded content movement only when their semantics require it, notably fragment or TCP stream reassembly. The inspected modified VPP `stellar_lpi` baseline is not such an exception: it inspects the current L4 payload in place and retains only small derived per-session features, identifiers, and counters rather than packet copies. Any later recognizer that demonstrably requires selected payload retention owns a named capacity/lifetime budget and measurement; recognition must retain only the minimum required content rather than treating this exception as permission to archive packets.
+The contract that normal packet-domain processing and worker distribution transfer ownership and metadata without copying, cloning, or reserializing complete packet bytes. Protocol-required byte movement or content retention, including reassembly, requires a named, measured exception with explicit capacity/lifetime budgets and only the minimum necessary content; protocol identification alone grants no such exception.
 _Avoid_: per-node packet clone, worker-to-worker payload copy, telemetry packet copy, implicit recognizer retention, unbounded payload history, using an exception to bypass User-Space Single Materialization
 
 **Contiguous Parser Envelope**:

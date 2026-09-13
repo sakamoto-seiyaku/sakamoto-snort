@@ -1,5 +1,7 @@
 # Android VPP 软件分流与 ingress 线程拓扑研究
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 状态：point-in-time research，2026-07-20。本文提供证据与推荐，不是 standing authority；经确认的结论应再提升到 `docs/decisions/`。
 
 ## 1. 结论先行
@@ -289,13 +291,13 @@ Primary Software Distributor 对非初始分片拿不到 ports，因此仍按已
 - `experiments/vpp-nfq-poc/overlay/src/plugins/tun_poc/tun_poc.c`
 - `experiments/vpp-nfq-poc/overlay/src/plugins/nfqueue_poc/nfqueue_poc.c`
 - `experiments/vpp-nfq-poc/EXPERIMENT_LOG.md` sections 54-56
-- `/home/js/backup/backup/Git/vpp/src/vnet/handoff.c`
-- `/home/js/backup/backup/Git/vpp/src/vlib/buffer_funcs.c`
-- `/home/js/backup/backup/Git/vpp/src/vlib/node_funcs.h`
-- `/home/js/backup/backup/Git/vpp/src/vlib/threads.c`
-- `/home/js/backup/backup/Git/vpp/src/vlib/unix/input.c`
-- `/home/js/backup/backup/Git/vpp/src/vppinfra/file.h`
-- `/home/js/backup/backup/Git/vpp/src/vnet/dev/runtime.c`
+- `<reference-root>/src/vnet/handoff.c`
+- `<reference-root>/src/vlib/buffer_funcs.c`
+- `<reference-root>/src/vlib/node_funcs.h`
+- `<reference-root>/src/vlib/threads.c`
+- `<reference-root>/src/vlib/unix/input.c`
+- `<reference-root>/src/vppinfra/file.h`
+- `<reference-root>/src/vnet/dev/runtime.c`
 - `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md`
 - `docs/reviews/VPP_CORE_DATAPATH_FEASIBILITY_INVESTIGATION.md`
 - `docs/reviews/VPN_TUN_DATAPATH_ADAPTER_INVESTIGATION.md`

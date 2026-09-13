@@ -1,5 +1,7 @@
 # Rust/VPP packet ownership research
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 > Scope correction (2026-08-01): the `LocalPacket` model below assumed Rust would own VPP buffers while
 > executing packet work inside the VPP graph. That premise was rejected. Rust owns platform I/O before VPP
 > ingress and after VPP returns its result; C/VPP exclusively owns graph processing and worker handoff. The
@@ -126,7 +128,7 @@ Keep all constructors in the VPP boundary module. Safe packet code should not be
 
 The modified VPP handoff implementation compresses `u32` buffer indices into the destination frame queue,
 publishes the element, and returns the number enqueued
-(`/home/js/backup/backup/Git/vpp/src/vlib/buffer_funcs.c`, lines 290-346). Copying those four bytes is not a
+(`<reference-root>/src/vlib/buffer_funcs.c`, lines 290-346). Copying those four bytes is not a
 second packet owner if the Rust handoff abstraction consumes the source owner and only the dequeue boundary
 can reconstruct the destination owner.
 
@@ -299,9 +301,9 @@ For VPP opaque metadata mirrored in Rust:
 
 The modified fork similarly keeps small ownership facts in VPP buffer metadata and passes buffer indices.
 For example, `vnet_buffer_opaque3_t` contains `session_owner_thread` and packet flags
-(`/home/js/backup/backup/Git/vpp/src/vnet/buffer.h`, lines 543-571), while session cleanup frees retained
+(`<reference-root>/src/vnet/buffer.h`, lines 543-571), while session cleanup frees retained
 first-packet indices only if ownership was not transferred
-(`/home/js/backup/backup/Git/vpp/src/plugins/stellar_session_manager/session_manager.c`, lines 324-340).
+(`<reference-root>/src/plugins/stellar_session_manager/session_manager.c`, lines 324-340).
 This supports the buffer-resident model but does not itself supply Rust's proof boundary.
 
 ## Minimal type/operation model

@@ -483,8 +483,8 @@ Network Gate/L4、Debug Activity、VPN parity、release packaging 或产品容�
   measured cost 与新的显式决策，不能静默加入 full copy。
 - VPP graph 内的 parsing、policy、observation、Primary Distribution、owner handoff 和一次
   Corrective Handoff 只能移动 buffer index/ownership 与 side metadata，不得 clone、copy 或
-  reserialize 全包。已检查的 `stellar_lpi` baseline 直接原地读取 L4 payload，只保存少量派生
-  session feature/id/counter，不是 packet-copy exception。fragment/TCP reassembly 或未来
+  reserialize 全包。协议识别本身不构成 packet-copy exception；这条 Product 约束不表示
+  外部参考识别器已经在本项目实现。fragment/TCP reassembly 或未来
   recognizer 实证需要保留 selected payload 时，必须作为 named bounded exception 定义
   capacity/lifetime budget 并单独测量；不能借此保存无界 packet history。
 - normal parser/policy/session/recognition/distribution/observation node 对 packet bytes 只读。

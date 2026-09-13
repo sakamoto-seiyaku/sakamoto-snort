@@ -1,5 +1,7 @@
 # VPP experimental NFQUEUE plugin audit and hardening POC
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 状态：Android 基线与首轮硬化已执行；生产准入 HOLD；Android-only
 
 Plane：`SAKAMOTO-32`
@@ -24,7 +26,7 @@ VPP graph 并回写 verdict”，但这不等于它具备正式平台 Adapter �
 历史参考插件：
 
 ```text
-/home/js/backup/backup/Git/vpp/src/plugins/stellar_netfilter_queue_deprecated/
+<reference-root>/src/plugins/stellar_netfilter_queue_deprecated/
 ```
 
 具体源文件、commit/tag、VPP API 版本和本仓库使用的 patch 必须在第一阶段冻结并记录。不能只

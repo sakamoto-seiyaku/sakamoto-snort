@@ -1,5 +1,7 @@
 # Protocol Identification libprotoident NDK Probe
 
+> 参考命名说明（2026-09-13）：本机参考仓库绝对路径已抽象；外部插件、API、CLI、环境变量和证据标识保留原名，仅用于溯源，不是 Sakamoto 领域术语。下文是标注日期的历史观察；命令能否重跑须核对现行入口，旧结果不证明当前 Product 实现。
+
 Date: 2026-08-12
 
 Status: repeatable build probe for SAKAMOTO-61 provider-source planning. This
@@ -16,7 +18,7 @@ bash tools/protocol_identification/libprotoident_android_build_probe.sh
 Default inputs:
 
 - source:
-  `/home/js/backup/backup/Git/vpp/src/plugins/stellar_lpi/libprotoident`
+  `<reference-root>/src/plugins/stellar_lpi/libprotoident`
 - NDK root: `/home/js/.local/share/android-sdk/ndk/29.0.14206865`
 - ABI: `arm64-v8a`
 - platform: `android-31`
