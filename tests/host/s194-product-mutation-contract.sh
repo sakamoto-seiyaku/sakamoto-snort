@@ -6,6 +6,8 @@ abi="$repo_root/src/product/include/sakamoto_product_abi.h"
 vapi="$repo_root/src/product/native/sakamoto_product_vapi.c"
 fixture="$repo_root/src/product/native/sakamoto_product_host_fixture_abi.c"
 core="$repo_root/crates/product-core/src/lib.rs"
+policy="$repo_root/crates/product-core/src/policy.rs"
+session="$repo_root/crates/product-core/src/session.rs"
 callback_contract="$repo_root/tests/host/product_vapi_callback_contract.sh"
 
 fail() {
@@ -36,22 +38,22 @@ grep -Fq 'PolicyOutcomeUnknown' "$core" \
   || fail "Rust outcome-unknown projection is missing"
 grep -Fq 'PolicyMutationFenced' "$core" \
   || fail "Rust mutation-fenced projection is missing"
-grep -Fq 'policy-mutation-fence.properties' "$core" \
+grep -Fq 'policy-mutation-fence.properties' "$policy" \
   || fail "durable fence file is missing"
-grep -Fq 'policy-mutation-candidate.properties' "$core" \
+grep -Fq 'policy-mutation-candidate.properties' "$policy" \
   || fail "durable candidate file is missing"
-grep -Fq 'reconcile_unknown_mutation' "$core" \
+grep -Fq 'reconcile_unknown_mutation' "$session" \
   || fail "fresh-generation reconcile path is missing"
-grep -Fq 'active_policy_matches_fence' "$core" \
+grep -Fq 'active_policy_matches_fence' "$policy" \
   || fail "readback identity tuple is missing"
 
 # The ambiguous native result must retain a candidate before publishing the
 # fence; a deterministic native error must only remove the temp file.
-grep -Fq 'store.quarantine_policy_bundle(&temporary)' "$core" \
+grep -Fq 'store.quarantine_policy_bundle(&temporary)' "$session" \
   || fail "unknown result does not retain the staged candidate"
-grep -Fq 'store.write_mutation_fence(&fence)' "$core" \
+grep -Fq 'store.write_mutation_fence(&fence)' "$session" \
   || fail "unknown result does not persist the fence"
-grep -Fq 'store.discard_staged_policy_bundle(&temporary)' "$core" \
+grep -Fq 'store.discard_staged_policy_bundle(&temporary)' "$session" \
   || fail "definite failure does not discard the staged file"
 
 bash "$callback_contract"

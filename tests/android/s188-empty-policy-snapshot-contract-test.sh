@@ -13,6 +13,12 @@ jni="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 ffi="$repo_root/src/product/include/sakamoto_product_core_ffi.h"
 abi="$repo_root/src/product/include/sakamoto_product_abi.h"
 rust_core="$repo_root/crates/product-core/src/lib.rs"
+rust_sources=(
+  "$repo_root/crates/product-core/src/lib.rs"
+  "$repo_root/crates/product-core/src/ffi.rs"
+  "$repo_root/crates/product-core/src/policy.rs"
+  "$repo_root/crates/product-core/src/session.rs"
+)
 vapi="$repo_root/src/product/native/sakamoto_product_vapi.c"
 plugin="$repo_root/src/product/vpp/product_core_plugin.c"
 api="$repo_root/src/product/vpp/product_core.api"
@@ -175,7 +181,7 @@ for token in \
   'fnv1a64' \
   'assert_eq!(size_of::<ProductPolicySnapshot>(), 264)' \
   'assert_eq!(size_of::<ProductStatus>(), 1304)'; do
-  grep -Fq "$token" "$rust_core"
+  grep -Fq "$token" "${rust_sources[@]}"
 done
 
 for token in \

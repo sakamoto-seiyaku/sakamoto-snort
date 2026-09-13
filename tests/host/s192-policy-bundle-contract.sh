@@ -11,7 +11,7 @@ cc -std=c11 -Wall -Wextra -Werror \
   -o "$out_dir/s192-product-policy-bundle-test"
 "$out_dir/s192-product-policy-bundle-test"
 
-rust="$repo_root/crates/product-core/src/lib.rs"
+rust="$repo_root/crates/product-core/src/policy.rs"
 grep -Fq 'fn validate_policy_bundle' "$rust"
 grep -Fq 'policy-bundle.properties' "$rust"
 grep -Fq 'fs::rename(temporary, &target)' "$rust"

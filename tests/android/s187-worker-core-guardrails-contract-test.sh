@@ -7,6 +7,10 @@ service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/android
 native_status="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java"
 abi_header="$repo_root/src/product/include/sakamoto_product_abi.h"
 rust_core="$repo_root/crates/product-core/src/lib.rs"
+rust_sources=(
+  "$repo_root/crates/product-core/src/lib.rs"
+  "$repo_root/crates/product-core/src/ffi.rs"
+)
 device_runner="$repo_root/tests/device/s187-worker-core-guardrails-product.sh"
 
 for file in "$service" "$native_status" "$abi_header" "$rust_core" "$device_runner"; do
@@ -143,7 +147,7 @@ for token in \
   'value.product_graph_worker_count = status.product_graph_worker_count' \
   'value.product_graph_vpp_worker_count = status.product_graph_vpp_worker_count' \
   'assert_eq!(size_of::<ProductStatus>(), 1304)'; do
-  grep -Fq -- "$token" "$rust_core"
+  grep -Fq -- "$token" "${rust_sources[@]}"
 done
 
 for token in \

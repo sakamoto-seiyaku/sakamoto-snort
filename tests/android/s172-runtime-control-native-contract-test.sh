@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-rust_source="$repo_root/crates/product-core/src/lib.rs"
+rust_source="$repo_root/crates/product-core/src/ffi.rs"
 ffi_header="$repo_root/src/product/include/sakamoto_product_core_ffi.h"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 java_source="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java"

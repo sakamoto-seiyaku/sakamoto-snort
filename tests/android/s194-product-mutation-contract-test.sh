@@ -6,6 +6,8 @@ abi="$repo_root/src/product/include/sakamoto_product_abi.h"
 vapi="$repo_root/src/product/native/sakamoto_product_vapi.c"
 ffi="$repo_root/src/product/include/sakamoto_product_core_ffi.h"
 core="$repo_root/crates/product-core/src/lib.rs"
+rust_ffi="$repo_root/crates/product-core/src/ffi.rs"
+session="$repo_root/crates/product-core/src/session.rs"
 lifecycle="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreLifecycle.java"
 native="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java"
 protocol="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlProtocol.java"
@@ -37,7 +39,7 @@ grep -Fq 'debug policy bundle apply was not submitted' "$vapi" \
   || fail "VAPI pre-submit fault does not expose a definite not-submitted detail"
 grep -Fq 'sakamoto_product_core_set_policy_mutation_fault' "$ffi" \
   || fail "Rust C facade fault entry point is not present"
-grep -Fq 'sakamoto_product_core_set_policy_mutation_fault' "$core" \
+grep -Fq 'sakamoto_product_core_set_policy_mutation_fault' "$rust_ffi" \
   || fail "Rust fault entry point is not present"
 grep -Fq 'Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeSetPolicyMutationFault' "$jni" \
   || fail "JNI fault entry point is not present"
@@ -107,9 +109,9 @@ grep -Fq 'debugSetL4RuleSubject' "$device_runner" \
 # second bundle submission after the native unknown result.
 grep -Fq 'PolicyMutationFenced' "$core" \
   || fail "Rust fence state is absent from the Android-visible core"
-grep -Fq 'without issuing another VAPI mutation' "$core" \
+grep -Fq 'without issuing another VAPI mutation' "$session" \
   || fail "fresh-generation reconcile is not explicitly readback-only"
-grep -Fq 'store.clear_mutation_fence()' "$core" \
+grep -Fq 'store.clear_mutation_fence()' "$session" \
   || fail "fence lifecycle has no clear operation"
 
 echo "s194 Android mutation contract: PASS"

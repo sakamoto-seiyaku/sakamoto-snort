@@ -8,6 +8,11 @@ native_status="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/a
 jni="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 ffi="$repo_root/src/product/include/sakamoto_product_core_ffi.h"
 rust_core="$repo_root/crates/product-core/src/lib.rs"
+rust_sources=(
+  "$repo_root/crates/product-core/src/ffi.rs"
+  "$repo_root/crates/product-core/src/policy.rs"
+  "$repo_root/crates/product-core/src/session.rs"
+)
 vapi="$repo_root/src/product/native/sakamoto_product_vapi.c"
 plugin="$repo_root/src/product/vpp/product_core_plugin.c"
 graph="$repo_root/src/product/vpp/product_packet_graph.c"
@@ -186,7 +191,7 @@ for token in \
   'sakamoto_product_core_apply_network_gate_policy_revision' \
   'sakamoto_product_core_apply_empty_policy_revision' \
   'sakamoto_product_core_reconcile_policy'; do
-  grep -Fq "$token" "$rust_core"
+  grep -Fq "$token" "${rust_sources[@]}"
 done
 
 for token in \
