@@ -382,7 +382,7 @@ wait_for_running() {
     capture_remote_file "$STATE_PATH" "$output"
     if grep -Fxq 'state=running' "$output" \
         && grep -Fxq 'profile=root' "$output" \
-        && grep -Fxq 'adapterReadiness=root-nfqueue' "$output" \
+        && grep -Fxq 'adapterReadiness=root-nfqueue-tcp-udp-echo-dualstack-q2w2' "$output" \
         && grep -Fxq 'coreHealth=ok' "$output" \
         && grep -Fxq 'mayBeActive=true' "$output"; then
       generation="$(property_value "$output" generation || true)"

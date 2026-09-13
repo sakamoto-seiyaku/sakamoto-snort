@@ -15,6 +15,7 @@ backend="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/android
 activity="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
 service="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeService.java"
 formatter="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeEvidenceFormatter.java"
+adapter_contract="$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java"
 jni="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 device_runner="$repo_root/tests/device/s194-product-mutation-product.sh"
 
@@ -92,6 +93,10 @@ grep -Fq 'isUnknownPolicyMutationReadbackDetail(errorMessage)' "$formatter" \
   || fail "S194 status bridge drops preserved readback-only resolution detail"
 
 test -x "$device_runner" || fail "S194 device runner is missing or not executable"
+grep -Fq 'ROOT_ADAPTER = "root-nfqueue-tcp-udp-echo-dualstack-q2w2"' "$adapter_contract" \
+  || fail "S194 expected readiness differs from the current Root contract"
+grep -Fq "grep -Fxq 'adapterReadiness=root-nfqueue-tcp-udp-echo-dualstack-q2w2'" "$device_runner" \
+  || fail "S194 runner does not require exact current Root readiness"
 bash -n "$device_runner" || fail "S194 device runner has shell syntax errors"
 runner_help="$(bash "$device_runner" --help)"
 grep -Fq 'bundle_pre_submit_not_sent' <<<"$runner_help" \
