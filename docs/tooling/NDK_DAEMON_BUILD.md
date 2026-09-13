@@ -1,9 +1,8 @@
 # Retired NDK daemon build
 
-ADR-0008 removed the Android NDK C++ daemon build, `sucre-snort-ndk`, and the
-APK artifact `libsucre_snortd.so`. The former `snort-build-ndk` target and its
-deploy/debug workflow no longer exist.
+ADR-0008 removed `sucre-snort-ndk`, `libsucre_snortd.so` and the former
+`snort-build-ndk` target. Do not restore that C++ build or deployment workflow.
 
-This is deliberate: the next product runtime must be a newly specified
-VPP-native C mainline. C/VPP POC scripts are scoped evidence tools and do not
-replace that product build.
+The VPP-native C Product runtime now exists. Use the [current tooling guide](README.md)
+and [Android artifact build entry](../../app/android-runtime/scripts/build-debug-apk.sh).
+POC adapter artifacts do not replace the product build.

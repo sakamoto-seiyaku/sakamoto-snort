@@ -5,7 +5,6 @@
 !/.vscode/tasks.json
 /CMakeUserPresets.json
 /compile_commands.json
-build-output/*
 Testing/
 build/*
 /app/android-runtime/build/
@@ -14,3 +13,18 @@ build/*
 /product_core.api.c
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Retained local outputs from the archived IP/Neper harness (not source).
+/tests/device/ip/records/
+/tests/device/ip/third_party/neper/*.o
+/tests/device/ip/third_party/neper/*.log
+/tests/device/ip/third_party/neper/tcp_crr
+/tests/device/ip/third_party/neper/tcp_rr
+/tests/device/ip/third_party/neper/tcp_stream
+/tests/device/ip/third_party/neper/udp_rr
+/tests/device/ip/third_party/neper/udp_stream
+/tests/device/ip/third_party/neper/psp_stream
+/tests/device/ip/third_party/neper/psp_rr
+/tests/device/ip/third_party/neper/psp_crr

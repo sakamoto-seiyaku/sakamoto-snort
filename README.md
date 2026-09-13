@@ -1,15 +1,16 @@
 # Sakamoto Snort
 
-This repository is being reconstructed as a VPP-native C Android privacy
-firewall. ADR-0008 removed the former Snort C++ daemon, tests, NDK artifact,
-and archive because they formed a competing packet architecture.
+Android privacy firewall with a **VPP-native C packet domain**, Rust control
+plane and Java RuntimeService. The former Snort C++ implementation was removed
+by [ADR-0008](docs/adr/0008-remove-snort-cpp-mainline.md); do not restore it or
+import POC source into the product.
 
-The active engineering inputs are the accepted VPP-native C decisions
-(ADR-0006 and ADR-0007), the S170 baseline, and scoped C/VPP POC evidence.
-POC source is not product source. S171-S196 now provide the current VPP-native
-Product Core, Rust control plane, Java RuntimeService, APK packaging, and
-current-head acceptance evidence; the recovery dossier records the exact
-claims and remaining release boundaries.
+Start with [current implementation and boundaries](docs/current/README.md).
+The foundation integration has scoped `PASS_WITH_EXPLICIT_LIMITS` evidence;
+it is not a product release gate or ordinary-user VPN protection claim.
 
-Read `CONTEXT.md`, `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`, and
-`docs/adr/0008-remove-snort-cpp-mainline.md` before implementation work.
+- [Documentation map](docs/README.md): current facts, product goals and history.
+- [Tests](tests/README.md): Host checks, device runners and independent evidence.
+- [Build/tooling](docs/tooling/README.md) and [Android device wrapper](dev/README.md).
+
+Open work and acceptance decisions live in Plane, not in a second Markdown backlog.

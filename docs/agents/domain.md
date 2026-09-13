@@ -1,30 +1,27 @@
-# Domain Docs
+# Domain docs
 
-This is a single-context repo.
+This is a single-context repo. Start with the root [README](../../README.md) and
+[current mainline](../current/README.md), then route by task:
 
-## Before exploring, read these
+- Architecture: read the [decision map](../decisions/README.md), relevant decision
+  records and [accepted ADRs](../adr/) before changing boundaries. ADR-0006/0007/0008
+  define the VPP-native C mainline and the removed-C++ boundary.
+- Control plane / API / RuntimeService: use the [interface map](../INTERFACE_SPECIFICATION.md)
+  and the actual typed contracts it links.
+- Product scope / UI / content / release: read [product docs](../product/README.md)
+  and their routed plan. Goals are not implementation evidence.
+- Tests / builds: use [testing](../testing/README.md) or [tooling](../tooling/README.md).
+- Documentation organization: read [maintenance rules](doc-maintenance.md).
 
-- `docs/product/README.md` and its routed plan before product scope, UI/UX, content, release, or community work.
-- `docs/IMPLEMENTATION_ROADMAP.md` for current phase, implementation order, and boundaries.
-- `docs/INTERFACE_SPECIFICATION.md` before control-plane, API, stream, telemetry, RuntimeService, or frontend-contract work.
-- `docs/decisions/` for architectural and domain decisions.
-- `docs/adr/` for accepted hard-to-reverse architecture decisions produced by domain-modeling sessions.
-- `docs/README.md` for the documentation map.
-- `docs/agents/doc-maintenance.md` before reorganizing, archiving, or refreshing documentation.
-- Focused docs under `docs/testing/`, `docs/reviews/`, `docs/reference/`, or `docs/tooling/` when relevant to the task.
-- `CONTEXT.md` at the repo root if it exists.
+[CONTEXT](../../CONTEXT.md), the [roadmap](../IMPLEMENTATION_ROADMAP.md) and the
+[long Android/VPP handoff](../ANDROID_VPP_CURRENT_STATE_HANDOFF.md) are accumulated
+context. Read relevant sections for vocabulary and lineage, not all of them by
+default. Resolve phase conflicts against accepted current decisions, actual source
+and dated evidence; surface genuine decision conflicts instead of silently overriding them.
 
-If `CONTEXT.md` does not exist, proceed silently. Do not create it upfront; create or update it only when a documentation-oriented skill such as `grill-with-docs` resolves project vocabulary.
+`docs/reviews/`, `docs/reference/`, `docs/archived/` and `experiments/` are supporting
+or historical material. POC source is not an implementation template. OpenSpec in
+`archive/openspec/` is history only; inspect it only when explicitly requested.
 
-## Historical archive
-
-`archive/openspec/` is historical archive material. Do not use it as a source of active workflow constraints. Only inspect it when the user explicitly asks for archived OpenSpec context.
-
-`docs/archived/`, `docs/reviews/`, and `docs/reference/` are not default agent context. Treat them as evidence or background unless an active roadmap, interface, testing, tooling, or decision document explicitly points to them.
-
-## Vocabulary and decisions
-
-Use the project's existing domain language from the roadmap and decision docs. If a proposal contradicts `docs/decisions/`, surface the conflict explicitly instead of silently overriding prior decisions.
-
-Product outcomes and UI flows live under `docs/product/`. Do not infer a product promise from a VPP POC,
-an internal capability, or an archived backend feature.
+Use existing domain terms. Do not infer a product promise from an internal
+capability, POC or archived backend feature. Work state belongs to Plane.

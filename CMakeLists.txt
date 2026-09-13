@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 3.18)
 project(sakamoto_snort_workspace LANGUAGES C)
 
 # The former C++ sucre-snort daemon, its host model, and its NDK/APK staging
-# target were deliberately removed. The first product seam is the small,
-# packet-free Host ABI; the real VPP plugin is built by
+# target were deliberately removed. This workspace tests standalone C semantics
+# and the packet-free Host ABI; the real VPP plugin is built by
 # tools/product/build-host-artifact.sh against a pinned external VPP checkout.
 add_library(sakamoto_product_host_fixture_abi STATIC
   src/product/native/sakamoto_product_host_fixture_abi.c
@@ -171,24 +171,27 @@ add_test(NAME sakamoto-s175-host-vpp-core-stage-contract
 add_test(NAME sakamoto-s175-android-vpp-core-profile-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s175-android-vpp-core-profile-contract-test.sh")
-add_test(NAME sakamoto-s176-root-nfqueue-output-contract
+add_test(NAME sakamoto-android-runtime-contract
   COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s176-root-nfqueue-output-contract-test.sh")
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/android-runtime-contract-test.sh")
 add_test(NAME sakamoto-s187-worker-core-guardrails-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s187-worker-core-guardrails-contract-test.sh")
 add_test(NAME sakamoto-s188-empty-policy-snapshot-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s188-empty-policy-snapshot-contract-test.sh")
-add_test(NAME sakamoto-s189-root-network-gate-contract
+add_test(NAME sakamoto-product-platform-boundary-contract
+  COMMAND python3
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_platform_boundary_test.py")
+add_test(NAME sakamoto-android-policy-bundle-contract
   COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s189-root-network-gate-contract-test.sh")
-add_test(NAME sakamoto-s190-vpn-network-gate-contract
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s192-policy-bundle-contract-test.sh")
+add_test(NAME sakamoto-android-runtime-teardown-contract
   COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s190-vpn-network-gate-contract-test.sh")
-add_test(NAME sakamoto-s191-root-tcp4-l4-contract
-  COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s191-root-tcp4-l4-contract-test.sh")
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s196-runtime-instance-teardown-contract-test.sh")
+add_test(NAME sakamoto-repository-navigation-contract
+  COMMAND python3
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/repository_navigation_test.py")
 add_test(NAME sakamoto-product-host-query-identity-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_query_identity_contract.sh")
 add_test(NAME sakamoto-product-host-residue-contract
@@ -220,4 +223,4 @@ add_custom_target(sakamoto-vpp-mainline-pending
   VERBATIM
 )
 
-message(STATUS "Snort C++ implementation removed; see ADR-0008 and the Android/VPP handoff.")
+message(STATUS "VPP-native C Product: standalone Host tests here; see docs/current/README.md for artifact builds and limits.")

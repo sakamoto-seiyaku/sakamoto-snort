@@ -4,10 +4,15 @@ The legacy Snort C++ daemon build, deploy, and native-debug helpers were
 removed by ADR-0008 together with their source and NDK artifact. Do not restore
 or invoke those workflows.
 
-The only active Android device entry is [`./dev/adb`](./adb). It remains the
-required wrapper for scoped C/VPP POC device operations. Standalone device test
-utility builders may remain under `dev/`, but they are not a product daemon or
-an implementation starting point.
+The only active Android device entry is [`./dev/adb`](./adb). It is required
+for Product and scoped POC device operations. Current builds and tests are routed
+through the [tooling guide](../docs/tooling/README.md) and
+[testing map](../docs/testing/README.md).
+
+Generic NDK setup/environment, Android device selection and tombstone helpers
+remain here. Former DX/IP/telemetry utility builders and the resolver mount helper
+are [archived together with their tests](../tests/archive/pre-vpp/README.md).
+They are not supported product commands or implementation starting points.
 
 ## KernelSU Superuser grant after reinstall
 
@@ -35,6 +40,6 @@ is `com.sakamoto.snort.androidruntime` and the visible app name is usually
 Do not edit KernelSU's database or allowlist files directly unless the user
 explicitly authorizes that destructive/out-of-band recovery path.
 
-The VPP-native C Product runtime and its RuntimeService contract are available
-through the S170 recovery baseline. Device operations for that runtime must
-continue to use `./dev/adb`; the removed C++ daemon helpers remain historical.
+The current VPP-native C runtime and its acceptance limits are summarized in
+[current mainline](../docs/current/README.md). Device operations continue to use
+`./dev/adb`; the removed C++ daemon helpers remain historical.

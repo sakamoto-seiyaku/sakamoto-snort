@@ -1,48 +1,55 @@
-# Testing status
+# Testing and evidence
 
-Status: **legacy test estate retired** (2026-08-26, ADR-0008).
+The current product is VPP-native C with Rust control and Java supervision.
+The former C++ daemon/model suite was removed by ADR-0008.
 
-The former Host gtest/CTest suite, NDK daemon build, and device/DX scripts
-exercised the removed Snort C++ mainline. They are not runnable acceptance
-paths for the current product and must not be used to claim C/VPP readiness.
+## Current acceptance entry
 
-Focused current VPP-native C evidence:
+Start with the [2026-09-13 foundation joint report](2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md):
+`PASS_WITH_EXPLICIT_LIMITS`, with independent Linux Root / Pixel Root / controlled
+VPN checks, source-bound artifacts, 64 Pixel generations and retained failures.
+This is not a release gate or ordinary-user VPN protection claim.
 
-- [S229 bounded Product reassembly](2026-09-11_S229_INDEPENDENT_REASSEMBLY.md).
-- [S221 owner-local FlowRuntime](2026-09-11_S221_FLOW_RUNTIME.md): shared typed storage,
-  startup capacity, processing bypass, worker/collision and stop ledgers. Protocol trackers,
-  automatic expiry and release latency/size budgets remain distinct claims.
+The independent checker can re-evaluate retained raw evidence without operating
+a device. Write the new report separately from frozen evidence:
 
-The first current product acceptance path was the combined SAKAMOTO-171/172
-Product Spine device run recorded in
-[`SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md`](SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md).
-It starts from a newly versioned debug APK installed through `./dev/adb`, then
-uses the visible Activity, Java Supervisor, Rust Product Core, production VAPI
-bridge, and product VPP plugin. Plane marks both tickets Done as of
-2026-08-30; the document remains the local record of what counted for that
-Product Spine closure.
+```sh
+python3 tests/evidence/verify_foundation_joint.py \
+  --input build-output/foundation-joint-20260913/acceptance-input.json \
+  --output build-output/host-tests/foundation-recheck.json
+```
 
-The SAKAMOTO-176 through SAKAMOTO-196 recovery device paths are closed. Their
-current-head acceptance baseline, artifact hashes, retained failures, and
-evidence limits are recorded in
-[`SAKAMOTO_195_RECOVERY_ACCEPTANCE_DOSSIER.md`](SAKAMOTO_195_RECOVERY_ACCEPTANCE_DOSSIER.md).
-Later source review findings must be recorded as code-review gaps rather than
-rewriting a completed device observation or calling S176 the current blocker.
+Local raw files and matching build witnesses are required. A missing file is not
+a passing or skipped acceptance branch. See [test layout](../../tests/README.md)
+and [build commands](../tooling/README.md) for Host checks.
 
-SAKAMOTO-171's named `sakamoto-product-host-fixture-abi-test` target and Rust
-socket fixture remain fast supporting tests for the fixed ABI, generated-VAPI
-seam, and one serialized generation-bound session. Their PASS was not the
-Product Spine acceptance result. The fixture is Host-test-only and must never
-be linked into the Android product; an Android build without generated VAPI
-inputs fails rather than falling back to it. Detailed Host results remain in
-[`SAKAMOTO_171_HOST_EVIDENCE.md`](SAKAMOTO_171_HOST_EVIDENCE.md).
+## Focused evidence
 
-The remaining `experiments/vpp-nfq-poc/` materials and their OI1–OI5 findings
-are bounded design evidence only. New packet-domain tests must be specified
-alongside the VPP-native C module and validate the owner-local flow-stack
-contract in ADR-0006 and ADR-0007 without importing the old C++ implementation.
+| Scope | Record |
+| --- | --- |
+| Protocol expiry and deferred real 24-hour TCP test | [S236](2026-09-13_S236_PROTOCOL_EXPIRY.md) |
+| Linux network classification and projection limits | [S235](2026-09-13_S235_LINUX_NETWORK_SNAPSHOT.md) |
+| Canonical owner versus CPU placement | [S220](2026-09-13_S220_WORKER_CPU_PLACEMENT.md) |
+| FlowRuntime and protocol trackers | [S221](2026-09-11_S221_FLOW_RUNTIME.md), [TCP](2026-09-12_S222_TCP_TRACKER.md), [UDP](2026-09-11_S223_UDP_TRACKER.md), [ICMP](2026-09-13_S224_ICMP_TRACKER.md) |
+| Independent bounded reassembly | [S229](2026-09-11_S229_INDEPENDENT_REASSEMBLY.md) |
+| Artifact/source/raw witness chain | [S244](SAKAMOTO_244_EVIDENCE_CHAIN.md) |
 
-The obsolete vpn-lite/C++ runtime contract and disabled-LPI/vpn-lite device
-wrappers were deleted in SAKAMOTO-197. Older detailed test documents and
-release-era device runners are retained as historical records where useful;
-their commands and pass results have no current execution status.
+The dated foundation report records HEV 36/36 and root CTest 35/40 at that time.
+Later test maintenance does not rewrite those observations; see the
+[repository organization record](../maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
+for obsolete contract replacement and its separate regression result.
+
+## Earlier baselines and history
+
+[Product Spine acceptance](SAKAMOTO_171_172_DEVICE_ACCEPTANCE.md), installed through
+the debug APK, established the first combined S171/S172 seam.
+[Host-only supporting evidence](SAKAMOTO_171_HOST_EVIDENCE.md) is not equivalent
+to that Product Spine acceptance or the ADR-0007 Flow Stack.
+The [S195 recovery dossier](SAKAMOTO_195_RECOVERY_ACCEPTANCE_DOSSIER.md) retains the
+S176–S196 baseline and its limits.
+
+Older unnumbered DX/IP casebooks and surveys may describe the removed daemon.
+Use them as dated history, not commands to run. Their isolated scripts are in
+[the test archive](../../tests/archive/README.md). Do not import C++ or POC code.
+Current numbered collectors and verifier dependencies keep their original paths;
+not every older filename is obsolete. Open work and deferred gates live in Plane.

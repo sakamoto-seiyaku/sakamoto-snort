@@ -1,90 +1,43 @@
-# Documentation Maintenance Map
+# Documentation maintenance
 
-Last updated: 2026-06-20
+Updated: 2026-09-13. [Current mainline](../current/README.md) is the short default
+entry; [the documentation map](../README.md) routes everything else.
 
-This file records how Matt skills and future agents should treat the documentation tree after the OpenSpec workflow moved to `archive/openspec/` and Plane `Sakamoto` became the active tracker.
+## Authority and placement
 
-## Classification Rules
-
-- `authoritative-current`: safe default context for planning or implementation.
-- `evidence-current`: current evidence or acceptance material, but not a tracker.
-- `reference-only`: history, background, review output, or lineage material. Read only when relevant.
-- `historical-archive`: archived records that must not define current workflow.
-
-## Default Agent Context
-
-Use these first:
-
-- `CONTEXT.md`
-- `docs/agents/`
-- `docs/README.md`
-- `docs/product/` for product scope, UI/UX, content, release, and community work
-- `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` when discussing the current Android/VPP architecture or POC conclusions
-- `docs/IMPLEMENTATION_ROADMAP.md`
-- `docs/INTERFACE_SPECIFICATION.md`
-- `docs/decisions/`
-
-Use these by task:
-
-- `docs/testing/README.md` and focused `docs/testing/**` files for test work.
-- `docs/tooling/**` for build, deploy, NDK, VS Code, and native debug work.
-- `tests/host/README.md`, `tests/integration/README.md`, or module-local test docs when changing tests.
-
-Use these only as background:
-
-- `docs/reviews/`
-- `docs/reference/`
-- `docs/archived/`
-- `archive/openspec/`
-
-## Work Tracking Policy
-
-Plane project `Sakamoto` (`SAKAMOTO`) is the source of truth for open work.
-
-- VPP foundation POC planning lineage: `SAKAMOTO-1`. Its original Linux-first POC sequence is superseded by `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md`; Plane still owns the work-item state.
-- Current unfinished Android NFQUEUE plugin admission audit: `SAKAMOTO-32`.
-- `SNORT-1..19` references predate the tracker reset and must be treated as historical planning identifiers, not current Plane work items.
-
-Docs may link to these work items and keep evidence, but they must not keep their own `Open`, `TODO`, or unchecked bug ledgers.
-
-## Folder Handling
-
-| Path | Classification | Handling |
+| Class | Locations | Rule |
 | --- | --- | --- |
-| `docs/agents/` | `authoritative-current` | Matt skills / Plane / domain-doc workflow context. |
-| `docs/product/` | `authoritative-current` | Product outcomes, UI/UX, content, release, and community operating baseline. |
-| `docs/decisions/` | `authoritative-current` | Active decision records after refresh; interface details still defer to `docs/INTERFACE_SPECIFICATION.md`. |
-| `docs/testing/` | mixed | Active runbooks, casebooks, and evidence. Open work must link to Plane. |
-| `docs/tooling/` | `authoritative-current` | Active build/debug workflow docs. |
-| `docs/reviews/` | `reference-only` | Point-in-time audits. Accepted decisions must be promoted to `docs/decisions/` or Plane. |
-| `docs/reference/` | `reference-only` | Background/lineage comparison. Do not treat old bugs or line numbers as current facts. |
-| `docs/archived/` | `historical-archive` | History only. Files may keep historical wording; use folder/file banners to avoid current-authority confusion. |
-| `docs/archived/DOMAIN_IP_FUSION/` | `historical-archive` | Historical vNext/fusion workspace. Current authority is roadmap + interface spec + decisions. |
-| `archive/openspec/` | `historical-archive` | OpenSpec archive only. Do not create new root `openspec/` work unless explicitly asked. |
+| Current implementation | `docs/current/`, current source contracts | Keep short; link bounded evidence and state important limits |
+| Accepted constraints | `docs/adr/`, current entries in `docs/decisions/README.md` | Read before architectural work; retain supersession history |
+| Product intent | `docs/product/` | Desired outcomes, not proof of shipping or tested behavior |
+| Dated evidence / runbooks | `docs/testing/`, `tests/evidence/` | Preserve scope, source identity, failures and measurement date |
+| Active workflow | `docs/agents/`, `docs/tooling/`, `dev/README.md` | Commands must refer to existing current tools |
+| Accumulated context | root `CONTEXT.md`, roadmap, Android/VPP handoff | Select relevant sections; do not append every run to default reading |
+| Reference / history | `docs/reviews/`, `docs/reference/`, `docs/archived/`, archived tests | Not current authority or code to import |
 
-## Glossary Follow-Up
+## Editing and archiving
 
-`CONTEXT.md` should keep absorbing stable terminology when docs or implementation work clarifies it:
+- Separate current facts, intended goals and old observations. Do not erase an old
+  failure report because a later run passes; add a new dated record and route to it.
+- Move only unambiguously superseded material. Keep stable redirect pages where
+  existing links need them; archived content retains its original context and paths.
+- Historical scripts are non-runnable records, not supported entrypoints. Do not
+  wire them back into CMake, editor tasks or current device runners.
+- Do not move Product sources, current collectors or hashed verifier dependencies
+  as cosmetic cleanup. Their paths and bytes are part of acceptance provenance.
+- Preserve unrelated uncommitted changes. Large overlapping documents may be
+  reclassified through navigation without rewriting or staging the user's edits.
+- Never delete all `build-output/` as a “cache cleanup”: it contains frozen source,
+  artifacts, raw evidence and retained failed attempts as well as generated output.
+- OpenSpec remains an explicitly requested historical source only.
 
-- `clientRuleId`, `ruleId`, observe/enforce `ruleMode`, unified winner attribution, and legacy would/shadow terms. `wouldRuleId` / `wouldDrop` are legacy names, not current SNORT-10 vocabulary.
-- Complete Linux UID, `appId`, `userId`, app selector, selector ambiguity, and selector not found.
-- Policy state vs observability session state vs counters vs reset/session boundaries.
-- Legacy/backlog terms: `ip-leak`, Domain-IP bridge, `BLOCKIPLEAKS`, `GETBLACKIPS`, `MAXAGEIP`.
-- Diagnostic-only reverse DNS: `RDNS` / `rdns.enabled`.
+## Work tracking
 
-## SNORT-10 Stale Active-Contract Scan
+Plane project `SAKAMOTO` owns open work, priorities and acceptance decisions; use
+[plane-ops](issue-tracker.md). Docs may retain completed records, reproducible
+commands and ticket links, but not a competing TODO/unchecked backlog.
 
-Before creating implementation issues from SNORT-10 docs, scan active planning and testing docs for old contract terms. Hits are acceptable only when the surrounding text explicitly marks them as historical, frozen, current-head evidence, or reference-only.
-
-```bash
-rtk rg -n 'STREAM\.START\(type=(pkt|activity)|\btracked\b|wouldRuleId|wouldDrop|notice\.suppressed|suppressed notice|METRICS\.(GET|RESET)\(name=traffic|traffic\.dns|perfmetrics\.enabled|nfq_total_us|dns_decision_us' \
-  docs/testing docs/IMPLEMENTATION_ROADMAP.md docs/INTERFACE_SPECIFICATION.md docs/decisions \
-  --glob '!docs/testing/archive/**' --glob '!docs/testing/ip/archive/**'
-```
-
-Positive replacement vocabulary for source plans and issue splits:
-
-- Packet diagnostics: `DIAGNOSTICS.START(channel=packet)`, `diagnostic.packet.final`, `ruleMode`.
-- Traffic views: `TRAFFIC_WINDOWS.*`, reason metrics, `domainSources` for DNS policy attribution.
-- Perf observability: `perfmetrics.level`, `packetVerdictLatencyUs`, `nfqueueHealth`.
-- Authoring: Draft / Commit / Apply / latest-five Checkpoint / Runtime Snapshot; old direct `IPRULES.APPLY` and fixed `CHECKPOINT.*` are pre-SNORT-10 current-head surfaces.
+Old SNORT identifiers and point-in-time “unfinished” statements are historical;
+do not copy them into new issues without checking current source and Plane state.
+See the [organization record](../maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md)
+for the latest separation of current navigation and preserved material.
