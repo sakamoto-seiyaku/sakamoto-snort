@@ -329,7 +329,8 @@ public class DebugControlActivity extends Activity {
             String profile = intent.getStringExtra(EXTRA_RUNTIME_PROFILE);
             RuntimeProfile selected = RuntimeProfile.VPN.wireName.equalsIgnoreCase(profile)
                     ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
-            backend.start(this, selected, rootNfqueueFaultMode, vpnFaultMode);
+            backend.start(this, selected, rootNfqueueFaultMode, vpnFaultMode,
+                    intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS));
             handled = true;
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_REFRESH, false)) {
@@ -540,7 +541,8 @@ public class DebugControlActivity extends Activity {
             final String requestedVpnFaultMode = vpnFaultMode;
             final RuntimeProfile requestedRuntimeProfile = selected;
             startProfile(requestedRuntimeProfile, requestedRootNfqueueFaultMode,
-                    requestedVpnFaultMode, false);
+                    requestedVpnFaultMode, false,
+                    intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS));
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_REFRESH, false)) {
             main.post(() -> {
@@ -861,6 +863,11 @@ public class DebugControlActivity extends Activity {
 
     private void startProfile(RuntimeProfile profile, String rootNfqueueFaultMode,
                               String vpnFaultMode, boolean requireVpnPrepare) {
+        startProfile(profile, rootNfqueueFaultMode, vpnFaultMode, requireVpnPrepare, null);
+    }
+
+    private void startProfile(RuntimeProfile profile, String rootNfqueueFaultMode,
+                              String vpnFaultMode, boolean requireVpnPrepare, String workerCpuIds) {
         requestedProfile = profile;
         if (requireVpnPrepare && profile == RuntimeProfile.VPN
                 && !ensureVpnPreparedForStart()) {
@@ -868,7 +875,7 @@ public class DebugControlActivity extends Activity {
         }
         RuntimeControlBackend.StartResult result;
         try {
-            result = backend.start(this, profile, rootNfqueueFaultMode, vpnFaultMode);
+            result = backend.start(this, profile, rootNfqueueFaultMode, vpnFaultMode, workerCpuIds);
         } catch (RuntimeException error) {
             requestedProfile = null;
             action("Start failed: runtime_start_failed"

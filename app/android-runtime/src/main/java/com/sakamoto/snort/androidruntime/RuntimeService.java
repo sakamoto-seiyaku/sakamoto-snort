@@ -133,9 +133,8 @@ public final class RuntimeService extends VpnService {
             "debug/policy-mutation-fault.properties";
     private static final String PRODUCT_CORE_MAIN_CORE = "0";
     private static final String PRODUCT_CORE_WORKER_COUNT = "2";
-    private static final String PRODUCT_CORE_WORKER_CORES = "1-2";
-    private static final String PRODUCT_CORE_WORKER0_CORE = "1";
-    private static final String PRODUCT_CORE_WORKER1_CORE = "2";
+    private WorkerCpuPlacement requestedWorkerPlacement = WorkerCpuPlacement.DEFAULT;
+    private WorkerCpuPlacement activeWorkerPlacement = WorkerCpuPlacement.DEFAULT;
     private static final String PRODUCT_CORE_OWNER_MAPPING =
             "single-runtime-owner";
     private static final String PRODUCT_CORE_OWNER_MAPPING_SEED =
@@ -317,6 +316,15 @@ public final class RuntimeService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
+        try {
+            requestedWorkerPlacement = WorkerCpuPlacement.parse(getSharedPreferences(
+                    "worker-placement", MODE_PRIVATE).getString("workerCpuIds", "1,2"));
+            activeWorkerPlacement = requestedWorkerPlacement;
+        } catch (IllegalArgumentException error) {
+            // A corrupt saved choice is not permission to choose other CPUs.
+            // An explicit START with a valid replacement can repair it.
+            activeWorkerPlacement = null;
+        }
         RuntimeService previousInstance;
         synchronized (SERVICE_INSTANCE_LOCK) {
             previousInstance = activeServiceInstance;
@@ -563,6 +571,10 @@ public final class RuntimeService extends VpnService {
             }
             enqueueLifecycle(() -> {
                 if (requestEpoch != explicitRequestEpoch.get()) return;
+                if (!selectWorkerPlacement(intent != null
+                        && intent.hasExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
+                        ? intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
+                        : null)) return;
                 generationRequestEpoch = requestEpoch;
                 vpnRecoveryFailureCount = 0;
                 requestedVpnGraphValidation = graphValidation;
@@ -592,6 +604,7 @@ public final class RuntimeService extends VpnService {
                 requestedVpnGraphValidation = false;
                 requestedVpnHevValidation = false;
                 requestedNativeBuffers = 0;
+                if (!selectWorkerPlacement(null)) return;
                 startRuntime(profile);
             });
             return START_STICKY;
@@ -823,6 +836,27 @@ public final class RuntimeService extends VpnService {
         }
     }
 
+    private boolean selectWorkerPlacement(String explicitIds) {
+        try {
+            String ids = explicitIds == null ? getSharedPreferences("worker-placement",
+                    MODE_PRIVATE).getString("workerCpuIds", "1,2") : explicitIds;
+            WorkerCpuPlacement selection = WorkerCpuPlacement.parse(ids);
+            if ((processAlive(vppProcess) || productCoreSession != null)
+                    && !selection.equals(activeWorkerPlacement)) {
+                publishError("worker_placement_requires_restart",
+                        "Stop the current runtime before changing workerCpuIds",
+                        currentMayBeActive(), currentPid());
+                return false;
+            }
+            requestedWorkerPlacement = selection;
+            return true;
+        } catch (IllegalArgumentException error) {
+            publishError("invalid_worker_cpu_ids", error.getMessage(),
+                    currentMayBeActive(), currentPid());
+            return false;
+        }
+    }
+
     private void startRuntime(RuntimeProfile requestedProfile) {
         if (destroying || stopRequested || isSupersededServiceInstance()) {
             return;
@@ -880,6 +914,7 @@ public final class RuntimeService extends VpnService {
             return;
         }
         activeProfile = selected;
+        activeWorkerPlacement = requestedWorkerPlacement;
         initializeProfilePaths(selected);
         vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
         vpnHevValidation = vpnGraphValidation && requestedVpnHevValidation;
@@ -1210,6 +1245,17 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             status = reconciled;
+            if (!s187WorkerCoreConfigMatches(status)) {
+                failProductCoreGeneration("worker_placement_mismatch",
+                        "VPP worker placement differs from the requested CPU order");
+                return;
+            }
+            if (!getSharedPreferences("worker-placement", MODE_PRIVATE).edit()
+                    .putString("workerCpuIds", activeWorkerPlacement.encode()).commit()) {
+                failProductCoreGeneration("worker_placement_persistence_failed",
+                        "Validated worker placement could not be persisted");
+                return;
+            }
             if (!publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID)) {
                 failProductCoreGeneration("runtime_state_persistence_unavailable",
                         "Product Core identity could not be published");
@@ -3098,7 +3144,8 @@ public final class RuntimeService extends VpnService {
                 + "\nplacement_fixed_before_start=true"
                 + "\nmain_core=" + PRODUCT_CORE_MAIN_CORE
                 + "\nworker_count=" + PRODUCT_CORE_WORKER_COUNT
-                + "\nworker_cores=" + PRODUCT_CORE_WORKER_CORES
+                + "\nworker_cores=" + (activeWorkerPlacement == null ? "unknown" : activeWorkerPlacement.encode())
+                + "\nworker_cpu_ids=" + (activeWorkerPlacement == null ? "unknown" : activeWorkerPlacement.encode())
                 + "\nvpp_main_core=" + status.productGraphVppMainCore
                 + "\nvpp_worker_count=" + status.productGraphVppWorkerCount
                 + "\nvpp_worker0_thread_index=" + status.productGraphVppWorker0ThreadIndex
@@ -4753,17 +4800,15 @@ public final class RuntimeService extends VpnService {
         writeBestEffortEvidenceFile(S190_VPN_NETWORK_GATE_STATUS, text);
     }
 
-    private static boolean s187WorkerCoreConfigMatches(RuntimeControlNative.Status status) {
-        if (status == null) {
+    private boolean s187WorkerCoreConfigMatches(RuntimeControlNative.Status status) {
+        if (status == null || activeWorkerPlacement == null) {
             return false;
         }
         return status.productGraphWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
                 && status.productGraphVppWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
-                && status.productGraphVppWorker0Core == parseFixedInt(
-                        PRODUCT_CORE_WORKER0_CORE, -1)
-                && status.productGraphVppWorker1Core == parseFixedInt(
-                        PRODUCT_CORE_WORKER1_CORE, -1)
+                && status.productGraphVppWorker0Core == activeWorkerPlacement.worker0CpuId
+                && status.productGraphVppWorker1Core == activeWorkerPlacement.worker1CpuId
                 && status.productGraphWorkerLayoutReady != 0;
     }
 
@@ -5623,9 +5668,7 @@ public final class RuntimeService extends VpnService {
             throw new IOException("unable to create generation-owned profile directories");
         }
         String config = "plugin_path " + nativeLibraryPath + "\n\n"
-                + "cpu {\n  main-core " + PRODUCT_CORE_MAIN_CORE
-                + "\n  corelist-workers " + PRODUCT_CORE_WORKER_CORES
-                + "\n}\n\n"
+                + activeWorkerPlacement.startupConfig()
                 + "unix {\n  nodaemon\n  nobanner\n  runtime-dir "
                 + runtime.getPath() + "\n  log " + new File(logs, "vpp.log").getPath()
                 + "\n  cli-listen " + new File(runtime, "cli.sock").getPath()

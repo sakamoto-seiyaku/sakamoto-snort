@@ -1,0 +1,133 @@
+diff --git a/src/vlib/threads.c b/src/vlib/threads.c
+--- a/src/vlib/threads.c
++++ b/src/vlib/threads.c
+@@ -31,4 +31,41 @@
+ vlib_thread_main_t vlib_thread_main;
+ 
++/* Explicit startup placement is a sequence, not a CPU bitmap. It never
++ * participates in packet ownership and is immutable once workers launch. */
++static u32 *ordered_worker_cpus;
++static vlib_thread_registration_t *ordered_worker_registration;
++
++static clib_error_t *
++parse_ordered_worker_cpus (const u8 *text)
++{
++  const u8 *p = text;
++  if (vec_len (ordered_worker_cpus) || !*p)
++    return clib_error_return (0, "ordered-workers: empty or repeated list");
++  for (;;)
++    {
++      u32 cpu = 0;
++      if (*p < '0' || *p > '9')
++        return clib_error_return (0, "ordered-workers: expected decimal CPU ID");
++      do
++        {
++          u32 digit = *p++ - '0';
++          if (cpu > (CPU_SETSIZE - 1 - digit) / 10)
++            return clib_error_return (0, "ordered-workers: CPU ID out of range");
++          cpu = cpu * 10 + digit;
++        }
++      while (*p >= '0' && *p <= '9');
++      for (u32 i = 0; i < vec_len (ordered_worker_cpus); i++)
++        if (ordered_worker_cpus[i] == cpu)
++          return clib_error_return (0, "ordered-workers: duplicate CPU %u", cpu);
++      if (vec_len (ordered_worker_cpus) >= FRAME_QUEUE_MAX_NELTS - 1)
++        return clib_error_return (0, "ordered-workers: too many CPUs");
++      vec_add1 (ordered_worker_cpus, cpu);
++      if (!*p)
++        return 0;
++      if (*p++ != ',' || !*p)
++        return clib_error_return (0, "ordered-workers: expected comma and CPU");
++    }
++}
++
+ /*
+  * Barrier tracing can be enabled on a normal build to collect information
+@@ -820,12 +857,15 @@
+       else
+ 	{
+ 	  uword c;
++          u32 placement_index = 0;
+           clib_bitmap_foreach (c, tr->coremask)  {
++            uword cpu = tr == ordered_worker_registration ?
++              ordered_worker_cpus[placement_index++] : c;
+             w = vlib_worker_threads + worker_thread_index++;
+ 	    err = vlib_launch_thread_int (vlib_worker_thread_bootstrap_fn,
+-					  w, c);
++					  w, cpu);
+ 	    if (err)
+ 	      clib_unix_error ("%U, thread %s init on cpu %d failed",
+-			       format_clib_error, err, tr->name, c);
++			       format_clib_error, err, tr->name, cpu);
+ 	    }
+ 	}
+@@ -1118,4 +1158,13 @@
+ 			 unformat_memory_size, &tm->numa_heap_size))
+ 	;
++      else if (unformat (input, "ordered-workers"))
++        {
++          if (!unformat (input, "%s", &name))
++            return clib_error_return (0, "ordered-workers: CPU list required");
++          clib_error_t *error = parse_ordered_worker_cpus (name);
++          vec_free (name);
++          if (error)
++            return error;
++        }
+       else if (unformat (input, "coremask-%s %U", &name,
+ 			 unformat_bitmap_mask, &bitmap) ||
+@@ -1167,4 +1216,5 @@
+       else
+-	break;
++	return clib_error_return (0, "unknown CPU input `%U'",
++                                  format_unformat_error, input);
+     }
+ 
+@@ -1172,5 +1222,48 @@
+   if (use_corelist && tm->main_lcore == ~0)
+     return clib_error_return (0, "main-core must be specified when using "
+ 				 "corelist-* or coremask-* attribute");
+ 
++  if (vec_len (ordered_worker_cpus))
++    {
++      p = hash_get_mem (tm->thread_registrations_by_name, "workers");
++      if (!p)
++        return clib_error_return (0, "ordered-workers: worker type unavailable");
++      tr = (vlib_thread_registration_t *) p[0];
++      if (tm->main_lcore == ~0 || tm->use_pthreads || tm->cpu_translate ||
++          tm->skip_cores || tr->use_pthreads || tr->coremask)
++        return clib_error_return (
++          0, "ordered-workers: explicit main-core and workers count required; "
++          "corelist/coremask, relative, skip-cores and use-pthreads conflict");
++      if (tr->count != vec_len (ordered_worker_cpus))
++        return clib_error_return (0, "ordered-workers: CPU count must equal workers");
++
++      /* main.c snapshots inherited affinity before narrowing the main thread.
++       * Reading sched_getaffinity here instead would see only main-core. */
++      uword *allowed = os_get_cpu_affinity_bitmap ();
++      uword *online = os_get_online_cpu_core_bitmap ();
++      clib_error_t *error = 0;
++      if (!allowed || !online)
++        error = clib_error_return (0, "ordered-workers: CPU availability unknown");
++      for (u32 i = 0; !error && i <= tr->count; i++)
++        {
++          u32 cpu = i == tr->count ? tm->main_lcore : ordered_worker_cpus[i];
++          if (cpu >= CPU_SETSIZE || !clib_bitmap_get (online, cpu))
++            error = clib_error_return (
++              0, "ordered-workers: CPU %u absent or offline", cpu);
++          else if (!clib_bitmap_get (allowed, cpu))
++            error = clib_error_return (
++              0, "ordered-workers: CPU %u outside inherited allowed affinity", cpu);
++          else if (i < tr->count && cpu == tm->main_lcore)
++            error = clib_error_return (
++              0, "ordered-workers: CPU %u conflicts with main-core", cpu);
++        }
++      clib_bitmap_free (allowed);
++      clib_bitmap_free (online);
++      if (error)
++        return error;
++      for (u32 i = 0; i < tr->count; i++)
++        tr->coremask = clib_bitmap_set (tr->coremask, ordered_worker_cpus[i], 1);
++      ordered_worker_registration = tr;
++    }
++
+   if (tm->skip_cores != 0 && tm->main_lcore == ~0)

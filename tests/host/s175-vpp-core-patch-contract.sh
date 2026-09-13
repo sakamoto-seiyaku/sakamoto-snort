@@ -35,19 +35,19 @@ expect_fail() {
 [[ -f "$series_file" ]] || fail "missing ordered Product VPP core series"
 [[ -f "$identity_file" ]] || fail "missing Product VPP identity manifest"
 
-expected_series=$'0001-vlib-nonblocking-retained-enqueue.patch\n0002-ip-full-reass-product-custom-seam.patch\n0003-ip-reass-active-expiry.patch\n0004-ip4-custom-retained-exits.patch\n0005-ip6-custom-retained-exits.patch'
+expected_series=$'0001-vlib-nonblocking-retained-enqueue.patch\n0002-ip-full-reass-product-custom-seam.patch\n0003-ip-reass-active-expiry.patch\n0004-ip4-custom-retained-exits.patch\n0005-ip6-custom-retained-exits.patch\n0006-vlib-ordered-worker-cpus.patch'
 actual_series="$(sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*#/d' "$series_file")"
 [[ "$actual_series" == "$expected_series" ]] || \
   fail "core patches are missing, duplicated, or out of order"
 
 expected_count="$(property vpp.core.patch.count)"
 expected_sha256="$(property vpp.core.patch.sha256)"
-fixed_sha256=4e6569b35c7b58246448f5260735bf766830483f9323fbb62fde3d4151e46247
-[[ "$expected_count" == "5" ]] || fail "core patch count allowlist must remain 5"
+fixed_sha256=26cd4db436b5eb79d65db6d834464f6437cb21464bea4adc25f9f5cbb33f72c3
+[[ "$expected_count" == "6" ]] || fail "core patch count allowlist must remain 6"
 [[ "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
   fail "core patch hash allowlist is not a SHA-256 digest"
 [[ "$expected_sha256" == "$fixed_sha256" ]] || \
-  fail "core patch hash does not match the SAKAMOTO-228 fixed allowlist"
+  fail "core patch hash does not match the SAKAMOTO-220 fixed allowlist"
 
 manifest_lines=""
 while IFS= read -r patch_name; do
@@ -64,7 +64,7 @@ actual_sha256="$({
 [[ "$actual_sha256" == "$expected_sha256" ]] || \
   fail "core patch bytes/order do not match the fixed Product allowlist"
 
-expected_paths=$'src/vlib/buffer_funcs.c\nsrc/vlib/buffer_funcs.h\nsrc/vlib/buffer_node.h\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_full_reass.h\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.h\nsrc/vnet/ip/reass/ip6_sv_reass.c'
+expected_paths=$'src/vlib/buffer_funcs.c\nsrc/vlib/buffer_funcs.h\nsrc/vlib/buffer_node.h\nsrc/vlib/threads.c\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_full_reass.h\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.h\nsrc/vnet/ip/reass/ip6_sv_reass.c'
 
 # Source application is the public integration seam. A normal repository
 # checkout need not carry the large official VPP tree; formal Host evidence

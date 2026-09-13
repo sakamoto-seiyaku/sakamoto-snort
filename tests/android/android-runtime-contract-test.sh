@@ -7,6 +7,7 @@ trap 'rm -rf "$out_dir"' EXIT
 
 javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlProtocol.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/WorkerCpuPlacement.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlRequest.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlOrdering.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeRecoveryPolicy.java" \
@@ -50,7 +51,9 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreLifecycle.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreOwner.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/VppHealthHandshake.java" \
-  "$repo_root/tests/android/AndroidRuntimeContractTest.java"
+  "$repo_root/tests/android/AndroidRuntimeContractTest.java" \
+  "$repo_root/tests/android/WorkerCpuPlacementTest.java"
 java -cp "$out_dir" AndroidRuntimeContractTest
+java -cp "$out_dir" WorkerCpuPlacementTest
 
 echo "android runtime contract seam: PASS"

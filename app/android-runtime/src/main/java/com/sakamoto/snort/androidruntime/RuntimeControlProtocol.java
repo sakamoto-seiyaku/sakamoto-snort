@@ -23,6 +23,8 @@ public final class RuntimeControlProtocol {
     public static final String EXTRA_PROTOCOL_VERSION = "runtimeControlProtocolVersion";
     public static final String EXTRA_ACTION = "runtimeControlAction";
     public static final String EXTRA_PROFILE = "runtimeProfile";
+    /** Optional START-only experimental placement: worker 0, then worker 1. */
+    public static final String EXTRA_WORKER_CPU_IDS = "runtimeWorkerCpuIds";
     public static final String EXTRA_APPLICATION_SUBJECT = "applicationSubjectId";
     public static final String EXTRA_NETWORK_CONTEXT = "networkContext";
     public static final String EXTRA_NETWORK_GATE_BLOCKED = "networkGateBlocked";

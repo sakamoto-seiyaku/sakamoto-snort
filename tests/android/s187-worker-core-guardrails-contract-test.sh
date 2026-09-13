@@ -19,9 +19,9 @@ grep -Fq 'product-state/s187-worker-core-guardrails.properties' "$service"
 grep -Fq 'schema=s187-worker-core-guardrails/v1' "$service"
 grep -Fq 'PRODUCT_CORE_MAIN_CORE = "0"' "$service"
 grep -Fq 'PRODUCT_CORE_WORKER_COUNT = "2"' "$service"
-grep -Fq 'PRODUCT_CORE_WORKER_CORES = "1-2"' "$service"
-grep -Fq 'PRODUCT_CORE_WORKER0_CORE = "1"' "$service"
-grep -Fq 'PRODUCT_CORE_WORKER1_CORE = "2"' "$service"
+grep -Fq 'WorkerCpuPlacement.DEFAULT' "$service"
+grep -Fq 'activeWorkerPlacement.worker0CpuId' "$service"
+grep -Fq 'activeWorkerPlacement.worker1CpuId' "$service"
 grep -Fq 'writeS187WorkerCoreGuardrailsStatus(status)' "$service"
 grep -Fq 'threshold_scope=engineering_guardrail_not_release_slo' "$service"
 grep -Fq 'placement_fixed_before_start=true' "$service"
@@ -54,21 +54,16 @@ def body(source, signature):
 
 prepare = body(service, "private void prepareProductCoreProfile(")
 for token in (
-        '"cpu {\\n  main-core " + PRODUCT_CORE_MAIN_CORE',
-        '"\\n  corelist-workers " + PRODUCT_CORE_WORKER_CORES',
+        'activeWorkerPlacement.startupConfig()',
         '"plugin_path " + nativeLibraryPath',
         '"plugins {\\n  path " + nativeLibraryPath',
         "ProductCoreOwner.writeAtomic(new File(profile, \"startup.conf\")"):
     if token not in prepare:
         raise AssertionError("S187 startup placement/config seam missing " + token)
-if '"workers "' in prepare:
-    raise AssertionError("S187 Product Core must use explicit corelist-workers, not auto workers")
 if prepare.index('"plugin_path " + nativeLibraryPath') > prepare.index('"plugins {\\n  path "'):
     raise AssertionError("startup config must still publish plugin_path before allowlist")
-if prepare.index('"cpu {\\n  main-core " + PRODUCT_CORE_MAIN_CORE') > prepare.index('"unix {'):
+if prepare.index('activeWorkerPlacement.startupConfig()') > prepare.index('"unix {'):
     raise AssertionError("S187 CPU placement must be in startup.conf before unix runtime launch config")
-if prepare.index('"\\n  corelist-workers " + PRODUCT_CORE_WORKER_CORES') > prepare.index('"unix {'):
-    raise AssertionError("S187 worker CPU placement must be fixed before unix runtime launch config")
 
 running_publish = body(service, "private boolean publishProductCoreRunning(")
 if "writeS187WorkerCoreGuardrailsStatus(status)" not in running_publish:

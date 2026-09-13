@@ -27,10 +27,18 @@ public final class RuntimeControlBackend {
 
     public StartResult start(Context context, RuntimeProfile profile,
                              String rootNfqueueFaultMode, String vpnFaultMode) {
+        return start(context, profile, rootNfqueueFaultMode, vpnFaultMode, null);
+    }
+
+    public StartResult start(Context context, RuntimeProfile profile,
+                             String rootNfqueueFaultMode, String vpnFaultMode,
+                             String workerCpuIds) {
         if (!RuntimeService.notificationsReady(context)) {
             return StartResult.NOTIFICATION_REQUIRED;
         }
         Intent intent = requestIntent(context, RuntimeControlRequest.start(profile));
+        if (workerCpuIds != null)
+            intent.putExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS, workerCpuIds);
         if (rootNfqueueFaultMode != null) {
             intent.putExtra(RuntimeControlProtocol.EXTRA_ROOT_NFQUEUE_FAULT_MODE,
                     rootNfqueueFaultMode);
