@@ -1378,6 +1378,7 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
    */
   nm->hook_ready = 1;
   nm->available = 1;
+  product_network_snapshot_linux_start (vm);
   return 1;
 }
 

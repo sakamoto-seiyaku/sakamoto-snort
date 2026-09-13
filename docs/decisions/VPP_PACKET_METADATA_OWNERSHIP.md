@@ -53,6 +53,17 @@ unknown 沿用现有规则：依赖 NetworkContextId 的 Gate/L4 条件 no-match
 SAKAMOTO-235 定义对应 Linux 真机验收。分类选择已收口；具体事件来源可复用可用的平台网络
 管理信息，但不因本决策强制依赖 NetworkManager，也不新增通用 metadata service。
 
+### Linux implementation evidence — 2026-09-13
+
+S235 在现有 snapshot seam 接入同 netns 的 RTNL link/address 订阅。当前可靠来源为
+IEEE 802.11 protocol probe、WWAN/WireGuard kernel link kind，以及同时报告物理
+connector 和 supported medium 的 ethtool link settings；普通 Ethernet type 不足以归为
+Wired，通用 TUN/TAP/veth/bridge 不足以归为 VPN。未支持的设备/管理器证据保持 unknown。
+完整 dump 在 main 的既有 worker barrier 下发布；通知、丢包、删除复用或超过 32 项
+先撤销旧分类并重建。默认内核 writer 与显式 external writer 互斥，Android collector 不变。
+实际 WireGuard 双栈、其他硬件未验证边界、单列注入投影和停止清理见
+[S235 验证记录](../testing/2026-09-13_S235_LINUX_NETWORK_SNAPSHOT.md)。
+
 ## Physical ownership
 
 当前 pinned upstream VPP 的 `opaque` 与 `opaque2` 是按 subgraph 复用的有限 inline 空间，不是

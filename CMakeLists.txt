@@ -91,6 +91,13 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_executable(sakamoto-product-linux-network-test tests/host/product_linux_network_test.c)
+  target_include_directories(sakamoto-product-linux-network-test PRIVATE src/product/include)
+  target_compile_features(sakamoto-product-linux-network-test PRIVATE c_std_11)
+  target_compile_options(sakamoto-product-linux-network-test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME sakamoto-product-linux-network-test COMMAND sakamoto-product-linux-network-test)
+endif()
 add_executable(sakamoto-product-flow-icmp-test tests/host/product_flow_icmp_test.c src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-flow-icmp-test PRIVATE sakamoto_product_flow_entry)
 target_compile_options(sakamoto-product-flow-icmp-test PRIVATE -Wall -Wextra -Werror -pedantic)

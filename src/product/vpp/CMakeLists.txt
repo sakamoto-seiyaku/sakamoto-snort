@@ -210,6 +210,11 @@ else()
   endforeach()
 endif()
 
+set(SAKAMOTO_PRODUCT_LINUX_NETWORK_SOURCE)
+if(NOT ANDROID)
+  set(SAKAMOTO_PRODUCT_LINUX_NETWORK_SOURCE product_linux_network.c)
+endif()
+
 add_vpp_plugin(product_core
   SOURCES
     product_core_plugin.c
@@ -228,6 +233,7 @@ add_vpp_plugin(product_core
     product_vpn_flow_stack.c
     product_vpn_socket_broker.c
     product_network_snapshot.c
+    ${SAKAMOTO_PRODUCT_LINUX_NETWORK_SOURCE}
     ${SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE}
   API_FILES
     product_core.api

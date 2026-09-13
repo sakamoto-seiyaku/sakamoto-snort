@@ -6,6 +6,7 @@
 /* Adapter lifecycle owns this generation. Writers run on main under the VPP
  * worker barrier; readers run inside the graph or adapter callback. */
 void product_network_snapshot_start (u64 generation);
+void product_network_snapshot_linux_start (vlib_main_t *vm);
 void product_network_snapshot_stop (void);
 int product_network_snapshot_publish (vlib_main_t *vm, u64 generation,
   const sakamoto_product_network_snapshot_t *snapshot);
