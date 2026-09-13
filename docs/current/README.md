@@ -47,3 +47,6 @@ That identity describes the frozen Product sources, not every later docs/test co
 For older reasoning or measurements, use the [documentation map](../README.md)
 to select a focused record. Large source modules are still present intentionally;
 this repository organization does not change their behavior or split their ownership.
+
+For the subsequent private-module refactor and its separate fresh regression,
+see [KISS code organization](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md).

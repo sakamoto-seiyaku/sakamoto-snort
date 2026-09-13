@@ -42,6 +42,7 @@ ENTRIES = (
     "tests/archive/retired-contracts/README.md",
     "docs/maintenance/2026-09-13_REPOSITORY_ORGANIZATION.md",
     "docs/maintenance/2026-09-13_REFERENCE_AND_POC_ORGANIZATION.md",
+    "docs/maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md",
 )
 RETIRED_CONTRACTS = (
     "s176-root-nfqueue-output", "s189-root-network-gate",

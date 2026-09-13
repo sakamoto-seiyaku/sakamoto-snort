@@ -13,7 +13,10 @@ For the real product:
 
 - [Host artifact builder](../../tools/product/build-host-artifact.sh) requires a
   verified pinned VPP stage via `VPP_HOST_STAGE_DIR`; see its input checks.
-  Host evidence is an explicit build option and must stay outside Android production.
+  Use `SAKAMOTO_PRODUCT_HOST_EVIDENCE=OFF` for the current Product artifact.
+  The legacy Host-only branch has a known old-reassembly interface build failure;
+  see the [refactor verification limits](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md).
+  Host evidence must stay outside Android production.
 - [Android build entry](../../app/android-runtime/scripts/build-debug-apk.sh)
   stages VPP-native Product artifacts; consult the [app build notes](../../app/android-runtime/README.md)
   and the script's current input contract. Do not substitute POC adapter artifacts.
