@@ -13,8 +13,9 @@ For the real product:
 
 - [Host artifact builder](../../tools/product/build-host-artifact.sh) requires a
   verified pinned VPP stage via `VPP_HOST_STAGE_DIR`; see its input checks.
-  Use `SAKAMOTO_PRODUCT_HOST_EVIDENCE=OFF` for the current Product artifact.
-  The legacy Host-only branch has a known old-reassembly interface build failure;
+  `SAKAMOTO_PRODUCT_HOST_EVIDENCE` defaults to `OFF` for the current Product artifact.
+  Explicit `ON` is rejected before compilation: the retained legacy Host-only branch
+  depends on removed reassembly interfaces;
   see the [refactor verification limits](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md).
   Host evidence must stay outside Android production.
 - [Android build entry](../../app/android-runtime/scripts/build-debug-apk.sh)

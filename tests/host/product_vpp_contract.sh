@@ -25,11 +25,21 @@ grep -Eq '^[[:space:]]+product_packet\.c$' "$plugin_cmake"
 grep -q 'SAKAMOTO_PRODUCT_HOST_EVIDENCE' "$plugin_cmake"
 grep -q 'product_packet_graph_host_evidence.c' "$plugin_cmake"
 grep -q 'Android/default Product source closure contains Host evidence' "$plugin_cmake"
-# Host evidence is selectable; Android/default CMake must keep it excluded.
+# Product builds default OFF; the retained legacy Host branch is unavailable.
+grep -Fq 'host_evidence="${SAKAMOTO_PRODUCT_HOST_EVIDENCE:-OFF}"' "$builder"
 grep -Fq -- '-DSAKAMOTO_PRODUCT_HOST_EVIDENCE="$host_evidence"' "$builder"
 grep -Fq 'SAKAMOTO_PRODUCT_HOST_EVIDENCE must be ON or OFF' "$builder"
 grep -Fq '"Build the Host-only installed Product graph evidence seam" OFF)' "$plugin_cmake"
 grep -Fq 'SAKAMOTO_PRODUCT_HOST_EVIDENCE is forbidden for Android Product builds' "$plugin_cmake"
+grep -Fq 'Legacy Host-only evidence is unavailable on the current VPP pin' "$plugin_cmake"
+# ON must fail with guidance before stage/artifact validation or cleanup.
+if rejected="$(SAKAMOTO_PRODUCT_HOST_EVIDENCE=ON VPP_HOST_STAGE_DIR= \
+    PRODUCT_ARTIFACT_DIR=/not-a-product-artifact bash "$builder" 2>&1)"; then
+  echo "legacy Host evidence unexpectedly accepted" >&2
+  exit 1
+fi
+grep -Fq 'Legacy Host-only evidence is unavailable on the current VPP pin' <<<"$rejected"
+grep -Fq 'SAKAMOTO_PRODUCT_HOST_EVIDENCE=OFF' <<<"$rejected"
 grep -Eq '^[[:space:]]+product_core\.api$' "$plugin_cmake"
 grep -q '^product.plugin.allowlist=product_core_plugin.so$' "$manifest"
 grep -q '^control.transport=generated-vapi-c-blocking$' "$manifest"

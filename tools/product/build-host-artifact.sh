@@ -12,9 +12,14 @@ pin_file="$repo_root/src/product/vpp/pinned-vpp-revision.txt"
 source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 expected_revision="$(tr -d '[:space:]' < "$pin_file")"
 stage_raw="${VPP_HOST_STAGE_DIR:-}"
-host_evidence="${SAKAMOTO_PRODUCT_HOST_EVIDENCE:-ON}"
+host_evidence="${SAKAMOTO_PRODUCT_HOST_EVIDENCE:-OFF}"
 if [[ "$host_evidence" != ON && "$host_evidence" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_HOST_EVIDENCE must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$host_evidence" == ON ]]; then
+  echo "Legacy Host-only evidence is unavailable on the current VPP pin (removed reassembly interfaces)." >&2
+  echo "Use SAKAMOTO_PRODUCT_HOST_EVIDENCE=OFF for the Product mainline." >&2
   exit 2
 fi
 product_prepare_build_output || exit 2

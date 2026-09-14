@@ -193,6 +193,9 @@ if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
     message(FATAL_ERROR
       "SAKAMOTO_PRODUCT_HOST_EVIDENCE is forbidden for Android Product builds")
   endif()
+  message(FATAL_ERROR
+    "Legacy Host-only evidence is unavailable on the current VPP pin (removed reassembly interfaces). "
+    "Use SAKAMOTO_PRODUCT_HOST_EVIDENCE=OFF for the Product mainline.")
   set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE
     product_packet_graph_host_evidence.c)
 else()
