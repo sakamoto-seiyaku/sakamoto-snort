@@ -91,6 +91,17 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-rule-config-test
+  tests/host/product_rule_config_test.c
+  src/product/vpp/product_rule_config.c
+  src/product/vpp/product_l4_policy.c)
+target_include_directories(sakamoto-product-rule-config-test PRIVATE
+  src/product/include src/product/vpp)
+target_compile_features(sakamoto-product-rule-config-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-rule-config-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-rule-config-test COMMAND sakamoto-product-rule-config-test)
+add_test(NAME sakamoto-rule-config-android-contract
+  COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/t01-rule-configuration-test.sh")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(sakamoto-product-linux-network-test tests/host/product_linux_network_test.c)
   target_include_directories(sakamoto-product-linux-network-test PRIVATE src/product/include)
@@ -177,15 +188,11 @@ add_test(NAME sakamoto-android-runtime-contract
 add_test(NAME sakamoto-s187-worker-core-guardrails-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s187-worker-core-guardrails-contract-test.sh")
-add_test(NAME sakamoto-s188-empty-policy-snapshot-contract
-  COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s188-empty-policy-snapshot-contract-test.sh")
+
 add_test(NAME sakamoto-product-platform-boundary-contract
   COMMAND python3
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_platform_boundary_test.py")
-add_test(NAME sakamoto-android-policy-bundle-contract
-  COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s192-policy-bundle-contract-test.sh")
+
 add_test(NAME sakamoto-android-runtime-teardown-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s196-runtime-instance-teardown-contract-test.sh")
@@ -216,12 +223,8 @@ add_test(NAME sakamoto-product-path-contract
 add_test(NAME sakamoto-product-core-profile-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_core_profile_contract.sh")
 
-add_test(NAME sakamoto-s194-product-mutation-contract
-  COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s194-product-mutation-contract.sh")
-add_test(NAME sakamoto-s194-android-product-mutation-contract
-  COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/s194-product-mutation-contract-test.sh")
+
+
 
 add_custom_target(sakamoto-vpp-mainline-pending
   COMMAND "${CMAKE_COMMAND}" -E echo

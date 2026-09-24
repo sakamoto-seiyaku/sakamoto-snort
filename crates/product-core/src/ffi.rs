@@ -2,7 +2,7 @@
 
 use crate::{
     ErrorCode, ProductBytes, ProductCore, ProductError, ProductNetworkSnapshot,
-    ProductPolicyBundle, ProductPolicySnapshot, ProductStatus, Status,
+    ProductPolicyBundle, ProductStatus, Status,
 };
 use std::os::raw::c_uint;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -14,6 +14,12 @@ pub(super) struct ProductSession {
 }
 
 unsafe extern "C" {
+    pub(super) fn sakamoto_product_session_rule_config(
+        session: *mut ProductSession,
+        expected_generation: u64,
+        request: *const crate::RuleConfigRequest,
+        out_status: *mut crate::RuleConfigStatus,
+    ) -> c_uint;
     pub(super) fn sakamoto_product_session_stop_root(
         session: *mut ProductSession,
         expected_generation: u64,
@@ -37,18 +43,6 @@ unsafe extern "C" {
         expected_generation: u64,
         out_status: *mut ProductStatus,
     ) -> c_uint;
-    pub(super) fn sakamoto_product_session_apply_policy(
-        session: *mut ProductSession,
-        expected_generation: u64,
-        snapshot: *const ProductPolicySnapshot,
-        out_status: *mut ProductStatus,
-    ) -> c_uint;
-    pub(super) fn sakamoto_product_session_apply_policy_bundle(
-        session: *mut ProductSession,
-        expected_generation: u64,
-        bundle: *const ProductPolicyBundle,
-        out_status: *mut ProductStatus,
-    ) -> c_uint;
     pub(super) fn sakamoto_product_session_set_policy_mutation_fault(
         session: *mut ProductSession,
         expected_generation: u64,
@@ -56,6 +50,36 @@ unsafe extern "C" {
     ) -> c_uint;
     pub(super) fn sakamoto_product_session_disconnect(session: *mut ProductSession) -> c_uint;
     pub(super) fn sakamoto_product_session_destroy(session: *mut ProductSession) -> c_uint;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_rule_config(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    request: *const crate::RuleConfigRequest,
+    out_status: *mut crate::RuleConfigStatus,
+) -> c_uint {
+    if handle.is_null() || request.is_null() || out_status.is_null() || generation == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe { *out_status = crate::RuleConfigStatus::default() };
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        match core.rule_config(unsafe { &*request }) {
+            Ok(status) => {
+                unsafe { *out_status = status };
+                0
+            }
+            Err(ProductError::Native { code, .. }) => code.raw(),
+            Err(_) => ErrorCode::InternalError.raw(),
+        }
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
 }
 
 /// Publish control-plane platform facts on the existing serialized session.

@@ -9,6 +9,7 @@
 
 #include "product_packet.h"
 #include "product_packet_graph.h"
+#include "product_core_policy.h"
 #include "product_flow_entry.h"
 #include "product_flow_end.h"
 #include "product_flow_expiry.h"
@@ -2272,6 +2273,8 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   clib_atomic_store_rel_n (&graph->lifecycle_terminal_intents, 0);
   clib_atomic_store_rel_n (&graph->lifecycle_settlements, 0);
   clib_atomic_store_rel_n (&graph->lifecycle_returns, 0);
+  if (!product_core_policy_start (generation))
+    return 0;
   clib_atomic_store_rel_n (&graph->enabled, 1);
   clib_atomic_store_rel_n (&graph->accepting, 1);
   return 1;
@@ -4410,46 +4413,8 @@ static clib_error_t *
 product_policy_publish_cli (vlib_main_t *vm, unformat_input_t *input,
                             vlib_cli_command_t *command)
 {
-  product_packet_graph_main_t *g = &product_packet_graph_main;
-  u64 revision, hash, rule_id;
-  u32 uid;
-  (void) command;
-  if (!unformat (input, "%llu %llu %u %llu", &revision, &hash, &uid, &rule_id)
-      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
-      || !g->enabled || !revision || !hash || !rule_id || rule_id > UINT64_MAX - 100
-      || uid == UINT32_MAX)
-    return clib_error_return (0, "expected revision hash uid rule-id for active runtime");
-  product_l4_policy_rule_t rules[4] = { 0 };
-  for (u32 i = 0; i < 4; i++)
-    {
-      rules[i].rule_id = rule_id + i;
-      rules[i].uid = uid;
-      rules[i].network_context_id = PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY;
-      rules[i].ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY;
-      rules[i].source_port_last = rules[i].destination_port_last = 65535;
-      rules[i].family = i < 2 ? 4 : 6;
-      rules[i].protocol = (i & 1) ? 17 : 6;
-      rules[i].action = PRODUCT_L4_POLICY_ACTION_ALLOW;
-      rules[i].reason_id = 209;
-    }
-  product_packet_graph_gate_entry_t gate = {
-    .rule_id = rule_id + 100, .uid = uid,
-    .network_context_id = PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY,
-    .ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY,
-    .source_port_last = 65535, .destination_port_last = 65535,
-    .action = PRODUCT_L4_POLICY_ACTION_ALLOW, .reason_id = 209,
-  };
-  product_packet_graph_policy_bundle_t bundle = {
-    .generation = g->generation, .revision = revision, .snapshot_hash = hash,
-    .gate_entries = &gate, .gate_entry_count = 1, .l4_rules = rules, .l4_rule_count = 4,
-  };
-  product_packet_result_t result = product_packet_graph_publish_policy_bundle (&bundle);
-  if (result != PRODUCT_PACKET_OK)
-    return clib_error_return (0, "policy publication rejected: %u", result);
-  vlib_cli_output (vm, "policy.publish=ok generation=%llu revision=%llu snapshot_hash=%llu rule=%llu",
-    (unsigned long long) g->generation, (unsigned long long) revision,
-    (unsigned long long) hash, (unsigned long long) rule_id);
-  return 0;
+  (void) vm; (void) input; (void) command;
+  return clib_error_return (0, "retired: use the online Product rule configuration API");
 }
 VLIB_CLI_COMMAND (product_policy_publish_command, static) = {
   .path = "product policy publish", .short_help = "product policy publish <revision> <hash> <uid> <rule-id>",

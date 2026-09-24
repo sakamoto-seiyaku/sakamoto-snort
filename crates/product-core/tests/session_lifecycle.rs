@@ -157,7 +157,10 @@ fn root_stop_ffi_fences_generation_and_fixture_cannot_claim_native_drain() {
             ErrorCode::ApiUnavailable.raw()
         );
         assert_eq!(stopped, 0);
-        assert_eq!(sakamoto_product_core_disconnect(handle), ErrorCode::Ok.raw());
+        assert_eq!(
+            sakamoto_product_core_disconnect(handle),
+            ErrorCode::Ok.raw()
+        );
         assert_eq!(
             sakamoto_product_core_stop_root(handle, 242, &mut stopped),
             ErrorCode::StaleHandle.raw()

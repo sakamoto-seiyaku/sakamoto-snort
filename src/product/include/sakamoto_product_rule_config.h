@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#ifndef SAKAMOTO_PRODUCT_RULE_CONFIG_ABI_H
+#define SAKAMOTO_PRODUCT_RULE_CONFIG_ABI_H
+
+#include <stdint.h>
+
+#define SAKAMOTO_RULE_CONFIG_SCHEMA UINT32_C(1)
+#define SAKAMOTO_RULE_CONFIG_QUERY UINT32_C(0)
+#define SAKAMOTO_RULE_CONFIG_REPLACE UINT32_C(1)
+
+#define SAKAMOTO_RULE_CONFIG_OK UINT32_C(0)
+#define SAKAMOTO_RULE_CONFIG_INVALID UINT32_C(1)
+#define SAKAMOTO_RULE_CONFIG_CONFLICT UINT32_C(2)
+#define SAKAMOTO_RULE_CONFIG_IO UINT32_C(3)
+#define SAKAMOTO_RULE_CONFIG_UNSUPPORTED UINT32_C(4)
+#define SAKAMOTO_RULE_CONFIG_COMPILE UINT32_C(5)
+#define SAKAMOTO_RULE_CONFIG_PUBLISH UINT32_C(6)
+#define SAKAMOTO_RULE_CONFIG_EXHAUSTED UINT32_C(7)
+#define SAKAMOTO_RULE_CONFIG_NOT_READY UINT32_C(8)
+
+/* Addresses are four network-order bytes. Numeric fields are host order at
+ * the C ABI; generated VAPI owns wire conversion. No pointer crosses it. */
+typedef struct {
+  uint32_t present;
+  uint32_t uid;
+  uint32_t protocol;
+  uint32_t direction;
+  uint32_t action;
+  uint32_t source_port;
+  uint32_t destination_port;
+  uint32_t reserved;
+  uint8_t source_address[4];
+  uint8_t destination_address[4];
+} sakamoto_product_config_rule_t;
+
+typedef struct {
+  uint32_t schema;
+  uint32_t operation;
+  uint64_t expected_saved_revision;
+  sakamoto_product_config_rule_t rule;
+} sakamoto_product_rule_config_request_t;
+
+typedef struct {
+  uint64_t generation;
+  uint64_t saved_revision;
+  uint64_t active_revision;
+  uint64_t saved_rule_version;
+  uint64_t active_rule_version;
+  uint32_t result;
+  uint32_t save_error;
+  uint32_t compile_error;
+  uint32_t reserved;
+  sakamoto_product_config_rule_t rule;
+} sakamoto_product_rule_config_status_t;
+
+#endif

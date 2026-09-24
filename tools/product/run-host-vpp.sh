@@ -202,5 +202,10 @@ plugins {
 EOF
 
 export SAKAMOTO_PRODUCT_GENERATION="$generation"
+# Source survives runtime-directory cleanup and profile generations. Callers
+# may select another explicit persistent directory for isolated acceptance.
+rule_config_dir="${PRODUCT_RULE_CONFIG_DIR:-$repo_root/build-output/product-rule-config}"
+mkdir -p "$rule_config_dir"
+export SAKAMOTO_RULE_CONFIG_PATH="$(realpath -e -- "$rule_config_dir")/rules.conf"
 export LD_LIBRARY_PATH="$artifact_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$vpp_bin" -c "$config"

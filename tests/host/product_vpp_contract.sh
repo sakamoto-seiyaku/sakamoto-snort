@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-bash "$repo_root/tests/host/s192-policy-bundle-contract.sh"
+# ADR-0009 retires the Rust-owned bundle store; T01 behavioral tests cover its replacement.
 plugin_cmake="$repo_root/src/product/vpp/CMakeLists.txt"
 plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
 packet_source="$repo_root/src/product/vpp/product_packet.c"

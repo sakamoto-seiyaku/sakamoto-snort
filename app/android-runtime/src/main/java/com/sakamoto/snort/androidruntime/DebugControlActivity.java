@@ -20,6 +20,7 @@ import android.os.UserHandle;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -189,6 +190,9 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private TextView productView;
+    private TextView ruleConfigView;
+    private final EditText[] ruleInputs = new EditText[5];
+    private long ruleSavedRevision;
     private Spinner appSpinner;
     private ImageView selectedAppIcon;
     private Button bindSelectedButton;
@@ -758,10 +762,35 @@ public class DebugControlActivity extends Activity {
         buttons.addView(traffic, weighted());
         Button gateProbe = new Button(this);
         gateProbe.setText("Gate+probe");
+        gateProbe.setEnabled(false); // Stage-owned Gate authoring is retired by ADR-0009.
         gateProbe.setAllCaps(false);
         gateProbe.setOnClickListener(view -> runDebugApplyGateAndProbe());
         buttons.addView(gateProbe, weighted());
         root.addView(buttons, fillWrap());
+
+        TextView ruleTitle = new TextView(this);
+        ruleTitle.setText("Online rule: exact IPv4 UDP (one direct application binding)");
+        root.addView(ruleTitle, fillWrap());
+        String[] hints = {"Application UID", "Source IPv4", "Destination IPv4", "Source port", "Destination port"};
+        String[] defaults = {Integer.toString(android.os.Process.myUid()), "127.0.0.1", "127.0.0.2", "32000", "40608"};
+        for (int i = 0; i < ruleInputs.length; ++i) {
+            EditText field = new EditText(this);
+            field.setSingleLine(true);
+            field.setHint(hints[i]); field.setContentDescription(hints[i]);
+            field.setText(defaults[i]); ruleInputs[i] = field;
+            root.addView(field, fillWrap());
+        }
+        LinearLayout ruleButtons = new LinearLayout(this);
+        String[] ruleLabels = {"Allow UDP", "Drop UDP", "Clear", "Query"};
+        for (int i = 0; i < ruleLabels.length; ++i) {
+            final int selected = i;
+            Button button = new Button(this); button.setText(ruleLabels[i]); button.setAllCaps(false);
+            button.setOnClickListener(view -> submitRuleConfiguration(selected));
+            ruleButtons.addView(button, weighted());
+        }
+        root.addView(ruleButtons, fillWrap());
+        ruleConfigView = new TextView(this);
+        root.addView(ruleConfigView, fillWrap());
 
         LinearLayout appSelector = new LinearLayout(this);
         appSelector.setOrientation(LinearLayout.HORIZONTAL);
@@ -986,6 +1015,7 @@ public class DebugControlActivity extends Activity {
     };
 
     private void refreshStatus() {
+        refreshRuleConfiguration();
         if (statusView != null) {
             RuntimeSnapshot current = backend.query(this);
             if (requestedProfile != null
@@ -1006,12 +1036,50 @@ public class DebugControlActivity extends Activity {
                     setProfileSpinnerSelection(RuntimeProfile.ROOT);
                 }
             }
-            statusView.setText(current.displayText() + "\n\n"
+            setTextIfChanged(statusView, current.displayText() + "\n\n"
                     + initializationPlanText(current));
         }
         if (productView != null) {
-            renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()));
+            renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()), false);
         }
+    }
+
+    private void submitRuleConfiguration(int selected) {
+        try {
+            RuleConfiguration.Rule fields = selected >= 2 ? RuleConfiguration.Rule.empty() : RuleConfiguration.udp(
+                    Integer.parseInt(ruleInputs[0].getText().toString()),
+                    ruleInputs[1].getText().toString(), ruleInputs[2].getText().toString(),
+                    Integer.parseInt(ruleInputs[3].getText().toString()),
+                    Integer.parseInt(ruleInputs[4].getText().toString()), selected == 0 ? 1 : 2);
+            backend.ruleConfig(this, selected == 3 ? 0 : 1, ruleSavedRevision, fields);
+        } catch (RuntimeException error) {
+            ruleConfigView.setText("Rule request: " + error.getMessage());
+        }
+    }
+
+    private void refreshRuleConfiguration() {
+        if (ruleConfigView == null) return;
+        File file = new File(getFilesDir(), "product-state/rule-config.properties");
+        if (!file.isFile() || file.length() > 4096) return;
+        try (java.io.FileInputStream stream = new java.io.FileInputStream(file)) {
+            java.util.Properties values = new java.util.Properties(); values.load(stream);
+            ruleSavedRevision = Long.parseUnsignedLong(values.getProperty("savedRevision", "0"));
+            setTextIfChanged(ruleConfigView, "Saved " + values.getProperty("savedRevision", "?")
+                    + " / active " + values.getProperty("activeRevision", "?")
+                    + "\nRule version " + values.getProperty("savedRuleVersion", "?")
+                    + "\nResult " + values.getProperty("result", "?")
+                    + " / save " + values.getProperty("saveError", "?")
+                    + " / compile " + values.getProperty("compileError", "?")
+                    + "\nWinner " + values.getProperty("winnerVersion", "0")
+                    + " / action " + values.getProperty("winnerAction", "0")
+                    + "\n" + values.getProperty("error", ""));
+        } catch (IOException | IllegalArgumentException ignored) {
+            setTextIfChanged(ruleConfigView, "Rule status unavailable");
+        }
+    }
+
+    private static void setTextIfChanged(TextView view, String text) {
+        if (!text.contentEquals(view.getText())) view.setText(text);
     }
 
     private String initializationPlanText(RuntimeSnapshot current) {
@@ -1057,8 +1125,10 @@ public class DebugControlActivity extends Activity {
         if (profileSpinner == null) {
             return;
         }
+        int position = profile == RuntimeProfile.VPN ? 1 : 0;
+        if (profileSpinner.getSelectedItemPosition() == position) return;
         suppressProfileSelectionPersist = true;
-        profileSpinner.setSelection(profile == RuntimeProfile.VPN ? 1 : 0);
+        profileSpinner.setSelection(position);
         suppressProfileSelectionPersist = false;
     }
 
@@ -1094,12 +1164,17 @@ public class DebugControlActivity extends Activity {
     }
 
     private void renderProductProjection(ProductCatalogFormatter.Projection projection) {
+        renderProductProjection(projection, true);
+    }
+
+    private void renderProductProjection(ProductCatalogFormatter.Projection projection,
+                                         boolean updateSelector) {
         productProjection = projection;
         if (productView != null) {
             AppDetail detail = ProductActivityProjectionStore.read(getFilesDir());
-            productView.setText(projection.displayText + "\n\n" + detail.displayText);
+            setTextIfChanged(productView, projection.displayText + "\n\n" + detail.displayText);
         }
-        renderApplicationSelector(projection);
+        if (updateSelector) renderApplicationSelector(projection);
     }
 
     private void renderApplicationSelector(ProductCatalogFormatter.Projection projection) {
@@ -1150,10 +1225,10 @@ public class DebugControlActivity extends Activity {
 
     private void updateSelectedApplicationButtons(ProductCatalogFormatter.EntryRow row) {
         if (bindSelectedButton != null) {
-            bindSelectedButton.setEnabled(row != null && row.canBind());
+            bindSelectedButton.setEnabled(false);
         }
         if (unbindSelectedButton != null) {
-            unbindSelectedButton.setEnabled(row != null && row.canUnbind());
+            unbindSelectedButton.setEnabled(false);
         }
         updateNetworkGateButton(wifiGateButton, row,
                 AuthoringPolicyBundle.NetworkContextId.WIFI);
@@ -1168,7 +1243,7 @@ public class DebugControlActivity extends Activity {
         if (button == null) {
             return;
         }
-        button.setEnabled(row != null && row.canToggleGate());
+        button.setEnabled(false);
         button.setText(row == null ? "Block " + context.wireName
                 : row.networkGateButtonLabel(context));
     }

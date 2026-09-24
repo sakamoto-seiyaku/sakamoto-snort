@@ -304,3 +304,40 @@ define product_core_network_publish_reply {
     u32 context;
     i32 retval;
 };
+
+typedef product_config_rule {
+    u32 present;
+    u32 uid;
+    u32 protocol;
+    u32 direction;
+    u32 action;
+    u32 source_port;
+    u32 destination_port;
+    u32 reserved;
+    u8 source_address[4];
+    u8 destination_address[4];
+};
+
+define product_core_rule_config {
+    u32 client_index;
+    u32 context;
+    u64 generation;
+    u32 schema;
+    u32 operation;
+    u64 expected_saved_revision;
+    vl_api_product_config_rule_t rule;
+};
+
+define product_core_rule_config_reply {
+    u32 context;
+    i32 retval;
+    u64 generation;
+    u64 saved_revision;
+    u64 active_revision;
+    u64 saved_rule_version;
+    u64 active_rule_version;
+    u32 result;
+    u32 save_error;
+    u32 compile_error;
+    vl_api_product_config_rule_t rule;
+};

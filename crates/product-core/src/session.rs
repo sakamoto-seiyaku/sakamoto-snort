@@ -1,20 +1,13 @@
 //! Serialized Product Core sessions and generation lifetime.
 
 use crate::ffi::{
-    sakamoto_product_session_apply_policy, sakamoto_product_session_apply_policy_bundle,
     sakamoto_product_session_connect, sakamoto_product_session_destroy,
     sakamoto_product_session_disconnect, sakamoto_product_session_query,
     sakamoto_product_session_set_policy_mutation_fault, ProductSession,
 };
-use crate::policy::{
-    active_policy_matches_fence, is_policy_outcome_unknown, validate_policy_bundle,
-    EmptyPolicySnapshot, NetworkGatePolicySnapshot, PolicyMutationFence, ProductPolicyStore,
-    RuntimePolicySnapshot, StatelessL4PolicySnapshot, EMPTY_POLICY_STORE_FILE,
-    L4_POLICY_STORE_FILE, NETWORK_GATE_POLICY_STORE_FILE,
-};
 use crate::{
     abi_version, api_version, validate_status_identity, ErrorCode, ProductBytes, ProductError,
-    ProductPolicyBundle, ProductPolicySnapshot, ProductStatus, Status, ABI_VERSION, API_VERSION,
+    ProductPolicyBundle, ProductStatus, Status, ABI_VERSION, API_VERSION,
     POLICY_MUTATION_FAULT_NONE, POLICY_MUTATION_FAULT_OMIT_CALLBACK,
     POLICY_MUTATION_FAULT_PRE_SUBMIT_NOT_SENT,
 };
@@ -94,60 +87,6 @@ pub struct ProductCore {
 }
 
 impl ProductCore {
-    fn ensure_mutation_unfenced(&self, store: &ProductPolicyStore) -> Result<(), ProductError> {
-        if let Some(fence) = store.current_mutation_fence()? {
-            return Err(ProductError::MutationFenceActive {
-                generation: fence.generation,
-                requested_revision: fence.requested_revision,
-            });
-        }
-        if store.has_unresolved_mutation_artifact() {
-            return Err(ProductError::PolicyStore {
-                detail: "orphaned policy mutation artifact requires reconciliation".to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-    fn reconcile_unknown_mutation(
-        &mut self,
-        store: &ProductPolicyStore,
-        fence: &PolicyMutationFence,
-    ) -> Result<Status, ProductError> {
-        /* A reply from the fenced generation cannot clear this record.  A
-         * fresh handle first reads active state, then adopts or discards the
-         * retained candidate without issuing another VAPI mutation. */
-        if fence.generation == self.generation {
-            return Err(ProductError::MutationFenceActive {
-                generation: fence.generation,
-                requested_revision: fence.requested_revision,
-            });
-        }
-        let mut status = self.query()?;
-        let active_matches = active_policy_matches_fence(&status, fence, self.generation);
-        if active_matches {
-            store.validate_mutation_candidate(fence)?;
-            store.promote_mutation_candidate(&fence.target_file)?;
-        } else {
-            /* Do not replay a target that the fresh generation did not report
-             * as active.  The previous durable intent remains untouched. */
-            store.discard_mutation_candidate();
-        }
-        store.clear_mutation_fence()?;
-        status.error_detail = if active_matches {
-            format!(
-                "unknown policy mutation reconciled by active revision readback ({})",
-                fence.operation_id
-            )
-        } else {
-            format!(
-                "unknown policy mutation discarded after active revision readback ({})",
-                fence.operation_id
-            )
-        };
-        Ok(status)
-    }
-
     pub fn connect(path: &Path, generation: u64) -> Result<(Self, Status), ProductError> {
         let actual_abi = abi_version();
         if actual_abi != ABI_VERSION {
@@ -299,440 +238,141 @@ impl ProductCore {
         Ok(())
     }
 
-    pub fn apply_empty_policy(&mut self, files_dir: &Path) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = EmptyPolicySnapshot::new(store.next_revision()?)?;
-        let temporary = store.stage_empty_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            EMPTY_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+    fn retired_policy_writer(&self) -> Result<Status, ProductError> {
+        Err(ProductError::Native {
+            code: ErrorCode::ApiUnavailable,
+            status: Status {
+                code: ErrorCode::ApiUnavailable,
+                error_detail: "legacy authoring is retired; use online VPP rule configuration"
+                    .into(),
+                ..Status::empty(self.generation)
+            },
+        })
+    }
+
+    pub fn apply_empty_policy(&mut self, _files_dir: &Path) -> Result<Status, ProductError> {
+        let current = self.query_rule_config()?;
+        let result = self.rule_config(&crate::RuleConfigRequest {
+            schema: 1,
+            operation: 1,
+            expected_saved_revision: current.saved_revision,
+            ..Default::default()
+        })?;
+        if result.result != 0 {
+            return Err(ProductError::Native {
+                code: ErrorCode::PolicyApplyFailed,
+                status: Status {
+                    code: ErrorCode::PolicyApplyFailed,
+                    error_detail: format!("VPP configuration failed: {}", result.result),
+                    ..Status::empty(self.generation)
+                },
+            });
+        }
+        self.query()
     }
 
     pub fn apply_empty_policy_revision(
         &mut self,
-        files_dir: &Path,
-        revision: u64,
+        _files_dir: &Path,
+        _revision: u64,
     ) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = EmptyPolicySnapshot::new(revision)?;
-        let temporary = store.stage_empty_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            EMPTY_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+        self.retired_policy_writer()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_network_gate_policy(
         &mut self,
-        files_dir: &Path,
-        subject_uid: u32,
-        network_context: u32,
-        blocked: bool,
-        rule_id: u64,
-        reason_id: u32,
+        _files_dir: &Path,
+        _subject_uid: u32,
+        _network_context: u32,
+        _blocked: bool,
+        _rule_id: u64,
+        _reason_id: u32,
     ) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = NetworkGatePolicySnapshot::new(
-            store.next_revision()?,
-            subject_uid,
-            network_context,
-            blocked,
-            rule_id,
-            reason_id,
-        )?;
-        let temporary = store.stage_network_gate_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            NETWORK_GATE_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+        self.retired_policy_writer()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_network_gate_policy_revision(
         &mut self,
-        files_dir: &Path,
-        revision: u64,
-        subject_uid: u32,
-        network_context: u32,
-        blocked: bool,
-        rule_id: u64,
-        reason_id: u32,
+        _files_dir: &Path,
+        _revision: u64,
+        _subject_uid: u32,
+        _network_context: u32,
+        _blocked: bool,
+        _rule_id: u64,
+        _reason_id: u32,
     ) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = NetworkGatePolicySnapshot::new(
-            revision,
-            subject_uid,
-            network_context,
-            blocked,
-            rule_id,
-            reason_id,
-        )?;
-        let temporary = store.stage_network_gate_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            NETWORK_GATE_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+        self.retired_policy_writer()
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn apply_l4_policy(
         &mut self,
-        files_dir: &Path,
-        subject_uid: u32,
-        network_context: u32,
-        ip_family: u32,
-        ip_protocol: u32,
-        direction: u32,
-        action: u32,
-        source_cidr: &str,
-        destination_cidr: &str,
-        source_port_first: u32,
-        source_port_last: u32,
-        destination_port_first: u32,
-        destination_port_last: u32,
-        priority: u32,
-        order: u32,
-        rule_id: u64,
-        reason_id: u32,
+        _files_dir: &Path,
+        _subject_uid: u32,
+        _network_context: u32,
+        _ip_family: u32,
+        _ip_protocol: u32,
+        _direction: u32,
+        _action: u32,
+        _source_cidr: &str,
+        _destination_cidr: &str,
+        _source_port_first: u32,
+        _source_port_last: u32,
+        _destination_port_first: u32,
+        _destination_port_last: u32,
+        _priority: u32,
+        _order: u32,
+        _rule_id: u64,
+        _reason_id: u32,
     ) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = StatelessL4PolicySnapshot::new(
-            store.next_revision()?,
-            subject_uid,
-            network_context,
-            ip_family,
-            ip_protocol,
-            direction,
-            action,
-            source_cidr,
-            destination_cidr,
-            source_port_first,
-            source_port_last,
-            destination_port_first,
-            destination_port_last,
-            priority,
-            order,
-            rule_id,
-            reason_id,
-        )?;
-        let temporary = store.stage_l4_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            L4_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+        self.retired_policy_writer()
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn apply_l4_policy_revision(
         &mut self,
-        files_dir: &Path,
-        revision: u64,
-        subject_uid: u32,
-        network_context: u32,
-        ip_family: u32,
-        ip_protocol: u32,
-        direction: u32,
-        action: u32,
-        source_cidr: &str,
-        destination_cidr: &str,
-        source_port_first: u32,
-        source_port_last: u32,
-        destination_port_first: u32,
-        destination_port_last: u32,
-        priority: u32,
-        order: u32,
-        rule_id: u64,
-        reason_id: u32,
+        _files_dir: &Path,
+        _revision: u64,
+        _subject_uid: u32,
+        _network_context: u32,
+        _ip_family: u32,
+        _ip_protocol: u32,
+        _direction: u32,
+        _action: u32,
+        _source_cidr: &str,
+        _destination_cidr: &str,
+        _source_port_first: u32,
+        _source_port_last: u32,
+        _destination_port_first: u32,
+        _destination_port_last: u32,
+        _priority: u32,
+        _order: u32,
+        _rule_id: u64,
+        _reason_id: u32,
     ) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let snapshot = StatelessL4PolicySnapshot::new(
-            revision,
-            subject_uid,
-            network_context,
-            ip_family,
-            ip_protocol,
-            direction,
-            action,
-            source_cidr,
-            destination_cidr,
-            source_port_first,
-            source_port_last,
-            destination_port_first,
-            destination_port_last,
-            priority,
-            order,
-            rule_id,
-            reason_id,
-        )?;
-        let temporary = store.stage_l4_snapshot(&snapshot)?;
-        self.apply_staged_policy_snapshot(
-            &store,
-            &temporary,
-            L4_POLICY_STORE_FILE,
-            snapshot.to_ffi(),
-            &predecessor,
-        )
+        self.retired_policy_writer()
     }
 
-    fn apply_staged_policy_snapshot(
-        &mut self,
-        store: &ProductPolicyStore,
-        temporary: &Path,
-        target_file: &str,
-        snapshot: ProductPolicySnapshot,
-        predecessor: &Status,
-    ) -> Result<Status, ProductError> {
-        match self.apply_policy_snapshot(snapshot) {
-            Ok(status) => {
-                if let Err(error) = store.commit_staged_intent(temporary, target_file) {
-                    store.discard_staged_policy_bundle(temporary);
-                    return Err(error);
-                }
-                Ok(status)
-            }
-            Err(error) if is_policy_outcome_unknown(&error) => {
-                let fence = PolicyMutationFence::for_snapshot(
-                    self.generation,
-                    predecessor,
-                    &snapshot,
-                    target_file,
-                )?;
-                if let Err(store_error) = store.quarantine_policy_bundle(temporary) {
-                    /* Keep the staged file when quarantine fails.  The
-                     * unresolved-artifact gate prevents a later replay. */
-                    return Err(store_error);
-                }
-                if let Err(store_error) = store.write_mutation_fence(&fence) {
-                    /* Keep the candidate as an orphaned safety marker.  A
-                     * failed fence write must not make a later caller replay
-                     * an operation whose VPP outcome is still unknown. */
-                    return Err(store_error);
-                }
-                Err(error)
-            }
-            Err(error) => {
-                store.discard_staged_policy_bundle(temporary);
-                Err(error)
-            }
-        }
-    }
-
-    /// Validate and publish one complete Gate + L4 successor.  The bundle is
-    /// staged as one file, sent through one native apply call, and committed
-    /// only after native success; a rejected native apply removes only the
-    /// temporary file and leaves the previous bundle untouched.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_policy_bundle(
         &mut self,
-        files_dir: &Path,
-        bundle: &ProductPolicyBundle,
+        _files_dir: &Path,
+        _bundle: &ProductPolicyBundle,
     ) -> Result<Status, ProductError> {
-        validate_policy_bundle(bundle)?;
-        let store = ProductPolicyStore::new(files_dir);
-        self.ensure_mutation_unfenced(&store)?;
-        let predecessor = self.query()?;
-        let temporary = store.stage_policy_bundle(bundle)?;
-        match self.apply_policy_bundle_native(bundle) {
-            Ok(status) => {
-                if let Err(error) = store.commit_policy_bundle(&temporary) {
-                    store.discard_staged_policy_bundle(&temporary);
-                    return Err(error);
-                }
-                Ok(status)
-            }
-            Err(error) if is_policy_outcome_unknown(&error) => {
-                let fence =
-                    match PolicyMutationFence::for_bundle(self.generation, &predecessor, bundle) {
-                        Ok(fence) => fence,
-                        Err(fence_error) => {
-                            store.discard_staged_policy_bundle(&temporary);
-                            return Err(fence_error);
-                        }
-                    };
-                if let Err(store_error) = store.quarantine_policy_bundle(&temporary) {
-                    /* Keep the staged file when quarantine fails.  The
-                     * unresolved-artifact gate prevents a later replay. */
-                    return Err(store_error);
-                }
-                if let Err(store_error) = store.write_mutation_fence(&fence) {
-                    /* Keep the candidate as an orphaned safety marker.  A
-                     * failed fence write must not make a later caller replay
-                     * an operation whose VPP outcome is still unknown. */
-                    return Err(store_error);
-                }
-                Err(error)
-            }
-            Err(error) => {
-                store.discard_staged_policy_bundle(&temporary);
-                Err(error)
-            }
-        }
+        self.retired_policy_writer()
     }
 
-    pub fn reconcile_policy(&mut self, files_dir: &Path) -> Result<Status, ProductError> {
-        let store = ProductPolicyStore::new(files_dir);
-        if let Some(fence) = store.current_mutation_fence()? {
-            return self.reconcile_unknown_mutation(&store, &fence);
-        }
-        if store.has_unresolved_mutation_artifact() {
-            return Err(ProductError::PolicyStore {
-                detail: "orphaned policy mutation artifact requires a durable fence".to_owned(),
-            });
-        }
-        match store.current_snapshot()? {
-            Some(snapshot) => self.reconcile_persisted_snapshot(&store, &snapshot),
-            None => self.query(),
-        }
+    pub fn reconcile_policy(&mut self, _files_dir: &Path) -> Result<Status, ProductError> {
+        // VPP loads and compiles its source before Adapter admission. No replay
+        // from a Rust-owned snapshot or unknown-mutation candidate is allowed.
+        self.query_rule_config()?;
+        self.query()
     }
 
     pub fn reconcile_empty_policy(&mut self, files_dir: &Path) -> Result<Status, ProductError> {
         self.reconcile_policy(files_dir)
-    }
-
-    fn reconcile_persisted_snapshot(
-        &mut self,
-        store: &ProductPolicyStore,
-        snapshot: &RuntimePolicySnapshot,
-    ) -> Result<Status, ProductError> {
-        let predecessor = self.query()?;
-        let target_file = snapshot.target_file();
-        store.quarantine_persisted_intent(target_file)?;
-        let result = match snapshot.bundle() {
-            Some(bundle) => self.apply_policy_bundle_native(bundle),
-            None => self.apply_policy_snapshot(snapshot.to_ffi()),
-        };
-        match result {
-            Ok(status) => {
-                if let Err(error) = store.promote_mutation_candidate(target_file) {
-                    let _ = store.restore_mutation_candidate(target_file);
-                    return Err(error);
-                }
-                Ok(status)
-            }
-            Err(error) if is_policy_outcome_unknown(&error) => {
-                let fence = match snapshot.bundle() {
-                    Some(bundle) => {
-                        PolicyMutationFence::for_bundle(self.generation, &predecessor, bundle)
-                    }
-                    None => PolicyMutationFence::for_snapshot(
-                        self.generation,
-                        &predecessor,
-                        &snapshot.to_ffi(),
-                        target_file,
-                    ),
-                };
-                let fence = match fence {
-                    Ok(fence) => fence,
-                    Err(fence_error) => {
-                        /* The native outcome is already unknown.  Keep the
-                         * candidate as a safety marker if identity
-                         * construction fails, so a later reconcile cannot
-                         * replay it without an explicit repair. */
-                        return Err(fence_error);
-                    }
-                };
-                if let Err(store_error) = store.write_mutation_fence(&fence) {
-                    /* Keep the candidate when the durable fence cannot be
-                     * written; orphan detection blocks automatic replay. */
-                    return Err(store_error);
-                }
-                Err(error)
-            }
-            Err(error) => {
-                if let Err(store_error) = store.restore_mutation_candidate(target_file) {
-                    return Err(store_error);
-                }
-                Err(error)
-            }
-        }
-    }
-
-    fn apply_policy_snapshot(
-        &mut self,
-        snapshot: ProductPolicySnapshot,
-    ) -> Result<Status, ProductError> {
-        let session = self.session.ok_or(ProductError::Native {
-            code: ErrorCode::Disconnected,
-            status: Status::empty(self.generation),
-        })?;
-        let mut raw = ProductStatus::zeroed();
-        let code = unsafe {
-            sakamoto_product_session_apply_policy(
-                session.as_ptr(),
-                self.generation,
-                &snapshot,
-                &mut raw,
-            )
-        };
-        let status = Status::from_ffi(raw);
-        if code != 0 {
-            if matches!(ErrorCode::from_raw(code), ErrorCode::StaleHandle) {
-                self.retire_generation();
-            }
-            return Err(ProductError::Native {
-                code: ErrorCode::from_raw(code),
-                status,
-            });
-        }
-        validate_status_identity(&status)?;
-        Ok(status)
-    }
-
-    fn apply_policy_bundle_native(
-        &mut self,
-        bundle: &ProductPolicyBundle,
-    ) -> Result<Status, ProductError> {
-        let session = self.session.ok_or(ProductError::Native {
-            code: ErrorCode::Disconnected,
-            status: Status::empty(self.generation),
-        })?;
-        let mut raw = ProductStatus::zeroed();
-        let code = unsafe {
-            sakamoto_product_session_apply_policy_bundle(
-                session.as_ptr(),
-                self.generation,
-                bundle,
-                &mut raw,
-            )
-        };
-        let status = Status::from_ffi(raw);
-        if code != 0 {
-            if matches!(ErrorCode::from_raw(code), ErrorCode::StaleHandle) {
-                self.retire_generation();
-            }
-            return Err(ProductError::Native {
-                code: ErrorCode::from_raw(code),
-                status,
-            });
-        }
-        validate_status_identity(&status)?;
-        Ok(status)
     }
 
     pub fn disconnect(&mut self) -> Result<(), ProductError> {
@@ -773,66 +413,24 @@ impl Drop for ProductCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::tests::{complete_fence_readback, unique_policy_dir, valid_policy_bundle};
-    use std::fs;
 
     #[test]
-    fn unknown_policy_mutation_persists_bounded_fence_and_candidate() {
-        let root = unique_policy_dir("policy-mutation-fence");
-        let store = ProductPolicyStore::new(&root);
-        let bundle = valid_policy_bundle();
-        let mut predecessor = Status::empty(7);
-        predecessor.policy_active_revision = 41;
-        predecessor.policy_snapshot_hash = 0x1111;
-        predecessor.policy_snapshot_identity = "bundle/v1/revision-41".to_owned();
-        predecessor.artifact_id = "sakamoto-product-vpp-host-v1".to_owned();
-        predecessor.api_identity = "product_core.api/v1".to_owned();
-
-        let fence = PolicyMutationFence::for_bundle(7, &predecessor, &bundle).unwrap();
-        let temporary = store.stage_policy_bundle(&bundle).unwrap();
-        store.quarantine_policy_bundle(&temporary).unwrap();
-        store.write_mutation_fence(&fence).unwrap();
-
-        assert_eq!(store.current_mutation_fence().unwrap(), Some(fence.clone()));
-        assert!(root
-            .join("product-policy/policy-mutation-candidate.properties")
-            .is_file());
-        assert!(root
-            .join("product-policy/policy-mutation-fence.properties")
-            .is_file());
-
-        let mut old_generation = ProductCore {
+    fn retired_writer_does_not_create_an_offline_policy() {
+        let root = std::env::temp_dir().join(format!("t01-retired-{}", std::process::id()));
+        assert!(!root.exists());
+        let mut core = ProductCore {
             session: None,
             generation: 7,
             _not_send_or_sync: PhantomData,
         };
         assert!(matches!(
-            old_generation.reconcile_unknown_mutation(&store, &fence),
-            Err(ProductError::MutationFenceActive {
-                generation: 7,
-                requested_revision: 42
+            core.apply_network_gate_policy(&root, 12345, 1, true, 1, 1),
+            Err(ProductError::Native {
+                code: ErrorCode::ApiUnavailable,
+                ..
             })
         ));
-        assert!(root
-            .join("product-policy/policy-mutation-fence.properties")
-            .is_file());
-
-        let readback = complete_fence_readback(&fence, 8);
-        assert!(active_policy_matches_fence(&readback, &fence, 8));
-        assert!(!active_policy_matches_fence(&predecessor, &fence, 8));
-
-        store
-            .promote_mutation_candidate(&fence.target_file)
-            .unwrap();
-        store.clear_mutation_fence().unwrap();
-        assert_eq!(
-            store.current_snapshot().unwrap(),
-            Some(RuntimePolicySnapshot::Bundle(bundle))
-        );
-        assert!(!root
-            .join("product-policy/policy-mutation-fence.properties")
-            .exists());
-        fs::remove_dir_all(root).unwrap();
+        assert!(!root.exists());
     }
 
     #[test]

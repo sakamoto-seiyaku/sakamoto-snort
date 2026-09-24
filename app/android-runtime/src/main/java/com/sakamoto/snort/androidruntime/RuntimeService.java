@@ -377,6 +377,24 @@ public final class RuntimeService extends VpnService {
                     "expected " + RuntimeControlProtocol.NAME, currentMayBeActive(), currentPid()));
             return START_STICKY;
         }
+        if (RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)) {
+            final int operation = intent.getIntExtra("ruleOperation", 0);
+            final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
+            final int[] fields = intent.getIntArrayExtra("ruleFields");
+            enqueueLifecycle(() -> {
+                try { manageRuleConfiguration(operation, expectedSaved, RuleConfiguration.Rule.fromWire(fields)); }
+                catch (IllegalArgumentException error) {
+                    writeBestEffortEvidenceFile("product-state/rule-config.properties", "error=invalid_rule_request\n");
+                }
+            });
+            return START_STICKY;
+        }
+        if (ACTION_PRODUCT_BIND_APP.equals(action) || ACTION_PRODUCT_UNBIND_APP.equals(action)
+                || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action) || ACTION_PRODUCT_SET_L4_RULE.equals(action)) {
+            enqueueLifecycle(() -> writeBestEffortEvidenceFile("product-state/rule-config.properties",
+                    "error=legacy_authoring_retired\n"));
+            return START_NOT_STICKY;
+        }
         if (destroying
                 && (ACTION_START.equals(action) || ACTION_PROTECTION_RESUME.equals(action))) {
             repostStartAfterDestroy(intent, action);
@@ -644,7 +662,8 @@ public final class RuntimeService extends VpnService {
                 || ACTION_PRODUCT_UNBIND_APP.equals(action)
                 || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)
                 || ACTION_PRODUCT_SET_L4_RULE.equals(action)
-                || ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action);
+                || ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action)
+                || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action);
     }
 
     private static AuthoringPolicyBundle.L4Rule parseL4RuleIntent(
@@ -1041,6 +1060,9 @@ public final class RuntimeService extends VpnService {
             }
             prepareProductCoreProfile(profileRoot, nativeDir, owner);
             productCoreOwnerWritten = true;
+            File ruleDirectory = new File(getFilesDir(), "rule-configuration");
+            if (!ruleDirectory.isDirectory() && !ruleDirectory.mkdirs())
+                throw new IOException("cannot create VPP rule configuration directory");
 
             ProcessBuilder builder = buildProductCoreProcessBuilder(
                     vpp, nativeDir, profileRoot, selected, owner);
@@ -1052,6 +1074,8 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("SAKAMOTO_VPP_OWNER_TOKEN", owner.token);
             builder.environment().put("SAKAMOTO_VPP_SVM_DIR", svm.getPath());
             builder.environment().put("SAKAMOTO_VPP_RUNTIME_DIR", runtime.getPath());
+            builder.environment().put("SAKAMOTO_RULE_CONFIG_PATH",
+                    new File(ruleDirectory, "rules.conf").getAbsolutePath());
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
             if (vpnGraphValidation) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
@@ -1307,6 +1331,8 @@ public final class RuntimeService extends VpnService {
                     + "; export SAKAMOTO_VPP_OWNER_TOKEN=" + shellQuote(owner.token)
                     + "; export SAKAMOTO_VPP_SVM_DIR=" + shellQuote(svm.getPath())
                     + "; export SAKAMOTO_VPP_RUNTIME_DIR=" + shellQuote(runtime.getPath())
+                    + "; export SAKAMOTO_RULE_CONFIG_PATH="
+                    + shellQuote(new File(getFilesDir(), "rule-configuration/rules.conf").getAbsolutePath())
                     + "; export SAKAMOTO_RUNTIME_PROFILE=" + shellQuote(profile.wireName)
                     + "; export SAKAMOTO_PRODUCT_ROOT_NFQUEUE_QUEUE=\"176\""
                     + "; export SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES="
@@ -1485,23 +1511,15 @@ public final class RuntimeService extends VpnService {
         String reconciliationDetail = status.errorDetail == null ? "" : status.errorDetail;
         boolean reconciliationReadbackOnly =
                 RuntimeEvidenceFormatter.isUnknownPolicyMutationReadbackDetail(reconciliationDetail);
-        if (status.policyActiveRevision <= 0L) {
-            status = session.applyEmptyPolicy(getFilesDir().getAbsolutePath());
-            if (status == null || status.code != 0) {
-                productCoreConnectFailureCode = status == null
-                        ? "product_policy_apply_failed"
-                        : ProductCoreLifecycle.failureCode(status);
-                productCoreConnectFailureMessage =
-                        emptyPolicySnapshotFailureDetail(status,
-                                "initial empty policy apply failed");
-                writeS188EmptyPolicySnapshotStatus(status, stage + "_apply_failed",
-                        productCoreConnectFailureCode, productCoreConnectFailureMessage);
-                writeS194ProductMutationStatus(status, stage + "_apply_failed",
-                        productCoreConnectFailureCode, productCoreConnectFailureMessage);
-                return null;
-            }
-            stage = stage + "_fresh_apply";
+        if (status.policyActiveRevision == 0L) {
+            // A malformed saved file must remain repairable, never replaced
+            // with an empty Rust/Java policy to manufacture readiness.
+            productCoreConnectFailureCode = "rule_configuration_not_active";
+            productCoreConnectFailureMessage = "VPP source configuration requires correction";
+            return null;
         }
+        manageRuleConfiguration(0, 0L, RuleConfiguration.Rule.empty());
+
         String validation = validateRuntimePolicySnapshot(status);
         if (!validation.isEmpty()) {
             productCoreConnectFailureCode = validation;
@@ -1960,24 +1978,27 @@ public final class RuntimeService extends VpnService {
     }
 
     private String validateRuntimePolicySnapshot(RuntimeControlNative.Status status) {
-        // The durable bundle identity selects the complete typed validator;
-        // never route a multi-rule bundle through the S191 scalar checks.
-        if (status != null
-                && AuthoringPolicyBundle.BUNDLE_FORMAT.equals(status.policySnapshotIdentity)) {
-            return validatePolicyBundleSnapshot(status, -1L);
-        }
-        String emptyValidation = validateEmptyPolicySnapshot(status);
-        if (emptyValidation.isEmpty()) {
-            return "";
-        }
-        String gateValidation = validateNetworkGatePolicySnapshot(
-                status, -1L, -1, -1, null, -1L, -1);
-        if (gateValidation.isEmpty()) {
-            return "";
-        }
-        String l4Validation = validateRootL4PolicySnapshot(status, -1L);
-        return l4Validation.isEmpty()
-                ? "" : "product_policy_snapshot_unsupported";
+        // Validate the VPP publication identity, not a retired Java compiler's
+        // TCP-only source shape. Rule conditions are VPP-owned and validated there.
+        if (status == null || status.code != 0 || status.policyLastApplyStatusCode != 0)
+            return "product_policy_apply_failed";
+        if (status.policyGeneration != generation || !status.policyGenerationMatch)
+            return "product_policy_generation_mismatch";
+        if (status.policyActiveRevision == 0L
+                || status.policyRequestedRevision != status.policyActiveRevision
+                || status.policyWorker0Revision != status.policyActiveRevision
+                || status.policyWorker1Revision != status.policyActiveRevision
+                || status.policyMixedRevision)
+            return "product_policy_revision_mismatch";
+        if (!status.policyArtifactMatch || status.policySnapshotHash == 0L
+                || status.policySnapshotIdentity == null
+                || !status.policySnapshotIdentity.startsWith("rule-config/1/"))
+            return "product_policy_snapshot_identity_mismatch";
+        if (!status.policyDefaultPass || status.policyGateClaimCount != 0
+                || status.policyL4RuleCount < 0 || status.policyL4RuleCount > 1
+                || status.policySnapshotEmpty != (status.policyL4RuleCount == 0))
+            return "product_policy_snapshot_unsupported";
+        return "";
     }
 
     private String validatePolicyBundleSnapshot(RuntimeControlNative.Status status,
@@ -4790,6 +4811,30 @@ public final class RuntimeService extends VpnService {
         String text = RuntimeEvidenceFormatter.policyMutationFault(
                 mode, armed, status, generation, error);
         writeBestEffortEvidenceFile(S194_POLICY_MUTATION_FAULT_STATUS, text);
+    }
+
+    private void manageRuleConfiguration(int operation, long expectedSaved, RuleConfiguration.Rule fields) {
+        final String path = "product-state/rule-config.properties";
+        RuntimeControlNative.Session session = productCoreSession;
+        if (session == null || !session.isConnected()) {
+            writeBestEffortEvidenceFile(path, "error=management_unavailable\n");
+            return;
+        }
+        try {
+            if (fields == null || (operation != 0 && operation != 1))
+                throw new IllegalArgumentException("invalid rule configuration request");
+            RuleConfiguration.Status config = session.ruleConfig(operation, expectedSaved, fields);
+            RuntimeControlNative.Status packet = session.query();
+            writeBestEffortEvidenceFile(path, config.properties()
+                    + "queryElapsedMillis=" + android.os.SystemClock.elapsedRealtime() + "\n"
+                    + "winnerVersion=" + Long.toUnsignedString(packet.policyL4LastMatchRuleId) + "\n"
+                    + "winnerRevision=" + Long.toUnsignedString(packet.policyL4LastMatchRevision) + "\n"
+                    + "winnerAction=" + packet.policyL4LastMatchAction + "\n"
+                    + "evaluation=" + packet.policyL4LastEvaluationResult + "\n"
+                    + "verdict=" + packet.policyL4LastEvaluationVerdict + "\n");
+        } catch (RuntimeException error) {
+            writeBestEffortEvidenceFile(path, "error=rule_configuration_request_failed\n");
+        }
     }
 
     private void writeBestEffortEvidenceFile(String relativePath, String text) {

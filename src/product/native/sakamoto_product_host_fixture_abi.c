@@ -2,6 +2,17 @@
 
 #include "sakamoto_product_abi.h"
 
+/* Online source management exists only in the real VPP runtime. A host
+ * transport fixture must not turn local storage into a second authority. */
+uint32_t sakamoto_product_session_rule_config (
+  sakamoto_product_session_t *session, uint64_t generation,
+  const sakamoto_product_rule_config_request_t *request,
+  sakamoto_product_rule_config_status_t *status)
+{
+  (void) session; (void) generation; (void) request; (void) status;
+  return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+}
+
 /* Fixture transports cannot supply platform event/packet evidence. */
 uint32_t
 sakamoto_product_session_publish_network (

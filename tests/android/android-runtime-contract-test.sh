@@ -49,6 +49,7 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeStateStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlNative.java" \
+  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuleConfiguration.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreLifecycle.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCoreOwner.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/VppHealthHandshake.java" \

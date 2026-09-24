@@ -11,6 +11,11 @@ extern "C" {
 /* The handle is allocated and owned by the Rust Product Core cdylib. */
 typedef struct sakamoto_product_core_handle sakamoto_product_core_handle_t;
 
+uint32_t sakamoto_product_core_rule_config(
+    sakamoto_product_core_handle_t *, uint64_t generation,
+    const sakamoto_product_rule_config_request_t *,
+    sakamoto_product_rule_config_status_t *);
+
 uint32_t sakamoto_product_core_connect(
     sakamoto_product_bytes_t api_socket, uint64_t generation,
     sakamoto_product_core_handle_t **out_handle,

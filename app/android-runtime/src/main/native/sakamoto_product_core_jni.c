@@ -10,6 +10,54 @@
 #include <stdio.h>
 #include <string.h>
 
+JNIEXPORT jlongArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleConfig (
+  JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation,
+  jlong expected_saved, jintArray fields)
+{
+  (void) type;
+  sakamoto_product_rule_config_request_t request = {
+    .schema = 1, .operation = (uint32_t) operation,
+    .expected_saved_revision = (uint64_t) expected_saved
+  };
+  sakamoto_product_rule_config_status_t status = {0};
+  uint32_t code = SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (handle && generation > 0 && fields && (*env)->GetArrayLength (env, fields) == 9)
+    {
+      jint values[9];
+      (*env)->GetIntArrayRegion (env, fields, 0, 9, values);
+      if ((*env)->ExceptionCheck (env)) return NULL;
+      request.rule.present = (uint32_t) values[0];
+      request.rule.uid = (uint32_t) values[1];
+      request.rule.protocol = (uint32_t) values[2];
+      request.rule.direction = (uint32_t) values[3];
+      request.rule.action = (uint32_t) values[4];
+      request.rule.source_port = (uint32_t) values[5];
+      request.rule.destination_port = (uint32_t) values[6];
+      for (unsigned i = 0; i < 4; ++i)
+        {
+          request.rule.source_address[i] = (uint32_t) values[7] >> (24 - 8*i);
+          request.rule.destination_address[i] = (uint32_t) values[8] >> (24 - 8*i);
+        }
+      code = sakamoto_product_core_rule_config (
+        (sakamoto_product_core_handle_t *) (uintptr_t) handle,
+        (uint64_t) generation, &request, &status);
+    }
+  uint32_t source = 0, destination = 0;
+  for (unsigned i = 0; i < 4; ++i)
+    { source = (source << 8) | status.rule.source_address[i];
+      destination = (destination << 8) | status.rule.destination_address[i]; }
+  jlong values[] = { code, (jlong) status.generation,
+    (jlong) status.saved_revision, (jlong) status.active_revision,
+    (jlong) status.saved_rule_version, (jlong) status.active_rule_version,
+    status.result, status.save_error, status.compile_error, status.rule.present,
+    status.rule.uid, status.rule.protocol, status.rule.direction, status.rule.action,
+    status.rule.source_port, status.rule.destination_port, source, destination };
+  jlongArray result = (*env)->NewLongArray (env, 18);
+  if (result) (*env)->SetLongArrayRegion (env, result, 0, 18, values);
+  return result;
+}
+
 enum
 {
   /* Keep the S191 prefix count named for source-compatible contracts; the

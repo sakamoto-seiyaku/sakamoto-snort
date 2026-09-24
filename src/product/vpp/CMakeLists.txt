@@ -224,6 +224,7 @@ add_vpp_plugin(product_core
     product_packet.c
     product_fragment.c
     product_l4_policy.c
+    product_rule_config.c
     product_flow_entry.c
     product_flow_end.c
     product_flow_expiry.c

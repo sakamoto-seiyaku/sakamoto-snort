@@ -261,6 +261,8 @@ public final class RuntimeControlNative {
 
     private static native String[] nativeQuery(long handle, long generation);
 
+    private static native long[] nativeRuleConfig(long handle, long generation,
+            int operation, long expectedSaved, int[] rule);
     private static native String[] nativeApplyEmptyPolicy(long handle, long generation,
                                                           String filesDir);
 
@@ -346,6 +348,14 @@ public final class RuntimeControlNative {
 
         public synchronized boolean isConnected() {
             return nativeHandle != 0L;
+        }
+
+        public synchronized RuleConfiguration.Status ruleConfig(int operation,
+                long expectedSaved, RuleConfiguration.Rule rule) {
+            if (!LOADED || nativeHandle == 0L)
+                throw new IllegalStateException("VPP management is unavailable");
+            return new RuleConfiguration.Status(nativeRuleConfig(nativeHandle, generation,
+                    operation, expectedSaved, rule.toWire()));
         }
 
         public synchronized Status lastStatus() {

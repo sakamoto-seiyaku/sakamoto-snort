@@ -2,7 +2,8 @@
 
 // Keep the established crate-root interface; implementation modules are private.
 mod ffi;
-mod policy;
+mod rule_config;
+pub use rule_config::{ConfigRule, RuleConfigRequest, RuleConfigStatus};
 mod session;
 
 pub use ffi::{
@@ -120,18 +121,6 @@ pub struct ProductPolicyBundle {
     pub snapshot_identity: [u8; 96],
     pub gate_entries: [ProductPolicyRuleEntry; POLICY_BUNDLE_MAX_GATE_ENTRIES],
     pub l4_entries: [ProductPolicyRuleEntry; POLICY_BUNDLE_MAX_L4_ENTRIES],
-}
-
-impl ProductPolicyRuleEntry {
-    fn zeroed() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-impl ProductPolicyBundle {
-    fn zeroed() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
 }
 
 #[repr(C)]
@@ -742,12 +731,6 @@ impl ProductError {
 }
 
 impl ProductStatus {
-    fn zeroed() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-impl ProductPolicySnapshot {
     fn zeroed() -> Self {
         unsafe { std::mem::zeroed() }
     }

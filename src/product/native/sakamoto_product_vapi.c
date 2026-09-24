@@ -75,6 +75,93 @@ release_unsent_request (sakamoto_product_session_t *session, vapi_error_e rv,
     vapi_msg_free (session->context, message);
 }
 
+typedef struct {
+  bool called;
+  bool invalid_reply;
+  uint32_t code;
+  uint64_t generation;
+  sakamoto_product_rule_config_status_t *status;
+} rule_config_call_t;
+
+static vapi_error_e
+rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
+                   bool is_last, vapi_payload_product_core_rule_config_reply *reply)
+{
+  (void) context; (void) is_last;
+  rule_config_call_t *call = opaque;
+  call->called = true;
+  if (rv != VAPI_OK || !reply)
+    { call->invalid_reply = true; call->code = SAKAMOTO_PRODUCT_INTERNAL_ERROR; }
+  else if (reply->generation != call->generation || reply->retval == -5)
+    call->code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  else if (reply->retval) call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH;
+  else
+    {
+      sakamoto_product_rule_config_status_t *s = call->status;
+      s->generation = reply->generation;
+      s->saved_revision = reply->saved_revision;
+      s->active_revision = reply->active_revision;
+      s->saved_rule_version = reply->saved_rule_version;
+      s->active_rule_version = reply->active_rule_version;
+      s->result = reply->result;
+      s->save_error = reply->save_error;
+      s->compile_error = reply->compile_error;
+#define COPY_RULE(field) s->rule.field = reply->rule.field
+      COPY_RULE (present); COPY_RULE (uid); COPY_RULE (protocol); COPY_RULE (direction);
+      COPY_RULE (action); COPY_RULE (source_port); COPY_RULE (destination_port); COPY_RULE (reserved);
+#undef COPY_RULE
+      memcpy (s->rule.source_address, reply->rule.source_address, 4);
+      memcpy (s->rule.destination_address, reply->rule.destination_address, 4);
+      call->code = SAKAMOTO_PRODUCT_OK;
+    }
+  return VAPI_OK;
+}
+
+uint32_t
+sakamoto_product_session_rule_config (
+  sakamoto_product_session_t *session, uint64_t generation,
+  const sakamoto_product_rule_config_request_t *request,
+  sakamoto_product_rule_config_status_t *status)
+{
+  if (status) memset (status, 0, sizeof (*status));
+  if (!session || !generation || !request || !status)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if (!session->connected || session->generation != generation) goto done;
+  code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if (!vapi_is_msg_available (session->context, vapi_msg_id_product_core_rule_config)
+      || !vapi_is_msg_available (session->context, vapi_msg_id_product_core_rule_config_reply))
+    goto done;
+  vapi_msg_product_core_rule_config *message = vapi_alloc_product_core_rule_config (session->context);
+  code = SAKAMOTO_PRODUCT_ALLOCATION_FAILED;
+  if (!message) goto done;
+  message->payload.generation = generation;
+  message->payload.schema = request->schema;
+  message->payload.operation = request->operation;
+  message->payload.expected_saved_revision = request->expected_saved_revision;
+#define COPY_RULE(field) message->payload.rule.field = request->rule.field
+  COPY_RULE (present); COPY_RULE (uid); COPY_RULE (protocol); COPY_RULE (direction);
+  COPY_RULE (action); COPY_RULE (source_port); COPY_RULE (destination_port); COPY_RULE (reserved);
+#undef COPY_RULE
+  memcpy (message->payload.rule.source_address, request->rule.source_address, 4);
+  memcpy (message->payload.rule.destination_address, request->rule.destination_address, 4);
+  rule_config_call_t call = { .generation = generation, .status = status,
+                             .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
+  vapi_error_e rv = vapi_product_core_rule_config (session->context, message, rule_config_reply, &call);
+  release_unsent_request (session, rv, call.called, message);
+  /* Never let a stack callback survive a failed dispatch; never replay a
+   * mutation. The next generation/session queries VPP's saved/active state. */
+  if (rv != VAPI_OK || !call.called || call.invalid_reply
+      || call.code == SAKAMOTO_PRODUCT_STALE_HANDLE) session->connected = 0;
+  code = rv == VAPI_OK && call.called && !call.invalid_reply ? call.code
+    : request->operation == SAKAMOTO_RULE_CONFIG_REPLACE
+      ? SAKAMOTO_PRODUCT_POLICY_OUTCOME_UNKNOWN : SAKAMOTO_PRODUCT_QUERY_FAILED;
+done:
+  (void) pthread_mutex_unlock (&session->mutex);
+  return code;
+}
+
 static vapi_error_e
 network_publish_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
                        bool is_last,

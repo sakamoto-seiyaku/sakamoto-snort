@@ -102,7 +102,7 @@ grep -q 'flow_active_snapshot_hash' "$graph_source" "$graph_header" ||
 if grep -Fq 'gate_claim_count > 1' "$plugin_source"; then
   fail "typed GateTable handler still rejects multiple enabled Gate entries"
 fi
-grep -q 'active_gate_count == 1' "$plugin_source"
+# The retired Gate authoring API is not a Product source writer.
 # S216 replaces numeric unknown sentinels and the mixed hints overlay.
 grep -q 'metadata.obligation.queue_generation != generation' "$graph_source" ||
   fail "platform facts lack full generation validation"
@@ -317,7 +317,7 @@ grep -q 'gate_table_last_match_action' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_UID' "$graph_source"
 grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_CONTEXT' "$graph_source"
-grep -q 'PRODUCT_L4_POLICY_IFINDEX_ANY' "$plugin_source"
+grep -q 'PRODUCT_L4_POLICY_IFINDEX_ANY' "$repo_root/src/product/vpp/product_rule_config.c"
 # The shared typed projection above replaces the former scalar address reader.
 
 

@@ -7,15 +7,6 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 plugin_source="$repo_root/src/product/vpp/product_core_plugin.c"
-grep -Fq 'product_core_gate_rule_from_bundle' "$plugin_source"
-grep -Fq 'if (source->ifindex == 0)' "$plugin_source"
-grep -Fq 'destination->ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY' "$plugin_source"
-grep -Fq 'active_gate_count' "$plugin_source"
-if grep -Fq 'gate_claim_count > 1' "$plugin_source"; then
-  echo "typed GateTable handler must not reject multiple Gate entries" >&2
-  exit 1
-fi
-grep -Fq 'pcm->policy_gate_blocked =' "$plugin_source"
 work_dir="$(mktemp -d /tmp/sakamoto-product-plugin-init.XXXXXX)"
 trap 'rm -rf -- "$work_dir"' EXIT
 mkdir -p "$work_dir/vlib" "$work_dir/vlibapi" "$work_dir/vlibmemory" \
@@ -155,6 +146,8 @@ EOF
 cat >"$work_dir/product_core.api_enum.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
+#define VL_API_PRODUCT_CORE_RULE_CONFIG 20
+#define VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY 21
 #define VL_API_PRODUCT_CORE_STATUS_REPLY 1
 #define VL_API_PRODUCT_CORE_POLICY_APPLY_REPLY 2
 #define VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY_REPLY 3
@@ -168,6 +161,10 @@ EOF
 cat >"$work_dir/product_core.api_types.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_TYPES_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_TYPES_H
+#include "sakamoto_product_rule_config.h"
+typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;
+typedef struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; } vl_api_product_core_rule_config_t;
+typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; } vl_api_product_core_rule_config_reply_t;
 typedef struct {
   int32_t retval;
   uint32_t abi_version;
@@ -421,6 +418,7 @@ setup_message_id_table (void)
 {
   (void) vl_api_product_core_status_t_handler;
   (void) vl_api_product_core_policy_apply_t_handler;
+  (void) vl_api_product_core_rule_config_t_handler;
   (void) vl_api_product_core_policy_bundle_apply_t_handler;
   (void) vl_api_product_core_network_publish_t_handler;
   (void) vl_api_product_core_root_stop_t_handler;
@@ -683,7 +681,8 @@ main (void)
 EOF
 
 cc -std=c11 -Wall -Wextra -Werror \
-  -I"$work_dir" -I"$repo_root/src/product/include" \
+  -I"$work_dir" -I"$repo_root/src/product/include" -I"$repo_root/src/product/vpp" \
+  "$repo_root/src/product/vpp/product_rule_config.c" \
   "$work_dir/harness.c" -o "$work_dir/plugin-init-contract"
 "$work_dir/plugin-init-contract"
 echo "sakamoto production VPP plugin init contract: PASS"

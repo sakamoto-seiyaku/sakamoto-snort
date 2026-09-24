@@ -303,6 +303,22 @@ typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_cor
 typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
   vapi_ctx_t, void *, vapi_error_e, bool, vapi_payload_product_core_root_stop_reply *);
 
+#include "sakamoto_product_rule_config.h"
+typedef struct {
+  struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
+    sakamoto_product_config_rule_t rule; } payload;
+} vapi_msg_product_core_rule_config;
+typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
+  saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
+  sakamoto_product_config_rule_t rule; } vapi_payload_product_core_rule_config_reply;
+typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
+  vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
+extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
+extern vapi_msg_id_t vapi_msg_id_product_core_rule_config_reply;
+vapi_msg_product_core_rule_config *vapi_alloc_product_core_rule_config(vapi_ctx_t);
+vapi_error_e vapi_product_core_rule_config(vapi_ctx_t, vapi_msg_product_core_rule_config *,
+  vapi_product_core_rule_config_callback_t, void *);
+
 #define VAPI_OK 0
 #define VAPI_EINVAL 22
 #define VAPI_MODE_BLOCKING 1
@@ -311,6 +327,8 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
 #define DEFINE_VAPI_MSG_IDS_VLIB_API_JSON \
   vapi_msg_id_t vapi_msg_id_vlib;
 #define DEFINE_VAPI_MSG_IDS_PRODUCT_CORE_API_JSON \
+  vapi_msg_id_t vapi_msg_id_product_core_rule_config; \
+  vapi_msg_id_t vapi_msg_id_product_core_rule_config_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_status; \
   vapi_msg_id_t vapi_msg_id_product_core_status_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_policy_apply; \
@@ -434,6 +452,8 @@ int sakamoto_test_network_send_error = 0;
 int sakamoto_test_context_count = 0;
 int sakamoto_test_live_messages = 0;
 static size_t pending_requests;
+int sakamoto_test_rule_config_mode;
+int sakamoto_test_rule_config_calls;
 int sakamoto_test_root_stop_mode;
 int sakamoto_test_root_stop_calls;
 
@@ -475,6 +495,8 @@ vapi_ctx_alloc (vapi_ctx_t *context)
   vapi_msg_id_product_core_network_publish_reply = 107U;
   vapi_msg_id_product_core_root_stop = 108U;
   vapi_msg_id_product_core_root_stop_reply = 109U;
+  vapi_msg_id_product_core_rule_config = 110U;
+  vapi_msg_id_product_core_rule_config_reply = 111U;
   return VAPI_OK;
 }
 
@@ -489,6 +511,7 @@ bool
 vapi_is_msg_available (vapi_ctx_t context, vapi_msg_id_t type)
 {
   (void) context;
+  if (type == vapi_msg_id_product_core_rule_config || type == vapi_msg_id_product_core_rule_config_reply) return true;
   if (type == vapi_msg_id_product_core_root_stop
       || type == vapi_msg_id_product_core_root_stop_reply)
     return sakamoto_test_root_stop_mode != 8;
@@ -532,6 +555,34 @@ vapi_disconnect (vapi_ctx_t context)
   (void) context;
   pending_requests = 0;
   return sakamoto_test_disconnect_error;
+}
+
+vapi_msg_product_core_rule_config *vapi_alloc_product_core_rule_config(vapi_ctx_t context)
+{
+  (void) context;
+  return sakamoto_test_rule_config_mode == 7 ? NULL : test_message_alloc(sizeof(vapi_msg_product_core_rule_config));
+}
+vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_core_rule_config *message,
+  vapi_product_core_rule_config_callback_t callback, void *opaque)
+{
+  ++sakamoto_test_rule_config_calls;
+  int mode = sakamoto_test_rule_config_mode;
+  if (mode == 6) return VAPI_EINVAL;
+  if (message->payload.schema != 1 || message->payload.operation != 1
+      || message->payload.expected_saved_revision != 8 || message->payload.rule.uid != 12345
+      || message->payload.rule.source_address[0] != 127) abort();
+  vapi_payload_product_core_rule_config_reply reply = {
+    .generation = message->payload.generation + (mode == 5),
+    .saved_revision = 9, .active_revision = mode == 4 ? 8 : 9,
+    .saved_rule_version = UINT64_C(0xfedcba9876540002),
+    .active_rule_version = mode == 4 ? UINT64_C(0xfedcba9876540001) : UINT64_C(0xfedcba9876540002),
+    .result = mode == 4 ? 4 : 0, .compile_error = mode == 4 ? 4 : 0,
+    .rule = message->payload.rule,
+  };
+  vapi_msg_free(context, message);
+  pending_requests = mode == 1;
+  if (mode == 1) return VAPI_OK;
+  return callback(context, opaque, mode == 2 ? VAPI_EINVAL : VAPI_OK, true, mode == 3 ? NULL : &reply);
 }
 
 vapi_msg_product_core_root_stop *
@@ -755,6 +806,8 @@ extern int sakamoto_test_network_omit_callback;
 extern int sakamoto_test_network_send_error;
 extern int sakamoto_test_context_count;
 extern int sakamoto_test_live_messages;
+extern int sakamoto_test_rule_config_mode;
+extern int sakamoto_test_rule_config_calls;
 extern int sakamoto_test_root_stop_mode;
 extern int sakamoto_test_root_stop_calls;
 static sakamoto_product_session_t **current_session;
@@ -786,6 +839,7 @@ reset_faults (void)
   sakamoto_test_network_omit_callback = 0;
   sakamoto_test_network_send_error = 0;
   sakamoto_test_root_stop_mode = 0;
+  sakamoto_test_rule_config_mode = 0;
   // Transport dispatch failures now retire the session. Each independent
   // fault case starts with a new handle instead of reusing retired callbacks.
   if (current_session && *current_session) {
@@ -1086,6 +1140,29 @@ main (void)
 
   sakamoto_product_policy_bundle_t bundle = valid_empty_policy_bundle ();
   current_session = &session;
+  const uint32_t config_codes[] = {0, 14, 14, 14, 0, 5, 14, 2};
+  for (unsigned mode = 0; mode < sizeof(config_codes)/sizeof(config_codes[0]); ++mode) {
+    reset_faults();
+    sakamoto_test_rule_config_mode = mode;
+    sakamoto_product_rule_config_request_t request = {
+      .schema = 1, .operation = 1, .expected_saved_revision = 8,
+      .rule = {.present = 1, .uid = 12345, .protocol = 17, .direction = 3, .action = 2,
+        .source_port = 32000, .destination_port = 40608, .source_address = {127,0,0,1},
+        .destination_address = {127,0,0,2}}
+    };
+    sakamoto_product_rule_config_status_t config;
+    int before = sakamoto_test_rule_config_calls;
+    code = sakamoto_product_session_rule_config(session, 77, &request, &config);
+    if (code != config_codes[mode] || sakamoto_test_rule_config_calls-before != (mode != 7)) {
+      fprintf(stderr, "rule config mode=%u code=%u calls=%d\n", mode, code, sakamoto_test_rule_config_calls-before); return 1;
+    }
+    if (!code && (config.saved_revision != 9 || config.active_revision != (mode == 4 ? 8U : 9U)
+        || config.saved_rule_version != UINT64_C(0xfedcba9876540002)
+        || config.result != (mode == 4 ? 4U : 0U) || config.rule.uid != 12345)) return 1;
+    if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6)
+        && expect_retired(session)) return 1;
+  }
+  reset_faults();
   const uint32_t stop_codes[] = {
     SAKAMOTO_PRODUCT_OK, SAKAMOTO_PRODUCT_OK, SAKAMOTO_PRODUCT_INTERNAL_ERROR,
     SAKAMOTO_PRODUCT_STALE_HANDLE, SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH,

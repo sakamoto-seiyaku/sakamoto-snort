@@ -214,6 +214,15 @@ public final class RuntimeControlBackend {
         context.startService(intent);
     }
 
+    public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {
+        context.startService(new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_RULE_CONFIG)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_RULE_CONFIG)
+                .putExtra("ruleOperation", operation).putExtra("expectedSavedRevision", expectedSaved)
+                .putExtra("ruleFields", rule.toWire()));
+    }
+
     /** Debug-only seam used to prove replacement remains blocked on cleanup failure. */
     public void setCleanupFault(Context context, boolean enabled) {
         Intent intent = requestIntent(context, RuntimeControlRequest.query());
