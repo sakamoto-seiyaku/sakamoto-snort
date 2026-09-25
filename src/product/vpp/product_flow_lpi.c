@@ -601,6 +601,12 @@ product_flow_entry_status_t product_flow_entry_identify (
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   product_flow_sni_observe (entry, facts, payload, length);
   product_flow_runtime_features_changed (pool, slot);
+  /* TLS has its own bounded lifetime. Reassembly can finish after recognition
+   * stops on duplicate wire traffic; publish its valid evidence independently. */
+  if (entry->sni.result) {
+    state->protocols |= product_protocol_bit (1003);
+    state->available = 1;
+  }
   if (state->stop_reason || !length) return PRODUCT_FLOW_ENTRY_STATUS_OK;
   if (length > PRODUCT_LPI_MAX_BYTES - state->bytes) {
     state->stop_reason = PRODUCT_LPI_STOP_BYTE_BUDGET;

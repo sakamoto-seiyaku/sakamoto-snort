@@ -16,6 +16,7 @@ import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -172,6 +173,37 @@ final class ProtocolFactsProbe {
             if (socket.getInputStream().read() != 65) throw new IllegalStateException("raw endpoint receipt");
             result.put("sentBytes", hello.length).put("endpointReceipt", true);
             gate(app, nonce, result, "raw_ready");
+        }
+    }
+
+    private static void tcpReassembly(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        byte[] hello = hex(plan.getString("t14WireHex"));
+        int count = plan.optInt("t14Count", 1), prefix = plan.optInt("t14Prefix", 20);
+        int delay = plan.optInt("t14DelayMs", 80);
+        if (count < 1 || count > 48 || hello.length > 4097 || prefix < 1
+                || prefix >= hello.length || delay < 0 || delay > 2000)
+            throw new IllegalArgumentException("bounded TCP reassembly probe");
+        ArrayList<Socket> sockets = new ArrayList<>();
+        try {
+            for (int i = 0; i < count; ++i) {
+                Socket socket = new Socket(); sockets.add(socket);
+                socket.setTcpNoDelay(true); socket.bind(new InetSocketAddress(local, source + i));
+                socket.connect(new InetSocketAddress(endpoint, port), 10000); socket.setSoTimeout(15000);
+            }
+            result.put("connections", count);
+            gate(app, nonce, result, "connected_ready");
+            for (Socket socket : sockets) socket.getOutputStream().write(hello, 0, prefix);
+            result.put("prefixBytes", prefix);
+            if (plan.optBoolean("t14HoldPrefix", false)) gate(app, nonce, result, "prefix_ready");
+            else Thread.sleep(delay);
+            for (Socket socket : sockets) socket.getOutputStream().write(hello, prefix, hello.length - prefix);
+            for (Socket socket : sockets)
+                if (socket.getInputStream().read() != 65) throw new IllegalStateException("TCP endpoint receipt");
+            result.put("sentBytesPerConnection", hello.length).put("endpointReceipts", count);
+            gate(app, nonce, result, "raw_ready");
+        } finally {
+            for (Socket socket : sockets) try { socket.close(); } catch (Exception ignored) { }
         }
     }
 
@@ -368,7 +400,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("wireguard")) wireguard(app, plan, result, nonce, endpoint, local, source, port);

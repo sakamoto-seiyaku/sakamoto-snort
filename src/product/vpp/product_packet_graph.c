@@ -2663,6 +2663,16 @@ product_packet_graph_flow_observe (
           entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1],
           entry->sni.result==PRODUCT_SNI_NAME?entry->sni.name:"-");
       if (trace)
+        fprintf (stderr, "t14 event=tcp_cache token=%llu generation=%llu worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u\n",
+          (unsigned long long)lease->origin_obligation_id,
+          (unsigned long long)packet.policy.generation, worker, observation.slot,
+          (unsigned long long)entry->incarnation,
+          entry->tcp_bytes.length[0],entry->tcp_bytes.length[1],
+          entry->tcp_bytes.contiguous[0],entry->tcp_bytes.contiguous[1],
+          entry->tcp_bytes.range_count[0],entry->tcp_bytes.range_count[1],
+          entry->tcp_bytes.range_count[0]?entry->tcp_bytes.ranges[0][entry->tcp_bytes.range_count[0]-1].last:0,
+          entry->tcp_bytes.range_count[1]?entry->tcp_bytes.ranges[1][entry->tcp_bytes.range_count[1]-1].last:0);
+      if (trace)
         fprintf (stderr, "t12 event=lpi token=%llu generation=%llu worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u status=%u\n",
           (unsigned long long) lease->origin_obligation_id,
           (unsigned long long) packet.policy.generation, worker, observation.slot,
@@ -4105,6 +4115,14 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             e->sni.stop, e->sni.attempts, e->sni.bytes, e->sni.work,
             e->tcp_bytes.length[0]+e->tcp_bytes.length[1],
             e->sni.result==PRODUCT_SNI_NAME?e->sni.name:"-");
+          vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
+            worker, slot, (unsigned long long)e->incarnation,
+            e->tcp_bytes.length[0],e->tcp_bytes.length[1],
+            e->tcp_bytes.contiguous[0],e->tcp_bytes.contiguous[1],
+            e->tcp_bytes.range_count[0],e->tcp_bytes.range_count[1],
+            e->tcp_bytes.range_count[0]?e->tcp_bytes.ranges[0][e->tcp_bytes.range_count[0]-1].last:0,
+            e->tcp_bytes.range_count[1]?e->tcp_bytes.ranges[1][e->tcp_bytes.range_count[1]-1].last:0,
+            (unsigned)sizeof e->tcp_bytes,PRODUCT_TCP_CACHE_RANGES,PRODUCT_TCP_CACHE_SIDE_BYTES);
           vlib_cli_output (vm, "flow.lpi worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u stop_reason=%s",
             worker, slot, (unsigned long long)e->incarnation, e->lpi.available,
             (unsigned long long)e->lpi.protocols, e->lpi.attempts, e->lpi.bytes,

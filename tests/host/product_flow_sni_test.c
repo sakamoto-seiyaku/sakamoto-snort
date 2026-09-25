@@ -112,9 +112,9 @@ static void boundaries(void)
     product_sni_state_t s=sample(absent,sizeof absent,split,0,1);
     assert(s.result==PRODUCT_SNI_ABSENT && s.stop==PRODUCT_SNI_COMPLETE);
     s=sample(absent,sizeof absent,split,1,0);
-    assert(!s.result && s.stop==PRODUCT_SNI_SEQUENCE);
+    assert(!s.result && !s.stop);
     s=sample(absent,sizeof absent,split,-1,0);
-    assert(!s.result && s.stop==PRODUCT_SNI_SEQUENCE);
+    assert(!s.result);
   }
   for(unsigned n=1;n<sizeof absent;++n) {
     product_sni_state_t s=sample(absent,n,0,0,0);
@@ -217,12 +217,194 @@ static void syn_gap(void)
   assert(!product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&f,NULL,0));
   f.tcp_sequence=102;f.tcp_flags=16;f.transport_length=20+sizeof absent;
   assert(!product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&f,absent,sizeof absent));
-  assert(!o.entry->sni.result && o.entry->sni.stop==PRODUCT_SNI_SEQUENCE);
+  assert(!o.entry->sni.result && !o.entry->sni.stop);
   product_flow_runtime_destroy(pool);
+}
+static void reordered_hello(void)
+{
+  product_flow_runtime_t *pool=NULL;assert(!product_flow_runtime_create(&pool,0,1,7,1));
+  product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+    .source_port=42000,.destination_port=443,.l4_header_length=20,
+    .tcp_flags=2,.tcp_window=65535,.tcp_sequence=UINT32_MAX-10,
+    .transport_length=20,.packet_length=40};
+  f.source_address[0]=10;f.destination_address[0]=11;
+  product_worker_layout_t layout={1,1};product_owner_assignment_t owner;
+  assert(!product_owner_assign(&layout,&f,&owner));
+  product_flow_entry_packet_t input={.facts=&f,.policy={7,1,1},.uid=17,.timestamp=1};
+  product_flow_entry_observation_t o;
+  assert(!product_flow_entry_observe(pool,&owner,&input,0,&o));
+  assert(!product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&f,NULL,0));
+  const unsigned offsets[]={25,25,0}, sizes[]={25,25,25};
+  for(unsigned i=0;i<3;++i) {
+    f.tcp_sequence=UINT32_MAX-9+offsets[i];f.tcp_flags=16;
+    f.transport_length=20+sizes[i];f.packet_length=40+sizes[i];input.timestamp++;
+    assert(!product_flow_entry_observe(pool,&owner,&input,0,&o));
+    assert(!product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&f,absent+offsets[i],sizes[i]));
+    if(i<2) assert(!o.entry->sni.result && !o.entry->sni.stop && o.entry->sni.bytes==25);
+  }
+  assert(o.entry->sni.result==PRODUCT_SNI_ABSENT && o.entry->sni.bytes==50);
+  assert(!o.entry->tcp_bytes.length[0] && !o.entry->tcp_bytes.length[1]);
+  product_flow_runtime_destroy(pool);
+}
+/* Owner API transcript: independent literal wire offsets, never parser-derived. */
+typedef struct {
+  product_flow_runtime_t *pool;
+  product_packet_facts_t facts;
+  product_owner_assignment_t owner;
+  product_flow_entry_observation_t observation;
+  uint64_t tick;
+} stream_case_t;
+static void stream_send(stream_case_t *c,unsigned side,uint32_t sequence,
+                        const uint8_t *data,unsigned size,unsigned flags)
+{
+  product_packet_facts_t f=c->facts;
+  if(side) {
+    f.source_address[0]=11;f.destination_address[0]=10;
+    f.source_port=443;f.destination_port=42000;
+  }
+  f.tcp_sequence=sequence;f.tcp_flags=(uint8_t)flags;
+  f.transport_length=20+size;f.packet_length=40+size;
+  product_worker_layout_t layout={1,1};
+  assert(!product_owner_assign(&layout,&f,&c->owner));
+  product_flow_entry_packet_t packet={.facts=&f,.policy={7,1,1},.uid=17,.timestamp=++c->tick};
+  assert(!product_flow_entry_observe(c->pool,&c->owner,&packet,0,&c->observation));
+  assert(!product_flow_entry_identify(c->pool,c->observation.slot,7,
+    c->observation.entry->incarnation,&f,data,size));
+}
+static stream_case_t stream_case(void)
+{
+  stream_case_t c={.facts={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+    .source_port=42000,.destination_port=443,.l4_header_length=20,.tcp_window=65535}};
+  c.facts.source_address[0]=10;c.facts.destination_address[0]=11;
+  product_worker_layout_t layout={1,1};assert(!product_owner_assign(&layout,&c.facts,&c.owner));
+  assert(!product_flow_runtime_create(&c.pool,0,1,7,1));
+  stream_send(&c,0,99,NULL,0,2);return c;
+}
+static void reorder_matrix(void)
+{
+  unsigned cases=0;
+  for(unsigned a=0;a<4;++a) for(unsigned b=0;b<4;++b)
+    for(unsigned d=0;d<4;++d) for(unsigned e=0;e<4;++e) {
+      if(a==b || a==d || a==e || b==d || b==e || d==e) continue;
+      stream_case_t c=stream_case();unsigned order[]={a,b,d,e};
+      for(unsigned i=0;i<4;++i) {
+        unsigned offset=order[i]*12,size=order[i]==3?14:12;
+        stream_send(&c,0,100+offset,absent+offset,size,16);
+        uint32_t credited=c.observation.entry->sni.bytes;
+        stream_send(&c,0,100+offset,absent+offset,size,16);
+        assert(c.observation.entry->sni.bytes==credited);
+      }
+      assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT);
+      assert(c.observation.entry->sni.bytes==50);
+      product_flow_runtime_destroy(c.pool);++cases;
+    }
+  assert(cases==24);
+  /* Overlapping equal bytes merge; contradictory overlap fails closed for
+   * parsing only, preserving the linked Flow and its published TLS fact. */
+  stream_case_t c=stream_case();
+  stream_send(&c,0,100,absent,30,16);
+  stream_send(&c,0,120,absent+20,30,16);
+  assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT && c.observation.entry->sni.bytes==50);
+  product_flow_runtime_destroy(c.pool);
+  c=stream_case();stream_send(&c,0,100,absent,30,16);
+  uint8_t bad[30];memcpy(bad,absent+20,30);bad[0]^=1;
+  stream_send(&c,0,120,bad,30,16);
+  assert(c.observation.entry->sni.stop==PRODUCT_SNI_SEQUENCE && !c.observation.entry->sni.result);
+  assert(c.observation.entry->linked && !c.observation.entry->tcp_bytes.length[0]);
+  product_flow_runtime_destroy(c.pool);
+  puts("24 TCP orderings, exact duplicates, equal/conflicting overlap: PASS");
+}
+static void sparse_and_duplex(void)
+{
+  stream_case_t c=stream_case();
+  for(unsigned i=0;i<17;++i) stream_send(&c,0,101+2*i,absent,1,16);
+  assert(c.observation.entry->sni.stop==PRODUCT_SNI_BYTE_BUDGET);
+  assert(!c.observation.entry->sni.result && !c.observation.entry->tcp_bytes.length[0]);
+  assert(c.observation.entry->sni.bytes==16 && c.observation.entry->linked);
+  product_flow_runtime_destroy(c.pool);
+  c=stream_case();stream_send(&c,0,4195,absent,1,16);
+  assert(!c.observation.entry->sni.stop && c.observation.entry->sni.bytes==1);
+  stream_send(&c,0,4196,absent,1,16);
+  assert(c.observation.entry->sni.stop==PRODUCT_SNI_BYTE_BUDGET && !c.observation.entry->sni.result);
+  product_flow_runtime_destroy(c.pool);
+  c=stream_case();stream_send(&c,1,999,NULL,0,18);
+  stream_send(&c,0,125,absent+25,25,16);
+  stream_send(&c,1,1020,absent+20,30,16);
+  assert(c.observation.entry->sni.bytes==55 && !c.observation.entry->sni.result);
+  stream_send(&c,1,1000,absent,20,16);
+  assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT && c.observation.entry->sni.bytes==75);
+  assert(!c.observation.entry->tcp_bytes.length[0] && !c.observation.entry->tcp_bytes.length[1]);
+  product_flow_runtime_destroy(c.pool);
+  puts("Independent direction spaces, 16 sparse ranges and 4096-byte span bound: PASS");
+}
+static void recognition_stopped_before_reassembly(void)
+{
+  uint8_t wire[3556]={0};memcpy(wire,absent,sizeof absent);
+  wire[3]=13;wire[4]=223; /* record payload 3551 */
+  wire[6]=0;wire[7]=13;wire[8]=219; /* body 3547 */
+  wire[50]=13;wire[51]=176; /* extensions 3504 */
+  wire[52]=0;wire[53]=42;wire[54]=13;wire[55]=172; /* padding 3500 */
+  stream_case_t c=stream_case();
+  for(unsigned i=0;i<10;++i) stream_send(&c,0,156,wire+56,3500,16);
+  assert(c.observation.entry->lpi.stop_reason);
+  assert(!c.observation.entry->sni.result && c.observation.entry->sni.bytes==3500);
+  stream_send(&c,0,100,wire,56,16);
+  assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT);
+  assert(c.observation.entry->lpi.available && (c.observation.entry->lpi.protocols&4));
+  product_flow_runtime_destroy(c.pool);
+}
+static void record_split_and_pre_flow_drop(void)
+{
+  uint8_t wire[55];
+  memcpy(wire,absent,5);wire[4]=17;memcpy(wire+5,absent+5,17);
+  memcpy(wire+22,absent,5);wire[26]=28;memcpy(wire+27,absent+22,28);
+  stream_case_t c=stream_case();
+  stream_send(&c,0,122,wire+22,33,16);
+  stream_send(&c,0,100,wire,22,16);
+  assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT && c.observation.entry->sni.bytes==55);
+  product_flow_runtime_destroy(c.pool);
+  c=stream_case();stream_send(&c,0,100,absent,20,16);
+  const product_flow_entry_t *entry=c.observation.entry;
+  uint64_t packets=entry->packets;
+  product_packet_facts_t f=c.facts;f.tcp_sequence=120;f.tcp_flags=16;
+  f.transport_length=50;f.packet_length=70;
+  product_flow_entry_packet_t packet={.facts=&f,.policy={7,2,1},.uid=17,.timestamp=++c.tick};
+  product_flow_entry_observation_t dropped;
+  assert(product_flow_entry_observe(c.pool,&c.owner,&packet,PRODUCT_FLOW_ENTRY_VERDICT_DROP,&dropped)
+         ==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
+  assert(!dropped.entry && entry->packets==packets && entry->sni.bytes==20 && !entry->sni.result);
+  stream_send(&c,0,120,absent+20,30,16);
+  assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT && entry->packets==packets+1);
+  product_flow_runtime_destroy(c.pool);
+}
+static void overlap_work_budget(void)
+{
+  /* A padded 4096-byte Hello remains incomplete while long equal overlaps
+   * advance its prefix one byte at a time. Work, not bytes/ranges/time/packets,
+   * must terminate this attempt before the seventeenth 4000-byte comparison. */
+  uint8_t wire[4096]={0};memcpy(wire,absent,sizeof absent);
+  wire[3]=15;wire[4]=251;wire[7]=15;wire[8]=247;
+  wire[50]=15;wire[51]=204;wire[52]=0;wire[53]=21;wire[54]=15;wire[55]=200;
+  stream_case_t c=stream_case();
+  stream_send(&c,0,100,wire,4000,16);
+  uint64_t published=c.observation.entry->lpi.protocols;
+  for(unsigned offset=1;offset<=16;++offset) stream_send(&c,0,100+offset,wire+offset,4000,16);
+  assert(c.observation.entry->sni.stop==PRODUCT_SNI_BYTE_BUDGET && !c.observation.entry->sni.result);
+  assert(c.observation.entry->sni.attempts==17 && c.observation.entry->sni.bytes==4015);
+  assert(c.observation.entry->sni.work==128120 && c.observation.entry->linked);
+  assert(c.observation.entry->lpi.protocols==published && !c.observation.entry->tcp_bytes.length[0]);
+  product_flow_runtime_destroy(c.pool);
+  puts("Long equal overlaps exhaust work before packet/byte/span/metadata/time limits: PASS");
 }
 int main(void)
 {
   assert(!product_lpi_init());
+  reordered_hello();
+  reorder_matrix();
+  sparse_and_duplex();
+  recognition_stopped_before_reassembly();
+  record_split_and_pre_flow_drop();
+  overlap_work_budget();
   named_split();
   absence_rule();
   parser_deadline();

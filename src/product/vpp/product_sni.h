@@ -4,6 +4,7 @@
 #include <stdint.h>
 #define PRODUCT_SNI_NAME_BYTES 254U
 #define PRODUCT_TCP_CACHE_SIDE_BYTES 4096U
+#define PRODUCT_TCP_CACHE_RANGES 16U
 #define PRODUCT_SNI_MAX_PACKETS 20U
 #define PRODUCT_SNI_TIMEOUT_US UINT64_C(5000000)
 typedef enum { PRODUCT_SNI_UNAVAILABLE, PRODUCT_SNI_NAME, PRODUCT_SNI_ABSENT } product_sni_result_t;
@@ -14,9 +15,11 @@ typedef enum { PRODUCT_SNI_RUNNING, PRODUCT_SNI_COMPLETE, PRODUCT_SNI_MALFORMED,
  * these bytes synchronously and retains only small result/attempt metadata. */
 typedef struct {
   uint8_t bytes[2][PRODUCT_TCP_CACHE_SIDE_BYTES];
-  uint32_t next_sequence[2];
+  uint32_t base_sequence[2];
+  struct { uint16_t first, last; } ranges[2][PRODUCT_TCP_CACHE_RANGES];
   uint16_t length[2];
-  uint8_t started[2];
+  uint16_t contiguous[2];
+  uint8_t started[2], range_count[2];
 } product_tcp_byte_cache_t;
 typedef struct {
   uint64_t started_us, deadline_us;

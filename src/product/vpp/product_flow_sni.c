@@ -146,7 +146,7 @@ void product_flow_sni_observe(product_flow_entry_t *entry,
   uint32_t sequence=facts->tcp_sequence+!!(facts->tcp_flags&2);
   if(!length) {
     if((facts->tcp_flags&2) && !cache->started[side]) {
-      cache->started[side]=1;cache->next_sequence[side]=sequence;
+      cache->started[side]=1;cache->base_sequence[side]=sequence;
     }
     return;
   }
@@ -156,16 +156,55 @@ void product_flow_sni_observe(product_flow_entry_t *entry,
       ? UINT64_MAX : entry->last_seen+PRODUCT_SNI_TIMEOUT_US;
   }
   ++s->attempts;
-  if(cache->started[side] && sequence!=cache->next_sequence[side]) {
-    product_flow_sni_stop(entry,PRODUCT_SNI_SEQUENCE);return;
+  if(!cache->started[side]) {
+    cache->started[side]=1;cache->base_sequence[side]=sequence;
   }
-  if(length>PRODUCT_TCP_CACHE_SIDE_BYTES-cache->length[side]) {
+  /* Unsigned subtraction handles wrap; the admitted window is far below
+   * half the sequence space. Data preceding the anchored start is unsupported. */
+  uint32_t first=sequence-cache->base_sequence[side];
+  if(first>=PRODUCT_TCP_CACHE_SIDE_BYTES || length>PRODUCT_TCP_CACHE_SIDE_BYTES-first
+     || length>TLS_WORK_LIMIT-s->work) {
     product_flow_sni_stop(entry,PRODUCT_SNI_BYTE_BUDGET);return;
   }
-  cache->started[side]=1;cache->next_sequence[side]=sequence+length;
-  memcpy(cache->bytes[side]+cache->length[side],payload,length);
-  cache->length[side]+=(uint16_t)length;s->bytes+=length;
-  unsigned stop=client_hello(cache->bytes[side],cache->length[side],s);
+  s->work+=length;
+  unsigned last=first+length, count=cache->range_count[side], unique=length;
+  unsigned begin=0,end=0, merged_first=first,merged_last=last;
+  while(begin<count && cache->ranges[side][begin].last<first) ++begin;
+  end=begin;
+  while(end<count && cache->ranges[side][end].first<=last) {
+    unsigned lo=cache->ranges[side][end].first,hi=cache->ranges[side][end].last;
+    unsigned overlap_first=lo>first?lo:first,overlap_last=hi<last?hi:last;
+    if(overlap_first<overlap_last) {
+      unsigned overlap=overlap_last-overlap_first;
+      if(memcmp(cache->bytes[side]+overlap_first,payload+overlap_first-first,overlap)) {
+        product_flow_sni_stop(entry,PRODUCT_SNI_SEQUENCE);return;
+      }
+      unique-=overlap;
+    }
+    if(lo<merged_first) merged_first=lo;
+    if(hi>merged_last) merged_last=hi;
+    ++end;
+  }
+  if(count-(end-begin)==PRODUCT_TCP_CACHE_RANGES) {
+    product_flow_sni_stop(entry,PRODUCT_SNI_BYTE_BUDGET);return;
+  }
+  if(unique) {
+    memcpy(cache->bytes[side]+first,payload,length);
+    memmove(&cache->ranges[side][begin+1],&cache->ranges[side][end],
+      (count-end)*sizeof cache->ranges[side][0]);
+    cache->ranges[side][begin].first=(uint16_t)merged_first;
+    cache->ranges[side][begin].last=(uint16_t)merged_last;
+    cache->range_count[side]=(uint8_t)(count-(end-begin)+1);
+    cache->length[side]+=(uint16_t)unique;s->bytes+=unique;
+  }
+  unsigned contiguous=cache->range_count[side] && !cache->ranges[side][0].first
+    ? cache->ranges[side][0].last:0;
+  unsigned stop=PRODUCT_SNI_RUNNING;
+  if(contiguous>cache->contiguous[side]) {
+    cache->contiguous[side]=(uint16_t)contiguous;
+    if(contiguous>TLS_WORK_LIMIT-s->work) stop=PRODUCT_SNI_BYTE_BUDGET;
+    else {s->work+=contiguous;stop=client_hello(cache->bytes[side],contiguous,s);}
+  }
   if(stop) product_flow_sni_stop(entry,stop);
   else if(s->attempts==PRODUCT_SNI_MAX_PACKETS) product_flow_sni_stop(entry,PRODUCT_SNI_PACKET_BUDGET);
 }
