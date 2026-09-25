@@ -63,6 +63,16 @@ final class ProtocolFactsProbe {
         }
         return bytes;
     }
+    private static String readLine(InputStream input) throws Exception {
+        StringBuilder line = new StringBuilder();
+        while (line.length() < 1024) {
+            int value = input.read();
+            if (value < 0) throw new java.io.EOFException("protocol response");
+            line.append((char) value);
+            if (line.toString().endsWith("\r\n")) return line.toString();
+        }
+        throw new IllegalStateException("protocol response limit");
+    }
     private static void tcp(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         try (Socket socket = new Socket()) {
@@ -70,18 +80,32 @@ final class ProtocolFactsProbe {
             socket.bind(new InetSocketAddress(local, source));
             socket.connect(new InetSocketAddress(endpoint, port), 10000); socket.setSoTimeout(10000);
             result.put("local", socket.getLocalSocketAddress().toString());
-            byte[] request = ("GET /" + nonce + " HTTP/1.1\r\nHost: example.test\r\n"
-                    + "Connection: Upgrade\r\nUpgrade: TLS/1.2\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
-            socket.getOutputStream().write(request);
-            StringBuilder header = new StringBuilder();
-            while (header.length() < 1024 && !header.toString().endsWith("\r\n\r\n")) {
-                int value = socket.getInputStream().read();
-                if (value < 0) throw new java.io.EOFException("HTTP response");
-                header.append((char) value);
+            boolean ftp = plan.optBoolean("ftp");
+            if (ftp) {
+                String banner = readLine(socket.getInputStream());
+                if (!banner.startsWith("220 ") || !banner.contains(" FTPd "))
+                    throw new IllegalStateException("FTP banner");
+                result.put("ftpBanner", banner);
+                gate(app, nonce, result, "ftp_ready");
+                socket.getOutputStream().write("AUTH TLS\r\n".getBytes(StandardCharsets.US_ASCII));
+                String response = readLine(socket.getInputStream());
+                if (!response.equals("234 Ready for TLS\r\n"))
+                    throw new IllegalStateException("FTP AUTH TLS");
+                result.put("ftpUpgrade", response);
+            } else {
+                byte[] request = ("GET /" + nonce + " HTTP/1.1\r\nHost: example.test\r\n"
+                        + "Connection: Upgrade\r\nUpgrade: TLS/1.2\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+                socket.getOutputStream().write(request);
+                StringBuilder header = new StringBuilder();
+                while (header.length() < 1024 && !header.toString().endsWith("\r\n\r\n")) {
+                    int value = socket.getInputStream().read();
+                    if (value < 0) throw new java.io.EOFException("HTTP response");
+                    header.append((char) value);
+                }
+                if (!header.toString().startsWith("HTTP/1.1 101")) throw new IllegalStateException("HTTP upgrade");
+                result.put("httpResponse", header.toString());
+                gate(app, nonce, result, "http_ready");
             }
-            if (!header.toString().startsWith("HTTP/1.1 101")) throw new IllegalStateException("HTTP upgrade");
-            result.put("httpResponse", header.toString());
-            gate(app, nonce, result, "http_ready");
             final byte[] expected = hex(plan.getString("certificateSha256"));
             if (expected.length != 32) throw new IllegalArgumentException("certificate pin");
             X509TrustManager pin = new X509TrustManager() {
@@ -104,18 +128,24 @@ final class ProtocolFactsProbe {
                 tls.setEnabledProtocols(new String[] {"TLSv1.2"}); tls.setSoTimeout(15000); tls.startHandshake();
                 result.put("tlsProtocol", tls.getSession().getProtocol()).put("cipher", tls.getSession().getCipherSuite());
                 gate(app, nonce, result, "tls_ready");
-                byte[] payload = (nonce + ":blocked\n").getBytes(StandardCharsets.US_ASCII);
+                byte[] payload = (ftp ? "NOOP " + nonce + ":blocked\r\n" : nonce + ":blocked\n")
+                        .getBytes(StandardCharsets.US_ASCII);
+                byte[] expectedReply = (ftp ? "200 " + nonce + ":blocked\r\n" : nonce + ":blocked\n")
+                        .getBytes(StandardCharsets.US_ASCII);
                 tls.setSoTimeout(1200); tls.getOutputStream().write(payload);
                 try { tls.getInputStream().read(); throw new IllegalStateException("expected policy timeout"); }
                 catch (SocketTimeoutException expectedTimeout) { result.put("blockedTimeout", true); }
                 gate(app, nonce, result, "blocked");
                 tls.setSoTimeout(15000);
-                if (!Arrays.equals(payload, read(tls.getInputStream(), payload.length)))
+                if (!Arrays.equals(expectedReply, read(tls.getInputStream(), expectedReply.length)))
                     throw new IllegalStateException("recovered TLS echo");
                 for (int i = 0; i < 24; ++i) {
-                    byte[] message = (nonce + ":" + i + "\n").getBytes(StandardCharsets.US_ASCII);
+                    byte[] message = (ftp ? "NOOP " + nonce + ":" + i + "\r\n" : nonce + ":" + i + "\n")
+                            .getBytes(StandardCharsets.US_ASCII);
+                    byte[] wanted = (ftp ? "200 " + nonce + ":" + i + "\r\n" : nonce + ":" + i + "\n")
+                            .getBytes(StandardCharsets.US_ASCII);
                     tls.getOutputStream().write(message);
-                    if (!Arrays.equals(message, read(tls.getInputStream(), message.length)))
+                    if (!Arrays.equals(wanted, read(tls.getInputStream(), wanted.length)))
                         throw new IllegalStateException("TLS echo");
                     Thread.sleep(30);
                 }

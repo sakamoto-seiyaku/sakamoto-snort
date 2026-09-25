@@ -38,6 +38,10 @@ public final class ApplicationProtocolCatalog {
     public static final int ID_QUIC = 1004;
     public static final int ID_SSH = 1005;
     public static final int ID_MDNS = 1006;
+    public static final int ID_SMTP = 1007;
+    public static final int ID_FTP_CONTROL = 1008;
+    public static final int ID_FTP_DATA = 1009;
+    public static final int ID_FTPS = 1010;
 
     private static final Entry[] ENTRIES = new Entry[] {
         new Entry(1000, "reserved-1000", "reserved", "", "Reserved tombstone for removed prerelease placeholder"),
@@ -47,6 +51,10 @@ public final class ApplicationProtocolCatalog {
         new Entry(1004, "quic", "active", "web", "QUIC"),
         new Entry(1005, "ssh", "active", "remote-access", "SSH"),
         new Entry(1006, "mdns", "active", "infrastructure", "Multicast DNS"),
+        new Entry(1007, "smtp", "active", "mail", "SMTP"),
+        new Entry(1008, "ftp-control", "active", "file-transfer", "FTP control"),
+        new Entry(1009, "ftp-data", "active", "file-transfer", "FTP data"),
+        new Entry(1010, "ftps", "active", "file-transfer", "FTPS"),
     };
 
     private static final Map<String, Entry> BY_KEY = buildByKey();
@@ -93,6 +101,7 @@ public final class ApplicationProtocolCatalog {
         aliases.put("http3", BY_KEY.get("quic"));
         aliases.put("secure-shell", BY_KEY.get("ssh"));
         aliases.put("multicast-dns", BY_KEY.get("mdns"));
+        aliases.put("ftp", BY_KEY.get("ftp-control"));
         return Collections.unmodifiableMap(aliases);
     }
 
@@ -105,12 +114,18 @@ public final class ApplicationProtocolCatalog {
         aliases.put("lpi:quic", BY_KEY.get("quic"));
         aliases.put("lpi:ssh", BY_KEY.get("ssh"));
         aliases.put("sakamoto:mdns", BY_KEY.get("mdns"));
+        aliases.put("sakamoto:smtp", BY_KEY.get("smtp"));
+        aliases.put("sakamoto:ftp-control", BY_KEY.get("ftp-control"));
+        aliases.put("sakamoto:ftp-data", BY_KEY.get("ftp-data"));
+        aliases.put("sakamoto:ftps", BY_KEY.get("ftps"));
         return Collections.unmodifiableMap(aliases);
     }
 
     private static Map<String, List<Integer>> buildCategories() {
         Map<String, List<Integer>> categories = new LinkedHashMap<String, List<Integer>>();
+        categories.put("file-transfer", immutableIds(new int[] {1008, 1009, 1010}));
         categories.put("infrastructure", immutableIds(new int[] {1001, 1006}));
+        categories.put("mail", immutableIds(new int[] {1007}));
         categories.put("remote-access", immutableIds(new int[] {1005}));
         categories.put("web", immutableIds(new int[] {1002, 1003, 1004}));
         return Collections.unmodifiableMap(categories);

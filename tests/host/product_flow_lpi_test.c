@@ -256,6 +256,229 @@ static uint64_t sample (const uint8_t *bytes, unsigned length, unsigned transpor
   return result;
 }
 
+static void mail_banner (void)
+{
+  const uint8_t ftp[]="220 test FTPd ready\r\n";
+  const uint8_t smtp[]="220 test ESMTP ready\r\n";
+  assert(sample(ftp,sizeof ftp-1,6,2121,42005,4)==128);
+  assert(sample(smtp,sizeof smtp-1,6,2525,42005,4)==64);
+  assert(sample(ftp,sizeof ftp-1,6,25,42005,4)==128);
+  assert(sample(ftp,sizeof ftp-1,6,20,42005,4)==128);
+  const uint8_t data[]="file contents\r\n";
+  assert(sample(data,sizeof data-1,6,20,42005,4)==256);
+  const uint8_t tls[]={0x16,3,1,0,4,1,0,0,0};
+  assert(sample(tls,sizeof tls,6,42005,990,4)==516);
+
+}
+
+static void mail_sequence (void)
+{
+  const uint8_t *payloads[]={(const uint8_t *)"220 test FTPd ready\r\n",
+    (const uint8_t *)"AUTH TLS\r\n",(const uint8_t *)"234 Ready\r\n",
+    (const uint8_t *)"\x16\x03\x01\0\x04\x01\0\0\0"};
+  const unsigned sizes[]={21,10,11,9};
+  const unsigned sides[]={1,0,1,0};
+  product_flow_runtime_t *pool=NULL;
+  assert(product_flow_runtime_create(&pool,0,1,27,1)==0);
+  product_worker_layout_t layout={1,1};
+  product_flow_entry_observation_t o;
+  for(unsigned step=0;step<4;++step) {
+    unsigned side=sides[step];
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+      .source_port=side?21:42007,.destination_port=side?42007:21,
+      .l4_header_length=20,.transport_length=20+sizes[step],.tcp_flags=16,.tcp_window=65535};
+    f.source_address[0]=side?11:10;f.destination_address[0]=side?10:11;
+    product_owner_assignment_t a; assert(product_owner_assign(&layout,&f,&a)==0);
+    product_flow_entry_packet_t p={.facts=&f,.policy={27,1,1},.uid=17,.timestamp=step+1};
+    assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(product_flow_entry_identify(pool,o.slot,27,o.entry->incarnation,&f,payloads[step],sizes[step])==0);
+    assert(o.entry->lpi.protocols==(step==3?644:128));
+  }
+  product_flow_runtime_destroy(pool);
+}
+
+typedef struct {
+  const char *text;
+  unsigned side;
+  uint64_t expected;
+} mail_step_t;
+
+static void transcript (const mail_step_t *steps, unsigned count, unsigned port)
+{
+  product_flow_runtime_t *pool=NULL;
+  assert(product_flow_runtime_create(&pool,0,1,29,1)==0);
+  product_worker_layout_t layout={1,1};
+  product_flow_entry_observation_t o;
+  uint64_t incarnation=0;
+  for(unsigned step=0;step<count;++step) {
+    unsigned side=steps[step].side, n=(unsigned)strlen(steps[step].text);
+    const uint8_t *payload=(const uint8_t *)steps[step].text;
+    /* Hand-coded framing witness, not production recognition as oracle. */
+    const uint8_t tls[]={22,3,1,0,4,1,0,0,0};
+    if(!strcmp(steps[step].text,"TLS")) {payload=tls;n=sizeof tls;}
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=6,.protocol=6,
+      .source_port=side?port:42008,.destination_port=side?42008:port,
+      .l4_header_length=20,.transport_length=20+n,.tcp_flags=16,.tcp_window=65535};
+    f.source_address[0]=side?11:10;f.destination_address[0]=side?10:11;
+    product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+    /* Every second packet changes policy: pending detection must survive. */
+    product_flow_entry_packet_t p={.facts=&f,.policy={29,1+step/2,1+step/2},.uid=17,.timestamp=step+1};
+    assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    if(step) assert(o.entry->incarnation==incarnation);
+    incarnation=o.entry->incarnation;
+    assert(product_flow_entry_identify(pool,o.slot,29,incarnation,&f,payload,n)==0);
+    if(o.entry->lpi.protocols!=steps[step].expected)
+      fprintf(stderr,"port=%u step=%u input=%s actual=%llu expected=%llu\n",port,step,
+        steps[step].text,(unsigned long long)o.entry->lpi.protocols,
+        (unsigned long long)steps[step].expected);
+    assert(o.entry->lpi.protocols==steps[step].expected);
+    assert(o.entry->lpi.available==(steps[step].expected!=0));
+  }
+  product_flow_runtime_destroy(pool);
+}
+#define TRANSCRIPT(port,...) do { const mail_step_t steps[]={__VA_ARGS__}; \
+  transcript(steps,sizeof steps/sizeof steps[0],port); } while(0)
+
+static void mail_boundaries (void)
+{
+  const uint8_t *negative[]={(const uint8_t *)"220 notFTPD ready\r\n",
+    (const uint8_t *)"220 ESMTPish ready\r\n",(const uint8_t *)"220 FTP ESMTP\r\n",
+    (const uint8_t *)"221 FTP ready\r\n",(const uint8_t *)"220 FTP ready\n",
+    (const uint8_t *)"220 FTP ready",(const uint8_t *)"220 service ready\r\n"};
+  for(unsigned i=0;i<sizeof negative/sizeof negative[0];++i)
+    for(unsigned port=21;port<=25;port+=4)
+      assert(!(sample(negative[i],(unsigned)strlen((const char *)negative[i]),6,port,42005,4)&(64|128)));
+  const uint8_t banner[]="220-test esmtp ready\r\n";
+  for(unsigned n=0;n<sizeof banner-1;++n)
+    assert(!(sample(banner,n,6,25,42005,4)&(64|128)));
+  for(unsigned family=4;family<=6;family+=2) {
+    assert(sample(banner,sizeof banner-1,6,21,42005,family)==64);
+    assert(sample(banner,sizeof banner-1,6,42005,2525,family)==64);
+  }
+  assert(!(sample(banner,sizeof banner-1,17,25,42005,4)&(64|128)));
+  uint8_t long_banner[520];memset(long_banner,' ',sizeof long_banner);
+  memcpy(long_banner,"220 FTP",7);long_banner[518]='\r';long_banner[519]='\n';
+  assert(!(sample(long_banner,sizeof long_banner,6,21,42005,4)&128));
+  const uint8_t opaque[]={0xfe,0xdd};
+  assert(sample(opaque,sizeof opaque,6,42005,20,4)==256);
+  assert(!(sample(opaque,sizeof opaque,6,42005,2020,4)&256));
+  assert(!(sample(opaque,sizeof opaque,17,20,42005,4)&256));
+  assert(!(sample(opaque,sizeof opaque,6,990,42005,4)&512));
+  const uint8_t tls[]={22,3,1,0,4,1,0,0,0};
+  assert(sample(tls,sizeof tls,6,990,42005,6)==516);
+  assert(!(sample(tls,sizeof tls,6,989,42005,4)&512));
+  assert(!(sample(tls,sizeof tls,6,443,42005,4)&512));
+  for(unsigned n=0;n<sizeof tls;++n) assert(!(sample(tls,n,6,990,42005,4)&512));
+  for(unsigned mutation=0;mutation<5;++mutation) {
+    uint8_t bad[sizeof tls];memcpy(bad,tls,sizeof bad);
+    if(mutation==0) bad[0]=23;
+    if(mutation==1) bad[1]=4;
+    if(mutation==2) bad[2]=4;
+    if(mutation==3) bad[4]=5;
+    if(mutation==4) bad[8]=1;
+    assert(!(sample(bad,sizeof bad,6,990,42005,4)&512));
+  }
+  TRANSCRIPT(2525,{"220 service ready\r\n",1,0},{"EHLO test\r\n",0,0},
+    {"250 test\r\n",1,64},{"TLS",0,68});
+  TRANSCRIPT(2525,{"EHLO test\r\n",0,0},{"250 test\r\n",0,0});
+  TRANSCRIPT(2525,{"EHLOX test\r\n",0,0},{"250 test\r\n",1,0});
+  TRANSCRIPT(2525,{"EHLO test\r\n",0,0},{"550 test\r\n",1,0});
+  TRANSCRIPT(2121,{"SYST\r\n",0,0},{"215 UNIX\r\n",1,128});
+  TRANSCRIPT(2525,{"HELO test\r\n",0,0},{"250 test\r\n",1,64});
+  TRANSCRIPT(2121,{"FEAT\r\n",0,0},{"211 Features\r\n",1,128});
+  TRANSCRIPT(2121,{"PASV\r\n",0,0},{"227 Passive\r\n",1,128});
+  TRANSCRIPT(2121,{"EPSV\r\n",0,0},{"229 Passive\r\n",1,128});
+  TRANSCRIPT(2121,{"RETR file\r\n",0,0},{"150 Data\r\n",1,128});
+  TRANSCRIPT(2121,{"STOR file\r\n",0,0},{"550 Refused\r\n",1,128});
+  TRANSCRIPT(21,{"USER test\r\n",0,0},{"331 Password\r\n",1,128});
+  TRANSCRIPT(21,{"PASS test\r\n",0,0},{"230 Login\r\n",1,128});
+  TRANSCRIPT(2121,{"SYST\r\n",0,0},{"215 UNIX\r\n",0,0});
+  TRANSCRIPT(2121,{"SYSTEM\r\n",0,0},{"215 UNIX\r\n",1,0});
+  TRANSCRIPT(25,{"SYST\r\n",0,0},{"215 UNIX\r\n",1,0});
+  TRANSCRIPT(2121,{"USER user\r\n",0,0},{"331 pass\r\n",1,0});
+  TRANSCRIPT(21,{"AUTH TLS\r\n",0,0},{"234 ready\r\n",1,128},{"TLS",0,644});
+  TRANSCRIPT(25,{"220 FTP ready\r\n",1,128},{"AUTH TLS\r\n",0,128},
+    {"234 ready\r\n",1,128},{"TLS",0,644});
+  TRANSCRIPT(110,{"220 FTP ready\r\n",1,128},{"AUTH TLS\r\n",0,128},
+    {"234 ready\r\n",1,128},{"TLS",0,644});
+  TRANSCRIPT(587,{"220 FTP ready\r\n",1,128},{"AUTH TLS\r\n",0,128},
+    {"234 ready\r\n",1,128},{"TLS",0,644});
+  TRANSCRIPT(2121,{"220 FTP ready\r\n",1,128},{"AUTH TLS\r\n",0,128},
+    {"234 ready\r\n",1,128},{"TLS",0,644});
+  TRANSCRIPT(21,{"AUTH TLSX\r\n",0,0},{"234 ready\r\n",1,0},{"TLS",0,0});
+  TRANSCRIPT(21,{"AUTH TLS\r\n",0,0},{"234 ready\r\n",0,0},{"TLS",0,4});
+  TRANSCRIPT(21,{"AUTH TLS\r\n",0,0},{"534 refused\r\n",1,128},{"TLS",0,132});
+  TRANSCRIPT(21,{"AUTH TLS\r\n",0,0},{"234 ready\r\n",1,128},{"TLS",1,132});
+  TRANSCRIPT(2121,{"AUTH TLS\r\n",0,0},{"234 ready\r\n",1,0},{"TLS",0,0});
+  TRANSCRIPT(21,{"AUTH TLS\r\n",0,0},{"234-more text\r\n",1,128},{"TLS",0,132});
+  /* Published history remains even after an incompatible later banner. */
+  TRANSCRIPT(2121,{"220 SMTP ready\r\n",1,64},{"220 FTP ready\r\n",1,192});
+  puts("R2 banners, bounded lines, direction, commands, data and explicit/implicit FTPS: PASS");
+}
+
+static void mail_lifecycle (void)
+{
+  product_flow_runtime_t *pool=NULL;
+  assert(product_flow_runtime_create(&pool,0,1,31,1)==0);
+  assert(product_flow_runtime_set_end_callback(pool,ended,NULL)==0);
+  product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+    .source_port=42009,.destination_port=21,.l4_header_length=20,.transport_length=20,.tcp_flags=16,.tcp_window=65535};
+  f.source_address[0]=10;f.destination_address[0]=11;
+  product_worker_layout_t layout={1,1};product_owner_assignment_t a;
+  assert(product_owner_assign(&layout,&f,&a)==0);
+  product_flow_entry_packet_t p={.facts=&f,.policy={31,1,1},.uid=17,.timestamp=1};
+  product_flow_entry_observation_t o;
+  assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+  uint64_t old=o.entry->incarnation;
+  const uint8_t auth[]="AUTH TLS\r\n",opaque[]={0xfe};
+  f.transport_length=20+sizeof auth-1;
+  assert(product_flow_entry_identify(pool,o.slot,31,old,&f,auth,sizeof auth-1)==0);
+  assert(!o.entry->lpi.protocols && o.entry->lpi.attempts==1);
+  for(unsigned i=1;i<20;++i) {
+    f.transport_length=21;
+    assert(product_flow_entry_identify(pool,o.slot,31,old,&f,opaque,sizeof opaque)==0);
+  }
+  assert(o.entry->lpi.stop_reason==1 && !o.entry->lpi.available);
+  const uint8_t banner[]="220 FTPd ready\r\n";
+  f.transport_length=20+sizeof banner-1;
+  assert(product_flow_entry_identify(pool,o.slot,31,old,&f,banner,sizeof banner-1)==0);
+  assert(!o.entry->lpi.protocols && o.entry->lpi.attempts==20);
+  assert(product_flow_runtime_close(pool,o.slot,31,old,PRODUCT_FLOW_END_CLOSED)==0);
+  assert(product_flow_runtime_release_end(pool,o.slot,31,old,PRODUCT_FLOW_END_CLOSED)==0);
+  ++p.timestamp;
+  assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+  assert(o.entry->incarnation!=old && !o.entry->lpi.attempts && !o.entry->lpi.available);
+  uint64_t fresh=o.entry->incarnation;
+  f.transport_length=20+sizeof auth-1;
+  assert(product_flow_entry_identify(pool,o.slot,31,old,&f,auth,sizeof auth-1)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+  /* A reply on the reused slot cannot satisfy the previous AUTH request. */
+  f.source_port=21;f.destination_port=42009;f.source_address[0]=11;f.destination_address[0]=10;
+  const uint8_t reply[]="234 Ready\r\n";
+  f.transport_length=20+sizeof reply-1;
+  assert(product_owner_assign(&layout,&f,&a)==0);
+  assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+  assert(product_flow_entry_identify(pool,o.slot,31,fresh,&f,reply,sizeof reply-1)==0);
+  assert(!o.entry->lpi.protocols);
+  f.source_port=42009;f.destination_port=21;f.source_address[0]=10;f.destination_address[0]=11;
+  const uint8_t tls[]={22,3,1,0,4,1,0,0,0};
+  f.transport_length=20+sizeof tls;
+  assert(product_owner_assign(&layout,&f,&a)==0);
+  assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+  assert(product_flow_entry_identify(pool,o.slot,31,fresh,&f,tls,sizeof tls)==0);
+  assert(!(o.entry->lpi.protocols&512));
+  /* A new published fact survives both a rule publication and byte exhaustion. */
+  f.transport_length=20+sizeof banner-1;
+  assert(product_flow_entry_identify(pool,o.slot,31,fresh,&f,banner,sizeof banner-1)==0);
+  uint64_t published=o.entry->lpi.protocols;assert(published&128);
+  p.policy.revision=p.policy.snapshot_hash=2;
+  assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+  assert(o.entry->incarnation==fresh && o.entry->lpi.protocols==published);
+  uint8_t large[32768]={0xfe};f.transport_length=20+sizeof large;
+  assert(product_flow_entry_identify(pool,o.slot,31,fresh,&f,large,sizeof large)==0);
+  assert(o.entry->lpi.stop_reason==2 && o.entry->lpi.available && o.entry->lpi.protocols==published);
+  product_flow_runtime_destroy(pool);
+}
+
 static void mdns_boundaries (void)
 {
   /* Independent literals: query a.local A/IN, compressed answer, goodbye TTL0. */
@@ -362,9 +585,48 @@ static void representative_cost (void)
            shape,(unsigned long long)elapsed,sizeof(product_lpi_state_t),sizeof(product_flow_entry_t));
   }
 }
+static void mail_cost (void)
+{
+  const uint8_t banner[]="220 mail.example.test ESMTP R2 ready\r\n";
+  const uint8_t negative[]="220 mail.example.test ESMTPish ready\r\n";
+  const uint8_t tls[]={22,3,1,0,4,1,0,0,0};
+  for(unsigned shape=0;shape<4;++shape) {
+    const uint8_t *payload=shape==0?banner:shape==1?negative:tls;
+    unsigned length=shape==0?sizeof banner-1:shape==1?sizeof negative-1:sizeof tls;
+    uint64_t elapsed=0;
+    for(unsigned repetition=0;repetition<2000;++repetition) {
+      product_flow_runtime_t *pool=NULL;
+      assert(product_flow_runtime_create(&pool,0,1,33,1)==0);
+      product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+        .source_port=shape<2?2525:990,.destination_port=42010,
+        .l4_header_length=20,.transport_length=20+length,.tcp_flags=16,.tcp_window=65535};
+      f.source_address[0]=10;f.destination_address[0]=11;
+      product_worker_layout_t layout={1,1};product_owner_assignment_t a;
+      assert(product_owner_assign(&layout,&f,&a)==0);
+      product_flow_entry_packet_t p={.facts=&f,.policy={33,1,1},.uid=17};
+      product_flow_entry_observation_t o;
+      assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+      if(shape==3) {
+        for(unsigned attempt=0;attempt<20;++attempt)
+          assert(product_flow_entry_identify(pool,o.slot,33,o.entry->incarnation,&f,payload,length)==0);
+      }
+      uint64_t start=nanos();
+      for(unsigned attempt=0;attempt<20;++attempt)
+        assert(product_flow_entry_identify(pool,o.slot,33,o.entry->incarnation,&f,payload,length)==0);
+      elapsed+=nanos()-start;
+      assert(o.entry->lpi.attempts==20 && o.entry->lpi.stop_reason==1);
+      assert(o.entry->lpi.protocols==(shape==0?64:shape==1?0:516));
+      product_flow_runtime_destroy(pool);
+    }
+    printf("{\"shape\":%u,\"calls\":40000,\"elapsed_ns\":%llu,\"lpi_bytes\":%zu,\"entry_bytes\":%zu}\n",
+           shape,(unsigned long long)elapsed,sizeof(product_lpi_state_t),sizeof(product_flow_entry_t));
+  }
+}
+
 int main (void)
 {
   assert (product_lpi_init () == 0);
+  if(getenv("R2_COST")) {mail_cost();return 0;}
   if(getenv("R1_COST")) {representative_cost();return 0;}
   dns_budget ();
   multi_result_and_reuse ();
@@ -372,9 +634,13 @@ int main (void)
   quic_header_failures ();
   mdns_query ();
   mdns_boundaries ();
+  mail_banner ();
+  mail_sequence ();
+  mail_boundaries ();
+  mail_lifecycle ();
   assert (product_static_expression_validate((uint8_t[]){15,0xe8,3,0,0},5)
           == PRODUCT_L4_POLICY_STATUS_INVALID_RULE); /* reserved catalog ID */
-  assert (product_static_expression_validate((uint8_t[]){15,0xef,3,0,0},5)
+  assert (product_static_expression_validate((uint8_t[]){15,0xff,3,0,0},5)
           == PRODUCT_L4_POLICY_STATUS_INVALID_RULE); /* absent catalog ID */
   assert (product_static_expression_validate((uint8_t[]){15,0xeb,3,0},4)
           == PRODUCT_L4_POLICY_STATUS_INVALID_RULE); /* truncated operand */

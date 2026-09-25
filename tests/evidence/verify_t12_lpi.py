@@ -71,7 +71,7 @@ def protocol_observation(session,facts,payload,length,side):
     if session['attempts']==20:session['stop']=1
     elif session['bytes']==32768:session['stop']=2
 
-def verify_trace(text,profile,generation,ports,configurations,uid):
+def verify_trace(text,profile,generation,ports,configurations,uid,observe=protocol_observation):
     prefixes={'acquire':'s209 event=acquire ','release':'s209 event=release ',
       'match':'s209 event=l4 ','flow':'s208 event=observe ','tcp':'s222 event=tcp_update ',
       'udp':'s223 event=udp_update ','lpi':'t12 event=lpi ','cache':'t11 event=cache ',
@@ -89,8 +89,10 @@ def verify_trace(text,profile,generation,ports,configurations,uid):
     selected=[]
     for _,admit in records(text,'s216 stage=admit '):
         if int(admit.get('protocol',0)) not in (6,17):continue
+        # Ignore unrelated device traffic before the representative IPv4 parser.
+        # Selected ports still require and validate their complete wire projection.
+        if not ({int(admit['src_port']),int(admit['dst_port'])}&set(ports)):continue
         facts,flags,payload=base.packet(admit)
-        if not ({facts['sport'],facts['dport']}&set(ports)):continue
         assert int(admit['generation'])==generation
         token=admit['token'];events={};indices={}
         for name in ('acquire','release','match','flow','lpi','tcp' if facts['protocol']==6 else 'udp'):
@@ -133,7 +135,7 @@ def verify_trace(text,profile,generation,ports,configurations,uid):
         assert int(flow['packets'])==session['packets'],'Flow packet accounting'
         length=int(value['admit']['transport_length'])-int(value['admit']['l4_length'])
         old=set(session['protocols'])
-        protocol_observation(session,facts,value['payload'],length,side)
+        observe(session,facts,value['payload'],length,side)
         mask=sum(1<<(p-1001) for p in session['protocols'])
         assert int(lpi['protocols'])==mask and int(lpi['available'])==bool(mask),('wire protocol facts',value['token'],session['protocols'],lpi)
         assert int(lpi['attempts'])==session['attempts'] and int(lpi['bytes'])==session['bytes'],'bounded producer work'

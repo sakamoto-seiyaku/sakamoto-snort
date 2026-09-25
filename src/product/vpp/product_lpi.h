@@ -25,6 +25,8 @@ typedef struct {
   uint32_t bytes;
   uint16_t client_port, server_port;
   uint8_t attempts, available, stop_reason, last_outcome;
+  /* Direction is the existing ORIG/REPLY observation, never inferred from port. */
+  uint8_t mail_pending, mail_side, ftps_stage, ftps_side;
 } product_lpi_state_t;
 static inline const char *product_lpi_stop_name (unsigned reason)
 {

@@ -13,14 +13,20 @@
         "tls",
         "quic",
         "ssh",
-        "mdns"
+        "mdns",
+        "smtp",
+        "ftp-control",
+        "ftp-data",
+        "ftps"
       ],
       "description": "Stable ApplicationProtocolKey used by authoring/import/export/API."
     },
     "category": {
       "type": "string",
       "enum": [
+        "file-transfer",
         "infrastructure",
+        "mail",
         "remote-access",
         "web"
       ],

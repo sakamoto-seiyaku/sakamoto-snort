@@ -11,3 +11,7 @@
 1004	quic	active	web	http3	lpi:quic	QUIC
 1005	ssh	active	remote-access	secure-shell	lpi:ssh	SSH
 1006	mdns	active	infrastructure	multicast-dns	sakamoto:mdns	Multicast DNS
+1007	smtp	active	mail	-	sakamoto:smtp	SMTP
+1008	ftp-control	active	file-transfer	ftp	sakamoto:ftp-control	FTP control
+1009	ftp-data	active	file-transfer	-	sakamoto:ftp-data	FTP data
+1010	ftps	active	file-transfer	-	sakamoto:ftps	FTPS

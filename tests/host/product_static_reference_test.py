@@ -160,7 +160,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -203,9 +203,9 @@ def run(lib):
         assert (plan.direct_rules,plan.factorized_rules,plan.residual_rules)==expected_plan
 
     # R1: each published identity includes NOT and full-set cache transitions.
-    for target in (1001,1002,1003,1004,1005,1006):
+    for target in (1001,1002,1003,1004,1005,1006,1007,1008,1009,1010):
         # T12: set membership, NOT, availability and full application dependencies.
-        for published in (None, set(), {1002}, {1003}, {1006}, {1004,1006}, {1002,1003}, {1001,1002,1003,1004,1005,1006}):
+        for published in (None, set(), {1002}, {1003}, {1006}, {1007}, {1008}, {1009}, {1010}, {1003,1008,1010}, {1004,1006}, {1002,1003}, set(range(1001,1011))):
             for mode in (0,1):
                 for ranges in ((1,6),(1,65534)):
                     expr=('and',('and',('sport',*ranges),('dport',*ranges)),('lpi',target))

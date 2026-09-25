@@ -99,17 +99,145 @@ static int mdns_message (const uint8_t *p, uint32_t n)
   return at==n;
 }
 
+/* Complete bounded first line only. Case folding is ASCII and locale-free. */
+static unsigned ascii_upper (unsigned c)
+{ return c >= 'a' && c <= 'z' ? c - ('a'-'A') : c; }
+static int word_equal (const uint8_t *p, unsigned n, const char *word)
+{
+  unsigned length=(unsigned)strlen(word);
+  if(n!=length) return 0;
+  for(unsigned i=0;i<n;++i) if(ascii_upper(p[i])!=(unsigned)word[i]) return 0;
+  return 1;
+}
+static unsigned first_line (const uint8_t *p, unsigned n)
+{
+  if(n>512) n=512;
+  for(unsigned i=0;i+1<n;++i) {
+    if(p[i]=='\r' && p[i+1]=='\n') return i;
+    if(p[i]<32 || p[i]>126) return 0;
+  }
+  return 0;
+}
+static int banner_token (const uint8_t *p, unsigned n, const char *token)
+{
+  unsigned at=4;
+  while(at<n) {
+    while(at<n && p[at]==' ') ++at;
+    unsigned start=at;
+    while(at<n && p[at]!=' ') ++at;
+    if(word_equal(p+start,at-start,token)) return 1;
+  }
+  return 0;
+}
+static const char *mail_banner (const uint8_t *p, unsigned n)
+{
+  unsigned line=first_line(p,n);
+  if(line<5 || memcmp(p,"220",3) || (p[3]!=' ' && p[3]!='-')) return NULL;
+  int smtp=banner_token(p,line,"SMTP") || banner_token(p,line,"ESMTP");
+  int ftp=banner_token(p,line,"FTP") || banner_token(p,line,"FTPD");
+  if(smtp==ftp) return NULL;
+  return smtp?"sakamoto:smtp":"sakamoto:ftp-control";
+}
+
+/* RFC8446 record envelope plus handshake header; not handshake validation.
+ * Require the complete first record in this borrowed payload. */
+static int tls_handshake_record (const uint8_t *p, unsigned n)
+{
+  if(n<9 || p[0]!=22 || p[1]!=3 || p[2]>3) return 0;
+  unsigned record=((unsigned)p[3]<<8)|p[4];
+  unsigned handshake=((unsigned)p[6]<<16)|((unsigned)p[7]<<8)|p[8];
+  return record>=4 && record<=18432 && record<=n-5 &&
+    (p[5]==1 || p[5]==2) && handshake<=record-4;
+}
+
+static int line_command (const uint8_t *p, unsigned n, const char *command,
+                         int argument)
+{
+  unsigned size=(unsigned)strlen(command);
+  return n>=size && word_equal(p,size,command) &&
+    (argument ? n>size+1 && p[size]==' ' : n==size);
+}
+
+enum { MAIL_PENDING_NONE, MAIL_PENDING_SMTP, MAIL_PENDING_FTP };
+enum { FTPS_PLAIN, FTPS_AUTH_PENDING, FTPS_TLS_READY };
+
+/* Small request/reply evidence, no credentials or TCP bytes retained. */
+static const char *mail_exchange (product_lpi_state_t *state, unsigned side,
+  const product_packet_facts_t *facts, const uint8_t *p, unsigned n,
+  const char **companion)
+{
+  if(tls_handshake_record(p,n)) {
+    if((state->ftps_stage==FTPS_TLS_READY && side==state->ftps_side)
+       || facts->source_port==990 || facts->destination_port==990) {
+      *companion="lpi:tls";
+      return "sakamoto:ftps";
+    }
+    return (state->protocols & (product_protocol_bit(1007)|product_protocol_bit(1008)))
+      ? "lpi:tls" : NULL;
+  }
+  unsigned line=first_line(p,n);
+  if(!line) return NULL;
+  const char *banner=mail_banner(p,n);
+  if(banner) return banner;
+  int mail_port=facts->source_port==25 || facts->destination_port==25 ||
+    facts->source_port==110 || facts->destination_port==110 ||
+    facts->source_port==587 || facts->destination_port==587;
+  if(line_command(p,line,"EHLO",1) || line_command(p,line,"HELO",1)) {
+    state->mail_pending=MAIL_PENDING_SMTP;state->mail_side=(uint8_t)side;
+    return NULL;
+  }
+  int auth=line_command(p,line,"AUTH TLS",0);
+  int ftp_context=(state->protocols & product_protocol_bit(1008)) ||
+    facts->source_port==21 || facts->destination_port==21;
+  if(auth && ftp_context) {
+    state->ftps_stage=FTPS_AUTH_PENDING;state->ftps_side=(uint8_t)side;
+    state->mail_pending=MAIL_PENDING_FTP;state->mail_side=(uint8_t)side;
+    return NULL;
+  }
+  if(!mail_port && (line_command(p,line,"SYST",0) ||
+      line_command(p,line,"FEAT",0) || line_command(p,line,"PASV",0) ||
+      line_command(p,line,"EPSV",0) || line_command(p,line,"RETR",1) ||
+      line_command(p,line,"STOR",1) ||
+      (ftp_context && (line_command(p,line,"USER",1) || line_command(p,line,"PASS",1))))) {
+    state->mail_pending=MAIL_PENDING_FTP;state->mail_side=(uint8_t)side;
+    return NULL;
+  }
+  if(line>=4 && p[0]>='1' && p[0]<='5' && p[1]>='0' && p[1]<='9' &&
+      p[2]>='0' && p[2]<='9' && (p[3]==' ' || p[3]=='-')) {
+    unsigned code=(p[0]-'0')*100+(p[1]-'0')*10+p[2]-'0';
+    if(state->ftps_stage==FTPS_AUTH_PENDING && side!=state->ftps_side) {
+      state->ftps_stage=(code==234 && p[3]==' ')?FTPS_TLS_READY:
+        (code==234?FTPS_AUTH_PENDING:FTPS_PLAIN);
+    }
+    if(state->mail_pending && side!=state->mail_side) {
+      unsigned pending=state->mail_pending;
+      state->mail_pending=MAIL_PENDING_NONE;
+      if(pending==MAIL_PENDING_SMTP && code==250) return "sakamoto:smtp";
+      if(pending==MAIL_PENDING_FTP) return "sakamoto:ftp-control";
+    }
+  }
+  return NULL;
+}
+
 /* Resolve one unpublished guess before any catalog mapping. Explicitly prefer
  * QUIC's modern Initial framing over port heuristics; mDNS requires its own
  * framing and either 5353 endpoint. Never union conflicting current guesses.
  * Earlier published facts remain untouched by this resolution. */
 static const char *resolve_guess (const char *base,
-  const product_packet_facts_t *facts, const uint8_t *payload, uint32_t length)
+  const product_packet_facts_t *facts, const uint8_t *payload, uint32_t length,
+  const char **companion, product_lpi_state_t *state, unsigned side)
 {
+  *companion=NULL;
   if (facts->protocol==17) {
     if (quic_initial(payload,length)) return "lpi:quic";
     if ((facts->source_port==5353 || facts->destination_port==5353)
         && mdns_message(payload,length)) return "sakamoto:mdns";
+  }
+  if (facts->protocol==6) {
+    const char *mail=mail_exchange(state,side,facts,payload,length,companion);
+    if(mail) return mail;
+    if((facts->source_port==20 || facts->destination_port==20)
+       && !product_protocol_provider_id(base)) return "sakamoto:ftp-data";
   }
   return base;
 }
@@ -168,8 +296,10 @@ product_flow_entry_status_t product_flow_entry_identify (
   ++state->attempts;
   const char *alias = sakamoto_lpi_guess (state->payload,state->lengths,state->observed,
     state->ips,state->client_port,state->server_port,facts->protocol);
-  alias = resolve_guess (alias,facts,payload,length);
-  uint64_t result = product_protocol_bit (product_protocol_provider_id (alias));
+  const char *companion=NULL;
+  alias = resolve_guess (alias,facts,payload,length,&companion,state,side);
+  uint64_t result = product_protocol_bit (product_protocol_provider_id (alias))
+    | product_protocol_bit (product_protocol_provider_id (companion));
   state->last_outcome = result ? PRODUCT_LPI_MAPPED : alias ? PRODUCT_LPI_UNMAPPED : PRODUCT_LPI_MISS;
   state->protocols |= result;
   state->available = state->protocols != 0;
