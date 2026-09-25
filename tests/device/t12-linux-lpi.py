@@ -18,7 +18,9 @@ parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--fixtures',type=Path,required=True)
 parser.add_argument('--dependencies',type=Path,required=True)
+parser.add_argument('--mdns',action='store_true')
 args = parser.parse_args()
+udp_port=5353 if args.mdns else 53
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
 assert os.getuid() == 0
@@ -31,7 +33,7 @@ runtime = ROOT/('build-output/product-vpp-runtime-'+runtime_tag)
 generation = 26301
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
-              cases=[], started_ns=time.time_ns(), artifact=str(artifact),
+              mdns=args.mdns, cases=[], started_ns=time.time_ns(), artifact=str(artifact),
               manifest_sha256=hashlib.sha256((artifact/'product-vpp-artifact.properties').read_bytes()).hexdigest())
 build_path=args.build.resolve()
 build=json.loads(build_path.read_text())
@@ -87,7 +89,7 @@ peer_source=ROOT/'tests/device/helpers/t12_protocol_peer.py'
 save('socket-peer.py',peer_source.read_text())
 result['peer_sha256']=hashlib.sha256(peer_source.read_bytes()).hexdigest()
 endpoint_log=(output/'endpoint.jsonl').open('w')
-endpoint=subprocess.Popen(['python3','-u',str(peer_source),'server','--host','127.0.0.2','--port','40610','--directory',str(args.fixtures.resolve())],
+endpoint=subprocess.Popen(['python3','-u',str(peer_source),'server','--host','127.0.0.2','--port','40610','--directory',str(args.fixtures.resolve()),'--udp-port',str(udp_port)],
     env=env,user=12001,group=12001,extra_groups=[],stdout=endpoint_log,stderr=subprocess.STDOUT)
 deadline=time.monotonic()+5
 while '"kind": "ready"' not in (output/'endpoint.jsonl').read_text():
@@ -96,7 +98,7 @@ while '"kind": "ready"' not in (output/'endpoint.jsonl').read_text():
     time.sleep(.02)
 hooks = [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--uid-owner','12001',
           flag,port,'-j','NFQUEUE','--queue-num','176']
-         for protocol,port in [('tcp','40610'),('udp','53')] for flag in ['--sport','--dport']]
+         for protocol,port in [('tcp','40610'),('udp',str(udp_port))] for flag in ['--sport','--dport']]
 clients=[]
 process = None; log = None; hooked = []
 def start(label):
@@ -164,7 +166,7 @@ class Client:
         self.label,self.protocol,self.port=label,protocol,port
         self.nonce='T12-'+label+'-'+str(time.time_ns())
         self.process=subprocess.Popen(['python3','-u',str(peer_source),'client','--host','127.0.0.2',
-            '--port','40610' if protocol=='tcp' else '53','--protocol',protocol,'--source',str(port),'--nonce',self.nonce],
+            '--port','40610' if protocol=='tcp' else str(udp_port),'--protocol',protocol,'--source',str(port),'--nonce',self.nonce],
             env=env,user=12001,group=12001,extra_groups=[],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,text=True,bufsize=1)
         self.events=[];clients.append(self)
@@ -194,10 +196,10 @@ try:
     result['fixtures_sha256']=hashlib.sha256((args.fixtures/'fixtures.json').read_bytes()).hexdigest()
     save('fixtures.json',(args.fixtures/'fixtures.json').read_text())
     status=start('first')
-    for protocol,number,port,target in [('tcp',6,45100,1003),('udp',17,45200,1004)]:
+    for protocol,number,port,target in [('tcp',6,45100,1003),('udp',17,45200,1006 if args.mdns else 1004)]:
         status=configure(protocol+'-observe',status,number,target)
         client=Client(protocol,protocol,port)
-        first='http' if protocol=='tcp' else 'dns'
+        first='http' if protocol=='tcp' else ('mdns' if args.mdns else 'dns')
         second='tls' if protocol=='tcp' else 'quic'
         client.execute(first,first+'_ready');client.capture(protocol+'-first',status,'first')
         client.execute(second,second+'_ready');client.capture(protocol+'-added',status,'added')

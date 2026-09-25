@@ -37,6 +37,7 @@ public final class ApplicationProtocolCatalog {
     public static final int ID_TLS = 1003;
     public static final int ID_QUIC = 1004;
     public static final int ID_SSH = 1005;
+    public static final int ID_MDNS = 1006;
 
     private static final Entry[] ENTRIES = new Entry[] {
         new Entry(1000, "reserved-1000", "reserved", "", "Reserved tombstone for removed prerelease placeholder"),
@@ -45,6 +46,7 @@ public final class ApplicationProtocolCatalog {
         new Entry(1003, "tls", "active", "web", "TLS"),
         new Entry(1004, "quic", "active", "web", "QUIC"),
         new Entry(1005, "ssh", "active", "remote-access", "SSH"),
+        new Entry(1006, "mdns", "active", "infrastructure", "Multicast DNS"),
     };
 
     private static final Map<String, Entry> BY_KEY = buildByKey();
@@ -90,6 +92,7 @@ public final class ApplicationProtocolCatalog {
         aliases.put("ssl", BY_KEY.get("tls"));
         aliases.put("http3", BY_KEY.get("quic"));
         aliases.put("secure-shell", BY_KEY.get("ssh"));
+        aliases.put("multicast-dns", BY_KEY.get("mdns"));
         return Collections.unmodifiableMap(aliases);
     }
 
@@ -101,12 +104,13 @@ public final class ApplicationProtocolCatalog {
         aliases.put("lpi:tls", BY_KEY.get("tls"));
         aliases.put("lpi:quic", BY_KEY.get("quic"));
         aliases.put("lpi:ssh", BY_KEY.get("ssh"));
+        aliases.put("sakamoto:mdns", BY_KEY.get("mdns"));
         return Collections.unmodifiableMap(aliases);
     }
 
     private static Map<String, List<Integer>> buildCategories() {
         Map<String, List<Integer>> categories = new LinkedHashMap<String, List<Integer>>();
-        categories.put("infrastructure", immutableIds(new int[] {1001}));
+        categories.put("infrastructure", immutableIds(new int[] {1001, 1006}));
         categories.put("remote-access", immutableIds(new int[] {1005}));
         categories.put("web", immutableIds(new int[] {1002, 1003, 1004}));
         return Collections.unmodifiableMap(categories);

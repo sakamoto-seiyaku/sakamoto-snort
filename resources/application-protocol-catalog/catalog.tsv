@@ -10,3 +10,4 @@
 1003	tls	active	web	ssl	lpi:ssl,lpi:tls	TLS
 1004	quic	active	web	http3	lpi:quic	QUIC
 1005	ssh	active	remote-access	secure-shell	lpi:ssh	SSH
+1006	mdns	active	infrastructure	multicast-dns	sakamoto:mdns	Multicast DNS

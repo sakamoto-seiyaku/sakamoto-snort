@@ -21,7 +21,8 @@ are immutable afterwards; queries use a stack `lpi_data_t`, iterate fixed
 registry lists and retain no query pointers. The registered global tables are
 released only at process exit, after worker lifetime. Matches do not allocate,
 spawn threads or take a global lock. Temporary misses return NULL; unmapped
-recognitions return an empty alias, separately from mapped catalog evidence.
+recognitions retain the original static module name for the C supplemental
+resolver, separately from mapped catalog evidence (R1).
 The product catalog mapping deliberately includes only supported exact facts.
 HTTPS maps to TLS because its detector directly checks TLS bytes; it does not
 publish HTTP merely from a category or inheritance relationship.

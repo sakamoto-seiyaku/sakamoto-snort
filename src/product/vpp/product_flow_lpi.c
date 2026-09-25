@@ -39,6 +39,81 @@ static int quic_initial (const uint8_t *p, uint32_t n)
   return 1;
 }
 
+static unsigned dns_u16 (const uint8_t *p)
+{ return (unsigned)p[0] << 8 | p[1]; }
+
+/* RFC1035 4.1.4: no recursion or retained bytes. A pointer must refer back to
+ * the message and name traversal has independent finite work/jump bounds. */
+static int dns_name (const uint8_t *p, uint32_t n, uint32_t *cursor,
+                     unsigned *work, uint8_t boundaries[512])
+{
+  uint32_t at=*cursor, end=0;
+  unsigned expanded=0, jumps=0;
+  for (;;) {
+    if (at>=n || !*work) return 0;
+    --*work;
+    uint32_t label=at;
+    unsigned size=p[at++];
+    if (!size) {
+      if (++expanded>255) return 0;
+      boundaries[label/8]|=(uint8_t)(1U<<(label%8));
+      *cursor=end?end:at;
+      return 1;
+    }
+    if ((size & 0xc0)==0xc0) {
+      if (at>=n || ++jumps>16) return 0;
+      unsigned target=((size & 63)<<8)|p[at++];
+      if (target<12 || target>=at-2 || !(boundaries[target/8]&(1U<<(target%8)))) return 0;
+      boundaries[label/8]|=(uint8_t)(1U<<(label%8));
+      if (!end) end=at;
+      at=target;
+    } else {
+      if ((size & 0xc0) || size>n-at || expanded+size+1>254) return 0;
+      boundaries[label/8]|=(uint8_t)(1U<<(label%8));
+      expanded+=size+1;
+      at+=size;
+    }
+  }
+}
+
+/* nDPI pinned dns.c informs port/header/count selection; independent bounded
+ * RFC1035/6762 framing, no nDPI code/state imported. RDATA remains opaque. */
+static int mdns_message (const uint8_t *p, uint32_t n)
+{
+  if (n<12 || n>4096 || (dns_u16(p+2)&0x780f)) return 0;
+  unsigned questions=dns_u16(p+4), records=dns_u16(p+6)+dns_u16(p+8)+dns_u16(p+10);
+  if (!questions && !records) return 0;
+  if (questions+records>64) return 0;
+  uint32_t at=12;
+  unsigned work=4096;
+  uint8_t boundaries[512]={0};
+  for (unsigned i=0;i<questions+records;++i) {
+    if (!dns_name(p,n,&at,&work,boundaries)) return 0;
+    unsigned header=i<questions?4:10;
+    if (header>n-at || !dns_u16(p+at) || !(dns_u16(p+at+2)&0x7fff)) return 0;
+    unsigned data=i<questions?0:dns_u16(p+at+8);
+    at+=header;
+    if (data>n-at) return 0;
+    at+=data;
+  }
+  return at==n;
+}
+
+/* Resolve one unpublished guess before any catalog mapping. Explicitly prefer
+ * QUIC's modern Initial framing over port heuristics; mDNS requires its own
+ * framing and either 5353 endpoint. Never union conflicting current guesses.
+ * Earlier published facts remain untouched by this resolution. */
+static const char *resolve_guess (const char *base,
+  const product_packet_facts_t *facts, const uint8_t *payload, uint32_t length)
+{
+  if (facts->protocol==17) {
+    if (quic_initial(payload,length)) return "lpi:quic";
+    if ((facts->source_port==5353 || facts->destination_port==5353)
+        && mdns_message(payload,length)) return "sakamoto:mdns";
+  }
+  return base;
+}
+
 product_flow_entry_status_t product_flow_entry_identify (
   product_flow_runtime_t *pool, uint32_t slot, uint64_t generation,
   uint64_t incarnation, const product_packet_facts_t *facts,
@@ -93,9 +168,8 @@ product_flow_entry_status_t product_flow_entry_identify (
   ++state->attempts;
   const char *alias = sakamoto_lpi_guess (state->payload,state->lengths,state->observed,
     state->ips,state->client_port,state->server_port,facts->protocol);
+  alias = resolve_guess (alias,facts,payload,length);
   uint64_t result = product_protocol_bit (product_protocol_provider_id (alias));
-  if (facts->protocol == 17 && quic_initial(payload,length))
-    result |= product_protocol_bit (1004);
   state->last_outcome = result ? PRODUCT_LPI_MAPPED : alias ? PRODUCT_LPI_UNMAPPED : PRODUCT_LPI_MISS;
   state->protocols |= result;
   state->available = state->protocols != 0;

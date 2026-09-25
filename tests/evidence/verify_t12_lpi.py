@@ -61,6 +61,11 @@ def protocol_observation(session,facts,payload,length,side):
     else:
         if 53 in (facts['sport'],facts['dport']) and len(payload)>=12 and payload[:2]==b'\x12\x0c' and payload[2:4] in (b'\x01\x00',b'\x81\x80'):
             session['protocols'].add(1001)
+        # Workload-specific RFC6762 literals, independently hand encoded.
+        query=bytes.fromhex('000000000001000000000000076578616d706c65056c6f63616c0000010001')
+        reply=bytes.fromhex('000084000001000100000000076578616d706c65056c6f63616c0000010001c00c00018001000000780004c0000201')
+        if 5353 in (facts['sport'],facts['dport']) and payload in (query,reply):
+            session['protocols'].add(1006)
         if length>=1200 and len(payload)>=5 and payload[0]&0xf0==0xc0 and payload[1:5]==b'\0\0\0\1':
             session['protocols'].add(1004)
     if session['attempts']==20:session['stop']=1
@@ -181,18 +186,18 @@ def verify_trace(text,profile,generation,ports,configurations,uid):
     assert totals['cache_hits'] and totals['cache_misses'] and totals['actual_drops']
     return selected,sessions,dict(totals),counter_history
 
-def flow_query(directory,case,packets,configurations,uid,dns_published):
+def flow_query(directory,case,packets,configurations,uid,dns_published,mdns=False):
     text=(directory/case['flow']).read_text()
     candidates=[r for _,r in records(text,'flow.entry ') if case['port'] in (int(r['port_a']),int(r['port_b']))]
     assert len(candidates)==1;entry=candidates[0]
     _,lpi=one(records(text,'flow.lpi '),worker=entry['worker'],slot=entry['slot'],incarnation=entry['incarnation'])
     protocol=case['protocol'];phase=case['phase']
-    expected=set() if phase=='unavailable' else ({1002} if protocol=='tcp' else ({1001} if dns_published else set()))
+    expected=set() if phase=='unavailable' else ({1002} if protocol=='tcp' else ({1006} if mdns else ({1001} if dns_published else set())))
     if phase in ('added','blocked','budget'):expected.add(1003 if protocol=='tcp' else 1004)
     assert int(lpi['protocols'])==sum(1<<(p-1001) for p in expected) and int(lpi['available'])==bool(expected),'query full published set'
     found={int(r['id']):r['key'] for _,r in records(text,'flow.protocol_fact ')
            if r['worker']==entry['worker'] and r['slot']==entry['slot'] and r['incarnation']==entry['incarnation']}
-    names={1001:'dns',1002:'http',1003:'tls',1004:'quic',1005:'ssh'}
+    names={1001:'dns',1002:'http',1003:'tls',1004:'quic',1005:'ssh',1006:'mdns'}
     assert found=={p:names[p] for p in expected},'stable catalog query mapping'
     if phase in ('budget','unavailable'):
         assert lpi['attempts']=='20' and lpi['stop']=='1' and lpi['stop_reason']=='packet_budget'
@@ -203,6 +208,49 @@ def flow_query(directory,case,packets,configurations,uid,dns_published):
     assert entry['rule']==packet['match']['rule'] and entry['revision']==packet['match']['revision'],'Flow winner query attribution'
     assert all(lpi[k]==packet['lpi'][k] for k in ('available','protocols','attempts','bytes','stop','outcome')),'query does not match live packet prefix'
     return entry
+
+def endpoint_delivery(directory,run,pixel,profile,endpoint,packets):
+    """Join the independent socket witnesses to this run's UDP nonce and peer.
+
+    VPN may translate its source port. The unique echo payload binds that
+    endpoint socket to the app session, then its earlier DNS exchange is joined
+    using the same peer and session time window. No Product classifier is used.
+    """
+    mdns=run.get('mdns',False)
+    query=bytes.fromhex('000000000001000000000000076578616d706c65056c6f63616c0000010001') if mdns else bytes.fromhex('120c01000001000000000000076578616d706c6504746573740000010001')
+    reply=bytes.fromhex('000084000001000100000000076578616d706c65056c6f63616c0000010001c00c00018001000000780004c0000201') if mdns else query[:2]+b'\x81\x80'+query[4:]
+    if pixel:
+        sessions=[s for s in run['sessions'] if s['profile']==profile and s['protocol']=='udp']
+    else:
+        sessions=[c for c in run['cases'] if c['protocol']=='udp' and c['phase']=='budget']
+    assert len(sessions)==1
+    for session in sessions:
+        nonce=session['nonce'];echo=('T12-opaque-'+nonce).encode().hex()
+        begin=int(nonce.rsplit('-',1)[1]);end=session.get('completed_ns',run['completed_ns'])
+        if not pixel:
+            events=json.loads((directory/(session['client']+'-client.json')).read_text())
+            assert events[0]['kind']=='connected' and events[-1]['kind']=='closed'
+            end=events[-1]['time_ns']
+        window=[e for e in endpoint if begin<=e['time_ns']<=end]
+        assert all(e['data']==echo for e in window if e['kind']=='udp_echo'),'recovery endpoint payload mismatch'
+        echoes=[e for e in window if e['kind']=='udp_echo' and e['data']==echo]
+        assert len(echoes)>=24, 'recovered UDP endpoint echo witnesses absent'
+        peers={tuple(e['peer']) for e in echoes};assert len(peers)==1,'ambiguous endpoint socket'
+        peer=next(iter(peers))
+        if profile=='root':assert peer[1]==session['port'],'root endpoint source port'
+        receives=[e for e in window if e['kind']=='udp_receive' and tuple(e['peer'])==peer]
+        assert all(e['data'] in (query.hex(),echo) or (bytes.fromhex(e['data']) and bytes.fromhex(e['data'])[0]&0x80) for e in receives),'unexpected endpoint control payload'
+        assert any(e['data']==query.hex() for e in receives),'DNS/mDNS query not received by endpoint'
+        responses=[e for e in window if e['kind']==('mdns_response' if mdns else 'dns_response')]
+        assert len(responses)>0 and all(tuple(e['peer'])==peer and e['data']==reply.hex() for e in responses),'DNS/mDNS endpoint response identity/payload'
+        assert sum(e['data']==echo for e in receives)>=24,'recovery endpoint receives absent'
+        observed=[p for p in packets if session['port'] in (p['facts']['sport'],p['facts']['dport'])]
+        assert any(p['payload']==query for p in observed) and any(p['payload']==reply for p in observed),'DNS/mDNS wire query/reply pair absent'
+        if not pixel:
+            assert tuple(events[0]['local'])==peer and events[0]['peer'][1]==(5353 if mdns else 53)
+            assert any(e['kind']==('mdns_ready' if mdns else 'dns_ready') and e['data']==reply.hex() for e in events),'client DNS/mDNS delivery absent'
+            assert any(e['kind']=='timeout' for e in events),'client block timeout absent'
+            assert any(e['kind']=='received' and e['count']==24 and e['data']==echo for e in events),'client recovery delivery absent'
 
 def verify(directory):
     directory=Path(directory);run=json.loads((directory/'result.json').read_text());pixel='serial' in run
@@ -216,7 +264,10 @@ def verify(directory):
     configurations=configs(directory,run,pixel)
     endpoint=[json.loads(line) for line in (directory/'endpoint.jsonl').read_text().splitlines()]
     assert endpoint[0]['kind']=='ready'
-    assert endpoint[0]['udp_port']==(40611 if pixel else 53)
+    mdns=run.get('mdns',False)
+    assert endpoint[0]['udp_port']==(5353 if mdns else (40611 if pixel else 53))
+    if mdns:
+        assert any(e['kind']=='mdns_response' for e in endpoint), 'mDNS endpoint reply absent'
     dns_published=endpoint[0]['udp_port']==53
     assert any(e['kind']=='tls_handshake' and e['version']=='TLSv1.2' for e in endpoint)
     assert any(e['kind']=='quic_event' and e['event']=='ProtocolNegotiated' for e in endpoint),'authenticated QUIC ClientHello not accepted by peer'
@@ -255,6 +306,7 @@ def verify(directory):
         cases=[c for c in run['cases'] if c.get('profile','root')==profile]
         ports=sorted({c['port'] for c in cases})
         packets,sessions,summary[profile],counter_history=verify_trace(trace,profile,generation,ports,configurations,uid)
+        endpoint_delivery(directory,run,pixel,profile,endpoint,packets)
         counter_file=profile+'-final.txt' if pixel else 'final-counters.txt'
         cache_rows=records((directory/counter_file).read_text(),'policy.cache ')
         assert len(cache_rows)==2 and {r['worker'] for _,r in cache_rows}=={'0','1'}
@@ -265,7 +317,7 @@ def verify(directory):
             assert int(row['replacements'])==int(row['misses'])-int(row['occupied'])
         queries={}
         for case in cases:
-            entry=flow_query(directory,case,packets,configurations,uid,dns_published)
+            entry=flow_query(directory,case,packets,configurations,uid,dns_published,mdns)
             query=props(directory/case['query']);base.query_observation(query,pixel,trace)
             queries.setdefault(case['client'],[]).append((entry,case))
         for name,values in queries.items():
@@ -284,7 +336,7 @@ def verify(directory):
                 if session['protocol']=='tcp':assert report['tlsProtocol']=='TLSv1.2'
                 else:assert report['quicReplyBytes']>0 and report['dnsReplyBytes']>=12
     return dict(status='PASS',source_sha256=run['source_sha256'],profiles=summary,
-      protocol_scope=('HTTP/TLS1.2 and QUICv1 authenticated Initial; nonstandard-port DNS remains unavailable' if pixel else 'HTTP/TLS1.2 and DNS/QUICv1 full handshake'),
+      mdns=mdns, protocol_scope=('HTTP/TLS1.2; '+('mDNS direct-unicast query/answer; ' if mdns else ('nonstandard-port DNS unavailable; ' if pixel else 'DNS query/answer; '))+('QUICv1 authenticated Initial exchange' if pixel else 'QUICv1 full handshake')),
       verifier_sha256=digest(__file__))
 
 if __name__=='__main__':

@@ -60,6 +60,21 @@ def run(directory):
         def changed_run(data,key,value):
             run=json.loads(data);run[key]=value;return (json.dumps(run)+'\n').encode()
         trial('wrong-build-binding','result.json',lambda b:changed_run(b,'build_sha256','0'*64))
+        def endpoint_change(data,kind,key=None,value=None,remove=False):
+            events=[json.loads(line) for line in data.decode().splitlines()]
+            selected=[e for e in events if e['kind']==kind];assert selected
+            if remove:events=[e for e in events if e['kind']!=kind]
+            else:selected[0][key]=value
+            return ('\n'.join(json.dumps(e) for e in events)+'\n').encode()
+        response='mdns_response' if original.get('mdns') else 'dns_response'
+        trial('missing-endpoint-receives','endpoint.jsonl',lambda b:endpoint_change(b,'udp_receive',remove=True))
+        trial('wrong-endpoint-response-peer','endpoint.jsonl',lambda b:endpoint_change(b,response,'peer',['203.0.113.99',9]))
+        trial('wrong-endpoint-response-payload','endpoint.jsonl',lambda b:endpoint_change(b,response,'data','00'))
+        trial('missing-endpoint-response','endpoint.jsonl',lambda b:endpoint_change(b,response,remove=True))
+        trial('missing-recovery-echo','endpoint.jsonl',lambda b:endpoint_change(b,'udp_echo',remove=True))
+        trial('wrong-recovery-echo-payload','endpoint.jsonl',lambda b:endpoint_change(b,'udp_echo','data','00'))
+        if not pixel:
+            trial('missing-client-delivery','udp-client.json',lambda b:b'[]')
         return dict(status='PASS',rejected=len(rejected),categories=rejected,run=str(directory),
                     verifier_sha256=v.digest(Path(__file__).with_name('verify_t12_lpi.py')),
                     harness_sha256=v.digest(__file__))

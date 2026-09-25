@@ -33,6 +33,6 @@ extern "C" const char *sakamoto_lpi_guess (const uint32_t payload[2], const uint
     case LPI_PROTO_UDP_QUIC: return "lpi:quic";
     case LPI_PROTO_UNKNOWN: case LPI_PROTO_NO_PAYLOAD: case LPI_PROTO_NO_FIRSTPKT:
       return nullptr;
-    default: return "";
+    default: return module->name;
   }
 }

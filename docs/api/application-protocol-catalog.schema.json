@@ -12,7 +12,8 @@
         "http",
         "tls",
         "quic",
-        "ssh"
+        "ssh",
+        "mdns"
       ],
       "description": "Stable ApplicationProtocolKey used by authoring/import/export/API."
     },

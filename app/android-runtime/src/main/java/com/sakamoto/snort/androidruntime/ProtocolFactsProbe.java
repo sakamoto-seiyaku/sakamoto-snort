@@ -135,7 +135,14 @@ final class ProtocolFactsProbe {
             DatagramPacket reply = new DatagramPacket(new byte[4096], 4096); socket.receive(reply);
             if (reply.getLength() < 12 || reply.getData()[0] != dns[0] || reply.getData()[1] != dns[1]
                     || (reply.getData()[2] & 0x80) == 0) throw new IllegalStateException("DNS response");
-            result.put("dnsReplyBytes", reply.getLength()); gate(app, nonce, result, "dns_ready");
+            result.put("dnsReplyBytes", reply.getLength());
+            // UDP can duplicate a response. Drain the preceding exchange before
+            // the gated protocol transition, without treating it as QUIC data.
+            socket.setSoTimeout(250);
+            try { for (int i = 0; i < 8; ++i) { reply.setLength(4096); socket.receive(reply); } }
+            catch (SocketTimeoutException drained) { }
+            gate(app, nonce, result, "dns_ready");
+            socket.setSoTimeout(3000);
             byte[] initial = hex(plan.getString("quicHex"));
             if (initial.length < 1200) throw new IllegalArgumentException("QUIC Initial datagram");
             socket.send(new DatagramPacket(initial, initial.length));

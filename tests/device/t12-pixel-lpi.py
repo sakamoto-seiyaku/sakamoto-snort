@@ -23,7 +23,9 @@ p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--fixtures',type=Path,required=True)
 p.add_argument('--python',default='/tmp/t12-quic-venv/bin/python')
+p.add_argument('--mdns',action='store_true')
 args = p.parse_args()
+udp_port=5353 if args.mdns else 40611
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
 assert SERIAL and SERIAL != 'unknown'
 build_path, output = args.build.resolve(), args.output.resolve()
@@ -34,7 +36,7 @@ def save(name, text): (output/name).write_text(text); return text
 def props(text): return dict(line.split('=',1) for line in text.splitlines() if '=' in line and not line.startswith('#'))
 result = dict(status='HOLD', profile='root', source='NFQ_CAPTURED+TUN_ORIGIN', serial=SERIAL,
               build=str(build_path), build_sha256=digest(build_path), source_sha256=build['source_sha256'],
-              runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[])
+              runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[], mdns=args.mdns)
 save('runner.py',Path(__file__).read_text())
 adb_prefix = [str(ROOT/'dev/adb'), '-s', SERIAL]
 def adb(*argv, check=True, timeout=35):
@@ -168,7 +170,7 @@ def launch(label,profile,protocol,source):
     global held
     nonce='T12-'+label+'-'+str(time.time_ns())
     fixture=json.loads(args.fixtures.read_text())
-    plan=dict(nonce=nonce,endpoint=args.endpoint,port=40610 if protocol=='tcp' else 40611,
+    plan=dict(nonce=nonce,endpoint=args.endpoint,port=40610 if protocol=='tcp' else udp_port,
               source=source,mode=protocol,bindDefault=profile=='root',**fixture)
     save(label+'-launch.txt',action('--es','t12ProbePlan',shlex.quote(json.dumps(plan))))
     case=dict(label=label,profile=profile,nonce=nonce,port=source,protocol=protocol,plan=plan,
@@ -214,7 +216,7 @@ try:
     save('fixtures.json',args.fixtures.read_text());result['fixtures_sha256']=digest(args.fixtures)
     endpoint_log=(output/'endpoint.jsonl').open('w')
     endpoint=subprocess.Popen([args.python,'-u',str(peer),'server','--host',args.endpoint,'--port','40610',
-                              '--directory',str(args.fixtures.resolve().parent),'--udp-port','40611'],stdout=endpoint_log,stderr=subprocess.STDOUT)
+                              '--directory',str(args.fixtures.resolve().parent),'--udp-port',str(udp_port)],stdout=endpoint_log,stderr=subprocess.STDOUT)
     deadline=time.monotonic()+5
     while '"kind": "ready"' not in (output/'endpoint.jsonl').read_text():
         assert endpoint.poll() is None
@@ -224,7 +226,7 @@ try:
     adb('shell','input','keyevent','224');adb('shell','wm','dismiss-keyguard')
     for profile,baseport in [('root',46100),('vpn',46200)]:
         status=start(profile,profile)
-        for index,(protocol,number,target_id) in enumerate([('tcp',6,1003),('udp',17,1004)]):
+        for index,(protocol,number,target_id) in enumerate([('tcp',6,1003),('udp',17,1006 if args.mdns else 1004)]):
             label=profile+'-'+protocol
             status=configure(label+'-observe',status,number,target_id)
             case=launch(label,profile,protocol,baseport+index)

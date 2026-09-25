@@ -160,7 +160,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -202,20 +202,22 @@ def run(lib):
         plan=Plan();lib.product_l4_policy_plan_resources(view,C.byref(plan))
         assert (plan.direct_rules,plan.factorized_rules,plan.residual_rules)==expected_plan
 
-    # T12: set membership, NOT, availability and full application dependencies.
-    for published in (None, set(), {1002}, {1003}, {1002,1003}, {1001,1002,1003,1004,1005}):
-        for mode in (0,1):
-            for ranges in ((1,6),(1,65534)):
-                expr=('and',('and',('sport',*ranges),('dport',*ranges)),('lpi',1003))
-                rules=[logical(expr,identity=10,priority=1,mode=mode),
-                       logical(('not',('lpi',1003)),identity=20,priority=2),
-                       logical(('lpi',1002),identity=30,priority=3,action=1),
-                       logical(('family',4),identity=40,priority=4,action=1)]
-                for port in (0,1,6,7,65534,65535):
-                    compare(rules, BASE | dict(lpi=published,sport=port,dport=port))
-        for expr, truth in [(('lpi',1003), None if published is None else 1003 in published),
-                            (('not',('lpi',1003)), None if published is None else 1003 not in published)]:
-            compare([logical(expr)], BASE | dict(lpi=published),10 if truth is True else 0)
+    # R1: each published identity includes NOT and full-set cache transitions.
+    for target in (1001,1002,1003,1004,1005,1006):
+        # T12: set membership, NOT, availability and full application dependencies.
+        for published in (None, set(), {1002}, {1003}, {1006}, {1004,1006}, {1002,1003}, {1001,1002,1003,1004,1005,1006}):
+            for mode in (0,1):
+                for ranges in ((1,6),(1,65534)):
+                    expr=('and',('and',('sport',*ranges),('dport',*ranges)),('lpi',target))
+                    rules=[logical(expr,identity=10,priority=1,mode=mode),
+                           logical(('not',('lpi',target)),identity=20,priority=2),
+                           logical(('lpi',1002),identity=30,priority=3,action=1),
+                           logical(('family',4),identity=40,priority=4,action=1)]
+                    for port in (0,1,6,7,65534,65535):
+                        compare(rules, BASE | dict(lpi=published,sport=port,dport=port))
+            for expr, truth in [(('lpi',target), None if published is None else target in published),
+                                (('not',('lpi',target)), None if published is None else target not in published)]:
+                compare([logical(expr)], BASE | dict(lpi=published),10 if truth is True else 0)
 
     # T10: 16 / 32 / 900 exact-mask products and every range edge, with
     # same-action competitors, observe mode and dynamic whole-rule placement.
