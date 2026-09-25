@@ -61,7 +61,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleConfig (
 /* Shared positional layout is documented in T02_RULE_CONFIGURATION.md and
  * checked by the Java and production VAPI boundary tests. */
 enum {
-    COMPLETE_RULE_WORDS = 26,
+    COMPLETE_RULE_WORDS = 43,
     COMPLETE_REPLY_HEADER_WORDS = 13,
     COMPLETE_SOURCE_WORD = 18,
     COMPLETE_DESTINATION_WORD = 22,
@@ -152,6 +152,9 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
             request.rules[i].destination_port_first = (uint32_t)values[15];
             request.rules[i].destination_port_last = (uint32_t)values[16];
             request.rules[i].reserved = (uint32_t)values[17];
+            request.rules[i].expression_length = (uint32_t)values[26];
+            for (unsigned j = 0; j < 64; ++j)
+                request.rules[i].expression[j] = (uint64_t)values[27+j/4] >> (24-(j%4)*8);
             for (unsigned j = 0; j < 16; ++j) {
                 request.rules[i].source_address[j] =
                     (uint64_t)values[COMPLETE_SOURCE_WORD + j / 4] >> (24 - (j % 4) * 8);
@@ -205,6 +208,9 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         values[15] = status.rules[i].destination_port_first;
         values[16] = status.rules[i].destination_port_last;
         values[17] = status.rules[i].reserved;
+        values[26] = status.rules[i].expression_length;
+        for (unsigned j = 0; j < 64; ++j)
+            values[27+j/4] |= (jlong)status.rules[i].expression[j] << (24-(j%4)*8);
         for (unsigned j = 0; j < 16; ++j) {
             values[COMPLETE_SOURCE_WORD + j / 4] |= (jlong)status.rules[i].source_address[j]
                                                     << (24 - (j % 4) * 8);

@@ -28,6 +28,7 @@ and [build commands](../tooling/README.md) for Host checks.
 | Scope | Record |
 | --- | --- |
 | Ordinary network-disable rules, scoped switches and shared observe behavior | [T05](2026-09-25_T05_NETWORK_DISABLE.md) |
+| Bounded static Boolean conditions and field availability | [T06](2026-09-25_T06_STATIC_EXPRESSIONS.md) |
 | Startup compilation failure, online management repair and policy-before-capture lifecycle | [T03](2026-09-25_T03_STARTUP_REPAIR.md) |
 | Complete VPP-owned direct rules, versions, failures and Root/VPN source lifecycle | [T02](2026-09-25_T02_COMPLETE_RULE_CONFIGURATION.md) |
 | Protocol expiry and deferred real 24-hour TCP test | [S236](2026-09-13_S236_PROTOCOL_EXPIRY.md) |

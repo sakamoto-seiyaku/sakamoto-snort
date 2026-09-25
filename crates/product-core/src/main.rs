@@ -152,6 +152,15 @@ fn main() {
                     s.count, s.active_count, s.error_index, s.compiler_status);
                 for (i, r) in s.rules[..s.count as usize].iter().enumerate() {
                     println!("config.rule.{i}.version={}\nconfig.rule.{i}.uid={}\nconfig.rule.{i}.family={}\nconfig.rule.{i}.protocol={}\nconfig.rule.{i}.action={}", r.version, r.uid, r.family, r.protocol, r.action);
+                    println!("config.rule.{i}.expression_length={}", r.expression_length);
+                    println!(
+                        "config.rule.{i}.expression={}",
+                        r.expression
+                            .iter()
+                            .take(r.expression_length.min(64) as usize)
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    );
                 }
                 for (i, version) in s.active_versions[..s.active_count as usize]
                     .iter()

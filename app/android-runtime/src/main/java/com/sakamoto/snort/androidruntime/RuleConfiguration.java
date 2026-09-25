@@ -56,7 +56,7 @@ public final class RuleConfiguration {
         return false;
     }
 
-    public static final int COMPLETE_RULE_WORDS = 26;
+    public static final int COMPLETE_RULE_WORDS = 43;
     public static final int MAX_RULES = 256;
     public static final int MAX_ACTIVE_RULES = 128;
     private static final int COMPLETE_REPLY_HEADER_WORDS = 13;
@@ -102,7 +102,7 @@ public final class RuleConfiguration {
         long[] wire = new long[lines.length * COMPLETE_RULE_WORDS];
         for (int i = 0; i < lines.length; ++i) {
             String[] f = lines[i].trim().split("\\s+");
-            if (f.length != 16) throw new IllegalArgumentException("expected 16 direct-rule fields at " + i);
+            if (f.length != 16 && f.length != 17) throw new IllegalArgumentException("expected 16 direct-rule fields at " + i);
             int at = i * COMPLETE_RULE_WORDS;
             wire[at] = Long.parseUnsignedLong(f[0]);
             wire[at+1] = Long.parseUnsignedLong(f[1]);
@@ -114,6 +114,14 @@ public final class RuleConfiguration {
             if (sourceFamily != destinationFamily) throw new IllegalArgumentException("CIDR families differ");
             wire[at+7] = sourceFamily;
             for (int n = 12; n <= 15; ++n) wire[at+n+1] = unsigned32(f[n]);
+            if (f.length == 17) {
+                String hex = f[16];
+                if (!hex.matches("(?:[0-9a-fA-F]{2}){1,64}"))
+                    throw new IllegalArgumentException("expression must be 1..64 hex bytes");
+                wire[at+26] = hex.length()/2;
+                for (int n = 0; n < hex.length()/2; ++n)
+                    wire[at+27+n/4] |= Long.parseLong(hex.substring(n*2, n*2+2), 16) << (24-(n%4)*8);
+            }
         }
         return wire;
     }

@@ -52,6 +52,8 @@ typedef struct {
     uint32_t destination_port_first, destination_port_last;
     uint32_t reserved;
     uint8_t source_address[16], destination_address[16];
+    uint32_t expression_length;
+    uint8_t expression[64];
 } sakamoto_product_direct_rule_t;
 
 #define SAKAMOTO_RULE_CONFIG_MAX_GROUPS 64

@@ -699,12 +699,60 @@ test_compile_validation (void)
                 "duplicate stable rule ids must be rejected");
 }
 
+/* A missing network fact remains unavailable through NOT; an available port
+ * can independently prove OR. Literal vectors calibrate the Boolean contract. */
+static void
+test_static_expression_availability (void)
+{
+  product_l4_policy_rule_t rule = rule_template (70001, 9, 0, 0, 1, 0, 2);
+  product_l4_policy_packet_t packet = packet_template (9, 4, 17, 0, 65535);
+  product_l4_policy_view_t view;
+  const uint8_t expression[] = {7, 1, 0, 0, 0, 3, 12, 255, 255, 255, 255, 2};
+  memcpy (rule.expression, expression, sizeof expression);
+  rule.expression_length = sizeof expression;
+  packet.network_context_known = 0;
+  CHECK_STATUS (product_l4_policy_compile (&view, &rule, 1), 0, "compile OR/NOT");
+  CHECK (match (&view, &packet).rule_id == 70001, "known true OR unavailable wins");
+  packet.destination_port = 65534;
+  CHECK (match (&view, &packet).rule_id == 0, "NOT unavailable never wins");
+  packet.network_context_known = 1;
+  packet.network_context_id = 2;
+  CHECK (match (&view, &packet).rule_id == 70001, "NOT known false wins");
+  /* Exact byte and depth limits; failed compilation preserves the old view. */
+  memset (rule.expression, 0, sizeof rule.expression);
+  unsigned at = 0;
+  for (unsigned i = 0; i < 3; ++i) {
+    rule.expression[at++] = 9; rule.expression[at++] = 4;
+    at += 17;
+    if (i) rule.expression[at++] = 1;
+  }
+  rule.expression[at++] = 4; rule.expression[at++] = 4;
+  rule.expression[at++] = 1; rule.expression[at++] = 3; rule.expression[at++] = 3;
+  CHECK (at == 64, "literal maximum-length expression");
+  rule.expression_length = at;
+  CHECK_STATUS (product_l4_policy_compile (&view, &rule, 1), 0, "exact 64-byte expression accepted");
+  CHECK (match (&view, &packet).rule_id == 70001, "maximum expression fully evaluated");
+  rule.expression_length = 65;
+  CHECK_STATUS (product_l4_policy_compile (&view, &rule, 1), PRODUCT_L4_POLICY_STATUS_INVALID_RULE,
+                "overlong expression rejected before read");
+  CHECK (match (&view, &packet).rule_id == 70001, "failed compile leaves prior full plan intact");
+  const uint8_t invalid[][6] = {{1}, {3}, {0}, {13}, {4, 9}, {6, 2}, {11, 2, 0, 1, 0}, {9, 4}};
+  const unsigned lengths[] = {1,1,1,1,2,2,5,2};
+  for (unsigned i = 0; i < sizeof lengths / sizeof lengths[0]; ++i) {
+    rule.expression_length = lengths[i];
+    memset (rule.expression, 0, 64); memcpy (rule.expression, invalid[i], lengths[i]);
+    CHECK_STATUS (product_l4_policy_compile (&view, &rule, 1), PRODUCT_L4_POLICY_STATUS_INVALID_RULE,
+                  "malformed operator/operand rejected");
+  }
+}
+
 int
 main (void)
 {
   CHECK (PRODUCT_L4_POLICY_DIRECTION_INPUT == 1
            && PRODUCT_L4_POLICY_DIRECTION_OUTPUT == 3,
          "device direction domain must remain INPUT=1 and OUTPUT=3");
+  test_static_expression_availability ();
   test_four_family_protocols ();
   test_precedence_and_ranks ();
   test_cidr_and_ports ();

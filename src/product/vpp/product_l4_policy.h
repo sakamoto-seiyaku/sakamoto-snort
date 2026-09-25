@@ -12,6 +12,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define PRODUCT_STATIC_EXPRESSION_BYTES 64
+#define PRODUCT_STATIC_EXPRESSION_DEPTH 8
+
+/* Fixed source-bytecode contract; see docs/interfaces/T06_STATIC_EXPRESSIONS.md. */
+typedef enum {
+  PRODUCT_STATIC_AND = 1, PRODUCT_STATIC_OR = 2, PRODUCT_STATIC_NOT = 3,
+  PRODUCT_STATIC_FAMILY = 4, PRODUCT_STATIC_PROTOCOL = 5,
+  PRODUCT_STATIC_DIRECTION = 6, PRODUCT_STATIC_NETWORK = 7,
+  PRODUCT_STATIC_INTERFACE = 8, PRODUCT_STATIC_SOURCE_CIDR = 9,
+  PRODUCT_STATIC_DESTINATION_CIDR = 10, PRODUCT_STATIC_SOURCE_PORT = 11,
+  PRODUCT_STATIC_DESTINATION_PORT = 12
+} product_static_opcode_t;
+
 #define PRODUCT_L4_POLICY_MAX_RULES UINT32_C (128)
 #define PRODUCT_L4_POLICY_MAX_UID_BUCKETS PRODUCT_L4_POLICY_MAX_RULES
 #define PRODUCT_L4_POLICY_MAX_PROBES PRODUCT_L4_POLICY_MAX_RULES
@@ -78,6 +91,8 @@ typedef enum
  */
 typedef struct
 {
+  uint32_t expression_length;
+  uint8_t expression[PRODUCT_STATIC_EXPRESSION_BYTES];
   uint64_t rule_id;
   uint32_t uid;
   uint32_t network_context_id;
@@ -168,6 +183,8 @@ typedef struct
   uint32_t subject_probes;
   uint32_t candidate_count;
 } product_l4_policy_match_result_t;
+
+product_l4_policy_status_t product_static_expression_validate (const uint8_t *, uint32_t);
 
 void product_l4_policy_init (product_l4_policy_view_t *view);
 

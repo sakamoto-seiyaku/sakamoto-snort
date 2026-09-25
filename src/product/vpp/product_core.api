@@ -339,6 +339,8 @@ typedef product_direct_rule {
     u32 reserved;
     u8 source_address[16];
     u8 destination_address[16];
+    u32 expression_length;
+    u8 expression[64];
 };
 
 typedef product_group_edge { u32 group; u32 kind; u32 target; };

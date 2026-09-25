@@ -90,7 +90,7 @@ validate_rule (const product_l4_policy_rule_t *rule)
           || !ipv4_address_is_canonical (rule->destination_address)))
     return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
 
-  return PRODUCT_L4_POLICY_STATUS_OK;
+  return product_static_expression_validate (rule->expression, rule->expression_length);
 }
 
 static void
@@ -203,6 +203,125 @@ static int
 port_matches (uint16_t value, uint16_t first, uint16_t last)
 {
   return value >= first && value <= last;
+}
+
+/* Source bytecode uses postfix operators and little-endian numeric operands.
+ * Validation runs before publication; workers use only fixed query-local state. */
+static uint32_t
+expression_number (const uint8_t *at, unsigned bytes)
+{
+  uint32_t value = 0;
+  for (unsigned i = 0; i < bytes; ++i)
+    value |= (uint32_t) at[i] << (8 * i);
+  return value;
+}
+
+product_l4_policy_status_t
+product_static_expression_validate (const uint8_t *bytes, uint32_t length)
+{
+  if ((!bytes && length) || length > PRODUCT_STATIC_EXPRESSION_BYTES)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+  if (!length)
+    return PRODUCT_L4_POLICY_STATUS_OK;
+  unsigned stack = 0, depths[PRODUCT_STATIC_EXPRESSION_BYTES], max_depth = 0;
+  for (unsigned at = 0; at < length;)
+    {
+      unsigned op = bytes[at++], size = 0;
+      if (op >= PRODUCT_STATIC_AND && op <= PRODUCT_STATIC_NOT)
+        {
+          unsigned arity = op == PRODUCT_STATIC_NOT ? 1 : 2;
+          if (stack < arity)
+            return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+          unsigned depth = depths[--stack];
+          if (arity == 2)
+            {
+              unsigned left = depths[--stack];
+              if (left > depth) depth = left;
+            }
+          depths[stack++] = ++depth;
+          if (depth > max_depth) max_depth = depth;
+          continue;
+        }
+      if (op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION) size = 1;
+      else if (op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE || op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT) size = 4;
+      else if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR) size = 18;
+      else return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+      if (size > length - at)
+        return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+      const uint8_t *arg = bytes + at;
+      if ((op == PRODUCT_STATIC_FAMILY && !supported_family (arg[0]))
+          || (op == PRODUCT_STATIC_DIRECTION && arg[0] != 1 && arg[0] != 3)
+          || ((op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT)
+              && expression_number (arg, 2) > expression_number (arg + 2, 2))
+          || ((op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
+              && (!supported_family (arg[0]) || arg[1] > (arg[0] == 4 ? 32 : 128)
+                  || (arg[0] == 4 && !ipv4_address_is_canonical (arg + 2)))))
+        return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+      at += size;
+      depths[stack++] = 1;
+      if (!max_depth) max_depth = 1;
+    }
+  if (stack != 1)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+  return max_depth > PRODUCT_STATIC_EXPRESSION_DEPTH
+           ? PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED : PRODUCT_L4_POLICY_STATUS_OK;
+}
+
+/* 0 false, 1 true, 2 unavailable: strong Kleene AND/OR/NOT. */
+static int
+expression_matches (const product_l4_policy_rule_t *rule,
+                    const product_l4_policy_packet_t *packet)
+{
+  if (!rule->expression_length) return 1;
+  uint8_t values[PRODUCT_STATIC_EXPRESSION_BYTES];
+  unsigned stack = 0;
+  for (unsigned at = 0; at < rule->expression_length;)
+    {
+      unsigned op = rule->expression[at++];
+      const uint8_t *arg = rule->expression + at;
+      uint8_t value = 2;
+      if (op <= PRODUCT_STATIC_NOT)
+        {
+          uint8_t right = values[--stack];
+          if (op == PRODUCT_STATIC_NOT) value = right == 2 ? 2 : !right;
+          else
+            {
+              uint8_t left = values[--stack];
+              value = op == PRODUCT_STATIC_AND ? (left == 0 || right == 0 ? 0 : left == 1 && right == 1 ? 1 : 2)
+                              : (left == 1 || right == 1 ? 1 : left == 0 && right == 0 ? 0 : 2);
+            }
+        }
+      else if (op <= PRODUCT_STATIC_DIRECTION)
+        {
+          if (op == PRODUCT_STATIC_FAMILY) value = packet->family == arg[0];
+          if (op == PRODUCT_STATIC_PROTOCOL) value = packet->protocol == arg[0];
+          if (op == PRODUCT_STATIC_DIRECTION && packet->direction_known) value = packet->direction == arg[0];
+          ++at;
+        }
+      else if (op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE)
+        {
+          if (op == PRODUCT_STATIC_NETWORK && packet->network_context_known)
+            value = packet->network_context_id == expression_number (arg, 4);
+          if (op == PRODUCT_STATIC_INTERFACE && packet->ifindex_known)
+            value = packet->ifindex == expression_number (arg, 4);
+          at += 4;
+        }
+      else if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
+        {
+          value = packet->family == arg[0] && address_matches (arg[0], arg + 2,
+                    op == PRODUCT_STATIC_SOURCE_CIDR ? packet->source_address : packet->destination_address, arg[1]);
+          at += 18;
+        }
+      else
+        {
+          if (packet->ports_available && supported_protocol (packet->protocol))
+            value = port_matches (op == PRODUCT_STATIC_SOURCE_PORT ? packet->source_port : packet->destination_port,
+                                  expression_number (arg, 2), expression_number (arg + 2, 2));
+          at += 4;
+        }
+      values[stack++] = value;
+    }
+  return values[0] == 1;
 }
 
 static int
@@ -323,7 +442,8 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
       const product_l4_policy_compiled_rule_t *compiled =
         &view->rules[bucket->first_rule + index];
       result->probes++;
-      if (rule_matches (&compiled->source, packet))
+      if (rule_matches (&compiled->source, packet)
+          && expression_matches (&compiled->source, packet))
         {
           result->evaluation = PRODUCT_L4_POLICY_EVALUATION_MATCH;
           result->action = compiled->source.action;

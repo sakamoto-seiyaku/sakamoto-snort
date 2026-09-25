@@ -854,7 +854,73 @@ static void legacy_source_migration(void) {
     rmdir(directory);
 }
 
+static void static_expression_save_and_publish(void) {
+    char directory[] = "/tmp/sakamoto-expression-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path, sizeof path, "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {
+        .schema = 1, .operation = 2, .expected_saved_revision = 1, .count = 1,
+        .rules = {{.version = 0x12340001, .uid = 7, .network_context = UINT32_MAX,
+            .ifindex = UINT32_MAX, .action = 2, .source_port_last = 65535,
+            .destination_port_last = 65535, .expression_length = 5,
+            .expression = {12, 255, 255, 255, 255}}}};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_l4_policy_packet_t packet = {.uid=7, .uid_known=1, .family=4, .protocol=17,
+        .ports_available=1, .destination_port=65535};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == 0x12340001 && match.actual_action == 2);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == 2 && status.active_revision == 2);
+    request.expected_saved_revision = 2;
+    request.rules[0].expression[1] = 254;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_CONFLICT);
+    request.rules[0].version = 0;
+    request.rules[0].base_version = status.rules[0].version;
+    /* Malformed NOT, oversized bytes and dirty unused bytes never save. */
+    request.rules[0].expression_length = 1;
+    memset(request.rules[0].expression, 0, 64); request.rules[0].expression[0] = 3;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_INVALID);
+    request.rules[0].expression_length = 65;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_INVALID);
+    request.rules[0].expression_length = 2;
+    request.rules[0].expression[0] = 4; request.rules[0].expression[1] = 4;
+    request.rules[0].expression[63] = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_INVALID);
+    request.rules[0].expression[63] = 0;
+    /* A valid depth-nine source is saved, compilation refuses it, and the
+     * previously published complete rule keeps winning. */
+    request.rules[0].expression_length = 10;
+    memset(request.rules[0].expression + 2, 3, 8);
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == 3 && status.active_revision == 2);
+    assert(status.rules[0].version == 0x12340002 && status.error_index == 0);
+    assert(status.compiler_status == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED);
+    assert(runtime.publications == 1);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0 && match.rule_id == 0x12340001);
+    product_rule_config_close(config); config = product_rule_config_open(path);
+    assert(product_rule_config_activate(config, publish, &runtime) == SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == 3 && status.active_revision == 0);
+    request.expected_saved_revision = 3; request.rules[0].base_version = 0x12340002;
+    request.rules[0].expression_length = 9; request.rules[0].expression[9] = 0;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.active_revision == 4 && status.rules[0].version == 0x12340003);
+    product_rule_config_close(config); config = product_rule_config_open(path);
+    assert(product_rule_config_activate(config, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.rules[0].expression_length == 9 && status.active_revision == 4);
+    assert(memcmp(status.rules[0].expression, request.rules[0].expression, 64) == 0);
+    product_rule_config_close(config); unlink(path); rmdir(directory);
+}
+
 int main(void) {
+    static_expression_save_and_publish();
     complete_configuration();
     network_disable_scope_and_failures();
     ordinary_network_disable();

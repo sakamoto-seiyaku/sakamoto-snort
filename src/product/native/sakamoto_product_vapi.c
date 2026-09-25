@@ -137,6 +137,8 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
           s->rules[i].destination_port_first = reply->rules[i].destination_port_first;
           s->rules[i].destination_port_last = reply->rules[i].destination_port_last;
           s->rules[i].reserved = reply->rules[i].reserved;
+          s->rules[i].expression_length = reply->rules[i].expression_length;
+          memcpy(s->rules[i].expression, reply->rules[i].expression, 64);
           memcpy (s->rules[i].source_address, reply->rules[i].source_address, 16);
           memcpy (s->rules[i].destination_address, reply->rules[i].destination_address, 16);
         }
@@ -215,6 +217,8 @@ sakamoto_product_session_rule_config (
       message->payload.rules[i].destination_port_first = request->rules[i].destination_port_first;
       message->payload.rules[i].destination_port_last = request->rules[i].destination_port_last;
       message->payload.rules[i].reserved = request->rules[i].reserved;
+      message->payload.rules[i].expression_length = request->rules[i].expression_length;
+      memcpy(message->payload.rules[i].expression, request->rules[i].expression, 64);
       memcpy (message->payload.rules[i].source_address, request->rules[i].source_address, 16);
       memcpy (message->payload.rules[i].destination_address, request->rules[i].destination_address, 16);
     }

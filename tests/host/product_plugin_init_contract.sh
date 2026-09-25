@@ -630,20 +630,6 @@ void product_packet_graph_l4_status (product_packet_graph_l4_status_t *status)
   if (status != NULL)
     memset (status, 0, sizeof (*status));
 }
-void product_l4_policy_init (product_l4_policy_view_t *view)
-{
-  if (view != NULL)
-    memset (view, 0, sizeof (*view));
-}
-product_l4_policy_status_t product_l4_policy_compile (
-  product_l4_policy_view_t *view, const product_l4_policy_rule_t *rules,
-  size_t rule_count)
-{
-  (void) rules;
-  (void) rule_count;
-  product_l4_policy_init (view);
-  return PRODUCT_L4_POLICY_STATUS_OK;
-}
 product_packet_result_t product_packet_graph_apply_policy_bundle (
   const product_packet_graph_policy_bundle_t *bundle)
 {
@@ -686,6 +672,7 @@ EOF
 cc -std=c11 -Wall -Wextra -Werror \
   -I"$work_dir" -I"$repo_root/src/product/include" -I"$repo_root/src/product/vpp" \
   "$repo_root/src/product/vpp/product_rule_config.c" \
+  "$repo_root/src/product/vpp/product_l4_policy.c" \
   "$work_dir/harness.c" -o "$work_dir/plugin-init-contract"
 "$work_dir/plugin-init-contract"
 echo "sakamoto production VPP plugin init contract: PASS"

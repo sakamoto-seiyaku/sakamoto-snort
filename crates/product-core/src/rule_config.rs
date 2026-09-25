@@ -18,7 +18,7 @@ pub struct ConfigRule {
 
 pub const MAX_CONFIG_RULES: usize = 256;
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirectRule {
     pub version: u64,
     pub base_version: u64,
@@ -40,6 +40,14 @@ pub struct DirectRule {
     pub reserved: u32,
     pub source_address: [u8; 16],
     pub destination_address: [u8; 16],
+    pub expression_length: u32,
+    pub expression: [u8; 64],
+}
+impl Default for DirectRule {
+    fn default() -> Self {
+        // All fields are integer scalars/arrays; zero is a valid empty request.
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -120,8 +128,8 @@ impl DirectRule {
     /// A transient request text, not a Rust-owned saved configuration.
     pub fn parse(line: &str) -> Result<Self, &'static str> {
         let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.len() != 16 {
-            return Err("expected 16 direct-rule fields");
+        if fields.len() != 16 && fields.len() != 17 {
+            return Err("expected 16 fields and optional expression hex");
         }
         let n = |i: usize| {
             fields[i]
@@ -155,7 +163,22 @@ impl DirectRule {
         if family != destination_family {
             return Err("CIDR families differ");
         }
+        let mut expression = [0; 64];
+        let mut expression_length = 0;
+        if fields.len() == 17 {
+            let hex = fields[16];
+            if hex.is_empty() || hex.len() > 128 || hex.len() % 2 != 0 || !hex.is_ascii() {
+                return Err("expression must be 1..64 hex bytes");
+            }
+            for (i, byte) in expression.iter_mut().take(hex.len() / 2).enumerate() {
+                *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                    .map_err(|_| "invalid expression hex")?;
+            }
+            expression_length = (hex.len() / 2) as u32;
+        }
         Ok(Self {
+            expression,
+            expression_length,
             version: fields[0].parse().map_err(|_| "invalid version")?,
             base_version: fields[1].parse().map_err(|_| "invalid base version")?,
             uid: n(2)?,
@@ -317,15 +340,29 @@ impl ProductCore {
 mod tests {
     use super::*;
     #[test]
+    fn expression_bytes_survive_the_request_adapter() {
+        let line = "0 0 17 4294967295 4294967295 1 0 0 0 2 * * 0 65535 0 65535";
+        let r = DirectRule::parse(&format!("{line} 0701000000030cffffffff02")).unwrap();
+        assert_eq!(r.expression_length, 12);
+        assert_eq!(
+            &r.expression[..12],
+            &[7, 1, 0, 0, 0, 3, 12, 255, 255, 255, 255, 2]
+        );
+        assert!(r.expression[12..].iter().all(|b| *b == 0));
+        for hex in ["0".into(), "gg".into(), "aa".repeat(65), "éé".into()] {
+            assert!(DirectRule::parse(&format!("{line} {hex}")).is_err());
+        }
+    }
+    #[test]
     fn fixed_width_online_contract_retains_full_unsigned_rule_version() {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
         assert_eq!(
             std::mem::size_of::<RuleConfigRequest>(),
-            64 + 112 * MAX_CONFIG_RULES + 8976
+            64 + 184 * MAX_CONFIG_RULES + 8976
         );
         assert_eq!(
             std::mem::size_of::<RuleConfigStatus>(),
-            112 + 120 * MAX_CONFIG_RULES + 8976
+            112 + 192 * MAX_CONFIG_RULES + 8976
         );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,

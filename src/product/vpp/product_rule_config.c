@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 #define SOURCE_BYTES                                                                               \
-    (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 112 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
+    (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
      4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
      20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
 struct product_rule_config {
@@ -44,7 +44,7 @@ static uint64_t get(const uint8_t **at, unsigned width) {
             F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE03", 8);
+    memcpy(at, "SKRULE04", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -62,6 +62,9 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
         at += 16;
         memcpy(at, r->destination_address, 16);
         at += 16;
+        put(&at, r->expression_length, 4);
+        memcpy(at, r->expression, 64);
+        at += 64;
     }
     const sakamoto_product_rule_graph_t *g = &config->state.graph;
     put(&at, g->group_count, 4);
@@ -120,6 +123,10 @@ static int valid_rule(const sakamoto_product_direct_rule_t *r) {
         for (unsigned i = 4; i < 16; ++i)
             if (r->source_address[i] || r->destination_address[i])
                 return 0;
+    if (product_static_expression_validate(r->expression, r->expression_length) ==
+        PRODUCT_L4_POLICY_STATUS_INVALID_RULE) return 0;
+    for (unsigned i = r->expression_length; i < 64; ++i)
+        if (r->expression[i]) return 0;
     return 1;
 }
 static int same_content(const sakamoto_product_direct_rule_t *a,
@@ -129,6 +136,8 @@ static int same_content(const sakamoto_product_direct_rule_t *a,
         return 0;
     RULE_FIELDS(SAME)
 #undef SAME
+    if (a->expression_length != b->expression_length ||
+        memcmp(a->expression, b->expression, 64)) return 0;
     return memcmp(a->source_address, b->source_address, 16) == 0 &&
            memcmp(a->destination_address, b->destination_address, 16) == 0;
 }
@@ -301,7 +310,8 @@ static uint32_t validate_graph(const sakamoto_product_rule_config_status_t *s) {
     return 0;
 }
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    int v3 = length >= 8 && !memcmp(bytes, "SKRULE03", 8);
+    int v4 = length >= 8 && !memcmp(bytes, "SKRULE04", 8);
+    int v3 = v4 || (length >= 8 && !memcmp(bytes, "SKRULE03", 8));
     if (length < 8 || (!v3 && memcmp(bytes, "SKRULE02", 8)))
         return load_v1(c, bytes, length);
     if (length < 24)
@@ -311,7 +321,7 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
     uint32_t count = get(&at, 4), retained = get(&at, 4);
     if (!revision || count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
         retained > SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES ||
-        length < 24 + 8 * (size_t)retained + 112 * (size_t)count)
+        length < 24 + 8 * (size_t)retained + (v4 ? 180 : 112) * (size_t)count)
         return SAKAMOTO_RULE_CONFIG_INVALID;
     for (unsigned i = 0; i < retained; ++i) {
         uint64_t version = get(&at, 8);
@@ -330,6 +340,10 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         at += 16;
         memcpy(r->destination_address, at, 16);
         at += 16;
+        if (v4) {
+            r->expression_length = get(&at, 4);
+            memcpy(r->expression, at, 64); at += 64;
+        }
         int index = retained_index(c, r->version);
         if ((!v3 && r->uid == UINT32_MAX) || !valid_rule(r) || r->base_version ||
             !valid_version(r->version) || index < 0 || c->retained[index] != r->version)
@@ -531,6 +545,15 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
         if (s->protocol != 0 && s->protocol != 6 && s->protocol != 17) {
             c->state.error_index = i;
             result = SAKAMOTO_RULE_CONFIG_UNSUPPORTED;
+            goto done;
+        }
+        r->expression_length = s->expression_length;
+        memcpy(r->expression, s->expression, 64);
+        uint32_t expression_status = product_static_expression_validate(r->expression, r->expression_length);
+        if (expression_status) {
+            c->state.error_index = i;
+            c->state.compiler_status = expression_status;
+            result = SAKAMOTO_RULE_CONFIG_COMPILE;
             goto done;
         }
         r->rule_id = s->version;

@@ -564,6 +564,8 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
       request.rules[i].destination_port_first = ntohl (mp->rules[i].destination_port_first);
       request.rules[i].destination_port_last = ntohl (mp->rules[i].destination_port_last);
       request.rules[i].reserved = ntohl (mp->rules[i].reserved);
+      request.rules[i].expression_length = ntohl(mp->rules[i].expression_length);
+      memcpy(request.rules[i].expression, mp->rules[i].expression, 64);
       memcpy (request.rules[i].source_address, mp->rules[i].source_address, 16);
       memcpy (request.rules[i].destination_address, mp->rules[i].destination_address, 16);
     }
@@ -648,6 +650,8 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
         rmp->rules[i].destination_port_first = htonl (status.rules[i].destination_port_first);
         rmp->rules[i].destination_port_last = htonl (status.rules[i].destination_port_last);
         rmp->rules[i].reserved = htonl (status.rules[i].reserved);
+        rmp->rules[i].expression_length = htonl(status.rules[i].expression_length);
+        memcpy(rmp->rules[i].expression, status.rules[i].expression, 64);
         memcpy (rmp->rules[i].source_address, status.rules[i].source_address, 16);
         memcpy (rmp->rules[i].destination_address, status.rules[i].destination_address, 16);
       }

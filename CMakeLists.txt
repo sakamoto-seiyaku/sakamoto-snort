@@ -91,6 +91,8 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_test(NAME sakamoto-product-static-reference-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_static_reference_test.py")
 add_executable(sakamoto-product-rule-config-test
   tests/host/product_rule_config_test.c
   src/product/vpp/product_rule_config.c
