@@ -122,10 +122,60 @@ def run(lib):
         assert lib.product_l4_policy_match(view, C.byref(packet(facts)), C.byref(result)) == 0
         actual = {key: getattr(result, key) for key in expected}
         assert actual == expected, (rules, facts, expected, actual)
+        # Compare actual split execution with identical inputs. A pre-flow
+        # whole winner is final; only NoMatch runs the post-flow program.
+        early = Result()
+        early_facts = facts | dict(ct=None, flowdir=None)
+        assert lib.product_l4_policy_match_position(view, C.byref(packet(early_facts)), 1, C.byref(early)) == 0
+        optimized = early
+        if not early.evaluation:
+            optimized = Result()
+            assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), 2, C.byref(optimized)) == 0
+        assert {key: getattr(optimized, key) for key in expected} == expected, (rules, facts, expected, optimized.rule_id)
         if expected['rule_id']:
             assert result.evaluation == 1 and result.stage_verdict == (expected['actual_action'] == 2)
         else: assert result.evaluation == 0
         count += 1
+
+    def placed(rules, facts, pre_id, post_id):
+        raw = (Rule*len(rules))(*(source(r) for r in rules))
+        view = C.create_string_buffer(128*1024)
+        assert lib.product_l4_policy_compile(view, raw, len(rules)) == 0
+        for position, identity in [(1, pre_id), (2, post_id)]:
+            result = Result()
+            assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), position, C.byref(result)) == 0
+            assert result.rule_id == identity, (position, identity, result.rule_id)
+        compare(rules, facts)
+
+    # A -> B -> C: C is disjoint from dynamic A but overlaps propagated B.
+    # All priorities tie: explicit order then identity must drive propagation.
+    chain = [logical(('and',('ct',2),('dport',100,100)),identity=10,order=0),
+             logical(('dport',100,200),identity=20,order=1,action=1),
+             logical(('dport',200,300),identity=30,order=1)]
+    placed(list(reversed(chain)), BASE | dict(dport=250,ct=2), 0, 30)
+    placed(chain, BASE | dict(dport=150,ct=2), 0, 20)
+    # Known disjoint family/protocol/device direction/address/port permits early
+    # whole rules, including same-action competition and observe DROP winners.
+    pairs = [(('family',6),('family',4)), (('protocol',6),('protocol',17)),
+             (('direction',1),('direction',3)), (('src','203.0.113.0/24'),('src','192.0.2.0/24')),
+             (('dst','203.0.113.0/24'),('dst','198.51.100.0/24')),
+             (('sport',10,20),('sport',0,0)), (('dport',10,20),('dport',65535,65535))]
+    for dynamic,static in pairs:
+        placed([logical(('and',('ct',2),dynamic)),logical(static,identity=20,priority=2,mode=1)],
+               BASE | dict(ct=2),20,0)
+    placed([logical(('family',4),mode=1),logical(('ct',2),identity=20,priority=2)],
+           BASE | dict(ct=2),10,20)
+    # OR hull includes both arms; NOT of a false dynamic conjunction must widen.
+    placed([logical(('and',('ct',2),('or',('dport',100,100),('dport',300,300)))),
+            logical(('dport',300,300),identity=20,priority=2)], BASE | dict(dport=300,ct=1),0,20)
+    placed([logical(('not',('and',('ct',2),('dport',100,100)))),
+            logical(('dport',300,300),identity=20,priority=2)], BASE | dict(dport=300,ct=2),0,10)
+    # Exhaust bounded proof through a long indirectly propagated chain. A final
+    # disjoint rule conservatively defers; matching remains complete.
+    long_chain=[logical(('and',('ct',2),('dport',0,1)),identity=100)]
+    long_chain += [logical(('dport',i,i+1),identity=100+i,priority=i+1) for i in range(1,91)]
+    long_chain += [logical(('dport',500,500),identity=1000,priority=1000)]
+    placed(long_chain, BASE | dict(dport=500,ct=1),0,1000)
 
     # Calibrate every new leaf before generated comparisons. Literal outcomes
     # include both current endpoints, family mismatch, /0, /32, /128, and edges.
@@ -209,7 +259,7 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06/T07 independent ordered reference: {count} complete winner comparisons PASS')
+    print(f'T06/T07/T08 independent ordered and split reference: {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

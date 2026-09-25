@@ -122,6 +122,140 @@ expression_requires_flow (const product_l4_policy_rule_t *rule)
   return 0;
 }
 
+/* Rectangular over-approximation of packets for which the whole rule may be
+ * true. NOT and non-static leaves widen to universal. AND intersects and OR
+ * takes the hull; no distribution, SAT search or CT-history assumption. */
+enum envelope_axis {
+  ENVELOPE_FAMILY, ENVELOPE_PROTOCOL, ENVELOPE_DIRECTION,
+  ENVELOPE_SOURCE_PORT, ENVELOPE_DESTINATION_PORT, ENVELOPE_AXES
+};
+
+typedef struct {
+  uint16_t low[ENVELOPE_AXES], high[ENVELOPE_AXES];
+  uint8_t address_low[2][16], address_high[2][16];
+  uint8_t empty;
+} static_envelope_t;
+
+static static_envelope_t
+envelope_any (void)
+{
+  static_envelope_t e = {0};
+  for (unsigned i = 0; i < ENVELOPE_AXES; ++i) e.high[i] = UINT16_MAX;
+  memset (e.address_high, 255, sizeof e.address_high);
+  return e;
+}
+
+static static_envelope_t
+envelope_combine (static_envelope_t a, static_envelope_t b, int intersection)
+{
+  if (a.empty) return intersection ? a : b;
+  if (b.empty) return intersection ? b : a;
+  for (unsigned i = 0; i < ENVELOPE_AXES; ++i)
+    {
+      if ((a.low[i] < b.low[i]) == intersection) a.low[i] = b.low[i];
+      if ((a.high[i] > b.high[i]) == intersection) a.high[i] = b.high[i];
+      if (a.low[i] > a.high[i]) a.empty = 1;
+    }
+  for (unsigned i = 0; i < 2; ++i)
+    {
+      if ((memcmp (a.address_low[i], b.address_low[i], 16) < 0) == intersection)
+        memcpy (a.address_low[i], b.address_low[i], 16);
+      if ((memcmp (a.address_high[i], b.address_high[i], 16) > 0) == intersection)
+        memcpy (a.address_high[i], b.address_high[i], 16);
+      if (memcmp (a.address_low[i], a.address_high[i], 16) > 0) a.empty = 1;
+    }
+  return a;
+}
+
+static void
+envelope_cidr (static_envelope_t *e, unsigned side, unsigned family,
+               unsigned prefix, const uint8_t *address)
+{
+  e->low[ENVELOPE_FAMILY] = e->high[ENVELOPE_FAMILY] = family;
+  for (unsigned i = 0; i < 16; ++i)
+    {
+      unsigned bits = prefix > 8 ? 8 : prefix;
+      uint8_t mask = bits ? (uint8_t) (255U << (8 - bits)) : 0;
+      e->address_low[side][i] = address[i] & mask;
+      e->address_high[side][i] = address[i] | (uint8_t) ~mask;
+      prefix -= bits;
+    }
+}
+
+static static_envelope_t
+rule_envelope (const product_l4_policy_rule_t *rule)
+{
+  static_envelope_t base = envelope_any ();
+  if (rule->family) base.low[ENVELOPE_FAMILY] = base.high[ENVELOPE_FAMILY] = rule->family;
+  if (rule->protocol) base.low[ENVELOPE_PROTOCOL] = base.high[ENVELOPE_PROTOCOL] = rule->protocol;
+  if (rule->direction) base.low[ENVELOPE_DIRECTION] = base.high[ENVELOPE_DIRECTION] = rule->direction;
+  base.low[ENVELOPE_SOURCE_PORT] = rule->source_port_first; base.high[ENVELOPE_SOURCE_PORT] = rule->source_port_last;
+  base.low[ENVELOPE_DESTINATION_PORT] = rule->destination_port_first; base.high[ENVELOPE_DESTINATION_PORT] = rule->destination_port_last;
+  if (rule->source_prefix_length)
+    envelope_cidr (&base, 0, rule->family, rule->source_prefix_length, rule->source_address);
+  if (rule->destination_prefix_length)
+    envelope_cidr (&base, 1, rule->family, rule->destination_prefix_length, rule->destination_address);
+  static_envelope_t stack[PRODUCT_STATIC_EXPRESSION_BYTES];
+  unsigned depth = 0;
+  for (unsigned at = 0; at < rule->expression_length;)
+    {
+      unsigned op = rule->expression[at++];
+      const uint8_t *arg = rule->expression + at;
+      static_envelope_t e = envelope_any ();
+      if (op == PRODUCT_STATIC_NOT) --depth;
+      else if (op == PRODUCT_STATIC_AND || op == PRODUCT_STATIC_OR)
+        {
+          static_envelope_t right = stack[--depth], left = stack[--depth];
+          e = envelope_combine (left, right, op == PRODUCT_STATIC_AND);
+        }
+      else
+        {
+          if (op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION)
+            {
+              enum envelope_axis axis = op == PRODUCT_STATIC_FAMILY ? ENVELOPE_FAMILY
+                : op == PRODUCT_STATIC_PROTOCOL ? ENVELOPE_PROTOCOL : ENVELOPE_DIRECTION;
+              e.low[axis] = e.high[axis] = arg[0];
+            }
+          else if (op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT)
+            {
+              enum envelope_axis i = op == PRODUCT_STATIC_SOURCE_PORT
+                ? ENVELOPE_SOURCE_PORT : ENVELOPE_DESTINATION_PORT;
+              e.low[i] = arg[0] | (uint16_t) arg[1] << 8;
+              e.high[i] = arg[2] | (uint16_t) arg[3] << 8;
+            }
+          else if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
+            envelope_cidr (&e, op == PRODUCT_STATIC_DESTINATION_CIDR, arg[0], arg[1], arg + 2);
+          at += expression_operand_bytes (op);
+        }
+      stack[depth++] = e;
+    }
+  return depth ? envelope_combine (base, stack[0], 1) : base;
+}
+
+static void
+place_rules (product_l4_policy_view_t *view)
+{
+  static_envelope_t envelopes[PRODUCT_L4_POLICY_MAX_RULES];
+  /* Fixed compile-only proof budget. Exhaustion defers, never rejects or
+   * truncates matching. Every propagated rule remains a constraint. */
+  unsigned budget = 4096;
+  for (unsigned i = 0; i < view->rule_count; ++i)
+    {
+      product_l4_policy_compiled_rule_t *rule = &view->rules[i];
+      envelopes[i] = rule_envelope (&rule->source);
+      rule->position = expression_requires_flow (&rule->source)
+        ? PRODUCT_L4_POLICY_POSITION_POST : PRODUCT_L4_POLICY_POSITION_PRE;
+      for (unsigned j = 0; rule->position == PRODUCT_L4_POLICY_POSITION_PRE && j < i; ++j)
+        if (view->rules[j].source.uid == rule->source.uid
+            && view->rules[j].position == PRODUCT_L4_POLICY_POSITION_POST)
+          {
+            if (!budget || !envelope_combine (envelopes[i], envelopes[j], 1).empty)
+              rule->position = PRODUCT_L4_POLICY_POSITION_POST;
+            if (budget) --budget;
+          }
+    }
+}
+
 static void
 insert_compiled_rule (product_l4_policy_view_t *view,
                       const product_l4_policy_rule_t *rule)
@@ -176,6 +310,7 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
   for (input_index = 0; input_index < rule_count; input_index++)
     insert_compiled_rule (view, &rules[input_index]);
 
+  place_rules (view);
   bucket_index = 0;
   rule_index = 0;
   while (rule_index < view->rule_count)
@@ -189,7 +324,7 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
         {
           view->rules[rule_index].winner_rank = rank++;
           view->uid_buckets[bucket_index].requires_flow |=
-            expression_requires_flow (&view->rules[rule_index].source);
+            view->rules[rule_index].position == PRODUCT_L4_POLICY_POSITION_POST;
           rule_index++;
         }
 
@@ -447,14 +582,17 @@ set_no_match (product_l4_policy_match_result_t *result,
 }
 
 product_l4_policy_status_t
-product_l4_policy_match (const product_l4_policy_view_t *view,
+product_l4_policy_match_position (const product_l4_policy_view_t *view,
                          const product_l4_policy_packet_t *packet,
+                         product_l4_policy_position_t position,
                          product_l4_policy_match_result_t *result)
 {
   const product_l4_policy_uid_bucket_t *bucket;
   uint32_t index;
 
-  if (view == NULL || packet == NULL || result == NULL)
+  if (view == NULL || packet == NULL || result == NULL
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST)
     return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
 
   set_no_match (result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
@@ -488,6 +626,7 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
     {
       const product_l4_policy_compiled_rule_t *compiled =
         &view->rules[bucket->first_rule + index];
+      if (position && compiled->position != position) continue;
       result->probes++;
       if (rule_matches (&compiled->source, packet)
           && expression_matches (&compiled->source, packet))
@@ -513,6 +652,14 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
                               ? PRODUCT_L4_POLICY_NO_MATCH_NO_RULE
                               : PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE;
   return PRODUCT_L4_POLICY_STATUS_OK;
+}
+
+product_l4_policy_status_t
+product_l4_policy_match (const product_l4_policy_view_t *view,
+                         const product_l4_policy_packet_t *packet,
+                         product_l4_policy_match_result_t *result)
+{
+  return product_l4_policy_match_position (view, packet, PRODUCT_L4_POLICY_POSITION_ALL, result);
 }
 
 product_l4_policy_status_t

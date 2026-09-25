@@ -229,6 +229,7 @@ typedef struct
   u32 trace;
   u32 hold_us;
   product_ct_facts_t ct; /* Packet-local result; not stored in the immutable bank. */
+  product_l4_policy_position_t position;
 } product_policy_snapshot_t;
 
 typedef struct
@@ -444,6 +445,7 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
           continue;
         }
       snapshot->ct = (product_ct_facts_t) {0};
+      snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
       snapshot->sequence = sequence;
@@ -2900,7 +2902,7 @@ product_packet_graph_l4_view_evaluate (
       product_l4_policy_init (&empty_view);
       return product_l4_policy_evaluate (&empty_view, &packet, match);
     }
-  return product_l4_policy_evaluate (&snapshot->bank->view, &packet, match);
+  return product_l4_policy_match_position (&snapshot->bank->view, &packet, snapshot->position, match);
 }
 
 static void
@@ -3582,7 +3584,8 @@ product_packet_graph_record_policy_stage (
 static product_packet_result_t
 product_packet_graph_policy_stage_snapshot (
   product_packet_lease_t *lease, product_packet_graph_policy_evaluation_t *evaluation,
-  const product_policy_snapshot_t *snapshot)
+  const product_policy_snapshot_t *snapshot,
+  const product_l4_policy_match_result_t *early_winner)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_l4_policy_match_result_t matched_view;
@@ -3618,16 +3621,18 @@ product_packet_graph_policy_stage_snapshot (
         (unsigned long long) product_packet_event_clock_ns ());
     }
 #endif
-  product_l4_policy_status_t matcher_status = product_packet_graph_l4_view_evaluate (
+  product_l4_policy_status_t matcher_status = PRODUCT_L4_POLICY_STATUS_OK;
+  if (early_winner) matched_view = *early_winner;
+  else matcher_status = product_packet_graph_l4_view_evaluate (
     graph, lease, snapshot, &matched_view);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (snapshot->trace)
-    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mode=%u actual_action=%u candidates=%u rank=%u status=%u ct_state=%u flow_dir=%u mono_ns=%llu\n",
+    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mode=%u actual_action=%u candidates=%u rank=%u status=%u ct_state=%u flow_dir=%u position=%u mono_ns=%llu\n",
       (unsigned long long) lease->origin_obligation_id, vlib_get_thread_index (),
       (unsigned long long) snapshot->identity.generation, (unsigned long long) snapshot->identity.revision,
       (unsigned long long) snapshot->bank->snapshot_hash, (unsigned long long) matched_view.rule_id,
       matched_view.action, matched_view.mode, matched_view.actual_action, matched_view.candidate_count,
-      matched_view.winner_rank, matcher_status, snapshot->ct.state, snapshot->ct.direction, (unsigned long long) product_packet_event_clock_ns ());
+      matched_view.winner_rank, matcher_status, snapshot->ct.state, snapshot->ct.direction, snapshot->position, (unsigned long long) product_packet_event_clock_ns ());
 #endif
   clib_atomic_fetch_add_relax (&graph->policy_l4_evaluations, 1);
   evaluation->stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4;
@@ -3690,7 +3695,7 @@ product_packet_graph_policy_stage (
   product_policy_snapshot_t snapshot;
   product_policy_snapshot_acquire (&product_packet_graph_main, &snapshot);
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
-    lease, evaluation, &snapshot);
+    lease, evaluation, &snapshot, 0);
   product_policy_snapshot_release (&product_packet_graph_main, &snapshot);
   return result;
 }
@@ -3725,15 +3730,20 @@ product_packet_graph_policy_on_owner (
       (unsigned long long) snapshot.identity.snapshot_hash, snapshot.bank_index, snapshot.sequence,
       (unsigned long long) product_packet_event_clock_ns ());
 #endif
-  int post_flow = snapshot.bank->generation == graph->generation
-    && (lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
-    && product_l4_policy_requires_flow (&snapshot.bank->view, lease->platform.uid);
+  /* PRE only produces complete logical winners. A complete early ALLOW is
+   * retained while Flow runs; lower Rank post rules cannot replace it. */
+  snapshot.position = PRODUCT_L4_POLICY_POSITION_PRE;
+  product_l4_policy_match_result_t early = {0};
+  product_l4_policy_status_t early_status = PRODUCT_L4_POLICY_STATUS_OK;
+  int eligible = lease->policy_owner_ready
+    && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE;
+  if (eligible)
+    early_status = product_packet_graph_l4_view_evaluate (graph, lease, &snapshot, &early);
+  int post_flow = eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK
+    && early.evaluation == PRODUCT_L4_POLICY_EVALUATION_NO_MATCH;
   product_flow_entry_observation_t observation = {0};
-  if (post_flow && lease->policy_owner_ready
-      && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+  if (post_flow)
     {
-      /* All competing rules move together. This is fact acquisition, not an
-       * early ALLOW winner, and therefore cannot bypass a higher Rank. */
       product_packet_graph_policy_evaluation_t pending = {
         .generation = snapshot.identity.generation,
         .revision = snapshot.identity.revision,
@@ -3742,10 +3752,13 @@ product_packet_graph_policy_on_owner (
       };
       product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
       snapshot.ct = observation.tracker.facts;
+      snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
-    lease, evaluation, &snapshot);
-  if (result == PRODUCT_PACKET_OK && !post_flow)
+    lease, evaluation, &snapshot,
+    eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK && !post_flow ? &early : 0);
+  if (result == PRODUCT_PACKET_OK && !post_flow
+      && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, 0);
   else if (result == PRODUCT_PACKET_OK && observation.entry
            && !evaluation->terminal_preserved && snapshot.identity.revision)

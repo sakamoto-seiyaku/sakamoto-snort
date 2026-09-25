@@ -164,9 +164,11 @@ import sys
 s=Path(sys.argv[1]).read_text()
 body=s.split('static product_packet_result_t\nproduct_packet_graph_policy_on_owner (',1)[1].split('\nint\nproduct_packet_graph_submit_external',1)[0]
 assert body.index('product_policy_snapshot_acquire') < body.index('product_packet_graph_flow_observe') < body.index('product_packet_graph_policy_stage_snapshot') < body.rindex('product_packet_graph_flow_observe') < body.index('product_policy_snapshot_release')
-assert 'if (post_flow && lease->policy_owner_ready' in body
+assert 'if (post_flow)' in body
+assert 'early.evaluation == PRODUCT_L4_POLICY_EVALUATION_NO_MATCH' in body
 assert 'result == PRODUCT_PACKET_OK && !post_flow' in body
-assert 'product_l4_policy_requires_flow' in body
+assert 'PRODUCT_L4_POLICY_POSITION_PRE' in body and 'PRODUCT_L4_POLICY_POSITION_POST' in body
+assert 'lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE' in body
 assert 'product_flow_entry_publish_revision' not in s
 assert 'product_packet_graph_l4_match (' not in s
 assert 'product_packet_graph_policy_gate_drop' not in s

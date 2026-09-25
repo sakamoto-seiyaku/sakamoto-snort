@@ -30,12 +30,16 @@ assert 'flow_pools[' not in publish and 'flow_pools_flush' not in publish and 'p
 assert publish.index('l4_policy_bank_readers[inactive_bank]')<publish.index('bank->view = compiled_view')<publish.index('sequence + 1U')<publish.index('l4_policy_active_bank, inactive_bank')
 assert '__ATOMIC_SEQ_CST' in publish
 claim=body('product_policy_snapshot_acquire');release=body('product_policy_snapshot_release')
+assert 'snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL' in claim, 'public complete-view callers require an initialized selector'
 assert claim.index('__atomic_fetch_add')<claim.index('snapshot->bank =') and '__ATOMIC_SEQ_CST' in claim and '__ATOMIC_SEQ_CST' in release
 owner=body('product_packet_graph_policy_on_owner')
 assert owner.index('product_policy_snapshot_acquire') < owner.index('product_packet_graph_flow_observe') < owner.index('product_packet_graph_policy_stage_snapshot') < owner.rindex('product_packet_graph_flow_observe') < owner.index('product_policy_snapshot_release')
-assert 'if (post_flow && lease->policy_owner_ready' in owner
+assert 'if (post_flow)' in owner
+assert 'early.evaluation == PRODUCT_L4_POLICY_EVALUATION_NO_MATCH' in owner
 assert 'result == PRODUCT_PACKET_OK && !post_flow' in owner
-assert 'product_l4_policy_requires_flow' in owner
+assert 'PRODUCT_L4_POLICY_POSITION_PRE' in owner and 'PRODUCT_L4_POLICY_POSITION_POST' in owner
+assert 'lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE' in owner
+assert 'early_winner) matched_view = *early_winner' in body('product_packet_graph_policy_stage_snapshot')
 stage=body('product_packet_graph_policy_stage_snapshot')
 assert 'product_packet_graph_policy_gate_drop' not in graph
 assert 'product_policy_snapshot_acquire' not in stage and 'policy_publish_sequence' not in stage

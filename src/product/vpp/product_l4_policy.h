@@ -47,7 +47,7 @@ typedef enum {
 #define PRODUCT_L4_POLICY_ACTION_ALLOW UINT8_C (1)
 #define PRODUCT_L4_POLICY_ACTION_DROP UINT8_C (2)
 
-/* An early-stage allow continues to the next stage. */
+/* ALLOW continues packet/Flow processing with the complete winner retained. */
 #define PRODUCT_L4_POLICY_VERDICT_PASS_NEXT UINT8_C (0)
 #define PRODUCT_L4_POLICY_VERDICT_DROP UINT8_C (1)
 
@@ -146,6 +146,7 @@ typedef struct
 {
   product_l4_policy_rule_t source;
   uint32_t winner_rank;
+  uint8_t position;
 } product_l4_policy_compiled_rule_t;
 
 typedef struct
@@ -153,7 +154,7 @@ typedef struct
   uint32_t uid;
   uint32_t first_rule;
   uint32_t rule_count;
-  uint8_t requires_flow; /* Conservative placement for the complete UID view. */
+  uint8_t requires_flow; /* At least one whole rule is post-flow. */
 } product_l4_policy_uid_bucket_t;
 
 /*
@@ -191,6 +192,18 @@ typedef struct
 } product_l4_policy_match_result_t;
 
 product_l4_policy_status_t product_static_expression_validate (const uint8_t *, uint32_t);
+
+/* Position is snapshot-owned; a rule is evaluated wholly at exactly one side.
+ * ALL remains the complete ordered semantic seam. PRE NoMatch is not final;
+ * PRE Match preserves the entire result across flow observation. */
+typedef enum {
+  PRODUCT_L4_POLICY_POSITION_ALL = 0,
+  PRODUCT_L4_POLICY_POSITION_PRE = 1,
+  PRODUCT_L4_POLICY_POSITION_POST = 2
+} product_l4_policy_position_t;
+product_l4_policy_status_t product_l4_policy_match_position (
+  const product_l4_policy_view_t *, const product_l4_policy_packet_t *,
+  product_l4_policy_position_t, product_l4_policy_match_result_t *);
 
 /* Only placement is queried; no partial matching or candidate filtering. */
 int product_l4_policy_requires_flow (const product_l4_policy_view_t *, uint32_t uid);
