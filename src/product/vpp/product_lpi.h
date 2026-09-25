@@ -33,6 +33,11 @@ typedef struct {
   uint8_t ovpn_session[2][8], ovpn_count[2], ovpn_reset[2];
   uint8_t rdp_pending, rdp_side;
   uint32_t rdp_sequence;
+  uint32_t rtp_ssrc[2];
+  uint16_t rtp_sequence[2];
+  uint8_t rtp_count[2];
+  uint32_t rtcp_ssrc[2];
+  uint8_t rtcp_count[2];
 } product_lpi_state_t;
 static inline const char *product_lpi_stop_name (unsigned reason)
 {

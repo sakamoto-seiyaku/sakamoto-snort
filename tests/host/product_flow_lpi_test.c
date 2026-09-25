@@ -287,6 +287,400 @@ static void tunnel_transcript (const tunnel_step_t *steps, unsigned count,
   }
   product_flow_runtime_destroy(pool);
 }
+static void realtime_stun (void)
+{
+  /* RFC8489 Binding request, modern cookie, opaque transaction ID. */
+  const uint8_t request[]={0,1,0,0,0x21,0x12,0xa4,0x42,1,2,3,4,5,6,7,8,9,10,11,12};
+  assert(sample(request,sizeof request,17,42000,3478,4)==32768);
+  assert(sample(request,sizeof request,17,42000,5349,6)==32768);
+  assert(sample(request,sizeof request,6,42000,3479,4)==32768);
+}
+
+static void realtime_rtp (void)
+{
+  const uint8_t p1[]={0x80,0,0,1,0,0,0,1,1,2,3,4,0x7f};
+  const uint8_t p2[]={0x80,0,0,2,0,0,0,2,1,2,3,4,0x7e};
+  const uint8_t p3[]={0x80,0,0,3,0,0,0,3,1,2,3,4,0x7d};
+  tunnel_step_t steps[]={{p1,sizeof p1,0,0},{p2,sizeof p2,0,0},{p3,sizeof p3,0,65536}};
+  tunnel_transcript(steps,3,17,5004,4);
+  for(unsigned i=0;i<3;++i) steps[i].side=1;
+  tunnel_transcript(steps,3,17,5005,6);
+}
+
+static void realtime_rtcp (void)
+{
+  const uint8_t rr[]={0x80,201,0,1,1,2,3,4};
+  tunnel_step_t steps[]={{rr,8,0,0},{rr,8,0,0},{rr,8,0,0},{rr,8,0,131072}};
+  tunnel_transcript(steps,4,17,5005,4);
+}
+
+static void realtime_sip (void)
+{
+  const uint8_t request[]="OPTIONS sip:peer@example.test SIP/2.0\r\nVia: SIP/2.0/UDP client.test\r\n\r\n";
+  const uint8_t response[]="SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP client.test\r\n\r\n";
+  assert(sample(request,sizeof request-1,17,42000,5060,4)==262144);
+  assert(sample(response,sizeof response-1,6,5069,42000,6)==262144);
+}
+
+static void realtime_dtls (void)
+{
+  /* DTLS1.2 epoch-one application record: envelope evidence, no decryption. */
+  const uint8_t record[]={23,0xfe,0xfd,0,1,0,0,0,0,0,1,0,4,1,2,3,4};
+  assert(sample(record,sizeof record,17,42000,443,4)==524288);
+  assert(sample(record,sizeof record,17,4433,42000,6)==524288);
+}
+
+/* Test fixtures and expectations are literal protocol examples, never outputs
+ * from a production detector. Each transcript enters the public owner seam. */
+static void realtime_repeat (const uint8_t *bytes, unsigned length,
+  unsigned transport, unsigned port, unsigned family, unsigned side,
+  unsigned count, unsigned threshold, uint64_t expected, int rtp)
+{
+  uint8_t messages[8][1024];tunnel_step_t steps[8];
+  assert(count<=8 && length<=1024);
+  for(unsigned i=0;i<count;++i) {
+    memcpy(messages[i],bytes,length);
+    unsigned offset=transport==6?2:0;
+    if(rtp && length>=offset+4) {
+      unsigned seq=(unsigned)bytes[offset+2]*256+bytes[offset+3]+i;
+      messages[i][offset+2]=(uint8_t)(seq>>8);messages[i][offset+3]=(uint8_t)seq;
+    }
+    steps[i]=(tunnel_step_t){messages[i],length,side,i+1>=threshold?expected:0};
+  }
+  tunnel_transcript(steps,count,transport,port,family);
+}
+static void realtime_boundaries (void)
+{
+  const uint8_t stun[]={0,1,0,8,0x21,0x12,0xa4,0x42,1,2,3,4,5,6,7,8,9,10,11,12,
+    0x80,0x22,0,3,'r','4','x',0};
+  uint8_t changed[1024],framed[1024];
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned side=0;side<2;++side)
+      for(unsigned port=0;port<3;++port) {
+        const unsigned ports[]={3478,5349,53};
+        realtime_repeat(stun,sizeof stun,17,ports[port],family,side,1,1,32768,0);
+        realtime_repeat(stun,sizeof stun,6,ports[port],family,side,1,1,32768,0);
+      }
+  framed[0]=0;framed[1]=sizeof stun;memcpy(framed+2,stun,sizeof stun);
+  realtime_repeat(framed,sizeof stun+2,6,3479,4,0,1,1,32768,0);
+  for(unsigned n=0;n<sizeof stun;++n) assert(sample(stun,n,17,42000,3478,4)==0);
+  /* Type class does not affect method; response and indication are visible. */
+  for(unsigned cls=0;cls<4;++cls) {
+    memcpy(changed,stun,sizeof stun);changed[0]=(uint8_t)(cls>>1);changed[1]=(uint8_t)(1+((cls&1)<<4));
+    assert(sample(changed,sizeof stun,17,42000,3478,4)==32768);
+  }
+  for(unsigned bad=0;bad<6;++bad) {
+    memcpy(changed,stun,sizeof stun);
+    if(bad==0) changed[0]=0xc0;
+    if(bad==1) changed[1]=0; /* unassigned method0 */
+    if(bad==2) changed[4]=0;
+    if(bad==3) changed[3]=7;
+    if(bad==4) changed[23]=9;
+    if(bad==5) changed[2]=1;
+    assert(sample(changed,sizeof stun,17,42000,3478,4)==0);
+  }
+  const uint8_t rtp[]={0x80,96,0xff,0xfe,0,0,0,1,1,2,3,4,0x7f};
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned side=0;side<2;++side) {
+      realtime_repeat(rtp,sizeof rtp,17,5004,family,side,3,3,65536,1);
+      framed[0]=0;framed[1]=sizeof rtp;memcpy(framed+2,rtp,sizeof rtp);
+      realtime_repeat(framed,sizeof rtp+2,6,5006,family,side,3,3,65536,1);
+    }
+  for(unsigned i=0;i<4;++i) {
+    const unsigned ports[]={53,443,5353,5060};
+    realtime_repeat(rtp,sizeof rtp,17,ports[i],4,0,3,3,65536,1);
+  }
+  for(unsigned n=0;n<sizeof rtp;++n)
+    realtime_repeat(rtp,n,17,5004,4,0,3,3,0,1);
+  for(unsigned bad=0;bad<7;++bad) {
+    memcpy(changed,rtp,sizeof rtp);
+    if(bad==0) changed[0]=0x40;
+    if(bad==1) changed[1]=35;
+    if(bad==2) changed[0]|=1; /* missing CSRC */
+    if(bad==3) changed[0]|=16; /* missing extension */
+    if(bad==4) {changed[0]|=32;changed[12]=0;}
+    if(bad==5) {changed[0]|=32;changed[12]=2;}
+    if(bad==6) changed[1]=201; /* RTCP-like header, impossible length */
+    realtime_repeat(changed,sizeof rtp,17,5004,4,0,3,3,0,1);
+  }
+  /* CSRC + extension + clear padding, with a nonempty media body. */
+  const uint8_t rich[]={0xb1,127,0,1,0,0,0,1,1,2,3,4,5,6,7,8,
+    0xbe,0xde,0,1,1,2,3,4,0xaa,0,0,3};
+  realtime_repeat(rich,sizeof rich,17,5004,4,0,3,3,65536,1);
+  memcpy(changed,rich,sizeof rich);changed[19]=2;
+  realtime_repeat(changed,sizeof rich,17,5004,4,0,3,3,0,1);
+  /* Duplication and direction mixing must not fabricate three observations. */
+  realtime_repeat(rtp,sizeof rtp,17,5004,4,0,4,4,0,0);
+  uint8_t r2[sizeof rtp],r3[sizeof rtp];memcpy(r2,rtp,sizeof rtp);memcpy(r3,rtp,sizeof rtp);
+  r2[2]=r3[2]=0;r2[3]=1;r3[3]=2;
+  tunnel_step_t mixed[]={{r2,sizeof r2,0,0},{r3,sizeof r3,1,0},{r3,sizeof r3,0,0},
+    {r2,sizeof r2,1,0}};
+  tunnel_transcript(mixed,4,17,5004,4);
+  r2[3]=2;r3[3]=1;
+  tunnel_step_t reorder[]={{r2,sizeof r2,0,0},{r3,sizeof r3,0,0},{r2,sizeof r2,0,0}};
+  tunnel_transcript(reorder,3,17,5004,4);
+  r2[3]=1;r3[3]=20;
+  tunnel_step_t gap[]={{r2,sizeof r2,0,0},{r3,sizeof r3,0,0},{r3,sizeof r3,0,0}};
+  tunnel_transcript(gap,3,17,5004,4);
+  r3[3]=2;r3[8]=9;
+  tunnel_step_t ssrc[]={{r2,sizeof r2,0,0},{r3,sizeof r3,0,0},{r2,sizeof r2,0,0}};
+  tunnel_transcript(ssrc,3,17,5004,4);
+  const uint8_t rr[]={0x80,201,0,1,1,2,3,4};
+  const uint8_t sr[]={0x80,200,0,6,1,2,3,4,0,0,0,1,0,0,0,2,0,0,0,3,0,0,0,4,0,0,0,5};
+  for(unsigned side=0;side<2;++side) {
+    realtime_repeat(rr,8,17,5005,4,side,4,4,131072,0);
+    realtime_repeat(sr,28,17,5007,6,side,4,4,131072,0);
+    framed[0]=0;framed[1]=8;memcpy(framed+2,rr,8);
+    realtime_repeat(framed,10,6,5007,4,side,4,4,131072,0);
+  }
+  for(unsigned n=0;n<28;++n) realtime_repeat(sr,n,17,5005,4,0,4,4,0,0);
+  for(unsigned bad=0;bad<5;++bad) {
+    memcpy(changed,rr,8);
+    if(bad==0) changed[0]=0;
+    if(bad==1) changed[0]=0x81;
+    if(bad==2) changed[1]=199;
+    if(bad==3) changed[3]=0;
+    if(bad==4) changed[0]=0xa0;
+    realtime_repeat(changed,8,17,5005,4,0,4,4,0,0);
+  }
+  const uint8_t sip[]="INVITE sips:peer@example.test SIP/2.0\r\nVia: SIP/2.0/UDP host\r\n\r\n";
+  for(unsigned transport=6;transport<=17;transport+=11)
+    for(unsigned side=0;side<2;++side)
+      realtime_repeat(sip,sizeof sip-1,transport,5069,6,side,1,1,262144,0);
+  for(unsigned bad=0;bad<7;++bad) {
+    memcpy(changed,sip,sizeof sip);
+    if(bad==0) changed[0]='X';
+    if(bad==1) changed[7]='x';
+    if(bad==2) changed[31]='X';
+    if(bad==3) changed[13]=' ';
+    if(bad==4) changed[20]=0;
+    if(bad==5) changed[35]='X';
+    if(bad==6) changed[36]='X';
+    assert(sample(changed,sizeof sip-1,17,42000,5060,4)==0);
+  }
+  assert(sample((const uint8_t *)"hello",5,17,42000,5060,4)==0);
+  const uint8_t dtls[]={23,0xfe,0xfd,0,1,0,0,0,0,0,1,0,4,1,2,3,4};
+  for(unsigned n=0;n<sizeof dtls;++n) assert(sample(dtls,n,17,42000,4433,4)==0);
+  for(unsigned bad=0;bad<6;++bad) {
+    memcpy(changed,dtls,sizeof dtls);
+    if(bad==0) changed[0]=19;
+    if(bad==1) changed[1]=3;
+    if(bad==2) changed[2]=0xfc;
+    if(bad==3) changed[4]=0;
+    if(bad==4) changed[12]=0;
+    if(bad==5) changed[12]=5;
+    assert(sample(changed,sizeof dtls,17,42000,4433,4)==0);
+  }
+  assert(sample(dtls,sizeof dtls,6,42000,4433,4)==0);
+  uint8_t hello[]={22,0xfe,0xfd,0,0,0,0,0,0,0,0,0,13,
+    1,0,0,40,0,0,0,0,0,0,0,1,0xfe};
+  assert(sample(hello,sizeof hello,17,42000,4433,4)==524288);
+  hello[21]=40; /* offset40 + fragment1 exceeds declared total40 */
+  assert(sample(hello,sizeof hello,17,42000,4433,4)==0);
+  hello[21]=0;hello[24]=2; /* promised fragment exceeds record body */
+  assert(sample(hello,sizeof hello,17,42000,4433,4)==0);
+  puts("R4 realtime protocol framing, lengths, directions and independent positive/negative examples: PASS");
+}
+
+static void realtime_additional_shapes (void)
+{
+  uint32_t seed=0x52440001;
+  for(unsigned run=0;run<128;++run) {
+    uint8_t bytes[13];
+    for(unsigned i=0;i<sizeof bytes;++i) {
+      seed=seed*1664525U+1013904223U;bytes[i]=(uint8_t)(seed>>24);
+    }
+    /* Short random data cannot satisfy STUN/SIP/DTLS/RTP; RTCP still needs
+     * its exact report envelope and four reports. Retain unrelated LPI facts. */
+    assert((sample(bytes,run%13,17,42000,3478,4)&UINT64_C(1015808))==0);
+  }
+  const uint8_t rr[]={0x80,201,0,1,1,2,3,4};
+  for(unsigned i=0;i<3;++i) {
+    const unsigned ports[]={53,5353,5060};
+    realtime_repeat(rr,8,17,ports[i],4,0,4,4,131072,0);
+  }
+  static const char *const methods[]={"ACK","BYE","CANCEL","INVITE","INFO","MESSAGE",
+    "NOTIFY","OPTIONS","PUBLISH","PRACK","REGISTER","REFER","SUBSCRIBE","UPDATE"};
+  char line[256];
+  for(unsigned i=0;i<sizeof methods/sizeof methods[0];++i) {
+    int n=snprintf(line,sizeof line,"%s tel:+123456789 SIP/2.0\r\nVia: SIP/2.0/UDP peer\r\n\r\n",methods[i]);
+    assert(n>0 && (unsigned)n<sizeof line);
+    assert(sample((uint8_t *)line,(unsigned)n,17,42000,53,4)==262144);
+  }
+  const uint8_t response[]="SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP host\r\n\r\n";
+  uint8_t changed[sizeof response];memcpy(changed,response,sizeof response);
+  changed[8]='7';assert(sample(changed,sizeof response-1,17,5060,42000,4)==0);
+  changed[8]='0';assert(sample(changed,sizeof response-1,17,5060,42000,4)==0);
+  changed[8]='2';changed[10]='x';assert(sample(changed,sizeof response-1,17,5060,42000,4)==0);
+  const uint8_t ccs[]={20,0xfe,0xff,0,0,0,0,0,0,0,0,0,1,1};
+  const uint8_t alert[]={21,0xfe,0xfd,0,0,0,0,0,0,0,0,0,2,2,40};
+  assert(sample(ccs,sizeof ccs,17,42000,4433,4)==524288);
+  assert(sample(alert,sizeof alert,17,4433,42000,6)==524288);
+  uint8_t records[9*sizeof ccs];
+  for(unsigned i=0;i<9;++i) memcpy(records+i*sizeof ccs,ccs,sizeof ccs);
+  assert(sample(records,8*sizeof ccs,17,42000,4433,4)==524288);
+  assert(sample(records,9*sizeof ccs,17,42000,4433,4)==0);
+  records[13]=2;assert(sample(records,sizeof ccs,17,42000,4433,4)==0);
+}
+
+static const uint8_t realtime_stun_fixture[]={0,1,0,0,0x21,0x12,0xa4,0x42,1,2,3,4,5,6,7,8,9,10,11,12};
+static const uint8_t realtime_rtp_fixture[]={0x80,96,0,1,0,0,0,1,1,2,3,4,0x7f};
+static const uint8_t realtime_rtcp_fixture[]={0x80,201,0,1,1,2,3,4};
+static const uint8_t realtime_sip_fixture[]="OPTIONS sip:peer@example.test SIP/2.0\r\nVia: SIP/2.0/UDP host\r\n\r\n";
+static const uint8_t realtime_dtls_fixture[]={23,0xfe,0xfd,0,1,0,0,0,0,0,1,0,4,1,2,3,4};
+typedef struct {
+  const uint8_t *bytes;
+  unsigned length, threshold;
+  uint64_t expected;
+  int sequence;
+} realtime_fixture_t;
+static const realtime_fixture_t realtime_fixtures[]={
+  {realtime_stun_fixture,sizeof realtime_stun_fixture,1,32768,0},
+  {realtime_rtp_fixture,sizeof realtime_rtp_fixture,3,65536,1},
+  {realtime_rtcp_fixture,sizeof realtime_rtcp_fixture,4,131072,0},
+  {realtime_sip_fixture,sizeof realtime_sip_fixture-1,1,262144,0},
+  {realtime_dtls_fixture,sizeof realtime_dtls_fixture,1,524288,0}
+};
+static void realtime_lifecycle (void)
+{
+  for(unsigned shape=0;shape<5;++shape) for(unsigned exhausted=0;exhausted<3;++exhausted) {
+    const realtime_fixture_t *fixture=&realtime_fixtures[shape];
+    product_flow_runtime_t *pool=NULL;assert(product_flow_runtime_create(&pool,0,1,59,1)==0);
+    assert(product_flow_runtime_set_end_callback(pool,ended,NULL)==0);
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=17,
+      .source_port=42106,.destination_port=5009,.l4_header_length=8,.transport_length=8+fixture->length};
+    f.source_address[0]=10;f.destination_address[0]=11;
+    product_worker_layout_t layout={1,1};product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+    product_flow_entry_packet_t p={.facts=&f,.policy={59,1,1},.uid=17,.timestamp=1};
+    product_flow_entry_observation_t o;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    uint64_t incarnation=o.entry->incarnation;
+    if(exhausted) {
+      const uint8_t noise=0xfe;f.transport_length=9;
+      for(unsigned i=0;i<(exhausted==1?20:1);++i)
+        assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&f,&noise,1)==0);
+      if(exhausted==2) {
+        uint8_t large[32768]={0xfe};f.transport_length=8+sizeof large;
+        assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&f,large,sizeof large)==0);
+      }
+      assert(!o.entry->lpi.available && !o.entry->lpi.protocols);
+    }
+    for(unsigned attempt=0;attempt<fixture->threshold;++attempt) {
+      uint8_t message[256];memcpy(message,fixture->bytes,fixture->length);
+      if(fixture->sequence) message[3]=(uint8_t)(attempt+1);
+      f.transport_length=8+fixture->length;
+      product_lpi_state_t before=o.entry->lpi;
+      assert(product_flow_entry_identify(pool,o.slot,60,incarnation,&f,message,fixture->length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION);
+      assert(product_flow_entry_identify(pool,o.slot,59,incarnation+1,&f,message,fixture->length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+      product_packet_facts_t wrong=f;wrong.destination_port++;
+      assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&wrong,message,fixture->length)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);
+      assert(!memcmp(&before,&o.entry->lpi,sizeof before));
+      ++p.policy.revision;++p.policy.snapshot_hash;++p.timestamp;
+      assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+      assert(!memcmp(&before,&o.entry->lpi,sizeof before));
+      assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&f,message,fixture->length)==0);
+      assert(o.entry->lpi.protocols==(!exhausted && attempt+1==fixture->threshold?fixture->expected:0));
+    }
+    if(exhausted) assert(o.entry->lpi.stop_reason==(exhausted==1?1:2));
+    else {
+      uint8_t noise=0xfe;f.transport_length=9;
+      for(unsigned attempt=o.entry->lpi.attempts;attempt<21;++attempt)
+        assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&f,&noise,1)==0);
+      assert(o.entry->lpi.protocols==fixture->expected && o.entry->lpi.available);
+      assert(o.entry->lpi.attempts==20 && o.entry->lpi.stop_reason==1);
+    }
+    assert(product_flow_runtime_close(pool,o.slot,59,incarnation,PRODUCT_FLOW_END_CLOSED)==0);
+    assert(product_flow_runtime_release_end(pool,o.slot,59,incarnation,PRODUCT_FLOW_END_CLOSED)==0);
+    ++p.timestamp;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(o.entry->incarnation!=incarnation && !o.entry->lpi.protocols && !o.entry->lpi.attempts);
+    f.transport_length=8+fixture->length;
+    assert(product_flow_entry_identify(pool,o.slot,59,incarnation,&f,fixture->bytes,fixture->length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+    assert(product_flow_entry_identify(pool,o.slot,59,o.entry->incarnation,&f,fixture->bytes,fixture->length)==0);
+    assert(o.entry->lpi.protocols==(fixture->threshold==1?fixture->expected:0));
+    product_flow_runtime_destroy(pool);
+  }
+  puts("R4 every detector: policy retention, stale identity, budgets, history and Flow slot reuse: PASS");
+}
+
+static void realtime_multiplex (void)
+{
+  uint8_t rtp1[13],rtp2[13],rtp3[13];
+  memcpy(rtp1,realtime_rtp_fixture,13);memcpy(rtp2,rtp1,13);memcpy(rtp3,rtp1,13);
+  rtp2[3]=2;rtp3[3]=3;
+  const tunnel_step_t steps[]={
+    {realtime_stun_fixture,sizeof realtime_stun_fixture,0,32768},
+    {rtp1,13,0,32768},
+    {realtime_dtls_fixture,sizeof realtime_dtls_fixture,1,557056},
+    {realtime_sip_fixture,sizeof realtime_sip_fixture-1,0,819200},
+    {realtime_rtcp_fixture,8,1,819200},
+    {rtp2,13,0,819200},
+    {realtime_rtcp_fixture,8,1,819200},
+    {realtime_rtcp_fixture,8,1,819200},
+    {realtime_rtcp_fixture,8,1,950272},
+    {rtp3,13,0,1015808},
+    {rtp3,13,1,1015808}, /* other-direction RTP observation doesn't double-publish */
+    {realtime_stun_fixture,sizeof realtime_stun_fixture,1,1015808}
+  };
+  tunnel_transcript(steps,sizeof steps/sizeof steps[0],17,3478,4);
+}
+static void realtime_winners (void)
+{
+  /* Literal highest-priority winner table: missing facts keep NOT unavailable;
+   * known STUN makes NOT RTP true; the third RTP sample enables RTP DROP. */
+  for(unsigned plan=0;plan<3;++plan) for(unsigned observe=0;observe<2;++observe) {
+    product_flow_runtime_t *pool=NULL;assert(product_flow_runtime_create(&pool,0,1,63,1)==0);
+    product_l4_policy_rule_t rules[3]={0};
+    for(unsigned i=0;i<3;++i) {
+      rules[i].rule_id=10+i*10;rules[i].reason_id=100+i;rules[i].uid=17;rules[i].priority=i+1;
+      rules[i].action=i==2?1:2;rules[i].mode=i==0?observe:i==1;
+      rules[i].network_context_id=rules[i].ifindex=UINT32_MAX;
+      rules[i].source_port_last=rules[i].destination_port_last=65535;
+    }
+    memcpy(rules[0].expression,(uint8_t[]){15,0xf9,3,0,0},5);rules[0].expression_length=5;
+    memcpy(rules[1].expression,(uint8_t[]){15,0xf9,3,0,0,3},6);rules[1].expression_length=6;
+    product_l4_policy_view_t view;product_l4_policy_compile_budget_t budget=product_l4_policy_default_budget();
+    if(plan) budget.direct_entries=0;
+    if(plan==2) budget.factor_rules=0;
+    assert(product_l4_policy_compile_with_budget(&view,rules,3,&budget)==0);
+    product_policy_cache_t cache={.capacity=8};
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=17,
+      .source_port=42108,.destination_port=5004,.l4_header_length=8};
+    f.source_address[0]=10;f.destination_address[0]=11;
+    product_worker_layout_t layout={1,1};product_owner_assignment_t a;
+    assert(product_owner_assign(&layout,&f,&a)==0);
+    uint64_t bytes=0;
+    for(unsigned step=0;step<7;++step) {
+      uint8_t rtp[13];memcpy(rtp,realtime_rtp_fixture,13);rtp[3]=(uint8_t)(step>1?step-1:1);
+      const uint8_t noise=0xfe;
+      const uint8_t *payload=step==0?&noise:step==1?realtime_stun_fixture:rtp;
+      unsigned length=step==0?1:step==1?sizeof realtime_stun_fixture:13;
+      f.transport_length=8+length;f.packet_length=28+length;bytes+=f.packet_length;
+      product_flow_entry_packet_t in={.facts=&f,.policy={63,1,71},.uid=17,.packet_bytes=f.packet_length,.timestamp=step+1};
+      product_flow_entry_observation_t o;assert(product_flow_entry_observe(pool,&a,&in,0,&o)==0);
+      assert(product_flow_entry_identify(pool,o.slot,63,o.entry->incarnation,&f,payload,length)==0);
+      uint64_t mask=step==0?0:step<4?32768:98304;
+      assert(o.entry->lpi.protocols==mask);
+      product_l4_policy_packet_t packet={.uid=17,.uid_known=1,.family=4,.protocol=17,
+        .protocol_set=mask,.protocol_set_known=mask!=0};
+      product_policy_cache_identity_t identity={63,1,71,o.entry->incarnation};
+      product_l4_policy_match_result_t result;
+      for(unsigned repeat=0;repeat<2;++repeat) {
+        product_l4_policy_packet_t pre=packet;pre.protocol_set_known=0;pre.protocol_set=0;
+        assert(product_l4_policy_match_cached(&cache,&view,&pre,&identity,1,&result)==0);
+        assert(!result.evaluation);
+        assert(product_l4_policy_match_cached(&cache,&view,&packet,&identity,2,&result)==0);
+        unsigned winner=step==0?30:step<4?20:10;
+        assert(result.rule_id==winner && result.reason_id==100+(winner-10)/10);
+        assert(result.mode==(winner==30?0:winner==20?1:observe));
+        assert(result.action==(winner==30?1:2));
+        assert(result.actual_action==(winner==10 && !observe?2:1));
+      }
+      assert(o.entry->packets==step+1 && o.entry->bytes==bytes);
+    }
+    product_flow_runtime_destroy(pool);
+  }
+  puts("R4 three-plan PRE/POST cold/hot/set-change full winners and exactly-once owner packets/IP bytes: PASS");
+}
+
 static void proxy_boundaries (void)
 {
   const uint8_t s4[]={4,1,0,80,127,0,0,1,'u',0};
@@ -1065,12 +1459,59 @@ static void tunnel_cost (void)
   }
 }
 
+static void realtime_cost (void)
+{
+  const uint8_t invalid[]={0x40,96,0,1,0,0,0,1,1,2,3,4,0x7f};
+  const realtime_fixture_t negative={invalid,sizeof invalid,1,0,0};
+  for(unsigned shape=0;shape<7;++shape) {
+    const realtime_fixture_t *fixture=shape<5?&realtime_fixtures[shape]:shape==5?&negative:&realtime_fixtures[0];
+    uint64_t elapsed=0;
+    for(unsigned repetition=0;repetition<2000;++repetition) {
+      product_flow_runtime_t *pool=NULL;assert(product_flow_runtime_create(&pool,0,1,61,1)==0);
+      product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=17,
+        .source_port=42107,.destination_port=5009,.l4_header_length=8,.transport_length=8+fixture->length};
+      f.source_address[0]=10;f.destination_address[0]=11;
+      product_worker_layout_t layout={1,1};product_owner_assignment_t a;
+      assert(product_owner_assign(&layout,&f,&a)==0);
+      product_flow_entry_packet_t input={.facts=&f,.policy={61,1,1},.uid=17,.timestamp=1};
+      product_flow_entry_observation_t o;
+      assert(product_flow_entry_observe(pool,&a,&input,0,&o)==0);
+      for(unsigned attempt=0;attempt<20;++attempt) {
+        uint8_t message[256];memcpy(message,fixture->bytes,fixture->length);
+        if(fixture->sequence) message[3]=(uint8_t)(attempt+1);
+        if(shape==6 && !attempt)
+          for(unsigned i=0;i<20;++i)
+            assert(product_flow_entry_identify(pool,o.slot,61,o.entry->incarnation,&f,message,fixture->length)==0);
+        uint64_t start=nanos();
+        assert(product_flow_entry_identify(pool,o.slot,61,o.entry->incarnation,&f,message,fixture->length)==0);
+        elapsed+=nanos()-start;
+      }
+      assert(o.entry->lpi.protocols==fixture->expected);
+      assert(o.entry->lpi.attempts==20 && o.entry->lpi.stop_reason==1);
+      product_flow_runtime_destroy(pool);
+    }
+    printf("{\"shape\":%u,\"calls\":40000,\"elapsed_ns\":%llu,\"lpi_bytes\":%zu,\"entry_bytes\":%zu}\n",
+      shape,(unsigned long long)elapsed,sizeof(product_lpi_state_t),sizeof(product_flow_entry_t));
+  }
+}
+
 int main (void)
 {
   assert (product_lpi_init () == 0);
+  if(getenv("R4_COST")) {realtime_cost();return 0;}
   if(getenv("R3_COST")) {tunnel_cost();return 0;}
   if(getenv("R2_COST")) {mail_cost();return 0;}
   if(getenv("R1_COST")) {representative_cost();return 0;}
+  realtime_stun ();
+  realtime_rtp ();
+  realtime_rtcp ();
+  realtime_sip ();
+  realtime_dtls ();
+  realtime_boundaries ();
+  realtime_additional_shapes ();
+  realtime_lifecycle ();
+  realtime_multiplex ();
+  realtime_winners ();
   proxy_sequence ();
   wireguard_sequence ();
   openvpn_sequence ();

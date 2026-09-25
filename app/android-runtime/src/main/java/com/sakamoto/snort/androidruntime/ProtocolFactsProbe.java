@@ -249,7 +249,7 @@ final class ProtocolFactsProbe {
         DatagramPacket response = new DatagramPacket(new byte[4096], 4096);
         socket.receive(response);
         if (!Arrays.equals(expected, Arrays.copyOf(response.getData(), response.getLength())))
-            throw new IllegalStateException("WireGuard peer response mismatch");
+            throw new IllegalStateException("protocol peer response mismatch");
     }
     private static void wireguard(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
@@ -287,6 +287,46 @@ final class ProtocolFactsProbe {
             result.put("echoes", 25); gate(app, nonce, result, "budget_done");
         }
     }
+    private static void realtime(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        JSONObject fixture = plan.getJSONObject("realtime");
+        org.json.JSONArray requests = fixture.getJSONArray("requests");
+        org.json.JSONArray replies = fixture.getJSONArray("replies");
+        if (requests.length() != 30 || replies.length() != 30)
+            throw new IllegalArgumentException("realtime workload size");
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.setReuseAddress(true); socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port); socket.setSoTimeout(5000);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            byte[] binding = hex(fixture.getString("first"));
+            socket.send(new DatagramPacket(binding, binding.length));
+            receiveDatagram(socket, hex(fixture.getString("firstReply")));
+            result.put("bindingResponse", true);
+            gate(app, nonce, result, "connected_ready");
+            for (int i = 0; i < 3; ++i) {
+                byte[] message = hex(requests.getString(i));
+                if (message.length != 172) throw new IllegalArgumentException("RTP PCMU packet");
+                socket.send(new DatagramPacket(message, message.length));
+                receiveDatagram(socket, hex(replies.getString(i)));
+            }
+            result.put("mediaResponses", 3);
+            gate(app, nonce, result, "realtime_ready");
+            byte[] blocked = hex(requests.getString(3));
+            socket.setSoTimeout(1200); socket.send(new DatagramPacket(blocked, blocked.length));
+            try { socket.receive(new DatagramPacket(new byte[4096], 4096));
+                throw new IllegalStateException("expected realtime policy timeout"); }
+            catch (SocketTimeoutException expected) { result.put("blockedTimeout", true); }
+            gate(app, nonce, result, "blocked");
+            socket.setSoTimeout(5000);
+            for (int i = 3; i < 28; ++i) {
+                byte[] message = hex(requests.getString(i));
+                socket.send(new DatagramPacket(message, message.length));
+                receiveDatagram(socket, hex(replies.getString(i)));
+                Thread.sleep(30);
+            }
+            result.put("echoes", 25); gate(app, nonce, result, "budget_done");
+        }
+    }
     static void start(Context context, String text) {
         final JSONObject plan;
         final String nonce;
@@ -307,7 +347,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("wireguard")) wireguard(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.getString("mode").equals("tcp")) tcp(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.getString("mode").equals("udp")) udp(app, plan, result, nonce, endpoint, local, source, port);

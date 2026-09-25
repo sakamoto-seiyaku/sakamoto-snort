@@ -47,6 +47,11 @@ public final class ApplicationProtocolCatalog {
     public static final int ID_SOCKS4 = 1013;
     public static final int ID_SOCKS5 = 1014;
     public static final int ID_RDP = 1015;
+    public static final int ID_STUN = 1016;
+    public static final int ID_RTP = 1017;
+    public static final int ID_RTCP = 1018;
+    public static final int ID_SIP = 1019;
+    public static final int ID_DTLS = 1020;
 
     private static final Entry[] ENTRIES = new Entry[] {
         new Entry(1000, "reserved-1000", "reserved", "", "Reserved tombstone for removed prerelease placeholder"),
@@ -65,6 +70,11 @@ public final class ApplicationProtocolCatalog {
         new Entry(1013, "socks4", "active", "proxy", "SOCKS4"),
         new Entry(1014, "socks5", "active", "proxy", "SOCKS5"),
         new Entry(1015, "rdp", "active", "remote-access", "RDP"),
+        new Entry(1016, "stun", "active", "realtime", "STUN"),
+        new Entry(1017, "rtp", "active", "realtime", "RTP"),
+        new Entry(1018, "rtcp", "active", "realtime", "RTCP"),
+        new Entry(1019, "sip", "active", "realtime", "SIP"),
+        new Entry(1020, "dtls", "active", "realtime", "DTLS"),
     };
 
     private static final Map<String, Entry> BY_KEY = buildByKey();
@@ -133,6 +143,11 @@ public final class ApplicationProtocolCatalog {
         aliases.put("sakamoto:socks4", BY_KEY.get("socks4"));
         aliases.put("sakamoto:socks5", BY_KEY.get("socks5"));
         aliases.put("sakamoto:rdp", BY_KEY.get("rdp"));
+        aliases.put("sakamoto:stun", BY_KEY.get("stun"));
+        aliases.put("sakamoto:rtp", BY_KEY.get("rtp"));
+        aliases.put("sakamoto:rtcp", BY_KEY.get("rtcp"));
+        aliases.put("sakamoto:sip", BY_KEY.get("sip"));
+        aliases.put("sakamoto:dtls", BY_KEY.get("dtls"));
         return Collections.unmodifiableMap(aliases);
     }
 
@@ -142,6 +157,7 @@ public final class ApplicationProtocolCatalog {
         categories.put("infrastructure", immutableIds(new int[] {1001, 1006}));
         categories.put("mail", immutableIds(new int[] {1007}));
         categories.put("proxy", immutableIds(new int[] {1013, 1014}));
+        categories.put("realtime", immutableIds(new int[] {1016, 1017, 1018, 1019, 1020}));
         categories.put("remote-access", immutableIds(new int[] {1005, 1015}));
         categories.put("vpn", immutableIds(new int[] {1011, 1012}));
         categories.put("web", immutableIds(new int[] {1002, 1003, 1004}));

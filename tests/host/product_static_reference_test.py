@@ -160,7 +160,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts | dict(lpi={1016}), facts | dict(lpi={1016,1017}), facts | dict(lpi={1017,1018}), facts | dict(lpi={1019}), facts | dict(lpi={1020}), facts | dict(lpi={1016,1017,1018,1019,1020}), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -203,9 +203,9 @@ def run(lib):
         assert (plan.direct_rules,plan.factorized_rules,plan.residual_rules)==expected_plan
 
     # R1: each published identity includes NOT and full-set cache transitions.
-    for target in tuple(range(1001,1016)):
+    for target in tuple(range(1001,1021)):
         # T12: set membership, NOT, availability and full application dependencies.
-        for published in (None, set(), {1002}, {1003}, {1006}, {1007}, {1008}, {1009}, {1010}, {1011}, {1012}, {1013}, {1014}, {1015}, {1011,1012,1013,1014,1015}, {1003,1008,1010}, {1003,1008,1010,1014}, {1004,1006}, {1002,1003}, set(range(1001,1016))):
+        for published in (None, set(), {1002}, {1003}, {1006}, {1007}, {1008}, {1009}, {1010}, {1011}, {1012}, {1013}, {1014}, {1015}, {1016}, {1017}, {1018}, {1019}, {1020}, {1016,1017,1018,1019,1020}, {1011,1012,1013,1014,1015}, {1003,1008,1010}, {1003,1008,1010,1014}, {1004,1006}, {1002,1003}, set(range(1001,1021))):
             for mode in (0,1):
                 for ranges in ((1,6),(1,65534)):
                     expr=('and',('and',('sport',*ranges),('dport',*ranges)),('lpi',target))

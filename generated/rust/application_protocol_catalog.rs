@@ -18,6 +18,11 @@ pub const APPLICATION_PROTOCOL_ID_WIREGUARD: u32 = 1012;
 pub const APPLICATION_PROTOCOL_ID_SOCKS4: u32 = 1013;
 pub const APPLICATION_PROTOCOL_ID_SOCKS5: u32 = 1014;
 pub const APPLICATION_PROTOCOL_ID_RDP: u32 = 1015;
+pub const APPLICATION_PROTOCOL_ID_STUN: u32 = 1016;
+pub const APPLICATION_PROTOCOL_ID_RTP: u32 = 1017;
+pub const APPLICATION_PROTOCOL_ID_RTCP: u32 = 1018;
+pub const APPLICATION_PROTOCOL_ID_SIP: u32 = 1019;
+pub const APPLICATION_PROTOCOL_ID_DTLS: u32 = 1020;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApplicationProtocolEntry {
@@ -44,4 +49,9 @@ pub const APPLICATION_PROTOCOL_CATALOG: &[ApplicationProtocolEntry] = &[
     ApplicationProtocolEntry { id: 1013, key: "socks4", status: "active", category: "proxy" },
     ApplicationProtocolEntry { id: 1014, key: "socks5", status: "active", category: "proxy" },
     ApplicationProtocolEntry { id: 1015, key: "rdp", status: "active", category: "remote-access" },
+    ApplicationProtocolEntry { id: 1016, key: "stun", status: "active", category: "realtime" },
+    ApplicationProtocolEntry { id: 1017, key: "rtp", status: "active", category: "realtime" },
+    ApplicationProtocolEntry { id: 1018, key: "rtcp", status: "active", category: "realtime" },
+    ApplicationProtocolEntry { id: 1019, key: "sip", status: "active", category: "realtime" },
+    ApplicationProtocolEntry { id: 1020, key: "dtls", status: "active", category: "realtime" },
 ];

@@ -20,3 +20,8 @@
 1013	socks4	active	proxy	-	sakamoto:socks4	SOCKS4
 1014	socks5	active	proxy	-	sakamoto:socks5	SOCKS5
 1015	rdp	active	remote-access	-	sakamoto:rdp	RDP
+1016	stun	active	realtime	-	sakamoto:stun	STUN
+1017	rtp	active	realtime	-	sakamoto:rtp	RTP
+1018	rtcp	active	realtime	-	sakamoto:rtcp	RTCP
+1019	sip	active	realtime	-	sakamoto:sip	SIP
+1020	dtls	active	realtime	-	sakamoto:dtls	DTLS

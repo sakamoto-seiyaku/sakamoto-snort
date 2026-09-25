@@ -22,7 +22,12 @@
         "wireguard",
         "socks4",
         "socks5",
-        "rdp"
+        "rdp",
+        "stun",
+        "rtp",
+        "rtcp",
+        "sip",
+        "dtls"
       ],
       "description": "Stable ApplicationProtocolKey used by authoring/import/export/API."
     },
@@ -33,6 +38,7 @@
         "infrastructure",
         "mail",
         "proxy",
+        "realtime",
         "remote-access",
         "vpn",
         "web"

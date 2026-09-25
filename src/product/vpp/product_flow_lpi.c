@@ -384,6 +384,156 @@ static const char *socks_exchange (product_lpi_state_t *state, unsigned side,
   return NULL;
 }
 
+/* Modern STUN envelope and padded attributes, RFC8489. No authentication or
+ * legacy-cookie/brand inference. A complete TCP message must be in this payload. */
+static int stun_message (const uint8_t *p, unsigned n, unsigned transport)
+{
+  if(transport==6 && n>=22 && ((unsigned)p[0]*256+p[1])==n-2) {p+=2;n-=2;}
+  if(n<20 || (p[0]&0xc0) || memcmp(p+4,"\x21\x12\xa4\x42",4)
+     || ((unsigned)p[2]*256+p[3])!=n-20 || (p[3]&3)) return 0;
+  unsigned type=(unsigned)p[0]*256+p[1];
+  unsigned method=(type&15)|((type>>1)&0x70)|((type>>2)&0xf80);
+  if(method!=1 && method!=3 && method!=4 && method!=6 && method!=7
+     && method!=8 && method!=9 && method!=10 && method!=11) return 0;
+  unsigned at=20;
+  while(at<n) {
+    if(n-at<4) return 0;
+    unsigned size=(unsigned)p[at+2]*256+p[at+3];
+    unsigned padded=(size+3)&~3U;
+    if(padded>n-at-4) return 0;
+    at+=4+padded;
+  }
+  return at==n;
+}
+
+/* RFC3550 framing and a bounded per-direction continuity heuristic. Sequence
+ * wrap is valid; duplicates/reordering do not advance the three-packet proof.
+ * No media decoder, timestamp promise or SRTP authentication is implied. */
+static int rtp_message (product_lpi_state_t *state, unsigned side,
+  const uint8_t *p, unsigned n, unsigned transport)
+{
+  if(transport==6) {
+    if(n<2 || ((unsigned)p[0]*256+p[1])!=n-2) return 0;
+    p+=2;n-=2;
+  }
+  if(n<12 || (p[0]&0xc0)!=0x80) return 0;
+  unsigned pt=p[1]&127, at=12+4*(p[0]&15);
+  if((pt>34 && pt<96) || at>n) return 0;
+  if(p[0]&16) {
+    if(n-at<4) return 0;
+    unsigned words=(unsigned)p[at+2]*256+p[at+3];
+    if(words>(n-at-4)/4) return 0;
+    at+=4+words*4;
+  }
+  if(p[0]&32) {
+    if(at==n || !p[n-1] || p[n-1]>n-at) return 0;
+    n-=p[n-1];
+  }
+  if(at>=n) return 0;
+  uint32_t ssrc;memcpy(&ssrc,p+8,4);
+  uint16_t seq=(uint16_t)((unsigned)p[2]*256+p[3]);
+  if(!state->rtp_count[side] || state->rtp_ssrc[side]!=ssrc) {
+    state->rtp_count[side]=1;
+  } else {
+    unsigned delta=(uint16_t)(seq-state->rtp_sequence[side]);
+    if(delta==0 || delta>=0x8000) return 0;
+    if(delta>16) state->rtp_count[side]=1;
+    else if(state->rtp_count[side]<3) ++state->rtp_count[side];
+  }
+  state->rtp_ssrc[side]=ssrc;state->rtp_sequence[side]=seq;
+  return state->rtp_count[side]>=3;
+}
+
+/* Selected reduced-size sender/receiver reports (RFC3550/RFC5506). Report
+ * counters are opaque. Four same-source reports are a heuristic, not a call. */
+static int rtcp_message (product_lpi_state_t *state, unsigned side,
+  const uint8_t *p, unsigned n, unsigned transport)
+{
+  if(transport==6) {
+    if(n<2 || ((unsigned)p[0]*256+p[1])!=n-2) return 0;
+    p+=2;n-=2;
+  }
+  if(n<8 || (p[0]&0xe0)!=0x80 || (p[1]!=200 && p[1]!=201)) return 0;
+  unsigned expected=(p[1]==200?28:8)+24*(p[0]&31);
+  if(n!=expected || 4*((unsigned)p[2]*256+p[3]+1)!=n) return 0;
+  uint32_t ssrc;memcpy(&ssrc,p+4,4);
+  if(!state->rtcp_count[side] || state->rtcp_ssrc[side]!=ssrc)
+    state->rtcp_count[side]=1;
+  else if(state->rtcp_count[side]<4) ++state->rtcp_count[side];
+  state->rtcp_ssrc[side]=ssrc;
+  return state->rtcp_count[side]>=4;
+}
+
+/* A complete visible SIP start line, not a SIP transaction parser. This keeps
+ * the upstream command/response heuristic without its unrelated "hello" guess. */
+static int sip_message (const uint8_t *p, unsigned n)
+{
+  if(n<30) return 0;
+  unsigned line=0;
+  while(line+1<n && line<512 && !(p[line]=='\r' && p[line+1]=='\n')) {
+    if(p[line]<32 || p[line]>126) return 0;
+    ++line;
+  }
+  if(line+1>=n || line==512) return 0;
+  if(line>=12 && !memcmp(p,"SIP/2.0 ",8))
+    return p[8]>='1' && p[8]<='6' && p[9]>='0' && p[9]<='9'
+      && p[10]>='0' && p[10]<='9' && p[11]==' ';
+  static const char *const methods[]={"ACK", "BYE", "CANCEL", "INVITE", "INFO",
+    "MESSAGE", "NOTIFY", "OPTIONS", "PUBLISH", "PRACK", "REGISTER", "REFER", "SUBSCRIBE", "UPDATE"};
+  unsigned start=0;
+  for(unsigned i=0;i<sizeof methods/sizeof methods[0];++i) {
+    unsigned m=(unsigned)strlen(methods[i]);
+    if(line<=m || p[m]!=' ') continue;
+    unsigned j=0;
+    for(;j<m;++j) {
+      unsigned c=p[j];if(c>='a' && c<='z') c-='a'-'A';
+      if(c!=(unsigned char)methods[i][j]) break;
+    }
+    if(j==m) {start=m+1;break;}
+  }
+  if(!start || line<start+13 || memcmp(p+line-8," SIP/2.0",8)) return 0;
+  unsigned uri_end=line-8, scheme=0;
+  if(uri_end-start>=4 && !memcmp(p+start,"sip:",4)) scheme=4;
+  else if(uri_end-start>=5 && !memcmp(p+start,"sips:",5)) scheme=5;
+  else if(uri_end-start>=4 && !memcmp(p+start,"tel:",4)) scheme=4;
+  if(!scheme || uri_end<=start+scheme) return 0;
+  for(unsigned i=start;i<uri_end;++i) if(p[i]==' ') return 0;
+  return 1;
+}
+
+/* RFC6347 classic record envelope only. Fragment bounds are checked without
+ * retaining/reassembling bytes. DTLS never creates TLS or SNI facts here. */
+static int dtls_message (const uint8_t *p, unsigned n)
+{
+  unsigned records=0;
+  while(n) {
+    if(++records>8 || n<14 || p[0]<20 || p[0]>23
+       || p[1]!=0xfe || (p[2]!=0xff && p[2]!=0xfd)) return 0;
+    unsigned size=(unsigned)p[11]*256+p[12];
+    if(!size || size>n-13) return 0;
+    unsigned epoch=(unsigned)p[3]*256+p[4];
+    const uint8_t *body=p+13;
+    if(!epoch) {
+      if(p[0]==23) return 0;
+      if(p[0]==20 && (size!=1 || body[0]!=1)) return 0;
+      if(p[0]==21 && (size!=2 || (body[0]!=1 && body[0]!=2))) return 0;
+      if(p[0]==22) {
+        if(size<12) return 0;
+        unsigned type=body[0];
+        if(type!=1 && type!=2 && type!=3 && type!=11 && type!=12
+           && type!=13 && type!=14 && type!=15 && type!=16 && type!=20) return 0;
+        unsigned total=((unsigned)body[1]<<16)|((unsigned)body[2]<<8)|body[3];
+        unsigned offset=((unsigned)body[6]<<16)|((unsigned)body[7]<<8)|body[8];
+        unsigned fragment=((unsigned)body[9]<<16)|((unsigned)body[10]<<8)|body[11];
+        if(fragment!=size-12 || offset>total || fragment>total-offset
+           || (!total && type!=14) || (total && !fragment)) return 0;
+      }
+    }
+    p+=13+size;n-=13+size;
+  }
+  return records!=0;
+}
+
 /* Resolve one unpublished guess before any catalog mapping. Explicitly prefer
  * QUIC's modern Initial framing over port heuristics; mDNS requires its own
  * framing and either 5353 endpoint. Never union conflicting current guesses.
@@ -393,6 +543,11 @@ static const char *resolve_guess (const char *base,
   const char **companion, product_lpi_state_t *state, unsigned side)
 {
   *companion=NULL;
+  if(stun_message(payload,length,facts->protocol)) return "sakamoto:stun";
+  if(facts->protocol==17 && dtls_message(payload,length)) return "sakamoto:dtls";
+  if(sip_message(payload,length)) return "sakamoto:sip";
+  if(rtp_message(state,side,payload,length,facts->protocol)) return "sakamoto:rtp";
+  if(rtcp_message(state,side,payload,length,facts->protocol)) return "sakamoto:rtcp";
   if(rdp_exchange(state,side,facts,payload,length)) return "sakamoto:rdp";
   if(openvpn_exchange(state,side,facts->protocol,payload,length)) return "sakamoto:openvpn";
   if (facts->protocol==17) {
