@@ -55,7 +55,8 @@ static void ended (void *context, const product_flow_entry_t *entry,
 {
   (void) context; (void) slot; (void) reason;
   assert (entry->lpi.stop_reason == PRODUCT_LPI_STOP_FLOW_END
-          || entry->lpi.stop_reason == PRODUCT_LPI_STOP_PACKET_BUDGET);
+          || entry->lpi.stop_reason == PRODUCT_LPI_STOP_PACKET_BUDGET
+          || entry->lpi.stop_reason == PRODUCT_LPI_STOP_BYTE_BUDGET);
 }
 static void multi_result_and_reuse (void)
 {
@@ -254,6 +255,408 @@ static uint64_t sample (const uint8_t *bytes, unsigned length, unsigned transpor
   uint64_t result=o.entry->lpi.protocols;
   product_flow_runtime_destroy(pool);
   return result;
+}
+
+typedef struct {
+  const uint8_t *bytes;
+  unsigned length, side;
+  uint64_t expected;
+} tunnel_step_t;
+static void tunnel_transcript (const tunnel_step_t *steps, unsigned count,
+                               unsigned transport, unsigned port, unsigned family)
+{
+  product_flow_runtime_t *pool=NULL;
+  assert(product_flow_runtime_create(&pool,0,1,43,1)==0);
+  product_worker_layout_t layout={1,1};
+  for(unsigned step=0;step<count;++step) {
+    unsigned side=steps[step].side, header=transport==6?20:8;
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=family,.protocol=transport,
+      .source_port=side?port:42101,.destination_port=side?42101:port,
+      .l4_header_length=header,.transport_length=header+steps[step].length,
+      .tcp_flags=16,.tcp_window=65535};
+    f.source_address[0]=side?11:10;f.destination_address[0]=side?10:11;
+    product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+    product_flow_entry_packet_t p={.facts=&f,.policy={43,step+1,step+1},.uid=17,.timestamp=step+1};
+    product_flow_entry_observation_t o;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(product_flow_entry_identify(pool,o.slot,43,o.entry->incarnation,&f,
+                                      steps[step].bytes,steps[step].length)==0);
+    if(o.entry->lpi.protocols!=steps[step].expected)
+      fprintf(stderr,"tunnel step %u transport %u port %u got %llu expected %llu\n",
+        step,transport,port,(unsigned long long)o.entry->lpi.protocols,(unsigned long long)steps[step].expected);
+    assert(o.entry->lpi.protocols==steps[step].expected);
+  }
+  product_flow_runtime_destroy(pool);
+}
+static void proxy_boundaries (void)
+{
+  const uint8_t s4[]={4,1,0,80,127,0,0,1,'u',0};
+  const uint8_t s4a[]={4,2,0,80,0,0,0,1,0,'a','.', 't','e','s','t',0};
+  uint8_t reply4[]={0,90,0,80,127,0,0,1};
+  const uint8_t s5[]={5,3,0,1,2};
+  uint8_t reply5[]={5,0};
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned first=0;first<2;++first)
+      for(unsigned port=1080;port<=1088;port+=8) {
+        for(unsigned status=90;status<=93;++status) {
+          reply4[1]=(uint8_t)status;
+          tunnel_step_t a[]={{s4,sizeof s4,first,0},{reply4,8,!first,4096}};
+          tunnel_transcript(a,2,6,port,family);
+          a[0].bytes=s4a;a[0].length=sizeof s4a;
+          tunnel_transcript(a,2,6,port,family);
+        }
+        for(unsigned method=0;method<4;++method) {
+          reply5[1]=(uint8_t)(method==3?255:method);
+          tunnel_step_t a[]={{s5,sizeof s5,first,0},{reply5,2,!first,8192}};
+          tunnel_transcript(a,2,6,port,family);
+        }
+      }
+  reply4[1]=90;reply5[1]=0;
+  for(unsigned version=4;version<=5;++version) {
+    const uint8_t *request=version==4?s4:s5, *reply=version==4?reply4:reply5;
+    unsigned n=version==4?sizeof s4:sizeof s5,rn=version==4?8:2;
+    for(unsigned shortened=0;shortened<n;++shortened) {
+      tunnel_step_t a[]={{request,shortened,0,0},{reply,rn,1,0}};
+      tunnel_transcript(a,2,6,1080,4);
+    }
+    for(unsigned shortened=0;shortened<rn;++shortened) {
+      tunnel_step_t a[]={{request,n,0,0},{reply,shortened,1,0}};
+      tunnel_transcript(a,2,6,1080,4);
+    }
+    tunnel_step_t same[]={{request,n,0,0},{reply,rn,0,0}};
+    tunnel_transcript(same,2,6,1088,4);
+    tunnel_step_t backwards[]={{reply,rn,1,0},{request,n,0,0}};
+    tunnel_transcript(backwards,2,6,1088,4);
+    tunnel_step_t udp[]={{request,n,0,0},{reply,rn,1,0}};
+    tunnel_transcript(udp,2,17,1080,4);
+  }
+  uint8_t bad4[sizeof s4];
+  for(unsigned scenario=0;scenario<5;++scenario) {
+    memcpy(bad4,s4,sizeof s4);
+    if(scenario==0) bad4[0]=3;
+    if(scenario==1) bad4[1]=3;
+    if(scenario==2) bad4[3]=0;
+    if(scenario==3) bad4[sizeof bad4-1]='x';
+    if(scenario==4) {bad4[4]=bad4[5]=bad4[6]=0;bad4[7]=1;} /* 4a lacks host */
+    tunnel_step_t a[]={{bad4,sizeof bad4,0,0},{reply4,8,1,0}};
+    tunnel_transcript(a,2,6,1080,4);
+  }
+  /* A private/GSS offer must not hide a valid selected no-auth method. */
+  const uint8_t mixed[]={5,2,0,128}, private_selection[]={5,128};
+  tunnel_step_t mixed_methods[]={{mixed,4,0,0},{reply5,2,1,8192}};
+  tunnel_transcript(mixed_methods,2,6,1080,4);
+  mixed_methods[1].bytes=private_selection;tunnel_transcript(mixed_methods,2,6,1088,6);
+  for(unsigned method=0;method<255;++method) {
+    uint8_t offered[]={5,1,(uint8_t)method},selected[]={5,(uint8_t)method};
+    tunnel_step_t a[]={{offered,3,0,0},{selected,2,1,8192}};
+    tunnel_transcript(a,2,6,1088,4);
+  }
+  uint8_t maximum[34]={5,32};
+  for(unsigned i=2;i<34;++i) maximum[i]=(uint8_t)(i+200);
+  const uint8_t selected_max[]={5,233};
+  tunnel_step_t limit[]={{maximum,34,0,0},{selected_max,2,1,8192}};
+  tunnel_transcript(limit,2,6,1088,4);
+  uint8_t excessive[35]={5,33};
+  tunnel_step_t too_many[]={{excessive,35,0,0},{reply5,2,1,0}};
+  tunnel_transcript(too_many,2,6,1088,4);
+  uint8_t long_user[513]={4,1,0,80,127,0,0,1};
+  memset(long_user+8,'a',504);long_user[512]=0;
+  tunnel_step_t long_socks4[]={{long_user,513,0,0},{reply4,8,1,0}};
+  tunnel_transcript(long_socks4,2,6,1088,4);
+  const uint8_t reserved[]={5,1,255}, rejected[]={5,255};
+  tunnel_step_t bad_reserved[]={{reserved,3,0,0},{rejected,2,1,0}};
+  tunnel_transcript(bad_reserved,2,6,1088,4);
+  const uint8_t single[]={5,1,0}, bad_method[]={5,2}, unsupported[]={5,1,128};
+  tunnel_step_t unoffered[]={{single,3,0,0},{bad_method,2,1,0},{reply5,2,1,0}};
+  tunnel_transcript(unoffered,3,6,1080,4);
+  tunnel_step_t bad_offer[]={{unsupported,3,0,0},{reply5,2,1,0}};
+  tunnel_transcript(bad_offer,2,6,1080,4);
+}
+static void wireguard_boundaries (void)
+{
+  uint8_t init[148]={1,0,0,0,0x12,0x34,0x56,0x78};
+  uint8_t reply[92]={2,0,0,0,0x87,0x65,0x43,0x21,0x12,0x34,0x56,0x78};
+  uint8_t cookie[64]={3,0,0,0,0x12,0x34,0x56,0x78};
+  uint8_t data_a[32]={4,0,0,0,0x12,0x34,0x56,0x78};
+  uint8_t data_b[48]={4,0,0,0,0x87,0x65,0x43,0x21};
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned first=0;first<2;++first)
+      for(unsigned port=51820;port<=51821;++port) {
+        tunnel_step_t a[]={{init,148,first,0},{reply,92,!first,2048}};
+        tunnel_transcript(a,2,17,port,family);
+        a[1].bytes=cookie;a[1].length=64;
+        tunnel_transcript(a,2,17,port,family);
+        tunnel_step_t b[]={{data_a,32,first,0},{data_b,48,!first,0},{data_a,32,first,2048}};
+        tunnel_transcript(b,3,17,port,family);
+        b[2].bytes=data_b;b[2].length=48;b[2].side=!first;
+        tunnel_transcript(b,3,17,port,family);
+      }
+  for(unsigned length=0;length<148;++length) {
+    tunnel_step_t a[]={{init,length,0,0},{reply,92,1,0}};
+    tunnel_transcript(a,2,17,51820,4);
+  }
+  for(unsigned scenario=0;scenario<7;++scenario) {
+    uint8_t bad[92];memcpy(bad,reply,92);
+    unsigned n=92,side=1,transport=17;
+    if(scenario==0) bad[0]=5;
+    if(scenario==1) bad[1]=1;
+    if(scenario==2) bad[8]^=1;
+    if(scenario==3) n=91;
+    if(scenario==4) side=0;
+    if(scenario==5) transport=6;
+    if(scenario==6) n=32;
+    tunnel_step_t a[]={{init,148,0,0},{bad,n,side,0}};
+    tunnel_transcript(a,2,transport,51820,4);
+  }
+  uint8_t bad_cookie[64];memcpy(bad_cookie,cookie,64);bad_cookie[4]^=1;
+  tunnel_step_t cookie_index[]={{init,148,0,0},{bad_cookie,64,1,0}};
+  tunnel_transcript(cookie_index,2,17,51820,4);
+  tunnel_step_t short_transport[]={{data_a,31,0,0},{data_b,48,1,0},{data_a,32,0,0}};
+  tunnel_transcript(short_transport,3,17,51820,4);
+  tunnel_step_t retrans[]={{init,148,0,0},{init,148,0,0},{init,148,0,0}};
+  tunnel_transcript(retrans,3,17,51820,4);
+  tunnel_step_t same[]={{data_a,32,0,0},{data_a,32,0,0},{data_a,32,0,0}};
+  tunnel_transcript(same,3,17,51820,4);
+  uint8_t wrong[32];memcpy(wrong,data_a,32);wrong[4]^=1;
+  tunnel_step_t inconsistent[]={{data_a,32,0,0},{data_b,48,1,0},{wrong,32,0,0},{data_a,32,0,0}};
+  tunnel_transcript(inconsistent,4,17,51820,4);
+}
+
+static void openvpn_boundaries (void)
+{
+  uint8_t init[]={0x38,1,2,3,4,5,6,7,8,0,0,0,0,0};
+  uint8_t reply[]={0x40,8,7,6,5,4,3,2,1,1,0,0,0,0,1,2,3,4,5,6,7,8,0,0,0,0};
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned first=0;first<2;++first)
+      for(unsigned transport=6;transport<=17;transport+=11) {
+        for(unsigned version=1;version<=2;++version) {
+          init[0]=version==1?8:56;reply[0]=version==1?16:64;
+          uint8_t tcp_i[16]={0,14},tcp_r[28]={0,26};
+          memcpy(tcp_i+2,init,14);memcpy(tcp_r+2,reply,26);
+          tunnel_step_t a[]={{transport==6?tcp_i:init,transport==6?16:14,first,0},
+            {transport==6?tcp_r:reply,transport==6?28:26,!first,1024}};
+          tunnel_transcript(a,2,transport,1194,family);
+          tunnel_transcript(a,2,transport,1195,family);
+        }
+      }
+  init[0]=56;reply[0]=64;
+  for(unsigned n=0;n<14;++n) {
+    tunnel_step_t a[]={{init,n,0,0},{reply,26,1,0}};
+    tunnel_transcript(a,2,17,1194,4);
+  }
+  for(unsigned scenario=0;scenario<9;++scenario) {
+    uint8_t bad[27];memcpy(bad,reply,26);bad[26]=0;
+    unsigned n=26,side=1;
+    if(scenario==0) bad[0]=65; /* nonzero key id */
+    if(scenario==1) bad[0]=72; /* encrypted data is not control */
+    if(scenario==2) bad[9]=9; /* ack bound */
+    if(scenario==3) bad[14]^=1; /* remote session mismatch */
+    if(scenario==4) bad[25]=1; /* reset packet id */
+    if(scenario==5) n=25;
+    if(scenario==6) n=27;
+    if(scenario==7) side=0;
+    if(scenario==8) memset(bad+1,0,8);
+    tunnel_step_t a[]={{init,14,0,0},{bad,n,side,0}};
+    tunnel_transcript(a,2,17,1194,4);
+  }
+  uint8_t tcp_i[16]={0,14},tcp_r[28]={0,27};memcpy(tcp_i+2,init,14);memcpy(tcp_r+2,reply,26);
+  tunnel_step_t framing[]={{tcp_i,16,0,0},{tcp_r,28,1,0}};
+  tunnel_transcript(framing,2,6,1194,4);
+  /* Two valid control envelopes per side; no remote-session field needed. */
+  uint8_t reset[]={64,8,7,6,5,4,3,2,1,0,0,0,0,0};
+  uint8_t control_i[14],control_r[14];memcpy(control_i,init,14);memcpy(control_r,reset,14);
+  control_i[0]=control_r[0]=32;control_i[13]=control_r[13]=1;
+  tunnel_step_t continuity[]={{init,14,0,0},{reset,14,1,0},{control_i,14,0,0},{control_r,14,1,1024}};
+  tunnel_transcript(continuity,4,17,1195,4);
+  control_r[1]^=1;continuity[3].expected=0;tunnel_transcript(continuity,4,17,1195,4);
+  /* No one-direction retransmission shortcut. */
+  tunnel_step_t one_way[]={{init,14,0,0},{init,14,0,0},{init,14,0,0},{init,14,0,0}};
+  tunnel_transcript(one_way,4,17,1194,4);
+}
+static void rdp_boundaries (void)
+{
+  uint8_t request[]={3,0,0,19,14,0xe0,0,0,0,0,0,1,0,8,0,1,0,0,0};
+  uint8_t response[]={3,0,0,19,14,0xd0,0,0,0x12,0x34,0,2,0,8,0,1,0,0,0};
+  uint8_t syn[]={255,255,255,255,0,64,0,1,0x12,0x34,0x56,0x78,4,176,4,176};
+  uint8_t synack[]={0x12,0x34,0x56,0x78,0,64,0,3,0x87,0x65,0x43,0x21,4,176,4,176};
+  uint8_t cookie[40]={3,0,0,40,35,0xe0,0,0,0,0,0};
+  memcpy(cookie+11,"Cookie: mstshash=r3\r\n",21);memcpy(cookie+32,request+11,8);
+  for(unsigned family=4;family<=6;family+=2)
+    for(unsigned first=0;first<2;++first) {
+      tunnel_step_t a[]={{request,19,first,0},{response,19,!first,16384}};
+      tunnel_transcript(a,2,6,3389,family);tunnel_transcript(a,2,6,3390,family);
+      a[0].bytes=cookie;a[0].length=40;tunnel_transcript(a,2,6,3390,family);
+      a[0].bytes=syn;a[0].length=16;a[0].side=0;a[1].bytes=synack;a[1].length=16;a[1].side=1;
+      tunnel_transcript(a,2,17,3389,family);
+      a[1].expected=0;tunnel_transcript(a,2,17,3390,family);
+    }
+  for(unsigned n=0;n<19;++n) {
+    tunnel_step_t a[]={{request,n,0,0},{response,19,1,0}};
+    tunnel_transcript(a,2,6,3389,4);
+  }
+  for(unsigned scenario=0;scenario<11;++scenario) {
+    uint8_t bad[19];memcpy(bad,response,19);unsigned n=19,side=1;
+    if(scenario==0) bad[0]=4;
+    if(scenario==1) bad[1]=1;
+    if(scenario==2) bad[3]=18;
+    if(scenario==3) bad[4]=13;
+    if(scenario==4) bad[5]=0xe0;
+    if(scenario==5) bad[10]=1;
+    if(scenario==6) bad[11]=4;
+    if(scenario==7) bad[14]=1;
+    if(scenario==8) bad[15]=3;
+    if(scenario==9) n=18;
+    if(scenario==10) side=0;
+    tunnel_step_t a[]={{request,19,0,0},{bad,n,side,0}};
+    tunnel_transcript(a,2,6,3390,4);
+  }
+  for(unsigned scenario=0;scenario<6;++scenario) {
+    uint8_t bad[16];memcpy(bad,synack,16);unsigned n=16,side=1;
+    if(scenario==0) bad[3]^=1; /* full sequence, not nDPI's three-byte prefix */
+    if(scenario==1) bad[7]=1;
+    if(scenario==2) bad[12]=0;
+    if(scenario==3) bad[14]=7;
+    if(scenario==4) n=15;
+    if(scenario==5) side=0;
+    tunnel_step_t a[]={{syn,16,0,0},{bad,n,side,0}};
+    tunnel_transcript(a,2,17,3389,4);
+  }
+  /* MS-RDPBCGR flag8 requires a following correlation-info structure;
+   * the selected eight-byte negotiation subset must not accept it absent. */
+  uint8_t missing_correlation[19];memcpy(missing_correlation,request,19);missing_correlation[12]=8;
+  tunnel_step_t correlation[]={{missing_correlation,19,0,0},{response,19,1,0}};
+  tunnel_transcript(correlation,2,6,3390,4);
+  response[11]=3;response[15]=1;
+  tunnel_step_t failed[]={{request,19,0,0},{response,19,1,16384}};
+  tunnel_transcript(failed,2,6,3389,4);
+  const uint8_t http[]="HTTP/1.1 200 OK\r\n\r\n";
+  tunnel_step_t mismatch[]={{request,19,0,0},{http,sizeof http-1,1,0}};
+  tunnel_transcript(mismatch,2,6,3390,4);
+}
+
+typedef struct {
+  const uint8_t *request, *reply;
+  unsigned request_length, reply_length, transport;
+  uint64_t expected;
+} tunnel_fixture_t;
+static const uint8_t ovpn_i[]={56,1,2,3,4,5,6,7,8,0,0,0,0,0};
+static const uint8_t ovpn_r[]={64,8,7,6,5,4,3,2,1,1,0,0,0,0,1,2,3,4,5,6,7,8,0,0,0,0};
+static const uint8_t wg_i[148]={1,0,0,0,1,2,3,4},wg_r[92]={2,0,0,0,5,6,7,8,1,2,3,4};
+static const uint8_t s4_i[]={4,1,0,80,127,0,0,1,0},s4_r[]={0,90,0,80,127,0,0,1};
+static const uint8_t s5_i[]={5,1,0},s5_r[]={5,0};
+static const uint8_t rdp_i[]={3,0,0,19,14,0xe0,0,0,0,0,0,1,0,8,0,1,0,0,0};
+static const uint8_t rdp_r[]={3,0,0,19,14,0xd0,0,0,0x12,0x34,0,2,0,8,0,1,0,0,0};
+static const tunnel_fixture_t tunnel_fixtures[]={
+  {ovpn_i,ovpn_r,sizeof ovpn_i,sizeof ovpn_r,17,1024},
+  {wg_i,wg_r,sizeof wg_i,sizeof wg_r,17,2048},
+  {s4_i,s4_r,sizeof s4_i,sizeof s4_r,6,4096},
+  {s5_i,s5_r,sizeof s5_i,sizeof s5_r,6,8192},
+  {rdp_i,rdp_r,sizeof rdp_i,sizeof rdp_r,6,16384}
+};
+
+static void tunnel_lifecycle (void)
+{
+  for(unsigned shape=0;shape<5;++shape) for(unsigned exhaustion=0;exhaustion<3;++exhaustion) {
+    const tunnel_fixture_t *fixture=&tunnel_fixtures[shape];
+    product_flow_runtime_t *pool=NULL;assert(product_flow_runtime_create(&pool,0,1,47,1)==0);
+    assert(product_flow_runtime_set_end_callback(pool,ended,NULL)==0);
+    unsigned header=fixture->transport==17?8:20;
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=fixture->transport,
+      .source_port=42103,.destination_port=1195,.l4_header_length=header,
+      .transport_length=header+fixture->request_length,.tcp_flags=16,.tcp_window=65535};
+    f.source_address[0]=10;f.destination_address[0]=11;
+    product_worker_layout_t layout={1,1};product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+    product_flow_entry_packet_t p={.facts=&f,.policy={47,1,1},.uid=17,.timestamp=1};
+    product_flow_entry_observation_t o;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    uint64_t incarnation=o.entry->incarnation;
+    assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&f,fixture->request,fixture->request_length)==0);
+    product_lpi_state_t saved=o.entry->lpi;
+    assert(product_flow_entry_identify(pool,o.slot,48,incarnation,&f,fixture->request,fixture->request_length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION);
+    assert(product_flow_entry_identify(pool,o.slot,47,incarnation+1,&f,fixture->request,fixture->request_length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+    product_packet_facts_t wrong=f;wrong.source_port++;
+    assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&wrong,fixture->request,fixture->request_length)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET);
+    assert(!memcmp(&saved,&o.entry->lpi,sizeof saved));
+    p.policy.revision=2;p.policy.snapshot_hash=2;p.timestamp=2;
+    assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(!memcmp(&saved,&o.entry->lpi,sizeof saved));
+    if(exhaustion==1) {
+      for(unsigned attempt=1;attempt<20;++attempt)
+        assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&f,fixture->request,fixture->request_length)==0);
+    } else if(exhaustion==2) {
+      uint8_t large[32768]={0xfe};f.transport_length=header+sizeof large;
+      assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&f,large,sizeof large)==0);
+    }
+    f.source_address[0]=11;f.destination_address[0]=10;f.source_port=1195;f.destination_port=42103;
+    f.transport_length=header+fixture->reply_length;assert(product_owner_assign(&layout,&f,&a)==0);
+    assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&f,fixture->reply,fixture->reply_length)==0);
+    assert(o.entry->lpi.protocols==(exhaustion?0:fixture->expected));
+    assert(o.entry->lpi.available==!exhaustion);
+    if(exhaustion) assert(o.entry->lpi.stop_reason==(exhaustion==1?1:2));
+    assert(product_flow_runtime_close(pool,o.slot,47,incarnation,PRODUCT_FLOW_END_CLOSED)==0);
+    assert(product_flow_runtime_release_end(pool,o.slot,47,incarnation,PRODUCT_FLOW_END_CLOSED)==0);
+    ++p.timestamp;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(o.entry->incarnation!=incarnation && !o.entry->lpi.protocols && !o.entry->lpi.attempts);
+    assert(product_flow_entry_identify(pool,o.slot,47,incarnation,&f,fixture->reply,fixture->reply_length)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+    assert(product_flow_entry_identify(pool,o.slot,47,o.entry->incarnation,&f,fixture->reply,fixture->reply_length)==0);
+    assert(!o.entry->lpi.protocols);
+    product_flow_runtime_destroy(pool);
+  }
+  puts("R3 proxy/VPN/RDP directions, framing, indices, policy retention, identity, budgets and same-slot reuse: PASS");
+}
+
+static void proxy_mail_union (void)
+{
+  const uint8_t greeting[]={5,2,0,128},selection[]={5,0};
+  const uint8_t banner[]="220 proxy-target FTPd ready\r\n",auth[]="AUTH TLS\r\n",ready[]="234 Ready\r\n";
+  const uint8_t hello[]={22,3,1,0,4,1,0,0,0};
+  const tunnel_step_t steps[]={{greeting,4,0,0},{selection,2,1,8192},
+    {banner,sizeof banner-1,1,8320},{auth,sizeof auth-1,0,8320},
+    {ready,sizeof ready-1,1,8320},{hello,sizeof hello,0,8836}};
+  tunnel_transcript(steps,6,6,1088,4);
+}
+
+static void rdp_sequence (void)
+{
+  const uint8_t request[]={3,0,0,19,14,0xe0,0,0,0,0,0,1,0,8,0,1,0,0,0};
+  const uint8_t response[]={3,0,0,19,14,0xd0,0,0,0x12,0x34,0,2,0,8,0,1,0,0,0};
+  const tunnel_step_t steps[]={{request,sizeof request,0,0},{response,sizeof response,1,16384}};
+  tunnel_transcript(steps,2,6,3390,4);
+}
+static void openvpn_sequence (void)
+{
+  const uint8_t init[]={0x38,1,2,3,4,5,6,7,8,0,0,0,0,0};
+  const uint8_t reply[]={0x40,8,7,6,5,4,3,2,1,1,0,0,0,0,1,2,3,4,5,6,7,8,0,0,0,0};
+  const tunnel_step_t steps[]={{init,sizeof init,0,0},{reply,sizeof reply,1,1024}};
+  tunnel_transcript(steps,2,17,1195,4);
+}
+static void wireguard_sequence (void)
+{
+  uint8_t init[148]={1,0,0,0,0x12,0x34,0x56,0x78};
+  uint8_t response[92]={2,0,0,0,0x87,0x65,0x43,0x21,0x12,0x34,0x56,0x78};
+  const tunnel_step_t steps[]={{init,sizeof init,0,0},{response,sizeof response,1,2048}};
+  tunnel_transcript(steps,2,17,51821,4);
+}
+
+/* Independent literal SOCKS5 greeting/selection through owner lifecycle. */
+static void proxy_sequence (void)
+{
+  product_flow_runtime_t *pool=NULL;
+  assert(product_flow_runtime_create(&pool,0,1,41,1)==0);
+  product_worker_layout_t layout={1,1};
+  const uint8_t greeting[]={5,1,0}, selection[]={5,0};
+  for(unsigned side=0;side<2;++side) {
+    product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=6,
+      .source_port=side?1088:42100,.destination_port=side?42100:1088,
+      .l4_header_length=20,.transport_length=side?22:23,.tcp_flags=16,.tcp_window=65535};
+    f.source_address[0]=side?11:10;f.destination_address[0]=side?10:11;
+    product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+    product_flow_entry_packet_t p={.facts=&f,.policy={41,1,1},.uid=17,.timestamp=side+1};
+    product_flow_entry_observation_t o;assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+    assert(product_flow_entry_identify(pool,o.slot,41,o.entry->incarnation,&f,
+                                      side?selection:greeting,side?2:3)==0);
+    assert(o.entry->lpi.protocols==(side?UINT64_C(8192):0));
+  }
+  product_flow_runtime_destroy(pool);
 }
 
 static void mail_banner (void)
@@ -623,11 +1026,61 @@ static void mail_cost (void)
   }
 }
 
+static void tunnel_cost (void)
+{
+  static const uint8_t negative_bytes[148]={1,1,0,0,1,2,3,4};
+  const tunnel_fixture_t negative={negative_bytes,negative_bytes,148,148,17,0};
+  for(unsigned shape=0;shape<7;++shape) {
+    const tunnel_fixture_t *fixture=shape<5?&tunnel_fixtures[shape]:&negative;
+    uint64_t elapsed=0;
+    for(unsigned repetition=0;repetition<2000;++repetition) {
+      product_flow_runtime_t *pool=NULL;assert(product_flow_runtime_create(&pool,0,1,53,1)==0);
+      unsigned transport=fixture->transport,header=transport==6?20:8;
+      product_packet_facts_t f={.l3_status=1,.l4_status=1,.ip_family=4,.protocol=transport,
+        .l4_header_length=header,.tcp_flags=16,.tcp_window=65535};
+      product_worker_layout_t layout={1,1};product_flow_entry_observation_t o;
+      for(unsigned attempt=0;attempt<20;++attempt) {
+        unsigned side=shape==6?0:attempt%2;
+        unsigned n=side?fixture->reply_length:fixture->request_length;
+        const uint8_t *payload=side?fixture->reply:fixture->request;
+        f.source_address[0]=side?11:10;f.destination_address[0]=side?10:11;
+        f.source_port=side?1195:42105;f.destination_port=side?42105:1195;f.transport_length=header+n;
+        product_owner_assignment_t a;assert(product_owner_assign(&layout,&f,&a)==0);
+        product_flow_entry_packet_t p={.facts=&f,.policy={53,1,1},.uid=17,.timestamp=attempt+1};
+        assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
+        if(shape==6 && !attempt) {
+          for(unsigned i=0;i<20;++i)
+            assert(product_flow_entry_identify(pool,o.slot,53,o.entry->incarnation,&f,payload,n)==0);
+        }
+        uint64_t start=nanos();
+        assert(product_flow_entry_identify(pool,o.slot,53,o.entry->incarnation,&f,payload,n)==0);
+        elapsed+=nanos()-start;
+      }
+      assert(o.entry->lpi.protocols==fixture->expected);
+      assert(o.entry->lpi.attempts==20 && o.entry->lpi.stop_reason==1);
+      product_flow_runtime_destroy(pool);
+    }
+    printf("{\"shape\":%u,\"calls\":40000,\"elapsed_ns\":%llu,\"lpi_bytes\":%zu,\"entry_bytes\":%zu}\n",
+      shape,(unsigned long long)elapsed,sizeof(product_lpi_state_t),sizeof(product_flow_entry_t));
+  }
+}
+
 int main (void)
 {
   assert (product_lpi_init () == 0);
+  if(getenv("R3_COST")) {tunnel_cost();return 0;}
   if(getenv("R2_COST")) {mail_cost();return 0;}
   if(getenv("R1_COST")) {representative_cost();return 0;}
+  proxy_sequence ();
+  wireguard_sequence ();
+  openvpn_sequence ();
+  rdp_sequence ();
+  proxy_boundaries ();
+  wireguard_boundaries ();
+  openvpn_boundaries ();
+  rdp_boundaries ();
+  tunnel_lifecycle ();
+  proxy_mail_union ();
   dns_budget ();
   multi_result_and_reuse ();
   tls_upgrade ();

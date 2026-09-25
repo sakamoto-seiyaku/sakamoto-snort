@@ -15,3 +15,8 @@
 1008	ftp-control	active	file-transfer	ftp	sakamoto:ftp-control	FTP control
 1009	ftp-data	active	file-transfer	-	sakamoto:ftp-data	FTP data
 1010	ftps	active	file-transfer	-	sakamoto:ftps	FTPS
+1011	openvpn	active	vpn	-	sakamoto:openvpn	OpenVPN
+1012	wireguard	active	vpn	-	sakamoto:wireguard	WireGuard
+1013	socks4	active	proxy	-	sakamoto:socks4	SOCKS4
+1014	socks5	active	proxy	-	sakamoto:socks5	SOCKS5
+1015	rdp	active	remote-access	-	sakamoto:rdp	RDP

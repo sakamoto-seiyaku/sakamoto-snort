@@ -219,6 +219,171 @@ static const char *mail_exchange (product_lpi_state_t *state, unsigned side,
   return NULL;
 }
 
+/* MS-RDPBCGR negotiation carried by TPKT/X.224, including bounded Cookie.
+ * Only a paired request and opposite response/failure establish the fact.
+ * Correlation-info flag8 requires a larger PDU and is outside this subset. */
+static unsigned rdp_negotiation (const uint8_t *p, unsigned n)
+{
+  if(n<19 || n>260 || p[0]!=3 || p[1] || dns_u16(p+2)!=n || p[4]!=n-5 ||
+     (p[5]!=0xe0 && p[5]!=0xd0) || p[10]) return 0;
+  unsigned at=11;
+  if(p[5]==0xe0 && n>19) {
+    if(n<28 || memcmp(p+at,"Cookie: ",8)) return 0;
+    at+=8;
+    while(at+1<n && p[at]>=32 && p[at]<=126) ++at;
+    if(at+1>=n || p[at]!='\r' || p[at+1]!='\n') return 0;
+    at+=2;
+  }
+  if(n-at!=8 || p[at+2]!=8 || p[at+3] || p[at+5] || p[at+6] || p[at+7]) return 0;
+  unsigned kind=p[at], value=p[at+4];
+  if(p[5]==0xe0 && kind==1 && !(value&~0x0bU) && !(p[at+1]&~0x03U)) return 1;
+  if(p[5]==0xd0 && kind==2 && (value==0 || value==1 || value==2 || value==8)) return 2;
+  if(p[5]==0xd0 && kind==3 && !p[at+1] && value>=1 && value<=6) return 2;
+  return 0;
+}
+static int rdp_exchange (product_lpi_state_t *state, unsigned side,
+  const product_packet_facts_t *facts, const uint8_t *p, unsigned n)
+{
+  if(facts->protocol==6) {
+    unsigned kind=rdp_negotiation(p,n);
+    if(kind==1) {state->rdp_pending=1;state->rdp_side=(uint8_t)side;}
+    else if(state->rdp_pending && side!=state->rdp_side) {
+      state->rdp_pending=0;
+      return kind==2;
+    }
+  } else if(n==16 && (facts->source_port==3389 || facts->destination_port==3389)) {
+    unsigned flags=dns_u16(p+6), up=dns_u16(p+12), down=dns_u16(p+14);
+    if(up<256 || up>1600 || down<256 || down>1600) return 0;
+    if(flags==1 && facts->destination_port==3389 && !memcmp(p,"\xff\xff\xff\xff",4)) {
+      memcpy(&state->rdp_sequence,p+8,4);
+      state->rdp_pending=1;state->rdp_side=(uint8_t)side;
+    } else if(state->rdp_pending && side!=state->rdp_side && facts->source_port==3389) {
+      state->rdp_pending=0;
+      return flags==3 && !memcmp(p,&state->rdp_sequence,4);
+    }
+  }
+  return 0;
+}
+
+/* Selected unencrypted OpenVPN control envelope, any TCP/UDP port.
+ * nDPI session continuity and remote-session matching inform this state only.
+ * No HMAC-size guessing, obfuscation, reassembly or inner TLS inspection. */
+static int openvpn_exchange (product_lpi_state_t *state, unsigned side,
+                             unsigned transport, const uint8_t *p, unsigned n)
+{
+  if(transport==6) {
+    if(n<2 || dns_u16(p)!=n-2) return 0;
+    p+=2;n-=2;
+  }
+  if(n<14 || n>=1200 || (p[0]&7)) return 0;
+  unsigned opcode=p[0]>>3;
+  int client=opcode==1 || opcode==7, server=opcode==2 || opcode==8;
+  if(!client && !server && opcode!=4 && opcode!=5) return 0;
+  if(!memcmp(p+4,"\x21\x12\xa4\x42",4)) return 0; /* STUN */
+  unsigned nonzero=0;
+  for(unsigned i=1;i<=8;++i) nonzero|=p[i];
+  if(!nonzero) return 0;
+  unsigned count=p[9], at=10;
+  if(count>8 || count*4U>n-at) return 0;
+  at+=count*4;
+  const uint8_t *remote=NULL;
+  if(count) {if(n-at<8) return 0;remote=p+at;at+=8;}
+  if(opcode!=5) {
+    if(n-at<4) return 0;
+    if((client || server) && (p[at] || p[at+1] || p[at+2] || p[at+3])) return 0;
+    at+=4;
+  }
+  if((client || server || opcode==5) && at!=n) return 0;
+  if(!state->ovpn_count[side]) {
+    if(!client && !server) return 0;
+    memcpy(state->ovpn_session[side],p+1,8);
+    state->ovpn_reset[side]=(uint8_t)(client?1:2);
+  } else if(memcmp(state->ovpn_session[side],p+1,8)) {
+    state->ovpn_count[0]=state->ovpn_count[1]=0;
+    return 0;
+  }
+  if(remote && state->ovpn_count[!side] &&
+     memcmp(remote,state->ovpn_session[!side],8)) {
+    state->ovpn_count[0]=state->ovpn_count[1]=0;
+    return 0;
+  }
+  if(state->ovpn_count[side]<2) ++state->ovpn_count[side];
+  if(server && remote && state->ovpn_count[!side] && state->ovpn_reset[!side]==1)
+    return 1;
+  return state->ovpn_count[0]==2 && state->ovpn_count[1]==2 &&
+    state->ovpn_reset[0]!=state->ovpn_reset[1];
+}
+
+enum { WG_NONE, WG_INITIATION, WG_TRANSPORT_ONE, WG_TRANSPORT_BOTH };
+/* WireGuard fixed framing and cross-direction indices; opaque encrypted body.
+ * Unlike nDPI's retransmission shortcut, initiation alone never publishes. */
+static int wireguard_exchange (product_lpi_state_t *state, unsigned side,
+                               const uint8_t *p, unsigned n)
+{
+  if(n<32 || p[1] || p[2] || p[3]) return 0;
+  uint32_t index;
+  memcpy(&index,p+4,4);
+  if(p[0]==1 && n==148) {
+    state->wg_stage=WG_INITIATION;state->wg_side=(uint8_t)side;
+    state->wg_index[side]=index;
+  } else if((p[0]==2 && n==92) || (p[0]==3 && n==64)) {
+    if(p[0]==2) memcpy(&index,p+8,4);
+    if(state->wg_stage==WG_INITIATION && side!=state->wg_side) {
+      int match=index==state->wg_index[!side];
+      state->wg_stage=WG_NONE;
+      return match;
+    }
+  } else if(p[0]==4) {
+    if(state->wg_stage==WG_NONE) {
+      state->wg_stage=WG_TRANSPORT_ONE;state->wg_side=(uint8_t)side;
+      state->wg_index[side]=index;
+    } else if(state->wg_stage==WG_TRANSPORT_ONE && side!=state->wg_side) {
+      state->wg_index[side]=index;state->wg_stage=WG_TRANSPORT_BOTH;
+    } else if(state->wg_stage==WG_TRANSPORT_BOTH) {
+      if(state->wg_index[side]==index) return 1;
+      state->wg_stage=WG_NONE;
+    }
+  }
+  return 0;
+}
+
+/* RFC1928 negotiation and SOCKS4/4a request/reply framing. Bounded current
+ * messages only; neither authentication nor a working proxy is inferred. */
+static const char *socks_exchange (product_lpi_state_t *state, unsigned side,
+                                  const uint8_t *p, unsigned n)
+{
+  if(state->socks_version && side!=state->socks_side) {
+    unsigned version=state->socks_version;
+    state->socks_version=0;
+    if(version==4 && n==8 && p[0]==0 && p[1]>=90 && p[1]<=93)
+      return "sakamoto:socks4";
+    if(version==5 && n==2 && p[0]==5 &&
+       (p[1]==255 || (state->socks_methods[p[1]/8] & (1U<<(p[1]%8)))))
+      return "sakamoto:socks5";
+  }
+  if(n>=9 && n<=512 && p[0]==4 && (p[1]==1 || p[1]==2) && dns_u16(p+2)) {
+    unsigned at=8;
+    while(at<n && p[at]) ++at;
+    if(at==n) return NULL;
+    ++at;
+    if(!p[4] && !p[5] && !p[6] && p[7]) {
+      unsigned start=at;
+      while(at<n && p[at]>=33 && p[at]<=126) ++at;
+      if(at==start || at==n || p[at]) return NULL;
+      ++at;
+    }
+    if(at==n) {state->socks_version=4;state->socks_side=(uint8_t)side;}
+  }
+  if(n>=3 && n<=34 && p[0]==5 && p[1] && n==2U+p[1]) {
+    /* RFC1928's full method byte space, including private-use offers. */
+    for(unsigned i=2;i<n;++i) if(p[i]==255) return NULL;
+    memset(state->socks_methods,0,sizeof state->socks_methods);
+    for(unsigned i=2;i<n;++i) state->socks_methods[p[i]/8]|=(uint8_t)(1U<<(p[i]%8));
+    state->socks_version=5;state->socks_side=(uint8_t)side;
+  }
+  return NULL;
+}
+
 /* Resolve one unpublished guess before any catalog mapping. Explicitly prefer
  * QUIC's modern Initial framing over port heuristics; mDNS requires its own
  * framing and either 5353 endpoint. Never union conflicting current guesses.
@@ -228,12 +393,17 @@ static const char *resolve_guess (const char *base,
   const char **companion, product_lpi_state_t *state, unsigned side)
 {
   *companion=NULL;
+  if(rdp_exchange(state,side,facts,payload,length)) return "sakamoto:rdp";
+  if(openvpn_exchange(state,side,facts->protocol,payload,length)) return "sakamoto:openvpn";
   if (facts->protocol==17) {
+    if (wireguard_exchange(state,side,payload,length)) return "sakamoto:wireguard";
     if (quic_initial(payload,length)) return "lpi:quic";
     if ((facts->source_port==5353 || facts->destination_port==5353)
         && mdns_message(payload,length)) return "sakamoto:mdns";
   }
   if (facts->protocol==6) {
+    const char *proxy=socks_exchange(state,side,payload,length);
+    if(proxy) return proxy;
     const char *mail=mail_exchange(state,side,facts,payload,length,companion);
     if(mail) return mail;
     if((facts->source_port==20 || facts->destination_port==20)

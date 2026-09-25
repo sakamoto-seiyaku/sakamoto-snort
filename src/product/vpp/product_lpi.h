@@ -27,6 +27,12 @@ typedef struct {
   uint8_t attempts, available, stop_reason, last_outcome;
   /* Direction is the existing ORIG/REPLY observation, never inferred from port. */
   uint8_t mail_pending, mail_side, ftps_stage, ftps_side;
+  uint8_t socks_version, socks_side, socks_methods[32];
+  uint8_t wg_stage, wg_side;
+  uint32_t wg_index[2];
+  uint8_t ovpn_session[2][8], ovpn_count[2], ovpn_reset[2];
+  uint8_t rdp_pending, rdp_side;
+  uint32_t rdp_sequence;
 } product_lpi_state_t;
 static inline const char *product_lpi_stop_name (unsigned reason)
 {

@@ -13,6 +13,11 @@ pub const APPLICATION_PROTOCOL_ID_SMTP: u32 = 1007;
 pub const APPLICATION_PROTOCOL_ID_FTP_CONTROL: u32 = 1008;
 pub const APPLICATION_PROTOCOL_ID_FTP_DATA: u32 = 1009;
 pub const APPLICATION_PROTOCOL_ID_FTPS: u32 = 1010;
+pub const APPLICATION_PROTOCOL_ID_OPENVPN: u32 = 1011;
+pub const APPLICATION_PROTOCOL_ID_WIREGUARD: u32 = 1012;
+pub const APPLICATION_PROTOCOL_ID_SOCKS4: u32 = 1013;
+pub const APPLICATION_PROTOCOL_ID_SOCKS5: u32 = 1014;
+pub const APPLICATION_PROTOCOL_ID_RDP: u32 = 1015;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApplicationProtocolEntry {
@@ -34,4 +39,9 @@ pub const APPLICATION_PROTOCOL_CATALOG: &[ApplicationProtocolEntry] = &[
     ApplicationProtocolEntry { id: 1008, key: "ftp-control", status: "active", category: "file-transfer" },
     ApplicationProtocolEntry { id: 1009, key: "ftp-data", status: "active", category: "file-transfer" },
     ApplicationProtocolEntry { id: 1010, key: "ftps", status: "active", category: "file-transfer" },
+    ApplicationProtocolEntry { id: 1011, key: "openvpn", status: "active", category: "vpn" },
+    ApplicationProtocolEntry { id: 1012, key: "wireguard", status: "active", category: "vpn" },
+    ApplicationProtocolEntry { id: 1013, key: "socks4", status: "active", category: "proxy" },
+    ApplicationProtocolEntry { id: 1014, key: "socks5", status: "active", category: "proxy" },
+    ApplicationProtocolEntry { id: 1015, key: "rdp", status: "active", category: "remote-access" },
 ];

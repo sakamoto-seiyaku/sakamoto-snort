@@ -3,7 +3,7 @@
 #define PRODUCT_PROTOCOL_CATALOG_H
 #include <stdint.h>
 #include <string.h>
-#define PRODUCT_PROTOCOL_CATALOG_COUNT 10U
+#define PRODUCT_PROTOCOL_CATALOG_COUNT 15U
 static inline uint64_t product_protocol_bit (uint32_t id)
 {
   switch (id) {
@@ -17,6 +17,11 @@ static inline uint64_t product_protocol_bit (uint32_t id)
     case 1008: return UINT64_C (1) << 7;
     case 1009: return UINT64_C (1) << 8;
     case 1010: return UINT64_C (1) << 9;
+    case 1011: return UINT64_C (1) << 10;
+    case 1012: return UINT64_C (1) << 11;
+    case 1013: return UINT64_C (1) << 12;
+    case 1014: return UINT64_C (1) << 13;
+    case 1015: return UINT64_C (1) << 14;
     default: return 0;
   }
 }
@@ -33,12 +38,17 @@ static inline const char *product_protocol_key (uint32_t id)
     case 1008: return "ftp-control";
     case 1009: return "ftp-data";
     case 1010: return "ftps";
+    case 1011: return "openvpn";
+    case 1012: return "wireguard";
+    case 1013: return "socks4";
+    case 1014: return "socks5";
+    case 1015: return "rdp";
     default: return "";
   }
 }
 static inline uint32_t product_protocol_id_at (unsigned bit)
 {
-  static const uint32_t ids[] = { 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010 };
+  static const uint32_t ids[] = { 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 1015 };
   return bit < PRODUCT_PROTOCOL_CATALOG_COUNT ? ids[bit] : 0;
 }
 static inline uint32_t product_protocol_provider_id (const char *alias)
@@ -55,6 +65,11 @@ static inline uint32_t product_protocol_provider_id (const char *alias)
   if (!strcmp (alias, "sakamoto:ftp-control")) return 1008;
   if (!strcmp (alias, "sakamoto:ftp-data")) return 1009;
   if (!strcmp (alias, "sakamoto:ftps")) return 1010;
+  if (!strcmp (alias, "sakamoto:openvpn")) return 1011;
+  if (!strcmp (alias, "sakamoto:wireguard")) return 1012;
+  if (!strcmp (alias, "sakamoto:socks4")) return 1013;
+  if (!strcmp (alias, "sakamoto:socks5")) return 1014;
+  if (!strcmp (alias, "sakamoto:rdp")) return 1015;
   return 0;
 }
 #endif

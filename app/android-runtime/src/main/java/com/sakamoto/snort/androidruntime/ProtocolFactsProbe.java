@@ -200,6 +200,93 @@ final class ProtocolFactsProbe {
             result.put("echoes", 24); gate(app, nonce, result, "budget_done");
         }
     }
+    private static void proxy(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        try (Socket socket = new Socket()) {
+            socket.setReuseAddress(true); socket.setTcpNoDelay(true);
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(new InetSocketAddress(endpoint, port), 10000); socket.setSoTimeout(10000);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            gate(app, nonce, result, "connected_ready");
+            socket.getOutputStream().write(new byte[] {5, 2, 0, (byte) 128});
+            if (!Arrays.equals(read(socket.getInputStream(), 2), new byte[] {5, 0}))
+                throw new IllegalStateException("SOCKS5 method selection");
+            byte[] address = endpoint.getAddress();
+            if (address.length != 4) throw new IllegalArgumentException("probe IPv4 target");
+            int target = plan.getInt("targetPort");
+            if (target < 1 || target > 65535) throw new IllegalArgumentException("proxy target port");
+            byte[] request = new byte[] {5, 1, 0, 1, address[0], address[1], address[2], address[3],
+                    (byte) (target >>> 8), (byte) target};
+            socket.getOutputStream().write(request);
+            byte[] response = read(socket.getInputStream(), 10);
+            request[1] = 0;
+            if (!Arrays.equals(request, response)) throw new IllegalStateException("SOCKS5 CONNECT");
+            result.put("proxyConnected", true);
+            byte[] first = (nonce + ":0\n").getBytes(StandardCharsets.US_ASCII);
+            socket.getOutputStream().write(first);
+            if (!Arrays.equals(first, read(socket.getInputStream(), first.length)))
+                throw new IllegalStateException("proxy initial delivery");
+            gate(app, nonce, result, "tunnel_ready");
+            byte[] blocked = (nonce + ":1\n").getBytes(StandardCharsets.US_ASCII);
+            socket.setSoTimeout(1200); socket.getOutputStream().write(blocked);
+            try { socket.getInputStream().read(); throw new IllegalStateException("expected proxy policy timeout"); }
+            catch (SocketTimeoutException expected) { result.put("blockedTimeout", true); }
+            gate(app, nonce, result, "blocked");
+            socket.setSoTimeout(15000);
+            if (!Arrays.equals(blocked, read(socket.getInputStream(), blocked.length)))
+                throw new IllegalStateException("proxy recovery delivery");
+            for (int i = 2; i < 26; ++i) {
+                byte[] message = (nonce + ":" + i + "\n").getBytes(StandardCharsets.US_ASCII);
+                socket.getOutputStream().write(message);
+                if (!Arrays.equals(message, read(socket.getInputStream(), message.length)))
+                    throw new IllegalStateException("proxy relayed delivery");
+                Thread.sleep(30);
+            }
+            result.put("echoes", 25); gate(app, nonce, result, "budget_done");
+        }
+    }
+    private static void receiveDatagram(DatagramSocket socket, byte[] expected) throws Exception {
+        DatagramPacket response = new DatagramPacket(new byte[4096], 4096);
+        socket.receive(response);
+        if (!Arrays.equals(expected, Arrays.copyOf(response.getData(), response.getLength())))
+            throw new IllegalStateException("WireGuard peer response mismatch");
+    }
+    private static void wireguard(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        JSONObject fixture = plan.getJSONObject("wireguard");
+        org.json.JSONArray pairs = fixture.getJSONArray("pairs");
+        if (pairs.length() != 26 || !fixture.getString("label").equals(nonce))
+            throw new IllegalArgumentException("WireGuard session fixture");
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.setReuseAddress(true); socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port); socket.setSoTimeout(5000);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            gate(app, nonce, result, "connected_ready");
+            byte[] initial = hex(fixture.getString("initial"));
+            if (initial.length != 148) throw new IllegalArgumentException("WireGuard initiation");
+            socket.send(new DatagramPacket(initial, initial.length));
+            receiveDatagram(socket, hex(fixture.getString("response")));
+            result.put("handshakeResponse", true);
+            byte[] first = hex(pairs.getJSONObject(0).getString("request"));
+            socket.send(new DatagramPacket(first, first.length));
+            receiveDatagram(socket, hex(pairs.getJSONObject(0).getString("reply")));
+            gate(app, nonce, result, "tunnel_ready");
+            byte[] blocked = hex(pairs.getJSONObject(1).getString("request"));
+            socket.setSoTimeout(1200); socket.send(new DatagramPacket(blocked, blocked.length));
+            try { socket.receive(new DatagramPacket(new byte[4096], 4096));
+                throw new IllegalStateException("expected WireGuard policy timeout"); }
+            catch (SocketTimeoutException expected) { result.put("blockedTimeout", true); }
+            gate(app, nonce, result, "blocked");
+            socket.setSoTimeout(5000);
+            for (int i = 1; i < 26; ++i) {
+                byte[] message = hex(pairs.getJSONObject(i).getString("request"));
+                socket.send(new DatagramPacket(message, message.length));
+                receiveDatagram(socket, hex(pairs.getJSONObject(i).getString("reply")));
+                Thread.sleep(30);
+            }
+            result.put("echoes", 25); gate(app, nonce, result, "budget_done");
+        }
+    }
     static void start(Context context, String text) {
         final JSONObject plan;
         final String nonce;
@@ -220,7 +307,9 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.getString("mode").equals("tcp")) tcp(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.optString("r3Protocol").equals("wireguard")) wireguard(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.getString("mode").equals("tcp")) tcp(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.getString("mode").equals("udp")) udp(app, plan, result, nonce, endpoint, local, source, port);
                 else throw new IllegalArgumentException("mode");
             } catch (Exception error) {
