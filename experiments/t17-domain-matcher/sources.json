@@ -1,0 +1,16 @@
+[
+  {
+    "name": "libdatrie",
+    "repository": "tlwg/libdatrie",
+    "revision": "665edc5ec1639a81df004d4f92f07a73d5b96aba",
+    "license": "LGPL-2.1-or-later",
+    "archive_sha256": "4fd05625e4b11b7fef6b4b7c46f8489326a8a61adc27d66f94024b5281ab6e75"
+  },
+  {
+    "name": "valkey",
+    "repository": "valkey-io/valkey",
+    "revision": "05a9c29c62538519d870d6512978f80ac58a758f",
+    "license": "BSD-3-Clause file notices",
+    "archive_sha256": "7ca1189ba1863881fca6ec8dd4f62b1c93ee5ccca37d19ed5fa0b11336ade496"
+  }
+]
