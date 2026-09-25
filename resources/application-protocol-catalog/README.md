@@ -3,7 +3,7 @@
 `catalog.tsv` is the authoritative, version-controlled build input for
 Sakamoto application protocol identity. It is not runtime hot-loaded user
 configuration. Adding a protocol requires a software release and a runtime
-restart so generated C++/Rust/product/API constants are used consistently.
+restart so generated C/Rust/product/API constants are used consistently.
 
 Each active row owns a stable integer `ApplicationProtocolId` and lowercase
 `ApplicationProtocolKey`. Released IDs are append-only: removed protocols stay

@@ -23,7 +23,8 @@ typedef enum {
   PRODUCT_STATIC_INTERFACE = 8, PRODUCT_STATIC_SOURCE_CIDR = 9,
   PRODUCT_STATIC_DESTINATION_CIDR = 10, PRODUCT_STATIC_SOURCE_PORT = 11,
   PRODUCT_STATIC_DESTINATION_PORT = 12,
-  PRODUCT_EXPRESSION_CT_STATE = 13, PRODUCT_EXPRESSION_FLOW_DIRECTION = 14
+  PRODUCT_EXPRESSION_CT_STATE = 13, PRODUCT_EXPRESSION_FLOW_DIRECTION = 14,
+  PRODUCT_EXPRESSION_APPLICATION_PROTOCOL = 15
 } product_static_opcode_t;
 
 #define PRODUCT_L4_POLICY_MAX_RULES UINT32_C (128)
@@ -140,6 +141,8 @@ typedef struct
   uint8_t flow_direction; /* ORIG=1, REPLY=2, independent of device direction. */
   uint8_t ct_state_known;
   uint8_t flow_direction_known;
+  uint64_t protocol_set; /* Stable catalog bit projection, all published facts. */
+  uint8_t protocol_set_known;
 } product_l4_policy_packet_t;
 
 typedef struct
@@ -294,6 +297,7 @@ product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
  * here before their predicates can be cached. Never summarize only the winner. */
 #define PRODUCT_POLICY_DEP_STATIC 1U
 #define PRODUCT_POLICY_DEP_CT 2U
+#define PRODUCT_POLICY_DEP_LPI 4U
 #define PRODUCT_POLICY_CACHE_CAPACITY 128U
 #define PRODUCT_POLICY_CACHE_MAX_CAPACITY 128U
 

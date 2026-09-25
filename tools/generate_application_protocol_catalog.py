@@ -233,103 +233,35 @@ def write_java(entries: list[Entry], out_root: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def write_cpp(entries: list[Entry], out_root: Path) -> None:
-    path = out_root / "src/core/protocol/ApplicationProtocolCatalog.hpp"
+def write_c(entries: list[Entry], out_root: Path) -> None:
+    # The product packet domain is C. Bit positions are a build-local projection;
+    # only stable catalog IDs cross management/storage boundaries.
+    values = list(active(entries))
+    if len(values) > 64:
+        raise ValueError("protocol fact bitset requires an explicit capacity revision")
+    path = out_root / "src/product/vpp/product_protocol_catalog.h"
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "#pragma once",
-        "",
-        "#include <array>",
-        "#include <cstdint>",
-        "#include <optional>",
-        "#include <string_view>",
-        "",
-        "namespace sucre::protocol {",
-        "",
-        "enum class ApplicationProtocolId : std::uint32_t {",
-    ]
-    for entry in entries:
-        lines.append(f"    {entry.const_name} = {entry.id},")
-    lines.extend([
-        "};",
-        "",
-        "struct ApplicationProtocolEntry {",
-        "    ApplicationProtocolId id;",
-        "    std::string_view key;",
-        "    std::string_view status;",
-        "    std::string_view category;",
-        "};",
-        "",
-        "struct ApplicationProtocolProviderAlias {",
-        "    std::string_view alias;",
-        "    ApplicationProtocolId id;",
-        "};",
-        "",
-        "inline constexpr std::uint32_t kApplicationProtocolCatalogVersion = 1;",
-        "inline constexpr std::array<ApplicationProtocolEntry, %d> kApplicationProtocolCatalog = {{"
-        % len(entries),
-    ])
-    for entry in entries:
-        category = "" if entry.category == "-" else entry.category
-        lines.append(
-            f"    {{ApplicationProtocolId::{entry.const_name}, \"{entry.key}\", "
-            f"\"{entry.status}\", \"{category}\"}},"
-        )
-    lines.extend([
-        "}};",
-        "",
-        "inline constexpr std::array<ApplicationProtocolProviderAlias, %d>"
-        % sum(len(entry.provider_aliases) for entry in entries),
-        "    kApplicationProtocolProviderAliases = {{",
-    ])
-    for entry in entries:
+    lines = ["/* Generated from resources/application-protocol-catalog/catalog.tsv. */",
+             "#ifndef PRODUCT_PROTOCOL_CATALOG_H", "#define PRODUCT_PROTOCOL_CATALOG_H",
+             "#include <stdint.h>", "#include <string.h>",
+             f"#define PRODUCT_PROTOCOL_CATALOG_COUNT {len(values)}U",
+             "static inline uint64_t product_protocol_bit (uint32_t id)", "{", "  switch (id) {"]
+    for bit, entry in enumerate(values):
+        lines.append(f"    case {entry.id}: return UINT64_C (1) << {bit};")
+    lines += ["    default: return 0;", "  }", "}",
+              "static inline const char *product_protocol_key (uint32_t id)", "{", "  switch (id) {"]
+    for entry in values:
+        lines.append(f'    case {entry.id}: return "{entry.key}";')
+    lines += ['    default: return "";', "  }", "}",
+              "static inline uint32_t product_protocol_id_at (unsigned bit)", "{",
+              "  static const uint32_t ids[] = { " + ", ".join(str(e.id) for e in values) + " };",
+              "  return bit < PRODUCT_PROTOCOL_CATALOG_COUNT ? ids[bit] : 0;", "}",
+              "static inline uint32_t product_protocol_provider_id (const char *alias)", "{",
+              "  if (!alias) return 0;"]
+    for entry in values:
         for alias in entry.provider_aliases:
-            lines.append(
-                f"        {{\"{alias}\", ApplicationProtocolId::{entry.const_name}}},"
-            )
-    lines.extend([
-        "    }};",
-        "",
-        "inline constexpr std::string_view applicationProtocolKey(ApplicationProtocolId id) {",
-        "    for (const auto &entry : kApplicationProtocolCatalog) {",
-        "        if (entry.id == id) {",
-        "            return entry.key;",
-        "        }",
-        "    }",
-        "    return {};",
-        "}",
-        "",
-        "inline constexpr std::string_view applicationProtocolCategory(ApplicationProtocolId id) {",
-        "    for (const auto &entry : kApplicationProtocolCatalog) {",
-        "        if (entry.id == id) {",
-        "            return entry.category;",
-        "        }",
-        "    }",
-        "    return {};",
-        "}",
-        "",
-        "inline constexpr std::optional<ApplicationProtocolId>",
-        "applicationProtocolIdForProviderAlias(std::string_view alias) {",
-        "    for (const auto &entry : kApplicationProtocolProviderAliases) {",
-        "        if (entry.alias == alias) {",
-        "            return entry.id;",
-        "        }",
-        "    }",
-        "    return std::nullopt;",
-        "}",
-        "",
-        "inline constexpr bool applicationProtocolIsActive(ApplicationProtocolId id) {",
-        "    for (const auto &entry : kApplicationProtocolCatalog) {",
-        "        if (entry.id == id) {",
-        "            return entry.status == std::string_view{\"active\"};",
-        "        }",
-        "    }",
-        "    return false;",
-        "}",
-        "",
-        "} // namespace sucre::protocol",
-        "",
-    ])
+            lines.append(f'  if (!strcmp (alias, "{alias}")) return {entry.id};')
+    lines += ["  return 0;", "}", "#endif", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -399,7 +331,7 @@ def write_schema(entries: list[Entry], out_root: Path) -> None:
 
 def write_all(entries: list[Entry], out_root: Path) -> None:
     write_java(entries, out_root)
-    write_cpp(entries, out_root)
+    write_c(entries, out_root)
     write_rust(entries, out_root)
     write_schema(entries, out_root)
 

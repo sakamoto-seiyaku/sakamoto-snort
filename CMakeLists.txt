@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(sakamoto_snort_workspace LANGUAGES C)
+project(sakamoto_snort_workspace LANGUAGES C CXX)
+add_subdirectory(third_party/libprotoident)
 
 # The former C++ sucre-snort daemon, its host model, and its NDK/APK staging
 # target were deliberately removed. This workspace tests standalone C semantics
@@ -47,6 +48,7 @@ target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
 # testable before graph integration.
 add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
+  src/product/vpp/product_flow_lpi.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
   src/product/vpp/product_flow_icmp.c
@@ -54,6 +56,7 @@ add_library(sakamoto_product_flow_entry STATIC
 target_include_directories(sakamoto_product_flow_entry PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
 )
+target_link_libraries(sakamoto_product_flow_entry PUBLIC sakamoto_lpi)
 target_compile_features(sakamoto_product_flow_entry PRIVATE c_std_11)
 target_compile_options(sakamoto_product_flow_entry PRIVATE -Wall -Wextra -Werror)
 
@@ -246,3 +249,11 @@ add_custom_target(sakamoto-vpp-mainline-pending
 )
 
 message(STATUS "VPP-native C Product: standalone Host tests here; see docs/current/README.md for artifact builds and limits.")
+
+add_executable(sakamoto-product-flow-lpi-test tests/host/product_flow_lpi_test.c
+  src/product/vpp/product_packet.c)
+target_compile_options(sakamoto-product-flow-lpi-test PRIVATE -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-flow-lpi-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy)
+add_test(NAME sakamoto-product-flow-lpi-test COMMAND sakamoto-product-flow-lpi-test)
+add_test(NAME sakamoto-product-protocol-catalog-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/catalog/application_protocol_catalog_contract_test.py")

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "product_l4_policy.h"
+#include "product_protocol_catalog.h"
 
 #include <string.h>
 
@@ -99,7 +100,8 @@ expression_operand_bytes (unsigned op)
   if ((op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION)
       || op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
     return 1;
-  if (op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE
+  if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL
+      || op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE
       || op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT)
     return 4;
   if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
@@ -109,17 +111,20 @@ expression_operand_bytes (unsigned op)
 
 /* Validated source only; skip operands so data bytes cannot become dependencies. */
 static int
-expression_requires_flow (const product_l4_policy_rule_t *rule)
+expression_dependencies (const product_l4_policy_rule_t *rule)
 {
+  unsigned dependencies = 0;
   for (unsigned at = 0; at < rule->expression_length;)
     {
       unsigned op = rule->expression[at++];
       if (op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
-        return 1;
+        dependencies |= PRODUCT_POLICY_DEP_CT;
+      if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL)
+        dependencies |= PRODUCT_POLICY_DEP_LPI;
       if (op <= PRODUCT_STATIC_NOT) continue;
       at += expression_operand_bytes (op);
     }
-  return 0;
+  return dependencies;
 }
 
 /* Rectangular over-approximation of packets for which the whole rule may be
@@ -243,7 +248,7 @@ place_rules (product_l4_policy_view_t *view)
     {
       product_l4_policy_compiled_rule_t *rule = &view->rules[i];
       envelopes[i] = rule_envelope (&rule->source);
-      rule->position = expression_requires_flow (&rule->source)
+      rule->position = expression_dependencies (&rule->source)
         ? PRODUCT_L4_POLICY_POSITION_POST : PRODUCT_L4_POLICY_POSITION_PRE;
       for (unsigned j = 0; rule->position == PRODUCT_L4_POLICY_POSITION_PRE && j < i; ++j)
         if (view->rules[j].source.uid == rule->source.uid
@@ -583,8 +588,8 @@ product_l4_policy_compile_with_budget (product_l4_policy_view_t *view,
           view->uid_buckets[bucket_index].requires_flow |=
             view->rules[rule_index].position == PRODUCT_L4_POLICY_POSITION_POST;
           view->uid_buckets[bucket_index].dependencies |= PRODUCT_POLICY_DEP_STATIC;
-          if (expression_requires_flow (&view->rules[rule_index].source))
-            view->uid_buckets[bucket_index].dependencies |= PRODUCT_POLICY_DEP_CT;
+          view->uid_buckets[bucket_index].dependencies |=
+            expression_dependencies (&view->rules[rule_index].source);
           rule_index++;
         }
 
@@ -681,7 +686,8 @@ product_static_expression_validate (const uint8_t *bytes, uint32_t length)
       if (!size || size > length - at)
         return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
       const uint8_t *arg = bytes + at;
-      if ((op == PRODUCT_EXPRESSION_CT_STATE && (arg[0] < 1 || arg[0] > 3))
+      if ((op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL && !product_protocol_bit (expression_number (arg, 4)))
+          || (op == PRODUCT_EXPRESSION_CT_STATE && (arg[0] < 1 || arg[0] > 3))
           || (op == PRODUCT_EXPRESSION_FLOW_DIRECTION && (arg[0] < 1 || arg[0] > 2))
           || (op == PRODUCT_STATIC_FAMILY && !supported_family (arg[0]))
           || (op == PRODUCT_STATIC_DIRECTION && arg[0] != 1 && arg[0] != 3)
@@ -724,6 +730,12 @@ expression_matches (const product_l4_policy_rule_t *rule,
               value = op == PRODUCT_STATIC_AND ? (left == 0 || right == 0 ? 0 : left == 1 && right == 1 ? 1 : 2)
                               : (left == 1 || right == 1 ? 1 : left == 0 && right == 0 ? 0 : 2);
             }
+        }
+      else if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL)
+        {
+          if (packet->protocol_set_known)
+            value = !!(packet->protocol_set & product_protocol_bit (expression_number (arg, 4)));
+          at += 4;
         }
       else if (op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
         {
@@ -1013,6 +1025,10 @@ cache_guard (product_policy_cache_guard_t *guard,
     {
       COPY(ct_state); COPY(ct_state_known);
       COPY(flow_direction); COPY(flow_direction_known);
+    }
+  if (dependencies & PRODUCT_POLICY_DEP_LPI)
+    {
+      COPY(protocol_set); COPY(protocol_set_known);
     }
 #undef COPY
 }

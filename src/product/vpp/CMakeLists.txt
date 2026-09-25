@@ -2,7 +2,7 @@
 
 cmake_minimum_required(VERSION 3.18)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.tcp" DESTINATION share/licenses/sakamoto)
-project(sakamoto_product_core_plugin LANGUAGES C)
+project(sakamoto_product_core_plugin LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
@@ -185,6 +185,9 @@ include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/hev"
                  "${CMAKE_CURRENT_BINARY_DIR}/hev")
 
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/libprotoident"
+                 "${CMAKE_CURRENT_BINARY_DIR}/libprotoident")
+
 option(SAKAMOTO_PRODUCT_HOST_EVIDENCE
   "Build the Host-only installed Product graph evidence seam" OFF)
 set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE product_packet_graph.c)
@@ -226,6 +229,7 @@ add_vpp_plugin(product_core
     product_l4_policy.c
     product_rule_config.c
     product_flow_entry.c
+    product_flow_lpi.c
     product_flow_end.c
     product_flow_expiry.c
     product_flow_udp.c
@@ -251,7 +255,7 @@ target_include_directories(product_core_plugin PRIVATE
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
-target_link_libraries(product_core_plugin sakamoto_hev_owner)
+target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)

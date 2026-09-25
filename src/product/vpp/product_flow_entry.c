@@ -227,6 +227,8 @@ product_flow_runtime_close (product_flow_runtime_t *pool, uint32_t slot,
   old->next = NO_SLOT;
   old->entry.linked = 0;
   old->entry.end_reason = reason;
+  if (!old->entry.lpi.stop_reason)
+    old->entry.lpi.stop_reason = PRODUCT_LPI_STOP_FLOW_END;
   --pool->stats.linked_entries;
   ++pool->stats.ending_entries;
   ++pool->stats.protocol[entry_protocol (&old->entry)].closed;

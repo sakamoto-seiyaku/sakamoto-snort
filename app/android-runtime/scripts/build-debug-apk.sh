@@ -520,6 +520,7 @@ build_native_stage() {
     -G Ninja
     -DCMAKE_BUILD_TYPE=Release
     "-DCMAKE_TOOLCHAIN_FILE=$toolchain_file"
+    "-DANDROID_STL=c++_static"
     -DANDROID_ABI=arm64-v8a
     "-DANDROID_PLATFORM=android-$android_api"
     "-DVPP_SOURCE_DIR=$vpp_source_dir"
@@ -1102,6 +1103,9 @@ build_apk_only() {
   install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
   python3 "$repo_root/tools/product/hev-notices.py" --output "$payload_assets/hev-notices.txt"
   install -m 0644 "$repo_root/src/product/NOTICE.tcp" "$payload_assets/product-tcp-notices.txt"
+  cat "$repo_root/third_party/libprotoident/README.md" \
+      "$repo_root/third_party/libprotoident/COPYING.LESSER" \
+      "$repo_root/third_party/libprotoident/COPYING" > "$payload_assets/product-lpi-notices.txt"
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"

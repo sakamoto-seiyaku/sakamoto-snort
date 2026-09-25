@@ -19,7 +19,7 @@ BASELINE = REPO / "resources/application-protocol-catalog/released-baseline.tsv"
 GENERATOR = REPO / "tools/generate_application_protocol_catalog.py"
 GENERATED = [
     "app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationProtocolCatalog.java",
-    "src/core/protocol/ApplicationProtocolCatalog.hpp",
+    "src/product/vpp/product_protocol_catalog.h",
     "generated/rust/application_protocol_catalog.rs",
     "docs/api/application-protocol-catalog.schema.json",
 ]

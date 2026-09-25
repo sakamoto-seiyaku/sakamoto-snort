@@ -25,7 +25,7 @@ class Packet(C.Structure):
     _fields_ = [(n, U32) for n in ('uid', 'network_context_id', 'ifindex')] + [
         (n, U16) for n in ('source_port', 'destination_port')] + [(n, U8) for n in (
         'family', 'protocol', 'direction', 'uid_known', 'direction_known', 'network_context_known', 'ifindex_known', 'ports_available')] + [
-        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')]
+        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')] + [('protocol_set', U64), ('protocol_set_known', U8)]
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
@@ -56,6 +56,7 @@ def logical_truth(expr, facts):
         return None if None in truths else False
     fact = facts[op]
     if fact is None: return None
+    if op == 'lpi': return args[0] in fact
     if op in ('src', 'dst'):
         return ipaddress.ip_address(fact) in ipaddress.ip_network(args[0], strict=False)
     if op in ('sport', 'dport'):
@@ -78,6 +79,7 @@ def encode(expr):
     op, *args = expr
     if op in ('and', 'or', 'not'):
         return b''.join(encode(arg) for arg in args) + bytes([{'and':1, 'or':2, 'not':3}[op]])
+    if op == 'lpi': return bytes([15])+args[0].to_bytes(4, 'little')
     if op in ('ct', 'flowdir'):
         return bytes([13 if op == 'ct' else 14, args[0]])
     if op in ('family', 'protocol', 'direction'):
@@ -101,6 +103,8 @@ def packet(facts):
     p.destination_address[:] = ipaddress.ip_address(facts['dst']).packed.ljust(16, b'\0')
     p.ct_state, p.flow_direction = facts.get("ct") or 0, facts.get("flowdir") or 0
     p.ct_state_known, p.flow_direction_known = facts.get("ct") is not None, facts.get("flowdir") is not None
+    p.protocol_set_known = facts.get("lpi") is not None
+    p.protocol_set = sum(1 << (value-1001) for value in (facts.get("lpi") or set()))
     return p
 
 def source(rule):
@@ -116,7 +120,7 @@ def logical(expr, identity=10, priority=1, order=0, action=2, mode=0, uid=17):
     return dict(expr=expr, id=identity, priority=priority, order=order, action=action, mode=mode, uid=uid, reason=identity+100)
 
 BASE = dict(uid=17, family=4, protocol=17, direction=3, network=1, interface=9,
-            src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535, ct=None, flowdir=None)
+            src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535, ct=None, flowdir=None, lpi=None)
 
 def run(lib):
     count = 0
@@ -141,7 +145,7 @@ def run(lib):
             # Compare actual split execution with identical inputs. A pre-flow
             # whole winner is final; only NoMatch runs the post-flow program.
             early = Result()
-            early_facts = facts | dict(ct=None, flowdir=None)
+            early_facts = facts | dict(ct=None, flowdir=None, lpi=None)
             assert lib.product_l4_policy_match_position(view, C.byref(packet(early_facts)), 1, C.byref(early)) == 0
             optimized = early
             if not early.evaluation:
@@ -156,7 +160,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -186,6 +190,32 @@ def run(lib):
             assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), position, C.byref(result)) == 0
             assert result.rule_id == identity, (position, identity, result.rule_id)
         compare(rules, facts)
+
+    # Prove the LPI combinations below actually exercise the advertised plans.
+    for bounds, forced, expected_plan in [((1,6),False,(1,0,0)),
+                                          ((1,65534),False,(0,1,0)),
+                                          ((1,65534),True,(0,0,1))]:
+        r=source(logical(('and',('and',('sport',*bounds),('dport',*bounds)),('lpi',1003))))
+        view=C.create_string_buffer(128*1024);budget=lib.product_l4_policy_default_budget()
+        if forced:budget.direct_entries=budget.factor_rules=0
+        assert lib.product_l4_policy_compile_with_budget(view,C.byref(r),1,C.byref(budget))==0
+        plan=Plan();lib.product_l4_policy_plan_resources(view,C.byref(plan))
+        assert (plan.direct_rules,plan.factorized_rules,plan.residual_rules)==expected_plan
+
+    # T12: set membership, NOT, availability and full application dependencies.
+    for published in (None, set(), {1002}, {1003}, {1002,1003}, {1001,1002,1003,1004,1005}):
+        for mode in (0,1):
+            for ranges in ((1,6),(1,65534)):
+                expr=('and',('and',('sport',*ranges),('dport',*ranges)),('lpi',1003))
+                rules=[logical(expr,identity=10,priority=1,mode=mode),
+                       logical(('not',('lpi',1003)),identity=20,priority=2),
+                       logical(('lpi',1002),identity=30,priority=3,action=1),
+                       logical(('family',4),identity=40,priority=4,action=1)]
+                for port in (0,1,6,7,65534,65535):
+                    compare(rules, BASE | dict(lpi=published,sport=port,dport=port))
+        for expr, truth in [(('lpi',1003), None if published is None else 1003 in published),
+                            (('not',('lpi',1003)), None if published is None else 1003 not in published)]:
+            compare([logical(expr)], BASE | dict(lpi=published),10 if truth is True else 0)
 
     # T10: 16 / 32 / 900 exact-mask products and every range edge, with
     # same-action competitors, observe mode and dynamic whole-rule placement.
@@ -326,7 +356,7 @@ def run(lib):
     # Deterministic AST generation, independent ordered evaluation, both endpoint
     # orientations and availability values; no compiled plan feeds expectations.
     rng = random.Random(257)
-    leaves = [c[0] for c in cases] + [('ct',1),('ct',2),('ct',3),('flowdir',1),('flowdir',2)]
+    leaves = [c[0] for c in cases] + [('ct',1),('ct',2),('ct',3),('flowdir',1),('flowdir',2),('lpi',1002),('lpi',1003),('lpi',1004)]
     def tree(depth):
         if not depth or rng.randrange(3)==0: return rng.choice(leaves)
         op = rng.choice(['and','or','not'])
@@ -338,7 +368,7 @@ def run(lib):
             while len(encode(expr)) > 64: expr = tree(3)
             rules.append(logical(expr, identity=100+j, priority=rng.randrange(3),
                                  order=rng.randrange(3), action=rng.choice([1,2]), mode=rng.randrange(2)))
-        facts = BASE | dict(ct=rng.choice([None,1,2,3]),flowdir=rng.choice([None,1,2]),
+        facts = BASE | dict(lpi=rng.choice([None,set(),{1002},{1002,1003},{1004}]),ct=rng.choice([None,1,2,3]),flowdir=rng.choice([None,1,2]),
                             network=rng.choice([1,2,None]), interface=rng.choice([9,10,None]),
                             direction=rng.choice([1,3,None]), sport=rng.choice([0,1,65534,65535]),
                             dport=rng.choice([0,1,65534,65535]), protocol=rng.choice([6,17]))
@@ -346,7 +376,7 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06–T11 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
+    print(f'T06–T12 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

@@ -11,6 +11,7 @@
 #include "product_packet_graph.h"
 #include "product_core_policy.h"
 #include "product_flow_entry.h"
+#include "product_protocol_catalog.h"
 #include "product_flow_end.h"
 #include "product_flow_expiry.h"
 #include "product_root_nfqueue_adapter.h"
@@ -233,6 +234,8 @@ typedef struct
   product_l4_policy_position_t position;
   product_policy_cache_t *cache; /* Current owner only; packet lifetime. */
   u64 flow_incarnation;
+  u64 protocols;
+  u8 protocols_available;
 } product_policy_snapshot_t;
 
 typedef struct
@@ -451,6 +454,8 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
       snapshot->ct = (product_ct_facts_t) {0};
       snapshot->cache = 0;
       snapshot->flow_incarnation = 0;
+      snapshot->protocols = 0;
+      snapshot->protocols_available = 0;
       snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
@@ -2256,6 +2261,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
     return 0;
 
   graph->vlib_main = vm;
+
   graph->generation = generation;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_fragment_start (vm);
@@ -2633,6 +2639,27 @@ product_packet_graph_flow_observe (
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK || status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED)
     product_flow_expiry_observed (vm, &observation, packet.timestamp);
   const product_flow_entry_t *entry = observation.entry;
+  if (status == PRODUCT_FLOW_ENTRY_STATUS_OK && entry
+      && observation.tracker.facts.state != PRODUCT_CT_INVALID)
+    {
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      u32 offset = lease->facts.transport_offset + lease->facts.l4_header_length;
+      u32 length = lease->facts.transport_length >= lease->facts.l4_header_length
+        ? lease->facts.transport_length - lease->facts.l4_header_length : 0;
+      if (offset <= buffer->current_length && length <= buffer->current_length - offset)
+        status = product_flow_entry_identify (pool, observation.slot,
+          packet.policy.generation, entry->incarnation, &lease->facts,
+          (const u8 *) vlib_buffer_get_current (buffer) + offset, length);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (trace)
+        fprintf (stderr, "t12 event=lpi token=%llu generation=%llu worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u status=%u\n",
+          (unsigned long long) lease->origin_obligation_id,
+          (unsigned long long) packet.policy.generation, worker, observation.slot,
+          (unsigned long long) entry->incarnation, entry->lpi.available,
+          (unsigned long long) entry->lpi.protocols, entry->lpi.attempts,
+          entry->lpi.bytes, entry->lpi.stop_reason, entry->lpi.last_outcome, status);
+#endif
+    }
   const char *event = "observe";
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK)
     {
@@ -2903,6 +2930,8 @@ product_packet_graph_l4_view_evaluate (
   u64 previous_hits = snapshot->cache ? snapshot->cache->hits : 0;
 #endif
   product_packet_graph_l4_packet_projection (lease, &packet);
+  packet.protocol_set = snapshot->protocols;
+  packet.protocol_set_known = snapshot->protocols_available;
   packet.ct_state = snapshot->ct.state;
   packet.ct_state_known = snapshot->ct.state != PRODUCT_CT_UNKNOWN;
   packet.flow_direction = snapshot->ct.direction;
@@ -3799,6 +3828,8 @@ product_packet_graph_policy_on_owner (
       product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
       snapshot.ct = observation.tracker.facts;
       snapshot.flow_incarnation = observation.entry ? observation.entry->incarnation : 0;
+      snapshot.protocols = observation.entry ? observation.entry->lpi.protocols : 0;
+      snapshot.protocols_available = observation.entry ? observation.entry->lpi.available : 0;
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
@@ -4056,6 +4087,17 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             (unsigned long long)e->incarnation,
             (unsigned long long)e->side_packets[0], (unsigned long long)e->side_packets[1],
             (unsigned long long)e->side_bytes[0], (unsigned long long)e->side_bytes[1]);
+          vlib_cli_output (vm, "flow.lpi worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u stop_reason=%s",
+            worker, slot, (unsigned long long)e->incarnation, e->lpi.available,
+            (unsigned long long)e->lpi.protocols, e->lpi.attempts, e->lpi.bytes,
+            e->lpi.stop_reason, e->lpi.last_outcome, product_lpi_stop_name(e->lpi.stop_reason));
+          for (unsigned bit = 0; bit < PRODUCT_PROTOCOL_CATALOG_COUNT; ++bit)
+            {
+              u32 id = product_protocol_id_at (bit);
+              if (e->lpi.protocols & product_protocol_bit (id))
+                vlib_cli_output (vm, "flow.protocol_fact worker=%u slot=%u incarnation=%llu id=%u key=%s",
+                  worker, slot, (unsigned long long)e->incarnation, id, product_protocol_key (id));
+            }
           if (e->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_UDP)
             vlib_cli_output (vm, "flow.udp worker=%u slot=%u incarnation=%llu phase=%u",
               worker, slot, (unsigned long long) e->incarnation,
@@ -4416,6 +4458,8 @@ VLIB_CONFIG_FUNCTION (product_flow_startup_config, "product-flow-runtime");
 static clib_error_t *
 product_packet_graph_init (vlib_main_t *vm)
 {
+  if (product_lpi_init ())
+    return clib_error_return (0, "application protocol registry initialization failed");
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u32 worker;
   graph->vlib_main = vm;
