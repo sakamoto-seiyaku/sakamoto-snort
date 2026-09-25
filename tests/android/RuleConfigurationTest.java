@@ -27,6 +27,15 @@ public final class RuleConfigurationTest {
         require(full[7] == 4 && full[33] == 6 && full[18] == 0x7f000000L);
         long[] mapped = RuleConfiguration.completeWire("0 0 12632 4294967295 4294967295 0 0 6 0 1 ::ffff:192.0.2.1/128 ::ffff:c000:202/128 0 65535 443 443");
         require(mapped[7] == 6 && mapped[20] == 65535 && mapped[21] == 0xc0000201L);
+        long[] graph = RuleConfiguration.completeWire("0 0 4294967295 4294967295 4294967295 5 0 17 3 2 0.0.0.0/0 0.0.0.0/0 0 65535 0 65535\n"
+                + "group 10\nedge 10 1 0\nbind 7 1012632 2 10 1");
+        require(graph.length == 40 && graph[0] == -1 && graph[1] == 1 && graph[2] == 1 && graph[3] == 1 && graph[4] == 1);
+        require(graph[31] == 10 && graph[35] == 7 && graph[39] == 1);
+        long[] groupedReply = new long[13 + 26 + 1 + 3 + 1 + 3 + 5];
+        groupedReply[9] = 1; groupedReply[10] = 1;
+        groupedReply[40] = 1; groupedReply[41] = 1; groupedReply[42] = 1;
+        System.arraycopy(graph, 31, groupedReply, 43, 9);
+        require(new RuleConfiguration.CompleteStatus(groupedReply).properties().contains("binding.0=7,1012632,2,10,1\n"));
         System.out.println("RuleConfiguration: exact inputs, saved/active distinction, unsigned identity, unknown transport");
     }
 }

@@ -38,6 +38,36 @@ public final class RuleConfiguration {
     /** Request-only numeric text. No hostname lookup and no second saved model. */
     public static long[] completeWire(String text) {
         if (text == null) throw new IllegalArgumentException("complete rules required");
+        StringBuilder rules = new StringBuilder();
+        java.util.ArrayList<Long> groups = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> edges = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> bindings = new java.util.ArrayList<>();
+        for (String line : text.split("[\\r\\n]+")) {
+            String[] f = line.trim().split("\\s+");
+            java.util.ArrayList<Long> target;
+            int fields, limit;
+            if (f[0].equals("group")) { target = groups; fields = 1; limit = 64; }
+            else if (f[0].equals("edge")) { target = edges; fields = 3; limit = 512; }
+            else if (f[0].equals("bind")) { target = bindings; fields = 5; limit = 128; }
+            else { rules.append(line).append('\n'); continue; }
+            if (f.length != fields + 1 || target.size() / fields == limit)
+                throw new IllegalArgumentException("invalid graph fields or capacity");
+            for (int i = 1; i < f.length; ++i) target.add(unsigned32(f[i]));
+        }
+        long[] direct = directWire(rules.toString());
+        if (groups.isEmpty() && edges.isEmpty() && bindings.isEmpty()) return direct;
+        long[] wire = new long[5 + direct.length + groups.size() + edges.size() + bindings.size()];
+        wire[0] = -1; wire[1] = direct.length / COMPLETE_RULE_WORDS;
+        wire[2] = groups.size(); wire[3] = edges.size()/3; wire[4] = bindings.size()/5;
+        System.arraycopy(direct, 0, wire, 5, direct.length);
+        int at = 5 + direct.length;
+        for (long n : groups) wire[at++] = n;
+        for (long n : edges) wire[at++] = n;
+        for (long n : bindings) wire[at++] = n;
+        return wire;
+    }
+    private static long[] directWire(String text) {
+        if (text == null) throw new IllegalArgumentException("complete rules required");
         String trimmed = text.trim();
         if (trimmed.isEmpty()) return new long[0];
         String[] lines = trimmed.split("[\\r\\n]+");
@@ -114,13 +144,23 @@ public final class RuleConfiguration {
     public static final class CompleteStatus {
         public final long transportCode, generation, savedRevision, activeRevision, result, saveError, compileError;
         public final int count, activeCount;
+        public final int groupCount, edgeCount, bindingCount;
         private final long[] values;
         public CompleteStatus(long[] reply) {
             if (reply == null || reply.length < COMPLETE_REPLY_HEADER_WORDS) throw new IllegalArgumentException("invalid complete reply");
             count = (int) reply[9]; activeCount = (int) reply[10];
             if (count < 0 || count > MAX_RULES || activeCount < 0 || activeCount > MAX_RULES
-                    || reply.length != COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + activeCount)
+                    || reply.length < COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + activeCount)
                 throw new IllegalArgumentException("invalid complete reply size");
+            int graphAt = COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + activeCount;
+            boolean graph = reply.length != graphAt;
+            if (graph && reply.length < graphAt + 3) throw new IllegalArgumentException("invalid graph reply");
+            long groups = graph ? reply[graphAt] : 0, edges = graph ? reply[graphAt+1] : 0,
+                    bindings = graph ? reply[graphAt+2] : 0;
+            if (groups < 0 || groups > 64 || edges < 0 || edges > 512 || bindings < 0 || bindings > 128
+                    || (graph && reply.length != graphAt + 3 + groups + 3*edges + 5*bindings))
+                throw new IllegalArgumentException("invalid graph reply size");
+            groupCount = (int) groups; edgeCount = (int) edges; bindingCount = (int) bindings;
             values = reply.clone(); transportCode = reply[0]; generation = reply[1];
             savedRevision = reply[2]; activeRevision = reply[3]; result = reply[6];
             saveError = reply[7]; compileError = reply[8];
@@ -146,6 +186,21 @@ public final class RuleConfiguration {
             }
             for (int i = 0; i < activeCount; ++i) out.append("activeVersion.").append(i).append('=')
                     .append(Long.toUnsignedString(values[COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + i])).append('\n');
+            out.append("groupCount=").append(groupCount).append('\n');
+            out.append("edgeCount=").append(edgeCount).append('\n');
+            out.append("bindingCount=").append(bindingCount).append('\n');
+            int at = COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + activeCount + 3;
+            for (int i = 0; i < groupCount; ++i) out.append("group.").append(i).append('=').append(values[at++]).append('\n');
+            for (int i = 0; i < edgeCount; ++i) {
+                out.append("edge.").append(i).append('=');
+                for (int j = 0; j < 3; ++j) { if (j != 0) out.append(','); out.append(values[at++]); }
+                out.append('\n');
+            }
+            for (int i = 0; i < bindingCount; ++i) {
+                out.append("binding.").append(i).append('=');
+                for (int j = 0; j < 5; ++j) { if (j != 0) out.append(','); out.append(values[at++]); }
+                out.append('\n');
+            }
             return out.toString();
         }
     }

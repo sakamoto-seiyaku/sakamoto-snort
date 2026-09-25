@@ -341,6 +341,15 @@ typedef product_direct_rule {
     u8 destination_address[16];
 };
 
+typedef product_group_edge { u32 group; u32 kind; u32 target; };
+typedef product_rule_binding { u32 id; u32 uid; u32 kind; u32 target; u32 mode; };
+typedef product_rule_graph {
+    u32 group_count; u32 edge_count; u32 binding_count;
+    u32 groups[64];
+    vl_api_product_group_edge_t edges[512];
+    vl_api_product_rule_binding_t bindings[128];
+};
+
 define product_core_rule_config {
     u32 client_index;
     u32 context;
@@ -352,6 +361,7 @@ define product_core_rule_config {
     u32 count;
     u32 reserved;
     vl_api_product_direct_rule_t rules[256];
+    vl_api_product_rule_graph_t graph;
 };
 
 define product_core_rule_config_reply {
@@ -372,4 +382,5 @@ define product_core_rule_config_reply {
     u32 compiler_status;
     vl_api_product_direct_rule_t rules[256];
     u64 active_versions[256];
+    vl_api_product_rule_graph_t graph;
 };

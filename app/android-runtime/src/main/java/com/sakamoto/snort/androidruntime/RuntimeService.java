@@ -4939,6 +4939,9 @@ public final class RuntimeService extends VpnService {
             RuleConfiguration.CompleteStatus config = session.completeRuleConfig(operation, expectedSaved, rules);
             RuntimeControlNative.Status packet = session.query();
             writeBestEffortEvidenceFile(path, config.properties()
+                    + "logicalHits=" + packet.policyL4MatchRecords + "\n"
+                    + "actualDrops=" + packet.policyDropRecords + "\n"
+                    + "effectiveRules=" + packet.policyL4RuleCount + "\n"
                     + "queryElapsedMillis=" + android.os.SystemClock.elapsedRealtime() + "\n"
                     + "winnerVersion=" + Long.toUnsignedString(packet.policyL4LastMatchRuleId) + "\n"
                     + "winnerRevision=" + Long.toUnsignedString(packet.policyL4LastMatchRevision) + "\n"

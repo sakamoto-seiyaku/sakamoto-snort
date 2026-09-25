@@ -567,6 +567,24 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
       memcpy (request.rules[i].source_address, mp->rules[i].source_address, 16);
       memcpy (request.rules[i].destination_address, mp->rules[i].destination_address, 16);
     }
+  request.graph.group_count = ntohl (mp->graph.group_count);
+  request.graph.edge_count = ntohl (mp->graph.edge_count);
+  request.graph.binding_count = ntohl (mp->graph.binding_count);
+  for (unsigned i = 0; i < request.graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+    request.graph.groups[i] = ntohl (mp->graph.groups[i]);
+  }
+  for (unsigned i = 0; i < request.graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+    request.graph.edges[i].group = ntohl (mp->graph.edges[i].group);
+    request.graph.edges[i].kind = ntohl (mp->graph.edges[i].kind);
+    request.graph.edges[i].target = ntohl (mp->graph.edges[i].target);
+  }
+  for (unsigned i = 0; i < request.graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+    request.graph.bindings[i].id = ntohl (mp->graph.bindings[i].id);
+    request.graph.bindings[i].uid = ntohl (mp->graph.bindings[i].uid);
+    request.graph.bindings[i].kind = ntohl (mp->graph.bindings[i].kind);
+    request.graph.bindings[i].target = ntohl (mp->graph.bindings[i].target);
+    request.graph.bindings[i].mode = ntohl (mp->graph.bindings[i].mode);
+  }
   sakamoto_product_rule_config_status_t status = {0};
   uint32_t result = SAKAMOTO_RULE_CONFIG_NOT_READY;
   int rv = 0;
@@ -633,6 +651,24 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
         memcpy (rmp->rules[i].source_address, status.rules[i].source_address, 16);
         memcpy (rmp->rules[i].destination_address, status.rules[i].destination_address, 16);
       }
+    rmp->graph.group_count = htonl (status.graph.group_count);
+    rmp->graph.edge_count = htonl (status.graph.edge_count);
+    rmp->graph.binding_count = htonl (status.graph.binding_count);
+    for (unsigned i = 0; i < status.graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+      rmp->graph.groups[i] = htonl (status.graph.groups[i]);
+    }
+    for (unsigned i = 0; i < status.graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+      rmp->graph.edges[i].group = htonl (status.graph.edges[i].group);
+      rmp->graph.edges[i].kind = htonl (status.graph.edges[i].kind);
+      rmp->graph.edges[i].target = htonl (status.graph.edges[i].target);
+    }
+    for (unsigned i = 0; i < status.graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+      rmp->graph.bindings[i].id = htonl (status.graph.bindings[i].id);
+      rmp->graph.bindings[i].uid = htonl (status.graph.bindings[i].uid);
+      rmp->graph.bindings[i].kind = htonl (status.graph.bindings[i].kind);
+      rmp->graph.bindings[i].target = htonl (status.graph.bindings[i].target);
+      rmp->graph.bindings[i].mode = htonl (status.graph.bindings[i].mode);
+    }
     for (unsigned i = 0; i < status.active_count; ++i)
       rmp->active_versions[i] = clib_host_to_net_u64 (status.active_versions[i]);
 

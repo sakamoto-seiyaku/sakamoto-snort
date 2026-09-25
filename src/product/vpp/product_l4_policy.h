@@ -94,6 +94,7 @@ typedef struct
   uint8_t source_prefix_length;
   uint8_t destination_prefix_length;
   uint8_t action;
+  uint8_t mode; /* 0 enforce, 1 observe; zero preserves direct-rule callers. */
   uint8_t source_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];
   uint8_t destination_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];
 } product_l4_policy_rule_t;
@@ -154,6 +155,8 @@ typedef struct
   uint8_t stage_verdict;
   uint8_t action;
   uint8_t no_match_reason;
+  uint8_t mode;
+  uint8_t actual_action;
   uint64_t rule_id;
   uint32_t reason_id;
   uint32_t priority;

@@ -56,6 +56,316 @@ static uint32_t publish(void *opaque, uint64_t revision, uint64_t hash,
     return 0;
 }
 
+static void reusable_groups(void) {
+    char directory[] = "/tmp/sakamoto-rule-groups-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256];
+    snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {
+        .schema = 1,
+        .operation = SAKAMOTO_RULE_CONFIG_REPLACE_ALL,
+        .expected_saved_revision = 1,
+        .count = 1,
+        .rules = {{.uid = UINT32_MAX,
+                   .family = 4,
+                   .protocol = 17,
+                   .action = 2,
+                   .network_context = UINT32_MAX,
+                   .ifindex = UINT32_MAX,
+                   .source_port_last = 65535,
+                   .destination_port_last = 65535}},
+        .graph = {.group_count = 2,
+                  .edge_count = 3,
+                  .binding_count = 3,
+                  .groups = {10, 20},
+                  .edges = {{10, 1, 0}, {20, 2, 10}, {20, 1, 0}},
+                  .bindings = {{1, 12345, 2, 20, 0}, {2, 23456, 2, 20, 1}, {3, 12345, 1, 0, 0}}}};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    assert(status.count == 1 && status.active_count == 2);
+    assert(status.graph.group_count == 2 && status.graph.binding_count == 3);
+    for (unsigned i = 0; i < 2; ++i) {
+        product_l4_policy_packet_t packet = {
+            .uid = i ? 23456 : 12345, .uid_known = 1, .family = 4, .protocol = 17};
+        product_l4_policy_match_result_t match;
+        assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+        assert(match.rule_id == status.rules[0].version && match.candidate_count == 1);
+        assert(match.action == 2 && match.mode == i && match.actual_action == (i ? 1 : 2));
+        assert(match.stage_verdict == (i ? 0 : 1));
+    }
+    request.expected_saved_revision = status.saved_revision;
+    request.rules[0] = status.rules[0];
+    unsigned publications = runtime.publications;
+    request.graph.bindings[2].mode = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_MODE_CONFLICT);
+    product_rule_config_query(config, &status);
+    assert(status.error_index == UINT32_MAX && runtime.publications == publications);
+    request.graph.bindings[2].mode = 0;
+    request.graph.edges[0].target = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_REFERENCE);
+    request.graph.edges[0].target = 0;
+    request.graph.edges[0].kind = 2;
+    request.graph.edges[0].target = 20;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_CYCLE);
+    request.graph.edges[0] = (sakamoto_product_group_edge_t){10, 1, 0};
+    request.graph.group_count = 9;
+    request.graph.edge_count = 8;
+    for (unsigned i = 0; i < 9; ++i)
+        request.graph.groups[i] = (i + 1) * 10;
+    for (unsigned i = 0; i < 8; ++i)
+        request.graph.edges[i] = (sakamoto_product_group_edge_t){(i + 1) * 10, 2, (i + 2) * 10};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_LIMIT);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == request.expected_saved_revision &&
+           runtime.publications == publications);
+    request.graph = status.graph;
+    /* Same contents, different identity: both remain candidates; no group winner. */
+    request.count = 2;
+    request.rules[1] = request.rules[0];
+    request.rules[1].version = 0;
+    request.graph.edges[3] = (sakamoto_product_group_edge_t){20, 1, 1};
+    request.graph.edge_count = 4;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.active_count == 4 && status.count == 2);
+    product_l4_policy_packet_t packet = {.uid = 12345, .uid_known = 1, .family = 4, .protocol = 17};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    uint64_t winner = status.rules[0].version < status.rules[1].version ? status.rules[0].version
+                                                                        : status.rules[1].version;
+    assert(match.rule_id == winner && match.candidate_count == 2 && match.action == 2);
+    /* A binding-only update preserves rule identity and changes actual action. */
+    request.expected_saved_revision = status.saved_revision;
+    memcpy(request.rules, status.rules, sizeof(request.rules));
+    request.graph.bindings[0].mode = request.graph.bindings[2].mode = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == winner && match.action == 2 && match.actual_action == 1);
+    product_rule_config_query(config, &status);
+    product_rule_config_close(config);
+    config = product_rule_config_open(path);
+    product_rule_config_query(config, &status);
+    assert(status.graph.edge_count == 4 && status.graph.bindings[1].mode == 1);
+    assert(product_rule_config_activate(config, publish, &runtime) == 0);
+    product_rule_config_close(config);
+    unlink(path);
+    rmdir(directory);
+}
+
+static void graph_resource_boundaries(void) {
+    char directory[] = "/tmp/sakamoto-group-limits-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256];
+    snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {.schema = 1,
+                                                      .operation = 2,
+                                                      .expected_saved_revision = 1,
+                                                      .count = 1,
+                                                      .rules = {{.uid = UINT32_MAX,
+                                                                 .family = 4,
+                                                                 .protocol = 17,
+                                                                 .action = 2,
+                                                                 .network_context = UINT32_MAX,
+                                                                 .ifindex = UINT32_MAX,
+                                                                 .source_port_last = 65535,
+                                                                 .destination_port_last = 65535}},
+                                                      .graph = {.group_count = 8,
+                                                                .edge_count = 8,
+                                                                .binding_count = 1,
+                                                                .bindings = {{1, 12345, 2, 1, 0}}}};
+    for (unsigned i = 0; i < 8; ++i) {
+        request.graph.groups[i] = i + 1;
+        request.graph.edges[i] =
+            (sakamoto_product_group_edge_t){i + 1, i == 7 ? 1 : 2, i == 7 ? 0 : i + 2};
+    }
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    assert(status.active_count == 1 && status.graph.group_count == 8);
+    request.rules[0] = status.rules[0];
+    request.expected_saved_revision = status.saved_revision;
+    memset(&request.graph, 0, sizeof(request.graph));
+    request.graph.group_count = 2;
+    request.graph.groups[0] = 1;
+    request.graph.groups[1] = 2;
+    request.graph.binding_count = 1;
+    request.graph.bindings[0] = (sakamoto_product_rule_binding_t){1, 12345, 2, 1, 0};
+    /* Exactly 4096 traversed references: root + 63*(child+63 leaves) + 63 leaves.
+     * The 4032 repeated leaf paths still compile to one candidate. */
+    for (unsigned i = 0; i < 63; ++i) {
+        request.graph.edges[request.graph.edge_count++] = (sakamoto_product_group_edge_t){1, 2, 2};
+        request.graph.edges[request.graph.edge_count++] = (sakamoto_product_group_edge_t){2, 1, 0};
+        request.graph.edges[request.graph.edge_count++] = (sakamoto_product_group_edge_t){1, 1, 0};
+    }
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.active_count == 1);
+    request.expected_saved_revision = status.saved_revision;
+    request.graph.edges[request.graph.edge_count++] = (sakamoto_product_group_edge_t){1, 1, 0};
+    unsigned publications = runtime.publications;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_LIMIT);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == request.expected_saved_revision &&
+           status.active_revision == status.saved_revision);
+    assert(status.graph.edge_count == 189 && runtime.publications == publications);
+    product_l4_policy_packet_t packet = {.uid = 12345, .uid_known = 1, .family = 4, .protocol = 17};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[0].version && match.candidate_count == 1 &&
+           match.actual_action == 2);
+    /* Effective-view capacity is a save-success/compile-failure, not truncation. */
+    memset(&request.graph, 0, sizeof(request.graph));
+    request.graph.group_count = 1;
+    request.graph.groups[0] = 1;
+    request.graph.edge_count = 2;
+    request.graph.edges[0] = (sakamoto_product_group_edge_t){1, 1, 0};
+    request.graph.edges[1] = (sakamoto_product_group_edge_t){1, 1, 1};
+    request.count = 2;
+    request.rules[1] = request.rules[0];
+    request.rules[1].version = 0;
+    request.graph.binding_count = 65;
+    for (unsigned i = 0; i < 65; ++i)
+        request.graph.bindings[i] = (sakamoto_product_rule_binding_t){i + 1, 12345 + i, 2, 1, 0};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == request.expected_saved_revision + 1 &&
+           status.active_revision == request.expected_saved_revision);
+    assert(status.graph.binding_count == 65 && status.active_count == 1 &&
+           runtime.publications == publications);
+    assert(status.compiler_status == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED);
+    product_rule_config_close(config);
+    config = product_rule_config_open(path);
+    product_rule_config_query(config, &status);
+    assert(status.graph.binding_count == 65 && status.count == 2 && !status.active_revision);
+    assert(product_rule_config_activate(config, publish, &runtime) == SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_close(config);
+    unlink(path);
+    rmdir(directory);
+}
+
+static void ordinary_group_fallback(void) {
+    char directory[] = "/tmp/sakamoto-group-fallback-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256];
+    snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t legacy = {
+        .schema = 1,
+        .operation = 1,
+        .expected_saved_revision = 1,
+        .rule = {.present = 1, .uid = UINT32_MAX, .protocol = 17, .action = 2}};
+    assert(product_rule_config_replace(config, &legacy, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_INVALID);
+
+    sakamoto_product_rule_config_request_t request = {.schema = 1,
+                                                      .operation = 2,
+                                                      .expected_saved_revision = 1,
+                                                      .count = 2,
+                                                      .graph = {.group_count = 1,
+                                                                .groups = {1},
+                                                                .edge_count = 2,
+                                                                .edges = {{1, 1, 1}, {1, 1, 0}},
+                                                                .binding_count = 1,
+                                                                .bindings = {{1, 12345, 2, 1, 0}}}};
+    request.rules[0] = (sakamoto_product_direct_rule_t){.uid = UINT32_MAX,
+                                                        .family = 4,
+                                                        .protocol = 17,
+                                                        .action = 1,
+                                                        .network_context = UINT32_MAX,
+                                                        .ifindex = UINT32_MAX,
+                                                        .source_port_last = 65535,
+                                                        .destination_port_first = 443,
+                                                        .destination_port_last = 443};
+    request.rules[1] = request.rules[0];
+    request.rules[1].action = 2;
+    request.rules[1].priority = UINT32_MAX;
+    request.rules[1].destination_port_first = 0;
+    request.rules[1].destination_port_last = 65535;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    product_l4_policy_packet_t packet = {.uid = 12345,
+                                         .uid_known = 1,
+                                         .family = 4,
+                                         .protocol = 17,
+                                         .ports_available = 1,
+                                         .destination_port = 443};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0 &&
+           match.rule_id == status.rules[0].version && match.actual_action == 1);
+    packet.destination_port = 444;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0 &&
+           match.rule_id == status.rules[1].version && match.actual_action == 2);
+    packet.uid = 23456;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0 && !match.rule_id &&
+           match.stage_verdict == PRODUCT_L4_POLICY_VERDICT_PASS_NEXT);
+    request.expected_saved_revision = status.saved_revision;
+    memcpy(request.rules, status.rules, sizeof(request.rules));
+    /* Invalid unbound groups cannot hide behind application applicability. */
+    request.graph.group_count = 3;
+    request.graph.groups[1] = 2;
+    request.graph.groups[2] = 3;
+    request.graph.edge_count = 4;
+    request.graph.edges[2] = (sakamoto_product_group_edge_t){2, 2, 3};
+    request.graph.edges[3] = (sakamoto_product_group_edge_t){3, 2, 2};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_CYCLE);
+    product_rule_config_close(config);
+    unlink(path);
+    rmdir(directory);
+}
+
+static void legacy_source_rejects_reusable_uid(void) {
+    char directory[] = "/tmp/sakamoto-legacy-uid-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256];
+    snprintf(path, sizeof(path), "%s/rules", directory);
+    FILE *f = fopen(path, "w");
+    assert(
+        f &&
+        fputs(
+            "sakamoto-rule-config/1\n1 65537\n1 4294967295 17 3 2 32000 40608\n7f000001 7f000002\n",
+            f) >= 0);
+    assert(fclose(f) == 0);
+    product_rule_config_t *config = product_rule_config_open(path);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    assert(status.save_error == SAKAMOTO_RULE_CONFIG_INVALID && !status.saved_revision);
+    product_rule_config_close(config);
+    /* V2 direct sources also cannot reinterpret an invalid UID as reusable. */
+    unsigned char raw[144] = {0};
+    memcpy(raw, "SKRULE02", 8);
+    raw[8] = 1;
+    raw[16] = 1;
+    raw[20] = 1;
+    raw[24] = raw[26] = raw[32] = raw[34] = 1;
+    memset(raw + 48, 255, 12);
+    raw[68] = 4;
+    raw[72] = 17;
+    raw[76] = 3;
+    raw[80] = 2;
+    f = fopen(path, "wb");
+    assert(f && fwrite(raw, 1, sizeof(raw), f) == sizeof(raw) && fclose(f) == 0);
+    config = product_rule_config_open(path);
+    product_rule_config_query(config, &status);
+    assert(status.save_error == SAKAMOTO_RULE_CONFIG_INVALID && !status.saved_revision);
+    product_rule_config_close(config);
+    unlink(path);
+    rmdir(directory);
+}
+
 static void complete_configuration(void) {
     char directory[] = "/tmp/sakamoto-rule-full-XXXXXX";
     assert(mkdtemp(directory));
@@ -338,7 +648,9 @@ static void legacy_source_migration(void) {
     snprintf(path, sizeof(path), "%s/rules", directory);
     FILE *file = fopen(path, "w");
     assert(file);
-    assert(fputs("sakamoto-rule-config/1\n12 18364758544493051906\n1 12345 17 3 2 32000 40608\n7f000001 7f000002\n", file) >= 0);
+    assert(fputs("sakamoto-rule-config/1\n12 18364758544493051906\n1 12345 17 3 2 32000 "
+                 "40608\n7f000001 7f000002\n",
+                 file) >= 0);
     assert(fclose(file) == 0);
     product_rule_config_t *config = product_rule_config_open(path);
     sakamoto_product_rule_config_status_t status;
@@ -347,10 +659,10 @@ static void legacy_source_migration(void) {
     assert(status.rules[0].version == UINT64_C(0xfedcba9876540002));
     runtime_t runtime = {0};
     assert(product_rule_config_activate(config, publish, &runtime) == 0);
-    sakamoto_product_rule_config_request_t request = {
-        .schema = 1, .operation = SAKAMOTO_RULE_CONFIG_REPLACE_ALL,
-        .expected_saved_revision = 12, .count = 1
-    };
+    sakamoto_product_rule_config_request_t request = {.schema = 1,
+                                                      .operation = SAKAMOTO_RULE_CONFIG_REPLACE_ALL,
+                                                      .expected_saved_revision = 12,
+                                                      .count = 1};
     request.rules[0] = status.rules[0];
     request.rules[0].base_version = request.rules[0].version;
     request.rules[0].version = 0;
@@ -362,11 +674,16 @@ static void legacy_source_migration(void) {
     assert(status.saved_revision == 13 && status.count == 1 && status.save_error == 0);
     assert(status.rules[0].version == UINT64_C(0xfedcba9876540003) && status.rules[0].action == 1);
     product_rule_config_close(config);
-    unlink(path); rmdir(directory);
+    unlink(path);
+    rmdir(directory);
 }
 
 int main(void) {
     complete_configuration();
+    reusable_groups();
+    graph_resource_boundaries();
+    ordinary_group_fallback();
+    legacy_source_rejects_reusable_uid();
     platform_conditions();
     uncertain_durability();
     legacy_source_migration();

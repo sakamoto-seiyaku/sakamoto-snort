@@ -166,8 +166,8 @@ cat >"$work_dir/product_core.api_types.h" <<'EOF'
 #define SAKAMOTO_TEST_PRODUCT_CORE_TYPES_H
 #include "sakamoto_product_rule_config.h"
 typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;
-typedef struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; } vl_api_product_core_rule_config_t;
-typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; } vl_api_product_core_rule_config_reply_t;
+typedef struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_t;
+typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_reply_t;
 typedef struct {
   int32_t retval;
   uint32_t abi_version;

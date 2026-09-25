@@ -68,7 +68,7 @@ validate_rule (const product_l4_policy_rule_t *rule)
       || !supported_protocol (rule->protocol)
       || !supported_direction (rule->direction)
       || rule->uid == UINT32_MAX || rule->rule_id == 0
-      || rule->reason_id == 0
+      || rule->reason_id == 0 || rule->mode > 1
       || (rule->action != PRODUCT_L4_POLICY_ACTION_ALLOW
           && rule->action != PRODUCT_L4_POLICY_ACTION_DROP)
       || rule->source_prefix_length
@@ -133,7 +133,8 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
       if (status != PRODUCT_L4_POLICY_STATUS_OK)
         return status;
       for (prior_index = 0; prior_index < input_index; prior_index++)
-        if (rules[prior_index].rule_id == rules[input_index].rule_id)
+        if (rules[prior_index].rule_id == rules[input_index].rule_id
+            && rules[prior_index].uid == rules[input_index].uid)
           return PRODUCT_L4_POLICY_STATUS_DUPLICATE_RULE_ID;
     }
 
@@ -325,8 +326,10 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
         {
           result->evaluation = PRODUCT_L4_POLICY_EVALUATION_MATCH;
           result->action = compiled->source.action;
+          result->mode = compiled->source.mode;
+          result->actual_action = result->mode ? PRODUCT_L4_POLICY_ACTION_ALLOW : result->action;
           result->stage_verdict =
-            compiled->source.action == PRODUCT_L4_POLICY_ACTION_DROP
+            result->actual_action == PRODUCT_L4_POLICY_ACTION_DROP
               ? PRODUCT_L4_POLICY_VERDICT_DROP
               : PRODUCT_L4_POLICY_VERDICT_PASS_NEXT;
           result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_NONE;

@@ -1,5 +1,5 @@
 use sakamoto_product_core::{
-    ConfigRule, DirectRule, ErrorCode, ProductCore, ProductError, RuleConfigRequest, Status,
+    ConfigRule, ErrorCode, ProductCore, ProductError, RuleConfigRequest, Status,
 };
 use std::env;
 use std::path::Path;
@@ -33,6 +33,9 @@ fn print_status(label: &str, status: &Status) {
         status.policy_snapshot_identity
     );
     println!("{label}.error_detail={}", status.error_detail);
+    println!("{label}.logical_hits={}", status.policy_l4_match_records);
+    println!("{label}.actual_drops={}", status.policy_drop_records);
+    println!("{label}.effective_rules={}", status.policy_l4_rule_count);
     println!(
         "{label}.winner_version={}",
         status.policy_l4_last_match_rule_id
@@ -97,15 +100,10 @@ fn main() {
                 request.expected_saved_revision = number(0);
                 let text = std::fs::read_to_string(&remaining[1]).unwrap_or_else(|_| usage());
                 for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                    let i = request.count as usize;
-                    if i == request.rules.len() {
-                        usage();
-                    }
-                    request.rules[i] = DirectRule::parse(line).unwrap_or_else(|error| {
-                        eprintln!("rule {}: {}", i, error);
+                    request.push_line(line).unwrap_or_else(|error| {
+                        eprintln!("configuration: {error}");
                         usage()
                     });
-                    request.count += 1;
                 }
             }
             "rule-clear" if remaining.len() == 1 => {
@@ -156,6 +154,31 @@ fn main() {
                     .enumerate()
                 {
                     println!("config.active_version.{i}={version}");
+                }
+                println!(
+                    "config.group_count={}\nconfig.edge_count={}\nconfig.binding_count={}",
+                    s.graph.group_count, s.graph.edge_count, s.graph.binding_count
+                );
+                for (i, id) in s.graph.groups[..s.graph.group_count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    println!("config.group.{i}={id}");
+                }
+                for (i, e) in s.graph.edges[..s.graph.edge_count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    println!("config.edge.{i}={},{},{}", e.group, e.kind, e.target);
+                }
+                for (i, b) in s.graph.bindings[..s.graph.binding_count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    println!(
+                        "config.binding.{i}={},{},{},{},{}",
+                        b.id, b.uid, b.kind, b.target, b.mode
+                    );
                 }
                 if s.result != 0 {
                     std::process::exit(1);

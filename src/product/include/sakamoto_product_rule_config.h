@@ -53,6 +53,33 @@ typedef struct {
     uint8_t source_address[16], destination_address[16];
 } sakamoto_product_direct_rule_t;
 
+#define SAKAMOTO_RULE_CONFIG_MAX_GROUPS 64
+#define SAKAMOTO_RULE_CONFIG_MAX_EDGES 512
+#define SAKAMOTO_RULE_CONFIG_MAX_BINDINGS 128
+#define SAKAMOTO_RULE_CONFIG_MAX_DEPTH 8
+#define SAKAMOTO_RULE_CONFIG_MAX_EXPANSION 4096
+#define SAKAMOTO_RULE_CONFIG_REFERENCE UINT32_C(10)
+#define SAKAMOTO_RULE_CONFIG_CYCLE UINT32_C(11)
+#define SAKAMOTO_RULE_CONFIG_LIMIT UINT32_C(12)
+#define SAKAMOTO_RULE_CONFIG_MODE_CONFLICT UINT32_C(13)
+#define SAKAMOTO_RULE_CONFIG_RULE UINT32_C(1)
+#define SAKAMOTO_RULE_CONFIG_GROUP UINT32_C(2)
+#define SAKAMOTO_RULE_CONFIG_ENFORCE UINT32_C(0)
+#define SAKAMOTO_RULE_CONFIG_OBSERVE UINT32_C(1)
+
+typedef struct {
+    uint32_t group, kind, target;
+} sakamoto_product_group_edge_t;
+typedef struct {
+    uint32_t id, uid, kind, target, mode;
+} sakamoto_product_rule_binding_t;
+typedef struct {
+    uint32_t group_count, edge_count, binding_count;
+    uint32_t groups[SAKAMOTO_RULE_CONFIG_MAX_GROUPS];
+    sakamoto_product_group_edge_t edges[SAKAMOTO_RULE_CONFIG_MAX_EDGES];
+    sakamoto_product_rule_binding_t bindings[SAKAMOTO_RULE_CONFIG_MAX_BINDINGS];
+} sakamoto_product_rule_graph_t;
+
 typedef struct {
     uint32_t schema;
     uint32_t operation;
@@ -60,6 +87,7 @@ typedef struct {
     sakamoto_product_config_rule_t rule;
     uint32_t count, reserved;
     sakamoto_product_direct_rule_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
+    sakamoto_product_rule_graph_t graph;
 } sakamoto_product_rule_config_request_t;
 
 typedef struct {
@@ -76,6 +104,7 @@ typedef struct {
     uint32_t count, active_count, error_index, compiler_status;
     sakamoto_product_direct_rule_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     uint64_t active_versions[SAKAMOTO_RULE_CONFIG_MAX_RULES];
+    sakamoto_product_rule_graph_t graph;
 } sakamoto_product_rule_config_status_t;
 
 #endif

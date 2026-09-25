@@ -11,7 +11,9 @@
 #include <unistd.h>
 
 #define SOURCE_BYTES                                                                               \
-    (24 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 112 * SAKAMOTO_RULE_CONFIG_MAX_RULES)
+    (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 112 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
+     4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
+     20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
 struct product_rule_config {
     char *path;
     sakamoto_product_rule_config_status_t state;
@@ -35,12 +37,14 @@ static uint64_t get(const uint8_t **at, unsigned width) {
 }
 #define RULE_FIELDS(F)                                                                             \
     F(uid)                                                                                         \
-    F(network_context) F(ifindex) F(priority) F(order) F(family) F(protocol) F(direction)          \
-        F(action) F(source_prefix) F(destination_prefix) F(source_port_first) F(source_port_last)  \
-            F(destination_port_first) F(destination_port_last) F(reserved)
+    F(network_context)                                                                             \
+    F(ifindex)                                                                                     \
+    F(priority) F(order) F(family) F(protocol) F(direction) F(action) F(source_prefix)             \
+        F(destination_prefix) F(source_port_first) F(source_port_last) F(destination_port_first)   \
+            F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE02", 8);
+    memcpy(at, "SKRULE03", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -58,6 +62,25 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
         at += 16;
         memcpy(at, r->destination_address, 16);
         at += 16;
+    }
+    const sakamoto_product_rule_graph_t *g = &config->state.graph;
+    put(&at, g->group_count, 4);
+    put(&at, g->edge_count, 4);
+    put(&at, g->binding_count, 4);
+    for (unsigned i = 0; i < g->group_count; ++i)
+        put(&at, g->groups[i], 4);
+    for (unsigned i = 0; i < g->edge_count; ++i) {
+        put(&at, g->edges[i].group, 4);
+        put(&at, g->edges[i].kind, 4);
+        put(&at, g->edges[i].target, 4);
+    }
+    for (unsigned i = 0; i < g->binding_count; ++i) {
+        const sakamoto_product_rule_binding_t *b = &g->bindings[i];
+        put(&at, b->id, 4);
+        put(&at, b->uid, 4);
+        put(&at, b->kind, 4);
+        put(&at, b->target, 4);
+        put(&at, b->mode, 4);
     }
     return (size_t)(at - bytes);
 }
@@ -82,9 +105,8 @@ static int valid_version(uint64_t version) {
     return (version >> 16) != 0 && (version & UINT16_MAX) != 0;
 }
 static int valid_rule(const sakamoto_product_direct_rule_t *r) {
-    if (r->reserved || r->uid == UINT32_MAX || (r->family != 4 && r->family != 6) ||
-        r->protocol == 0 || r->protocol > 255 ||
-        (r->direction != 0 && r->direction != 1 && r->direction != 3) ||
+    if (r->reserved || (r->family != 4 && r->family != 6) || r->protocol == 0 ||
+        r->protocol > 255 || (r->direction != 0 && r->direction != 1 && r->direction != 3) ||
         (r->action != 1 && r->action != 2) || r->source_prefix > (r->family == 4 ? 32U : 128U) ||
         r->destination_prefix > (r->family == 4 ? 32U : 128U) ||
         r->source_port_first > r->source_port_last || r->source_port_last > 65535 ||
@@ -169,7 +191,7 @@ static uint32_t load_v1(product_rule_config_t *c, const uint8_t *bytes, size_t l
     if (r.present) {
         legacy_rule(&c->state.rules[0], &r);
         c->state.rules[0].version = version;
-        if (!valid_rule(&c->state.rules[0]))
+        if (r.uid == UINT32_MAX || !valid_rule(&c->state.rules[0]))
             return SAKAMOTO_RULE_CONFIG_INVALID;
     } else {
         sakamoto_product_config_rule_t empty = {0};
@@ -185,8 +207,98 @@ static uint32_t load_v1(product_rule_config_t *c, const uint8_t *bytes, size_t l
     project(&c->state);
     return 0;
 }
+static int group_index(const sakamoto_product_rule_graph_t *g, uint32_t id) {
+    for (unsigned i = 0; i < g->group_count; ++i)
+        if (g->groups[i] == id)
+            return (int)i;
+    return -1;
+}
+/* Bounded DFS retains all source paths in the saved graph, while membership
+ * deduplicates only the emitted rule/application view. */
+static uint32_t members(const sakamoto_product_rule_config_status_t *s, uint32_t kind,
+                        uint32_t target, uint32_t *stack, unsigned depth, unsigned *steps,
+                        uint8_t *selected) {
+    if (++*steps > SAKAMOTO_RULE_CONFIG_MAX_EXPANSION)
+        return SAKAMOTO_RULE_CONFIG_LIMIT;
+    if (kind == SAKAMOTO_RULE_CONFIG_RULE) {
+        if (target >= s->count)
+            return SAKAMOTO_RULE_CONFIG_REFERENCE;
+        selected[target] = 1;
+        return 0;
+    }
+    if (kind != SAKAMOTO_RULE_CONFIG_GROUP || group_index(&s->graph, target) < 0)
+        return SAKAMOTO_RULE_CONFIG_REFERENCE;
+    for (unsigned i = 0; i < depth; ++i)
+        if (stack[i] == target)
+            return SAKAMOTO_RULE_CONFIG_CYCLE;
+    if (depth == SAKAMOTO_RULE_CONFIG_MAX_DEPTH)
+        return SAKAMOTO_RULE_CONFIG_LIMIT;
+    stack[depth] = target;
+    for (unsigned i = 0; i < s->graph.edge_count; ++i) {
+        const sakamoto_product_group_edge_t *e = &s->graph.edges[i];
+        if (e->group == target) {
+            uint32_t error = members(s, e->kind, e->target, stack, depth + 1, steps, selected);
+            if (error)
+                return error;
+        }
+    }
+    return 0;
+}
+static uint32_t select_members(const sakamoto_product_rule_config_status_t *s, uint32_t kind,
+                               uint32_t target, uint8_t *selected) {
+    uint32_t stack[SAKAMOTO_RULE_CONFIG_MAX_DEPTH];
+    unsigned steps = 0;
+    memset(selected, 0, SAKAMOTO_RULE_CONFIG_MAX_RULES);
+    return members(s, kind, target, stack, 0, &steps, selected);
+}
+static uint32_t validate_graph(const sakamoto_product_rule_config_status_t *s) {
+    const sakamoto_product_rule_graph_t *g = &s->graph;
+    if (g->group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS ||
+        g->edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES ||
+        g->binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+        return SAKAMOTO_RULE_CONFIG_LIMIT;
+    uint8_t selected[SAKAMOTO_RULE_CONFIG_MAX_RULES];
+    for (unsigned i = 0; i < g->group_count; ++i) {
+        if (!g->groups[i])
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        for (unsigned j = 0; j < i; ++j)
+            if (g->groups[j] == g->groups[i])
+                return SAKAMOTO_RULE_CONFIG_CONFLICT;
+        uint32_t error = select_members(s, 2, g->groups[i], selected);
+        if (error)
+            return error;
+    }
+    for (unsigned i = 0; i < g->edge_count; ++i)
+        if (group_index(g, g->edges[i].group) < 0)
+            return SAKAMOTO_RULE_CONFIG_REFERENCE;
+    uint8_t selections[SAKAMOTO_RULE_CONFIG_MAX_BINDINGS][SAKAMOTO_RULE_CONFIG_MAX_RULES];
+    for (unsigned i = 0; i < g->binding_count; ++i) {
+        const sakamoto_product_rule_binding_t *b = &g->bindings[i];
+        if (!b->id || b->uid == UINT32_MAX || b->mode > 1)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        uint8_t *bound = selections[i];
+        uint32_t error = select_members(s, b->kind, b->target, bound);
+        if (error)
+            return error;
+        for (unsigned r = 0; r < s->count; ++r)
+            if (bound[r] && b->mode && s->rules[r].uid == b->uid)
+                return SAKAMOTO_RULE_CONFIG_MODE_CONFLICT;
+        for (unsigned j = 0; j < i; ++j) {
+            const sakamoto_product_rule_binding_t *prior = &g->bindings[j];
+            if (prior->id == b->id)
+                return SAKAMOTO_RULE_CONFIG_CONFLICT;
+            if (prior->uid != b->uid || prior->mode == b->mode)
+                continue;
+            for (unsigned r = 0; r < s->count; ++r)
+                if (bound[r] && selections[j][r])
+                    return SAKAMOTO_RULE_CONFIG_MODE_CONFLICT;
+        }
+    }
+    return 0;
+}
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    if (length < 8 || memcmp(bytes, "SKRULE02", 8))
+    int v3 = length >= 8 && !memcmp(bytes, "SKRULE03", 8);
+    if (length < 8 || (!v3 && memcmp(bytes, "SKRULE02", 8)))
         return load_v1(c, bytes, length);
     if (length < 24)
         return SAKAMOTO_RULE_CONFIG_INVALID;
@@ -195,7 +307,7 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
     uint32_t count = get(&at, 4), retained = get(&at, 4);
     if (!revision || count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
         retained > SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES ||
-        length != 24 + 8 * (size_t)retained + 112 * (size_t)count)
+        length < 24 + 8 * (size_t)retained + 112 * (size_t)count)
         return SAKAMOTO_RULE_CONFIG_INVALID;
     for (unsigned i = 0; i < retained; ++i) {
         uint64_t version = get(&at, 8);
@@ -215,14 +327,48 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         memcpy(r->destination_address, at, 16);
         at += 16;
         int index = retained_index(c, r->version);
-        if (!valid_rule(r) || r->base_version || !valid_version(r->version) || index < 0 ||
-            c->retained[index] != r->version)
+        if ((!v3 && r->uid == UINT32_MAX) || !valid_rule(r) || r->base_version ||
+            !valid_version(r->version) || index < 0 || c->retained[index] != r->version)
             return SAKAMOTO_RULE_CONFIG_INVALID;
         for (unsigned j = 0; j < i; ++j)
             if ((c->state.rules[j].version >> 16) == (r->version >> 16))
                 return SAKAMOTO_RULE_CONFIG_INVALID;
     }
     c->state.count = count;
+    if (v3) {
+        if ((size_t)(bytes + length - at) < 12)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        sakamoto_product_rule_graph_t *g = &c->state.graph;
+        g->group_count = get(&at, 4);
+        g->edge_count = get(&at, 4);
+        g->binding_count = get(&at, 4);
+        if (g->group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS ||
+            g->edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES ||
+            g->binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
+            (size_t)(bytes + length - at) !=
+                4U * g->group_count + 12U * g->edge_count + 20U * g->binding_count)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        for (unsigned i = 0; i < g->group_count; ++i)
+            g->groups[i] = get(&at, 4);
+        for (unsigned i = 0; i < g->edge_count; ++i) {
+            g->edges[i].group = get(&at, 4);
+            g->edges[i].kind = get(&at, 4);
+            g->edges[i].target = get(&at, 4);
+        }
+        for (unsigned i = 0; i < g->binding_count; ++i) {
+            sakamoto_product_rule_binding_t *b = &g->bindings[i];
+            b->id = get(&at, 4);
+            b->uid = get(&at, 4);
+            b->kind = get(&at, 4);
+            b->target = get(&at, 4);
+            b->mode = get(&at, 4);
+        }
+        uint32_t error = validate_graph(&c->state);
+        if (error)
+            return error;
+    }
+    if (at != bytes + length)
+        return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.saved_revision = revision;
     project(&c->state);
     return 0;
@@ -368,10 +514,12 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     c->state.error_index = UINT32_MAX;
     c->state.compiler_status = 0;
     product_l4_policy_rule_t *rules = calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*rules));
+    product_l4_policy_rule_t *effective =
+        calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*effective));
     product_l4_policy_view_t *view = malloc(sizeof(*view));
     uint8_t *bytes = malloc(SOURCE_BYTES);
     uint32_t result = SAKAMOTO_RULE_CONFIG_COMPILE;
-    if (!rules || !view || !bytes)
+    if (!rules || !effective || !view || !bytes)
         goto done;
     for (unsigned i = 0; i < c->state.count; ++i) {
         const sakamoto_product_direct_rule_t *s = &c->state.rules[i];
@@ -401,7 +549,39 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
         memcpy(r->source_address, s->source_address, 16);
         memcpy(r->destination_address, s->destination_address, 16);
     }
-    c->state.compiler_status = product_l4_policy_compile(view, rules, c->state.count);
+    uint32_t effective_count = 0;
+    /* Each implicit direct binding and each explicit binding expands into the
+     * same view. Duplicate paths never reach the worker matcher. */
+    for (unsigned b = 0; b <= c->state.graph.binding_count; ++b) {
+        uint8_t selected[SAKAMOTO_RULE_CONFIG_MAX_RULES];
+        const sakamoto_product_rule_binding_t *binding = b ? &c->state.graph.bindings[b - 1] : NULL;
+        if (binding) {
+            result = select_members(&c->state, binding->kind, binding->target, selected);
+            if (result)
+                goto done;
+        }
+        for (unsigned i = 0; i < c->state.count; ++i) {
+            if (binding ? !selected[i] : rules[i].uid == UINT32_MAX)
+                continue;
+            uint32_t uid = binding ? binding->uid : rules[i].uid;
+            unsigned prior;
+            for (prior = 0; prior < effective_count; ++prior)
+                if (effective[prior].uid == uid && effective[prior].rule_id == rules[i].rule_id)
+                    break;
+            if (prior != effective_count)
+                continue;
+            if (effective_count == SAKAMOTO_RULE_CONFIG_MAX_RULES) {
+                c->state.compiler_status = PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED;
+                result = SAKAMOTO_RULE_CONFIG_COMPILE;
+                goto done;
+            }
+            effective[effective_count] = rules[i];
+            effective[effective_count].uid = uid;
+            effective[effective_count++].mode = binding ? binding->mode : 0;
+        }
+    }
+    result = SAKAMOTO_RULE_CONFIG_COMPILE;
+    c->state.compiler_status = product_l4_policy_compile(view, effective, effective_count);
     if (c->state.compiler_status)
         goto done;
     size_t length = encode(c, bytes);
@@ -412,19 +592,20 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     }
     if (!hash)
         hash = 1;
-    result = publish(opaque, c->state.saved_revision, hash, rules, c->state.count)
+    result = publish(opaque, c->state.saved_revision, hash, effective, effective_count)
                  ? SAKAMOTO_RULE_CONFIG_PUBLISH
                  : 0;
     if (!result) {
         c->state.active_revision = c->state.saved_revision;
-        c->state.active_count = c->state.count;
+        c->state.active_count = effective_count;
         memset(c->state.active_versions, 0, sizeof(c->state.active_versions));
-        for (unsigned i = 0; i < c->state.count; ++i)
-            c->state.active_versions[i] = c->state.rules[i].version;
+        for (unsigned i = 0; i < effective_count; ++i)
+            c->state.active_versions[i] = effective[i].rule_id;
         project(&c->state);
     }
 done:
     c->state.compile_error = result;
+    free(effective);
     free(rules);
     free(view);
     free(bytes);
@@ -495,10 +676,14 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
         return SAKAMOTO_RULE_CONFIG_IO;
     *next = *c;
     memset(next->state.rules, 0, sizeof(next->state.rules));
+    memset(&next->state.graph, 0, sizeof(next->state.graph));
     uint32_t result = SAKAMOTO_RULE_CONFIG_INVALID;
     if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
         const sakamoto_product_config_rule_t *r = &request->rule;
-        if (request->count || r->reserved || r->present > 1 || c->state.count > 1)
+        if (request->count || r->reserved || r->present > 1 ||
+            (r->present && r->uid == UINT32_MAX) || c->state.count > 1 ||
+            c->state.graph.group_count || c->state.graph.binding_count ||
+            request->graph.group_count || request->graph.edge_count || request->graph.binding_count)
             goto done;
         next->state.count = r->present;
         if (r->present) {
@@ -511,6 +696,7 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
                 goto done;
         }
     } else {
+        next->state.graph = request->graph;
         next->state.count = request->count;
         memcpy(next->state.rules, request->rules, request->count * sizeof(request->rules[0]));
     }
@@ -531,8 +717,22 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
             }
     }
     c->state.error_index = UINT32_MAX;
+    result = validate_graph(&next->state);
+    if (result)
+        goto done;
+    c->state.error_index = UINT32_MAX;
     next->state.error_index = UINT32_MAX;
-    int unchanged = next->state.count == c->state.count;
+    int unchanged =
+        next->state.count == c->state.count &&
+        next->state.graph.group_count == c->state.graph.group_count &&
+        next->state.graph.edge_count == c->state.graph.edge_count &&
+        next->state.graph.binding_count == c->state.graph.binding_count &&
+        !memcmp(next->state.graph.groups, c->state.graph.groups,
+                4U * next->state.graph.group_count) &&
+        !memcmp(next->state.graph.edges, c->state.graph.edges,
+                sizeof(next->state.graph.edges[0]) * next->state.graph.edge_count) &&
+        !memcmp(next->state.graph.bindings, c->state.graph.bindings,
+                sizeof(next->state.graph.bindings[0]) * next->state.graph.binding_count);
     for (unsigned i = 0; unchanged && i < next->state.count; ++i)
         unchanged = next->state.rules[i].version == c->state.rules[i].version &&
                     same_content(&next->state.rules[i], &c->state.rules[i]);

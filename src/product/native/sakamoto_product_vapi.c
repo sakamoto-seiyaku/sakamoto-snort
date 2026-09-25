@@ -112,7 +112,8 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
 #undef COPY_RULE
       memcpy (s->rule.source_address, reply->rule.source_address, 4);
       memcpy (s->rule.destination_address, reply->rule.destination_address, 4);
-      if (reply->count > SAKAMOTO_RULE_CONFIG_MAX_RULES || reply->active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
+      if (reply->count > SAKAMOTO_RULE_CONFIG_MAX_RULES || reply->active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+          reply->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || reply->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || reply->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
         { call->invalid_reply = true; call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH; return VAPI_OK; }
       s->count = reply->count; s->active_count = reply->active_count;
       s->error_index = reply->error_index; s->compiler_status = reply->compiler_status;
@@ -139,6 +140,24 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
           memcpy (s->rules[i].source_address, reply->rules[i].source_address, 16);
           memcpy (s->rules[i].destination_address, reply->rules[i].destination_address, 16);
         }
+      s->graph.group_count = reply->graph.group_count;
+      s->graph.edge_count = reply->graph.edge_count;
+      s->graph.binding_count = reply->graph.binding_count;
+      for (unsigned i = 0; i < s->graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+      s->graph.groups[i] = reply->graph.groups[i];
+      }
+      for (unsigned i = 0; i < s->graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+      s->graph.edges[i].group = reply->graph.edges[i].group;
+      s->graph.edges[i].kind = reply->graph.edges[i].kind;
+      s->graph.edges[i].target = reply->graph.edges[i].target;
+      }
+      for (unsigned i = 0; i < s->graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+      s->graph.bindings[i].id = reply->graph.bindings[i].id;
+      s->graph.bindings[i].uid = reply->graph.bindings[i].uid;
+      s->graph.bindings[i].kind = reply->graph.bindings[i].kind;
+      s->graph.bindings[i].target = reply->graph.bindings[i].target;
+      s->graph.bindings[i].mode = reply->graph.bindings[i].mode;
+      }
       for (unsigned i = 0; i < s->active_count; ++i) s->active_versions[i] = reply->active_versions[i];
       call->code = SAKAMOTO_PRODUCT_OK;
     }
@@ -152,7 +171,8 @@ sakamoto_product_session_rule_config (
   sakamoto_product_rule_config_status_t *status)
 {
   if (status) memset (status, 0, sizeof (*status));
-  if (!session || !generation || !request || !status || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
+  if (!session || !generation || !request || !status || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+      request->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || request->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || request->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
   if (pthread_mutex_lock (&session->mutex) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
@@ -198,6 +218,24 @@ sakamoto_product_session_rule_config (
       memcpy (message->payload.rules[i].source_address, request->rules[i].source_address, 16);
       memcpy (message->payload.rules[i].destination_address, request->rules[i].destination_address, 16);
     }
+  message->payload.graph.group_count = request->graph.group_count;
+  message->payload.graph.edge_count = request->graph.edge_count;
+  message->payload.graph.binding_count = request->graph.binding_count;
+  for (unsigned i = 0; i < message->payload.graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+    message->payload.graph.groups[i] = request->graph.groups[i];
+  }
+  for (unsigned i = 0; i < message->payload.graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+    message->payload.graph.edges[i].group = request->graph.edges[i].group;
+    message->payload.graph.edges[i].kind = request->graph.edges[i].kind;
+    message->payload.graph.edges[i].target = request->graph.edges[i].target;
+  }
+  for (unsigned i = 0; i < message->payload.graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+    message->payload.graph.bindings[i].id = request->graph.bindings[i].id;
+    message->payload.graph.bindings[i].uid = request->graph.bindings[i].uid;
+    message->payload.graph.bindings[i].kind = request->graph.bindings[i].kind;
+    message->payload.graph.bindings[i].target = request->graph.bindings[i].target;
+    message->payload.graph.bindings[i].mode = request->graph.bindings[i].mode;
+  }
   rule_config_call_t call = { .generation = generation, .status = status,
                              .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
   vapi_error_e rv = vapi_product_core_rule_config (session->context, message, rule_config_reply, &call);

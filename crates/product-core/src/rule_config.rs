@@ -43,6 +43,45 @@ pub struct DirectRule {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupEdge {
+    pub group: u32,
+    pub kind: u32,
+    pub target: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuleBinding {
+    pub id: u32,
+    pub uid: u32,
+    pub kind: u32,
+    pub target: u32,
+    pub mode: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RuleGraph {
+    pub group_count: u32,
+    pub edge_count: u32,
+    pub binding_count: u32,
+    pub groups: [u32; 64],
+    pub edges: [GroupEdge; 512],
+    pub bindings: [RuleBinding; 128],
+}
+impl Default for RuleGraph {
+    fn default() -> Self {
+        Self {
+            group_count: 0,
+            edge_count: 0,
+            binding_count: 0,
+            groups: [0; 64],
+            edges: [GroupEdge::default(); 512],
+            bindings: [RuleBinding::default(); 128],
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RuleConfigRequest {
     pub schema: u32,
@@ -52,6 +91,7 @@ pub struct RuleConfigRequest {
     pub count: u32,
     pub reserved_full: u32,
     pub rules: [DirectRule; MAX_CONFIG_RULES],
+    pub graph: RuleGraph,
 }
 
 #[repr(C)]
@@ -73,6 +113,7 @@ pub struct RuleConfigStatus {
     pub compiler_status: u32,
     pub rules: [DirectRule; MAX_CONFIG_RULES],
     pub active_versions: [u64; MAX_CONFIG_RULES],
+    pub graph: RuleGraph,
 }
 
 impl DirectRule {
@@ -136,6 +177,61 @@ impl DirectRule {
     }
 }
 
+impl RuleConfigRequest {
+    /// Append one transient diagnostic input line; VPP validates graph semantics.
+    pub fn push_line(&mut self, line: &str) -> Result<(), &'static str> {
+        let f: Vec<_> = line.split_whitespace().collect();
+        if f.is_empty() {
+            return Ok(());
+        }
+        let n = |i: usize| {
+            f[i].parse::<u32>()
+                .map_err(|_| "invalid unsigned graph field")
+        };
+        match f[0] {
+            "group" => {
+                if f.len() != 2 || self.graph.group_count == 64 {
+                    return Err("invalid group count/fields");
+                }
+                self.graph.groups[self.graph.group_count as usize] = n(1)?;
+                self.graph.group_count += 1;
+            }
+            "edge" => {
+                if f.len() != 4 || self.graph.edge_count == 512 {
+                    return Err("invalid edge count/fields");
+                }
+                self.graph.edges[self.graph.edge_count as usize] = GroupEdge {
+                    group: n(1)?,
+                    kind: n(2)?,
+                    target: n(3)?,
+                };
+                self.graph.edge_count += 1;
+            }
+            "bind" => {
+                if f.len() != 6 || self.graph.binding_count == 128 {
+                    return Err("invalid binding count/fields");
+                }
+                self.graph.bindings[self.graph.binding_count as usize] = RuleBinding {
+                    id: n(1)?,
+                    uid: n(2)?,
+                    kind: n(3)?,
+                    target: n(4)?,
+                    mode: n(5)?,
+                };
+                self.graph.binding_count += 1;
+            }
+            _ => {
+                if self.count as usize == MAX_CONFIG_RULES {
+                    return Err("too many source rules");
+                }
+                self.rules[self.count as usize] = DirectRule::parse(line)?;
+                self.count += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Default for RuleConfigRequest {
     fn default() -> Self {
         Self {
@@ -146,6 +242,7 @@ impl Default for RuleConfigRequest {
             count: 0,
             reserved_full: 0,
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
+            graph: RuleGraph::default(),
         }
     }
 }
@@ -167,6 +264,7 @@ impl Default for RuleConfigStatus {
             error_index: u32::MAX,
             compiler_status: 0,
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
+            graph: RuleGraph::default(),
             active_versions: [0; MAX_CONFIG_RULES],
         }
     }
@@ -220,11 +318,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
         assert_eq!(
             std::mem::size_of::<RuleConfigRequest>(),
-            64 + 112 * MAX_CONFIG_RULES
+            64 + 112 * MAX_CONFIG_RULES + 8976
         );
         assert_eq!(
             std::mem::size_of::<RuleConfigStatus>(),
-            112 + 120 * MAX_CONFIG_RULES
+            112 + 120 * MAX_CONFIG_RULES + 8976
         );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,

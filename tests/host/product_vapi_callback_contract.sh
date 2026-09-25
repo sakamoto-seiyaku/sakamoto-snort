@@ -306,11 +306,11 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
-    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; } payload;
+    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; } payload;
 } vapi_msg_product_core_rule_config;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
   saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
-  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; } vapi_payload_product_core_rule_config_reply;
+  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; } vapi_payload_product_core_rule_config_reply;
 typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
   vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
@@ -585,6 +585,7 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
     .result = mode == 4 ? 4 : 0, .compile_error = mode == 4 ? 4 : 0,
     .rule = message->payload.rule,
   };
+  reply.graph = message->payload.graph;
   reply.count = message->payload.count;
   reply.active_count = message->payload.count;
   memcpy (reply.rules, message->payload.rules, sizeof (reply.rules));
@@ -1163,6 +1164,7 @@ main (void)
         .destination_address = {127,0,0,2}}
     };
     if (operation == 2) {
+      request.graph = (sakamoto_product_rule_graph_t){.group_count=1,.groups={10},.edge_count=1,.edges={{10,1,1}},.binding_count=1,.bindings={{7,12345,2,10,1}}};
       request.count = 2;
       request.rules[1] = (sakamoto_product_direct_rule_t) {
         .version = UINT64_C(0xfedcba9876540002), .uid = 12345, .network_context = 3, .ifindex = 7,
@@ -1184,7 +1186,10 @@ main (void)
         || config.rules[1].version != UINT64_C(0xfedcba9876540002)
         || config.rules[1].network_context != 3 || config.rules[1].ifindex != 7
         || config.rules[1].source_port_last != 65000 || config.rules[1].source_address[15] != 1
-        || config.active_versions[1] != UINT64_C(0xfedcba9876540001))) return 1;
+        || config.active_versions[1] != UINT64_C(0xfedcba9876540001)
+        || config.graph.group_count != 1 || config.graph.groups[0] != 10
+        || config.graph.edge_count != 1 || config.graph.edges[0].target != 1
+        || config.graph.binding_count != 1 || config.graph.bindings[0].uid != 12345 || config.graph.bindings[0].mode != 1)) return 1;
     if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode == 8)
         && expect_retired(session)) return 1;
   }

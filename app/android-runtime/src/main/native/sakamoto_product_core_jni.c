@@ -79,13 +79,55 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
     sakamoto_product_rule_config_status_t status = {0};
     uint32_t code = SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
     jsize length = fields ? (*env)->GetArrayLength(env, fields) : -1;
-    if (handle && generation > 0 && length >= 0 && length % COMPLETE_RULE_WORDS == 0 &&
-        length / COMPLETE_RULE_WORDS <= SAKAMOTO_RULE_CONFIG_MAX_RULES &&
+    jsize rule_offset = 0;
+    uint32_t rule_count = length >= 0 ? (uint32_t)length / COMPLETE_RULE_WORDS : UINT32_MAX;
+    int valid = length >= 0 && length % COMPLETE_RULE_WORDS == 0;
+    if (length > 0) {
+        jlong marker;
+        (*env)->GetLongArrayRegion(env, fields, 0, 1, &marker);
+        if ((*env)->ExceptionCheck(env)) return NULL;
+        if (marker == -1) {
+            jlong header[5];
+            if (length < 5) return NULL;
+            (*env)->GetLongArrayRegion(env, fields, 0, 5, header);
+            if ((*env)->ExceptionCheck(env)) return NULL;
+            if (header[1] < 0 || header[1] > SAKAMOTO_RULE_CONFIG_MAX_RULES || header[2] < 0 || header[2] > SAKAMOTO_RULE_CONFIG_MAX_GROUPS ||
+                header[3] < 0 || header[3] > SAKAMOTO_RULE_CONFIG_MAX_EDGES || header[4] < 0 || header[4] > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+                return NULL;
+            rule_offset = 5; rule_count = header[1];
+            request.graph.group_count = header[2]; request.graph.edge_count = header[3];
+            request.graph.binding_count = header[4];
+            valid = length == 5 + rule_count * COMPLETE_RULE_WORDS + header[2] + 3*header[3] + 5*header[4];
+            if (!valid) return NULL;
+            jsize at = 5 + rule_count * COMPLETE_RULE_WORDS;
+            for (unsigned i = 0; i < request.graph.group_count; ++i) {
+                jlong value;
+                (*env)->GetLongArrayRegion(env, fields, at++, 1, &value);
+                if ((*env)->ExceptionCheck(env) || value < 0 || (uint64_t)value > UINT32_MAX) return NULL;
+                request.graph.groups[i] = value;
+            }
+            for (unsigned i = 0; i < request.graph.edge_count; ++i) {
+                jlong values[3];
+                (*env)->GetLongArrayRegion(env, fields, at, 3, values); at += 3;
+                if ((*env)->ExceptionCheck(env)) return NULL;
+                for (unsigned j = 0; j < 3; ++j) if (values[j] < 0 || (uint64_t)values[j] > UINT32_MAX) return NULL;
+                request.graph.edges[i] = (sakamoto_product_group_edge_t){values[0], values[1], values[2]};
+            }
+            for (unsigned i = 0; i < request.graph.binding_count; ++i) {
+                jlong values[5];
+                (*env)->GetLongArrayRegion(env, fields, at, 5, values); at += 5;
+                if ((*env)->ExceptionCheck(env)) return NULL;
+                for (unsigned j = 0; j < 5; ++j) if (values[j] < 0 || (uint64_t)values[j] > UINT32_MAX) return NULL;
+                request.graph.bindings[i] = (sakamoto_product_rule_binding_t){values[0], values[1], values[2], values[3], values[4]};
+            }
+        }
+    }
+    if (handle && generation > 0 && valid && rule_count <= SAKAMOTO_RULE_CONFIG_MAX_RULES &&
         (operation == 0 || operation == 2)) {
-        request.count = (uint32_t)length / COMPLETE_RULE_WORDS;
+        request.count = rule_count;
         for (unsigned i = 0; i < request.count; ++i) {
             jlong values[COMPLETE_RULE_WORDS];
-            (*env)->GetLongArrayRegion(env, fields, i * COMPLETE_RULE_WORDS, COMPLETE_RULE_WORDS,
+            (*env)->GetLongArrayRegion(env, fields, rule_offset + i * COMPLETE_RULE_WORDS, COMPLETE_RULE_WORDS,
                                        values);
             if ((*env)->ExceptionCheck(env))
                 return NULL;
@@ -122,7 +164,8 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
                                               (uint64_t)generation, &request, &status);
     }
     if (status.count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
-        status.active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
+        status.active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+        status.graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || status.graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || status.graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
         return NULL;
     jlong header[] = {code,
                       (jlong)status.generation,
@@ -139,7 +182,8 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
                       status.compiler_status};
     jlongArray result =
         (*env)->NewLongArray(env, COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count +
-                                      status.active_count);
+                                      status.active_count + 3 + status.graph.group_count +
+                                      3*status.graph.edge_count + 5*status.graph.binding_count);
     if (!result)
         return NULL;
     (*env)->SetLongArrayRegion(env, result, 0, COMPLETE_REPLY_HEADER_WORDS, header);
@@ -176,6 +220,23 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         (*env)->SetLongArrayRegion(
             env, result, COMPLETE_REPLY_HEADER_WORDS + status.count * COMPLETE_RULE_WORDS + i, 1,
             &version);
+    }
+    jsize at = COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count + status.active_count;
+    jlong graph_header[] = {status.graph.group_count, status.graph.edge_count, status.graph.binding_count};
+    (*env)->SetLongArrayRegion(env, result, at, 3, graph_header); at += 3;
+    for (unsigned i = 0; i < status.graph.group_count; ++i) {
+        jlong value = status.graph.groups[i];
+        (*env)->SetLongArrayRegion(env, result, at++, 1, &value);
+    }
+    for (unsigned i = 0; i < status.graph.edge_count; ++i) {
+        const sakamoto_product_group_edge_t *e = &status.graph.edges[i];
+        jlong values[] = {e->group, e->kind, e->target};
+        (*env)->SetLongArrayRegion(env, result, at, 3, values); at += 3;
+    }
+    for (unsigned i = 0; i < status.graph.binding_count; ++i) {
+        const sakamoto_product_rule_binding_t *b = &status.graph.bindings[i];
+        jlong values[] = {b->id, b->uid, b->kind, b->target, b->mode};
+        (*env)->SetLongArrayRegion(env, result, at, 5, values); at += 5;
     }
     return result;
 }

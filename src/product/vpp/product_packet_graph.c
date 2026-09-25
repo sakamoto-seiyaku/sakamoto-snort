@@ -3114,7 +3114,7 @@ product_packet_graph_record_l4_view_match (
 
   if (graph == 0 || lease == 0 || match == 0)
     return;
-  verdict = match->action == PRODUCT_L4_POLICY_ACTION_DROP
+  verdict = match->actual_action == PRODUCT_L4_POLICY_ACTION_DROP
               ? PRODUCT_POLICY_VERDICT_DROP
               : PRODUCT_POLICY_VERDICT_ALLOW;
   clib_atomic_fetch_add_relax (&graph->l4_policy_view_match_records, 1);
@@ -3156,7 +3156,7 @@ product_packet_graph_record_l4_view_match (
   clib_atomic_store_rel_n (&graph->l4_last_match_device_direction,
                            lease->platform.direction);
   clib_atomic_store_rel_n (&graph->l4_last_match_action, match->action);
-  if (match->action == PRODUCT_L4_POLICY_ACTION_DROP)
+  if (match->actual_action == PRODUCT_L4_POLICY_ACTION_DROP)
     {
       clib_atomic_fetch_add_relax (&graph->policy_drop_records, 1);
       clib_atomic_store_rel_n (&graph->policy_last_drop_revision, revision);
@@ -4013,11 +4013,12 @@ product_packet_graph_policy_stage_snapshot (
     graph, lease, snapshot, &matched_view);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (snapshot->trace)
-    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u status=%u mono_ns=%llu\n",
+    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mode=%u actual_action=%u candidates=%u rank=%u status=%u mono_ns=%llu\n",
       (unsigned long long) lease->origin_obligation_id, vlib_get_thread_index (),
       (unsigned long long) snapshot->identity.generation, (unsigned long long) snapshot->identity.revision,
       (unsigned long long) snapshot->bank->snapshot_hash, (unsigned long long) matched_view.rule_id,
-      matched_view.action, matcher_status, (unsigned long long) product_packet_event_clock_ns ());
+      matched_view.action, matched_view.mode, matched_view.actual_action, matched_view.candidate_count,
+      matched_view.winner_rank, matcher_status, (unsigned long long) product_packet_event_clock_ns ());
 #endif
   clib_atomic_fetch_add_relax (&graph->policy_l4_evaluations, 1);
   evaluation->stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4;
@@ -4041,7 +4042,7 @@ product_packet_graph_policy_stage_snapshot (
       evaluation->reason_id = matched_view.reason_id;
       evaluation->verdict = matched_view.stage_verdict == PRODUCT_L4_POLICY_VERDICT_DROP
         ? PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP : PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT;
-      if (matched_view.action == PRODUCT_L4_POLICY_ACTION_DROP)
+      if (matched_view.actual_action == PRODUCT_L4_POLICY_ACTION_DROP)
         {
           result = product_packet_set_terminal (lease, PRODUCT_PACKET_INTENT_DROP_RUNTIME);
           if (result == PRODUCT_PACKET_OK)
