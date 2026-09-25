@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "sakamoto_product_network.h"
+#include "sakamoto_product_sni.h"
 #include "sakamoto_product_rule_config.h"
 
 #ifdef __cplusplus
@@ -383,6 +384,10 @@ _Static_assert(sizeof(sakamoto_product_status_t) == 1304U,
 
 /* Opaque to Rust and to all callers except the bridge implementation. */
 typedef struct sakamoto_product_session sakamoto_product_session_t;
+
+uint32_t sakamoto_product_session_sni_query (
+  sakamoto_product_session_t *, uint64_t generation, uint32_t worker,
+  uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *);
 
 uint32_t sakamoto_product_session_rule_config(
   sakamoto_product_session_t *, uint64_t generation,

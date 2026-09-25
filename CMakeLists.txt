@@ -49,6 +49,7 @@ target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
 add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
   src/product/vpp/product_flow_lpi.c
+  src/product/vpp/product_flow_sni.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
   src/product/vpp/product_flow_icmp.c
@@ -257,3 +258,9 @@ target_link_libraries(sakamoto-product-flow-lpi-test PRIVATE sakamoto_product_fl
 add_test(NAME sakamoto-product-flow-lpi-test COMMAND sakamoto-product-flow-lpi-test)
 add_test(NAME sakamoto-product-protocol-catalog-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/catalog/application_protocol_catalog_contract_test.py")
+
+add_executable(sakamoto-product-flow-sni-test tests/host/product_flow_sni_test.c
+  src/product/vpp/product_packet.c)
+target_compile_options(sakamoto-product-flow-sni-test PRIVATE -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-flow-sni-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy)
+add_test(NAME sakamoto-product-flow-sni-test COMMAND sakamoto-product-flow-sni-test)

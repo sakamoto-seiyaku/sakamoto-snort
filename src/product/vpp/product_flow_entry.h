@@ -17,6 +17,7 @@
 #include "product_packet.h"
 #include "product_flow_tracker.h"
 #include "product_lpi.h"
+#include "product_sni.h"
 
 #define PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)
 #define PRODUCT_FLOW_ENTRY_UID_UNKNOWN UINT32_MAX
@@ -123,6 +124,8 @@ typedef struct
   uint32_t heap_position;
   uint8_t timeout_class;
   product_lpi_state_t lpi;
+  product_sni_state_t sni;
+  product_tcp_byte_cache_t tcp_bytes;
   /* The typed key is the protocol tag; every tracker shares this one pool. */
   union {
     product_tcp_state_t tcp;
@@ -247,6 +250,12 @@ product_flow_entry_status_t product_flow_entry_identify (
   product_flow_runtime_t *, uint32_t slot, uint64_t generation,
   uint64_t incarnation, const product_packet_facts_t *,
   const uint8_t *payload, uint32_t payload_length);
+
+/* Private owner composition after packet/identity validation. */
+void product_flow_runtime_features_changed (product_flow_runtime_t *, uint32_t);
+void product_flow_sni_stop (product_flow_entry_t *, unsigned);
+void product_flow_sni_observe (product_flow_entry_t *, const product_packet_facts_t *,
+                               const uint8_t *, uint32_t);
 
 /* Cache only the decision from this packet's acquired snapshot. */
 product_flow_entry_status_t

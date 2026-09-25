@@ -303,6 +303,12 @@ typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_cor
 typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
   vapi_ctx_t, void *, vapi_error_e, bool, vapi_payload_product_core_root_stop_reply *);
 
+typedef struct { struct { uint64_t generation, incarnation; uint32_t worker, slot; } payload; } vapi_msg_product_core_sni_query;
+typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vapi_payload_product_core_sni_query_reply;
+typedef vapi_error_e (*vapi_product_core_sni_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_sni_query_reply *);
+extern vapi_msg_id_t vapi_msg_id_product_core_sni_query, vapi_msg_id_product_core_sni_query_reply;
+vapi_msg_product_core_sni_query *vapi_alloc_product_core_sni_query(vapi_ctx_t);
+vapi_error_e vapi_product_core_sni_query(vapi_ctx_t,vapi_msg_product_core_sni_query *,vapi_product_core_sni_query_callback_t,void *);
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
@@ -327,6 +333,8 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t, vapi_msg_product_core_rul
 #define DEFINE_VAPI_MSG_IDS_VLIB_API_JSON \
   vapi_msg_id_t vapi_msg_id_vlib;
 #define DEFINE_VAPI_MSG_IDS_PRODUCT_CORE_API_JSON \
+  vapi_msg_id_t vapi_msg_id_product_core_sni_query; \
+  vapi_msg_id_t vapi_msg_id_product_core_sni_query_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_rule_config; \
   vapi_msg_id_t vapi_msg_id_product_core_rule_config_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_status; \
@@ -496,6 +504,8 @@ vapi_ctx_alloc (vapi_ctx_t *context)
   vapi_msg_id_product_core_network_publish_reply = 107U;
   vapi_msg_id_product_core_root_stop = 108U;
   vapi_msg_id_product_core_root_stop_reply = 109U;
+  vapi_msg_id_product_core_sni_query = 112U;
+  vapi_msg_id_product_core_sni_query_reply = 113U;
   vapi_msg_id_product_core_rule_config = 110U;
   vapi_msg_id_product_core_rule_config_reply = 111U;
   return VAPI_OK;
@@ -512,6 +522,7 @@ bool
 vapi_is_msg_available (vapi_ctx_t context, vapi_msg_id_t type)
 {
   (void) context;
+  if (type == vapi_msg_id_product_core_sni_query || type == vapi_msg_id_product_core_sni_query_reply) return true;
   if (type == vapi_msg_id_product_core_rule_config || type == vapi_msg_id_product_core_rule_config_reply) return true;
   if (type == vapi_msg_id_product_core_root_stop
       || type == vapi_msg_id_product_core_root_stop_reply)
@@ -776,6 +787,26 @@ vapi_product_core_policy_bundle_apply (
             true, &reply);
   return VAPI_OK;
 }
+int sakamoto_test_sni_mode;
+vapi_msg_product_core_sni_query *vapi_alloc_product_core_sni_query(vapi_ctx_t context)
+{ (void)context;return test_message_alloc(sizeof(vapi_msg_product_core_sni_query)); }
+vapi_error_e vapi_product_core_sni_query(vapi_ctx_t context,vapi_msg_product_core_sni_query *message,
+  vapi_product_core_sni_query_callback_t callback,void *opaque)
+{
+  vapi_payload_product_core_sni_query_reply reply={.generation=message->payload.generation,
+    .incarnation=message->payload.incarnation,.worker=message->payload.worker,.slot=message->payload.slot,
+    .result=2,.stop=1};
+  if(sakamoto_test_sni_mode==6) return VAPI_EINVAL;
+  vapi_msg_free(context,message);
+  if(sakamoto_test_sni_mode==1) ++reply.generation;
+  if(sakamoto_test_sni_mode==2) ++reply.incarnation;
+  if(sakamoto_test_sni_mode==3) return callback(context,opaque,VAPI_OK,true,NULL);
+  if(sakamoto_test_sni_mode==4) {pending_requests=1;return VAPI_OK;}
+  if(sakamoto_test_sni_mode==5) reply.name_length=254;
+  if(sakamoto_test_sni_mode==7) reply.retval=-5;
+  return callback(context,opaque,VAPI_OK,true,&reply);
+}
+
 EOF
 
 cat > "$stub_dir/harness.c" <<'EOF'
@@ -1440,6 +1471,19 @@ main (void)
       fprintf (stderr, "callback omission was not reported as QUERY_FAILED\n");
       return 1;
     }
+  reset_faults();
+  extern int sakamoto_test_sni_mode;
+  for(int mode=0;mode<8;++mode) {
+    sakamoto_test_sni_mode=mode;
+    sakamoto_product_sni_status_t facts={0};
+    if(sakamoto_product_session_connect(path,77U,&session,&status)) return 1;
+    uint32_t expected=mode==0?SAKAMOTO_PRODUCT_OK:mode==7?SAKAMOTO_PRODUCT_STALE_HANDLE:SAKAMOTO_PRODUCT_QUERY_FAILED;
+    code=sakamoto_product_session_sni_query(session,77U,1,2,3,&facts);
+    if(code!=expected || (mode==0 && (facts.result!=2 || facts.incarnation!=3))
+       || (mode!=0 && facts.result)) return 1;
+    if(mode>0 && mode<7 && sakamoto_product_session_sni_query(session,77U,1,2,3,&facts)!=SAKAMOTO_PRODUCT_STALE_HANDLE) return 1;
+    sakamoto_product_session_destroy(session);session=NULL;
+  }
   if (sakamoto_test_context_count != 0) {
     fprintf(stderr, "retired VAPI context was not reclaimed\n");
     return 1;

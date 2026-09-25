@@ -1460,3 +1460,22 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeDestroy (
   return (jint) sakamoto_product_core_destroy (
       (sakamoto_product_core_handle_t *) (intptr_t) handle);
 }
+
+JNIEXPORT jstring JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeSniQuery(
+  JNIEnv *env,jclass type,jlong handle,jlong generation,jint worker,jint slot,jlong incarnation)
+{
+  (void)type;
+  sakamoto_product_sni_status_t s={0};
+  uint32_t code=SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if(handle && generation>0 && worker>=0 && slot>=0 && incarnation>0)
+    code=sakamoto_product_core_sni_query((sakamoto_product_core_handle_t *)(uintptr_t)handle,
+      (uint64_t)generation,(uint32_t)worker,(uint32_t)slot,(uint64_t)incarnation,&s);
+  char text[1024];
+  snprintf(text,sizeof text,"code=%u\ngeneration=%" PRIu64 "\nworker=%u\nslot=%u\nincarnation=%" PRIu64
+    "\nresult=%u\nstop=%u\nattempts=%u\nbytes=%u\nwork=%u\ncacheBytes=%u\nprotocols=%" PRIu64
+    "\nprotocolsAvailable=%u\nname=%.*s\n",code,s.generation,s.worker,s.slot,s.incarnation,
+    s.result,s.stop,s.attempts,s.bytes,s.work,s.cache_bytes,s.protocols,s.protocols_available,
+    (int)s.name_length,s.name);
+  return (*env)->NewStringUTF(env,text);
+}

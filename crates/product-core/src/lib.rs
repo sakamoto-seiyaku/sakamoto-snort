@@ -1,6 +1,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 // Keep the established crate-root interface; implementation modules are private.
+mod sni;
+pub use sni::SniStatus;
 mod ffi;
 mod rule_config;
 pub use rule_config::{

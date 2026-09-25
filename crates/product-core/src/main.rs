@@ -82,6 +82,27 @@ fn main() {
         }
     };
     print_status("connect", &connected);
+    if command == "sni-query" {
+        if remaining.len() != 3 {
+            usage();
+        }
+        let worker = remaining[0].parse().unwrap_or_else(|_| usage());
+        let slot = remaining[1].parse().unwrap_or_else(|_| usage());
+        let incarnation = remaining[2].parse().unwrap_or_else(|_| usage());
+        match core.query_sni(worker, slot, incarnation) {
+            Ok(s) => {
+                println!("sni.code=0\nsni.generation={}\nsni.worker={}\nsni.slot={}\nsni.incarnation={}\nsni.result={}\nsni.stop={}\nsni.attempts={}\nsni.bytes={}\nsni.work={}\nsni.cache_bytes={}\nsni.protocols={}\nsni.protocols_available={}\nsni.name={}",
+                    s.generation,s.worker,s.slot,s.incarnation,s.result,s.stop,s.attempts,s.bytes,
+                    s.work,s.cache_bytes,s.protocols,s.protocols_available,
+                    String::from_utf8_lossy(&s.name[..s.name_length as usize]));
+            }
+            Err(e) => {
+                print_error(e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if command.starts_with("rule-") {
         let mut request = RuleConfigRequest {
             schema: 1,

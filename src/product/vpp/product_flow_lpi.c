@@ -599,6 +599,8 @@ product_flow_entry_status_t product_flow_entry_identify (
       || facts->source_port != (source_is_a ? entry->key.transport.ports.a : entry->key.transport.ports.b)
       || facts->destination_port != (source_is_a ? entry->key.transport.ports.b : entry->key.transport.ports.a))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
+  product_flow_sni_observe (entry, facts, payload, length);
+  product_flow_runtime_features_changed (pool, slot);
   if (state->stop_reason || !length) return PRODUCT_FLOW_ENTRY_STATUS_OK;
   if (length > PRODUCT_LPI_MAX_BYTES - state->bytes) {
     state->stop_reason = PRODUCT_LPI_STOP_BYTE_BUDGET;
@@ -625,6 +627,7 @@ product_flow_entry_status_t product_flow_entry_identify (
   alias = resolve_guess (alias,facts,payload,length,&companion,state,side);
   uint64_t result = product_protocol_bit (product_protocol_provider_id (alias))
     | product_protocol_bit (product_protocol_provider_id (companion));
+  if (entry->sni.result) result |= product_protocol_bit (1003);
   state->last_outcome = result ? PRODUCT_LPI_MAPPED : alias ? PRODUCT_LPI_UNMAPPED : PRODUCT_LPI_MISS;
   state->protocols |= result;
   state->available = state->protocols != 0;

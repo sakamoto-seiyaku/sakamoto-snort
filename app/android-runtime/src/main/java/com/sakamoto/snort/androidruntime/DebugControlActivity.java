@@ -278,6 +278,12 @@ public class DebugControlActivity extends Activity {
                     intent.getStringExtra("s239ProbePlan"));
             handled = true;
         }
+        if (debuggable && intent.hasExtra("sniNonce")) {
+            backend.querySni(this, intent.getStringExtra("sniNonce"),
+                    intent.getIntExtra("sniWorker", -1), intent.getIntExtra("sniSlot", -1),
+                    intent.getLongExtra("sniIncarnation", 0L));
+            handled = true;
+        }
         if (debuggable && intent.hasExtra("t12ProbePlan")) {
             ProtocolFactsProbe.start(this, intent.getStringExtra("t12ProbePlan"));
             handled = true;

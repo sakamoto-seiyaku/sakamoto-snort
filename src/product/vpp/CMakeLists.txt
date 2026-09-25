@@ -230,6 +230,7 @@ add_vpp_plugin(product_core
     product_rule_config.c
     product_flow_entry.c
     product_flow_lpi.c
+    product_flow_sni.c
     product_flow_end.c
     product_flow_expiry.c
     product_flow_udp.c

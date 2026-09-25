@@ -8,6 +8,29 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+/* Representative supplemental transcripts must never turn heuristic TLS/QUIC
+ * (or DTLS) labels into a definite SNI result. Exercise the consumer seam too. */
+static void unavailable_sni_rules(const product_flow_entry_t *entry)
+{
+  assert(entry->sni.result==PRODUCT_SNI_UNAVAILABLE);
+  product_l4_policy_rule_t rule={.rule_id=90,.reason_id=91,.uid=17,.action=2,
+    .network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,
+    .source_port_last=65535,.destination_port_last=65535};
+  product_l4_policy_packet_t packet={.uid=17,.uid_known=1,.family=4,.protocol=entry->key.protocol,
+    .protocol_set=entry->lpi.protocols,.protocol_set_known=entry->lpi.available,
+    .sni_result=entry->sni.result};
+  product_l4_policy_view_t view;
+  for(unsigned shape=0;shape<3;++shape) {
+    const uint8_t expressions[3][5]={{16,1},{16,1,3},{16,1,4,4,2}};
+    rule.expression_length=shape==0?2:shape==1?3:5;
+    memcpy(rule.expression,expressions[shape],rule.expression_length);
+    assert(!product_l4_policy_compile(&view,&rule,1));
+    product_l4_policy_match_result_t result;
+    assert(!product_l4_policy_match(&view,&packet,&result));
+    int applicable=!!(entry->lpi.protocols & (UINT64_C(4)|UINT64_C(8)));
+    assert(result.rule_id==(shape==2 && applicable?90:0));
+  }
+}
 static void dns_budget (void)
 {
   product_flow_runtime_t *pool = NULL;
@@ -156,6 +179,7 @@ static void tls_upgrade (void)
     uint64_t expected=product_protocol_bit(1002);
     if (step==3) expected|=product_protocol_bit(1003);
     assert (observation.entry->lpi.available && observation.entry->lpi.protocols==expected);
+    unavailable_sni_rules(observation.entry);
     product_l4_policy_packet_t packet={.uid=17,.uid_known=1,.family=4,.protocol=6,
       .protocol_set=observation.entry->lpi.protocols,.protocol_set_known=1};
     product_policy_cache_identity_t identity={11,1,10,observation.entry->incarnation};
@@ -252,6 +276,7 @@ static uint64_t sample (const uint8_t *bytes, unsigned length, unsigned transpor
   product_flow_entry_observation_t o;
   assert(product_flow_entry_observe(pool,&a,&p,0,&o)==0);
   assert(product_flow_entry_identify(pool,o.slot,19,o.entry->incarnation,&f,bytes,length)==0);
+  unavailable_sni_rules(o.entry);
   uint64_t result=o.entry->lpi.protocols;
   product_flow_runtime_destroy(pool);
   return result;
@@ -284,6 +309,7 @@ static void tunnel_transcript (const tunnel_step_t *steps, unsigned count,
       fprintf(stderr,"tunnel step %u transport %u port %u got %llu expected %llu\n",
         step,transport,port,(unsigned long long)o.entry->lpi.protocols,(unsigned long long)steps[step].expected);
     assert(o.entry->lpi.protocols==steps[step].expected);
+    unavailable_sni_rules(o.entry);
   }
   product_flow_runtime_destroy(pool);
 }

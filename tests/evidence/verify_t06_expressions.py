@@ -34,6 +34,8 @@ def expression(raw):
         elif op==3:stack.append(('not',stack.pop()))
         elif op in (4,5,6):
             stack.append(({4:'family',5:'protocol',6:'direction'}[op],raw[at]));at+=1
+        elif op == 16:
+            assert raw[at] == 1; at += 1; stack.append(('no_sni',))
         elif op == 15:
             stack.append(('lpi',struct.unpack_from('<I',raw,at)[0]));at+=4
         elif op in (13,14):

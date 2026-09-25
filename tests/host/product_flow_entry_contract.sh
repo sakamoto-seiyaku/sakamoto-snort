@@ -79,7 +79,7 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic \
   "$repo_root/src/product/vpp/product_flow_udp.c" \
   "$repo_root/src/product/vpp/product_flow_icmp.c" \
   "$repo_root/src/product/vpp/product_flow_tcp.c" \
-  "$source" "$test_source" -o "$fixture_root/product-flow-entry-test"
+  "$source" "$repo_root/src/product/vpp/product_flow_sni.c" "$test_source" -o "$fixture_root/product-flow-entry-test"
 
 "$fixture_root/product-flow-entry-test"
 

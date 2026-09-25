@@ -261,6 +261,8 @@ public final class RuntimeControlNative {
 
     private static native String[] nativeQuery(long handle, long generation);
 
+    private static native String nativeSniQuery(long handle, long generation,
+            int worker, int slot, long incarnation);
     private static native long[] nativeCompleteRuleConfig(long handle, long generation,
             int operation, long expectedSaved, long[] rules);
     private static native long[] nativeRuleConfig(long handle, long generation,
@@ -350,6 +352,11 @@ public final class RuntimeControlNative {
 
         public synchronized boolean isConnected() {
             return nativeHandle != 0L;
+        }
+
+        public synchronized String querySni(int worker, int slot, long incarnation) {
+            if (!LOADED || nativeHandle == 0L) throw new IllegalStateException("VPP management is unavailable");
+            return nativeSniQuery(nativeHandle, generation, worker, slot, incarnation);
         }
 
         public synchronized RuleConfiguration.CompleteStatus completeRuleConfig(int operation,

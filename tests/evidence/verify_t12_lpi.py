@@ -71,7 +71,7 @@ def protocol_observation(session,facts,payload,length,side):
     if session['attempts']==20:session['stop']=1
     elif session['bytes']==32768:session['stop']=2
 
-def verify_trace(text,profile,generation,ports,configurations,uid,observe=protocol_observation):
+def verify_trace(text,profile,generation,ports,configurations,uid,observe=protocol_observation,features=None):
     prefixes={'acquire':'s209 event=acquire ','release':'s209 event=release ',
       'match':'s209 event=l4 ','flow':'s208 event=observe ','tcp':'s222 event=tcp_update ',
       'udp':'s223 event=udp_update ','lpi':'t12 event=lpi ','cache':'t11 event=cache ',
@@ -142,6 +142,7 @@ def verify_trace(text,profile,generation,ports,configurations,uid,observe=protoc
         assert int(lpi['stop'])==session['stop'],'honest producer stop reason'
         if old!=session['protocols']:assert lpi['outcome']=='3'
         assert int(lpi['outcome']) in (0,1,2,3)
+        if features: features(value,session,facts)
         facts.update(ct=state,flowdir=side,lpi=set(session['protocols']) if mask else None)
         rules=logical_rules(value['config'],facts['uid'])
         expected=reference.ordered_reference(rules,facts)
@@ -158,9 +159,10 @@ def verify_trace(text,profile,generation,ports,configurations,uid,observe=protoc
             wanted=expected if post else dict(rule_id=0,winner_rank=0,action=0,actual_action=0,mode=0,reason_id=0,priority=0,order=0)
             for actual,want in [('rule','rule_id'),('rank','winner_rank'),('declared','action'),('actual','actual_action'),('mode','mode'),('reason','reason_id'),('priority','priority'),('order','order')]:
                 assert int(query[actual])==wanted[want],('complete cache result',actual,value['token'])
-            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi')}
+            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi','sni')}
             guarded['lpi']=sorted(session['protocols']) if post and rules else []
             guarded['available']=bool(mask) if post and rules else False
+            if features: guarded['sni']=facts.get('sni') if post and rules else None
             guard=(session['worker'],value['identity'],query['incarnation'],query['position'],json.dumps(guarded,sort_keys=True))
             if query['hit']=='1':
                 assert guard in past_guards and past_guards[guard]==wanted,'cache hit lacks identical complete prior guard/result'

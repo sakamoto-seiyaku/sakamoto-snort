@@ -90,11 +90,18 @@ entry_protocol (const product_flow_entry_t *entry)
     : entry->key.protocol == PRODUCT_FLOW_ENTRY_PROTOCOL_TCP ? 0 : 1;
 }
 
+static uint64_t
+scheduled_deadline (const product_flow_entry_t *entry)
+{
+  return entry->sni.deadline_us && entry->sni.deadline_us < entry->deadline_us
+    ? entry->sni.deadline_us : entry->deadline_us;
+}
+
 static int
 timer_before (const product_flow_runtime_t *pool, uint32_t a, uint32_t b)
 {
-  uint64_t first = pool->slots[a].entry.deadline_us;
-  uint64_t second = pool->slots[b].entry.deadline_us;
+  uint64_t first = scheduled_deadline (&pool->slots[a].entry);
+  uint64_t second = scheduled_deadline (&pool->slots[b].entry);
   return first < second || (first == second && a < b);
 }
 
@@ -227,6 +234,7 @@ product_flow_runtime_close (product_flow_runtime_t *pool, uint32_t slot,
   old->next = NO_SLOT;
   old->entry.linked = 0;
   old->entry.end_reason = reason;
+  product_flow_sni_stop (&old->entry, PRODUCT_SNI_FLOW_END);
   if (!old->entry.lpi.stop_reason)
     old->entry.lpi.stop_reason = PRODUCT_LPI_STOP_FLOW_END;
   --pool->stats.linked_entries;
@@ -263,11 +271,19 @@ product_flow_runtime_set_deadline (
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 
+void
+product_flow_runtime_features_changed (product_flow_runtime_t *pool, uint32_t slot)
+{
+  product_flow_entry_t *entry=&pool->slots[slot].entry;
+  if(entry->deadline_us && entry->heap_position!=NO_SLOT)
+    timer_reorder(pool,entry->heap_position);
+}
+
 uint64_t
 product_flow_runtime_next_deadline (const product_flow_runtime_t *pool)
 {
   return pool && pool->stats.timer_entries
-    ? pool->slots[pool->heap[0]].entry.deadline_us : UINT64_MAX;
+    ? scheduled_deadline (&pool->slots[pool->heap[0]].entry) : UINT64_MAX;
 }
 
 product_flow_entry_status_t
@@ -277,10 +293,18 @@ product_flow_runtime_run_due (product_flow_runtime_t *pool, uint64_t now_us,
   if (!pool || !closed || !budget)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   *closed = 0;
-  while (*closed < budget && pool->stats.timer_entries &&
+  uint32_t processed = 0;
+  while (processed++ < budget && pool->stats.timer_entries &&
          product_flow_runtime_next_deadline (pool) <= now_us)
     {
       uint32_t slot = pool->heap[0];
+      product_flow_entry_t *entry=&pool->slots[slot].entry;
+      if(entry->sni.deadline_us && entry->sni.deadline_us<=now_us
+         && entry->deadline_us>now_us) {
+        product_flow_sni_stop(entry,PRODUCT_SNI_TIMEOUT);
+        timer_reorder(pool,entry->heap_position);
+        continue;
+      }
       product_flow_entry_status_t status = product_flow_runtime_close (
         pool, slot, pool->stats.generation, pool->slots[slot].entry.incarnation,
         PRODUCT_FLOW_END_EXPIRED);

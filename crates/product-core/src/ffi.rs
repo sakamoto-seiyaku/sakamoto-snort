@@ -14,6 +14,14 @@ pub(super) struct ProductSession {
 }
 
 unsafe extern "C" {
+    pub(super) fn sakamoto_product_session_sni_query(
+        session: *mut ProductSession,
+        generation: u64,
+        worker: u32,
+        slot: u32,
+        incarnation: u64,
+        out: *mut crate::SniStatus,
+    ) -> c_uint;
     pub(super) fn sakamoto_product_session_rule_config(
         session: *mut ProductSession,
         expected_generation: u64,
@@ -1193,6 +1201,40 @@ pub unsafe extern "C" fn sakamoto_product_core_destroy(handle: *mut ProductCoreH
     match result {
         Ok(Ok(())) => ErrorCode::Ok.raw(),
         Ok(Err(code)) => code.raw(),
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_sni_query(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    worker: u32,
+    slot: u32,
+    incarnation: u64,
+    out: *mut crate::SniStatus,
+) -> c_uint {
+    if handle.is_null() || out.is_null() || generation == 0 || incarnation == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe {
+        *out = crate::SniStatus::default();
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        match core.query_sni(worker, slot, incarnation) {
+            Ok(status) => {
+                unsafe { *out = status };
+                0
+            }
+            Err(ProductError::Native { code, .. }) => code.raw(),
+            Err(_) => ErrorCode::InternalError.raw(),
+        }
+    })) {
+        Ok(code) => code,
         Err(_) => ErrorCode::InternalError.raw(),
     }
 }

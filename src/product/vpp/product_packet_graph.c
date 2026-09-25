@@ -236,6 +236,7 @@ typedef struct
   u64 flow_incarnation;
   u64 protocols;
   u8 protocols_available;
+  u8 sni_result;
 } product_policy_snapshot_t;
 
 typedef struct
@@ -456,6 +457,7 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
       snapshot->flow_incarnation = 0;
       snapshot->protocols = 0;
       snapshot->protocols_available = 0;
+      snapshot->sni_result = 0;
       snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
@@ -2650,7 +2652,16 @@ product_packet_graph_flow_observe (
         status = product_flow_entry_identify (pool, observation.slot,
           packet.policy.generation, entry->incarnation, &lease->facts,
           (const u8 *) vlib_buffer_get_current (buffer) + offset, length);
+      product_flow_expiry_changed (vm);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      if (trace)
+        fprintf (stderr, "t13 event=sni token=%llu generation=%llu worker=%u slot=%u incarnation=%llu result=%u stop=%u attempts=%u bytes=%u work=%u cache_bytes=%u name=%s\n",
+          (unsigned long long)lease->origin_obligation_id,
+          (unsigned long long)packet.policy.generation, worker, observation.slot,
+          (unsigned long long)entry->incarnation, entry->sni.result, entry->sni.stop,
+          entry->sni.attempts, entry->sni.bytes, entry->sni.work,
+          entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1],
+          entry->sni.result==PRODUCT_SNI_NAME?entry->sni.name:"-");
       if (trace)
         fprintf (stderr, "t12 event=lpi token=%llu generation=%llu worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u status=%u\n",
           (unsigned long long) lease->origin_obligation_id,
@@ -2932,6 +2943,7 @@ product_packet_graph_l4_view_evaluate (
   product_packet_graph_l4_packet_projection (lease, &packet);
   packet.protocol_set = snapshot->protocols;
   packet.protocol_set_known = snapshot->protocols_available;
+  packet.sni_result = snapshot->sni_result;
   packet.ct_state = snapshot->ct.state;
   packet.ct_state_known = snapshot->ct.state != PRODUCT_CT_UNKNOWN;
   packet.flow_direction = snapshot->ct.direction;
@@ -3830,6 +3842,7 @@ product_packet_graph_policy_on_owner (
       snapshot.flow_incarnation = observation.entry ? observation.entry->incarnation : 0;
       snapshot.protocols = observation.entry ? observation.entry->lpi.protocols : 0;
       snapshot.protocols_available = observation.entry ? observation.entry->lpi.available : 0;
+      snapshot.sni_result = observation.entry ? observation.entry->sni.result : 0;
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
@@ -4087,6 +4100,11 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             (unsigned long long)e->incarnation,
             (unsigned long long)e->side_packets[0], (unsigned long long)e->side_packets[1],
             (unsigned long long)e->side_bytes[0], (unsigned long long)e->side_bytes[1]);
+          vlib_cli_output (vm, "flow.sni worker=%u slot=%u incarnation=%llu result=%u stop=%u attempts=%u bytes=%u work=%u cache_bytes=%u name=%s",
+            worker, slot, (unsigned long long)e->incarnation, e->sni.result,
+            e->sni.stop, e->sni.attempts, e->sni.bytes, e->sni.work,
+            e->tcp_bytes.length[0]+e->tcp_bytes.length[1],
+            e->sni.result==PRODUCT_SNI_NAME?e->sni.name:"-");
           vlib_cli_output (vm, "flow.lpi worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u stop_reason=%s",
             worker, slot, (unsigned long long)e->incarnation, e->lpi.available,
             (unsigned long long)e->lpi.protocols, e->lpi.attempts, e->lpi.bytes,
@@ -4493,3 +4511,28 @@ product_packet_graph_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (product_packet_graph_init);
+
+/* Called on the API main thread. One bounded copy under the worker barrier. */
+int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
+  uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *out)
+{
+  memset(out,0,sizeof *out);
+  product_packet_graph_main_t *graph=&product_packet_graph_main;
+  if(!generation || generation!=graph->generation || worker>=PRODUCT_GRAPH_WORKERS)
+    return -5;
+  vlib_main_t *vm=vlib_get_main();
+  vlib_worker_thread_barrier_sync(vm);
+  const product_flow_entry_t *entry=product_flow_runtime_entry(graph->flow_pools[worker],slot);
+  int rv=-5;
+  if(entry && entry->linked && entry->incarnation==incarnation) {
+    out->generation=generation;out->incarnation=incarnation;out->worker=worker;out->slot=slot;
+    out->protocols=entry->lpi.protocols;out->protocols_available=entry->lpi.available;
+    out->result=entry->sni.result;out->stop=entry->sni.stop;out->attempts=entry->sni.attempts;
+    out->bytes=entry->sni.bytes;out->work=entry->sni.work;
+    out->cache_bytes=entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1];
+    out->name_length=entry->sni.name_length;memcpy(out->name,entry->sni.name,sizeof out->name);
+    rv=0;
+  }
+  vlib_worker_thread_barrier_release(vm);
+  return rv;
+}

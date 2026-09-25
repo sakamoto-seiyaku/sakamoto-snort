@@ -766,3 +766,12 @@ sakamoto_product_session_destroy (sakamoto_product_session_t *session)
   free (session);
   return SAKAMOTO_PRODUCT_OK;
 }
+
+uint32_t sakamoto_product_session_sni_query(sakamoto_product_session_t *session,
+  uint64_t generation,uint32_t worker,uint32_t slot,uint64_t incarnation,
+  sakamoto_product_sni_status_t *out)
+{
+  (void)session;(void)generation;(void)worker;(void)slot;(void)incarnation;
+  if(out) memset(out,0,sizeof *out);
+  return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+}

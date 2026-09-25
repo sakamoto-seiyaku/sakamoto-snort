@@ -76,6 +76,59 @@ release_unsent_request (sakamoto_product_session_t *session, vapi_error_e rv,
 }
 
 typedef struct {
+  bool called, invalid;
+  uint32_t code, worker, slot;
+  uint64_t generation, incarnation;
+  sakamoto_product_sni_status_t *out;
+} sni_call_t;
+static vapi_error_e sni_reply(vapi_ctx_t context, void *opaque, vapi_error_e rv,
+  bool last, vapi_payload_product_core_sni_query_reply *reply)
+{
+  (void)context;(void)last;
+  sni_call_t *call=opaque;call->called=true;
+  if(rv!=VAPI_OK || !reply) {call->invalid=true;return VAPI_OK;}
+  if(reply->retval) {call->code=SAKAMOTO_PRODUCT_STALE_HANDLE;return VAPI_OK;}
+  if(reply->generation!=call->generation || reply->incarnation!=call->incarnation
+     || reply->worker!=call->worker || reply->slot!=call->slot
+     || reply->result>2 || reply->stop>8 || reply->name_length>=254
+     || (reply->result==1 ? !reply->name_length : reply->name_length!=0)
+     || reply->name[reply->name_length]) {call->invalid=true;return VAPI_OK;}
+#define COPY(field) call->out->field=reply->field
+  COPY(generation);COPY(incarnation);COPY(protocols);COPY(worker);COPY(slot);
+  COPY(result);COPY(stop);COPY(attempts);COPY(bytes);COPY(work);COPY(cache_bytes);
+  COPY(name_length);COPY(protocols_available);
+#undef COPY
+  memcpy(call->out->name,reply->name,sizeof call->out->name);
+  call->code=SAKAMOTO_PRODUCT_OK;return VAPI_OK;
+}
+uint32_t sakamoto_product_session_sni_query(sakamoto_product_session_t *session,
+  uint64_t generation,uint32_t worker,uint32_t slot,uint64_t incarnation,
+  sakamoto_product_sni_status_t *out)
+{
+  if(out) memset(out,0,sizeof *out);
+  if(!session || !generation || !incarnation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if(pthread_mutex_lock(&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code=SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if(!session->connected || generation!=session->generation) goto done;
+  code=SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if(!vapi_is_msg_available(session->context,vapi_msg_id_product_core_sni_query)
+     || !vapi_is_msg_available(session->context,vapi_msg_id_product_core_sni_query_reply)) goto done;
+  vapi_msg_product_core_sni_query *message=vapi_alloc_product_core_sni_query(session->context);
+  code=SAKAMOTO_PRODUCT_ALLOCATION_FAILED;if(!message) goto done;
+  message->payload.generation=generation;message->payload.incarnation=incarnation;
+  message->payload.worker=worker;message->payload.slot=slot;
+  sni_call_t call={.code=SAKAMOTO_PRODUCT_QUERY_FAILED,.worker=worker,.slot=slot,
+    .generation=generation,.incarnation=incarnation,.out=out};
+  vapi_error_e rv=vapi_product_core_sni_query(session->context,message,sni_reply,&call);
+  release_unsent_request(session,rv,call.called,message);
+  if(rv!=VAPI_OK || !call.called || call.invalid) {
+    session->connected=0;memset(out,0,sizeof *out);code=SAKAMOTO_PRODUCT_QUERY_FAILED;
+  } else code=call.code;
+done:
+  (void)pthread_mutex_unlock(&session->mutex);return code;
+}
+
+typedef struct {
   bool called;
   bool invalid_reply;
   uint32_t code;

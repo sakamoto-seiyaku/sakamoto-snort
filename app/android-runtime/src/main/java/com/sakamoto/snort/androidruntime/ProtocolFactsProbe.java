@@ -81,7 +81,9 @@ final class ProtocolFactsProbe {
             socket.connect(new InetSocketAddress(endpoint, port), 10000); socket.setSoTimeout(10000);
             result.put("local", socket.getLocalSocketAddress().toString());
             boolean ftp = plan.optBoolean("ftp");
-            if (ftp) {
+            if (plan.optBoolean("t13Direct")) {
+                // TLS is the first application message, without upgrade negotiation.
+            } else if (ftp) {
                 String banner = readLine(socket.getInputStream());
                 if (!banner.startsWith("220 ") || !banner.contains(" FTPd "))
                     throw new IllegalStateException("FTP banner");
@@ -124,7 +126,13 @@ final class ProtocolFactsProbe {
             };
             SSLContext context = SSLContext.getInstance("TLS");
             context.init(null, new TrustManager[] {pin}, null);
-            try (SSLSocket tls = (SSLSocket) context.getSocketFactory().createSocket(socket, "example.test", port, false)) {
+            try (SSLSocket tls = (SSLSocket) context.getSocketFactory().createSocket(socket,
+                    plan.optBoolean("t13Absent") ? endpoint.getHostAddress() : "example.test", port, false)) {
+                if (plan.optBoolean("t13Absent")) {
+                    javax.net.ssl.SSLParameters parameters = tls.getSSLParameters();
+                    parameters.setServerNames(java.util.Collections.emptyList());
+                    tls.setSSLParameters(parameters);
+                }
                 tls.setEnabledProtocols(new String[] {"TLSv1.2"}); tls.setSoTimeout(15000); tls.startHandshake();
                 result.put("tlsProtocol", tls.getSession().getProtocol()).put("cipher", tls.getSession().getCipherSuite());
                 gate(app, nonce, result, "tls_ready");
@@ -154,6 +162,19 @@ final class ProtocolFactsProbe {
             }
         }
     }
+    private static void sniRaw(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        try (Socket socket = new Socket()) {
+            socket.setTcpNoDelay(true); socket.bind(new InetSocketAddress(local, source));
+            socket.connect(new InetSocketAddress(endpoint, port), 10000); socket.setSoTimeout(10000);
+            byte[] hello = hex(plan.getString("t13RawHex"));
+            socket.getOutputStream().write(hello);
+            if (socket.getInputStream().read() != 65) throw new IllegalStateException("raw endpoint receipt");
+            result.put("sentBytes", hello.length).put("endpointReceipt", true);
+            gate(app, nonce, result, "raw_ready");
+        }
+    }
+
     private static void udp(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         try (DatagramSocket socket = new DatagramSocket(null)) {
@@ -347,7 +368,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("wireguard")) wireguard(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.getString("mode").equals("tcp")) tcp(app, plan, result, nonce, endpoint, local, source, port);

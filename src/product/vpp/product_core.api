@@ -386,3 +386,16 @@ define product_core_rule_config_reply {
     u64 active_versions[256];
     vl_api_product_rule_graph_t graph;
 };
+
+/* Identity-fenced current SNI facts; no retained pointers or packet bytes. */
+define product_core_sni_query {
+  u32 client_index; u32 context;
+  u64 generation; u64 incarnation; u32 worker; u32 slot;
+};
+define product_core_sni_query_reply {
+  u32 context; i32 retval;
+  u64 generation; u64 incarnation; u64 protocols;
+  u32 worker; u32 slot; u32 result; u32 stop; u32 attempts; u32 bytes;
+  u32 work; u32 cache_bytes; u32 name_length; u32 protocols_available;
+  u8 name[254];
+};

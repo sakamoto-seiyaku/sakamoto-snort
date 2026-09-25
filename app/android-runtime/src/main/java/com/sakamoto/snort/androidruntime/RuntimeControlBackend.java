@@ -214,6 +214,15 @@ public final class RuntimeControlBackend {
         context.startService(intent);
     }
 
+    public void querySni(Context context, String nonce, int worker, int slot, long incarnation) {
+        Intent intent = new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_SNI_QUERY)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
+                .putExtra("sniNonce", nonce).putExtra("sniWorker", worker)
+                .putExtra("sniSlot", slot).putExtra("sniIncarnation", incarnation);
+        context.startService(intent);
+    }
+
     public void completeRuleConfig(Context context, int operation, long expectedSaved, String text) {
         long[] rules = RuleConfiguration.completeWire(text);
         context.startService(new Intent(context, RuntimeService.class)

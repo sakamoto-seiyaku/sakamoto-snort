@@ -377,6 +377,20 @@ public final class RuntimeService extends VpnService {
                     "expected " + RuntimeControlProtocol.NAME, currentMayBeActive(), currentPid()));
             return START_STICKY;
         }
+        if (RuntimeControlProtocol.ACTION_SNI_QUERY.equals(action)) {
+            final String nonce = intent.getStringExtra("sniNonce");
+            final int worker = intent.getIntExtra("sniWorker", -1), slot = intent.getIntExtra("sniSlot", -1);
+            final long incarnation = intent.getLongExtra("sniIncarnation", 0L);
+            enqueueLifecycle(() -> {
+                if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}")) return;
+                String text = "error=management_unavailable\n";
+                try {
+                    if (productCoreSession != null) text = productCoreSession.querySni(worker, slot, incarnation);
+                } catch (RuntimeException error) { text = "error=sni_query_failed\n"; }
+                writeBestEffortEvidenceFile("product-state/t13-sni-" + nonce + ".properties", text);
+            });
+            return START_STICKY;
+        }
         if (RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action)) {
             final int operation = intent.getIntExtra("ruleOperation", 0);
             final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
@@ -670,6 +684,7 @@ public final class RuntimeService extends VpnService {
                 || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)
                 || ACTION_PRODUCT_SET_L4_RULE.equals(action)
                 || ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action)
+                || RuntimeControlProtocol.ACTION_SNI_QUERY.equals(action)
                 || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)
                 || RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action);
     }

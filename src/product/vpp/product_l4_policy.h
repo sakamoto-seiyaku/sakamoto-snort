@@ -11,6 +11,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "product_sni.h"
 
 #define PRODUCT_STATIC_EXPRESSION_BYTES 64
 #define PRODUCT_STATIC_EXPRESSION_DEPTH 8
@@ -24,7 +25,8 @@ typedef enum {
   PRODUCT_STATIC_DESTINATION_CIDR = 10, PRODUCT_STATIC_SOURCE_PORT = 11,
   PRODUCT_STATIC_DESTINATION_PORT = 12,
   PRODUCT_EXPRESSION_CT_STATE = 13, PRODUCT_EXPRESSION_FLOW_DIRECTION = 14,
-  PRODUCT_EXPRESSION_APPLICATION_PROTOCOL = 15
+  PRODUCT_EXPRESSION_APPLICATION_PROTOCOL = 15,
+  PRODUCT_EXPRESSION_SNI_ABSENT = 16
 } product_static_opcode_t;
 
 #define PRODUCT_L4_POLICY_MAX_RULES UINT32_C (128)
@@ -143,6 +145,7 @@ typedef struct
   uint8_t flow_direction_known;
   uint64_t protocol_set; /* Stable catalog bit projection, all published facts. */
   uint8_t protocol_set_known;
+  uint8_t sni_result;
 } product_l4_policy_packet_t;
 
 typedef struct
@@ -298,6 +301,7 @@ product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
 #define PRODUCT_POLICY_DEP_STATIC 1U
 #define PRODUCT_POLICY_DEP_CT 2U
 #define PRODUCT_POLICY_DEP_LPI 4U
+#define PRODUCT_POLICY_DEP_SNI 8U
 #define PRODUCT_POLICY_CACHE_CAPACITY 128U
 #define PRODUCT_POLICY_CACHE_MAX_CAPACITY 128U
 

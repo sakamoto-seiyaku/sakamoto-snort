@@ -528,6 +528,33 @@ vl_api_product_core_policy_bundle_apply_t_handler (vl_api_product_core_policy_bu
 }
 
 static void
+vl_api_product_core_sni_query_t_handler (vl_api_product_core_sni_query_t *mp)
+{
+  vl_api_product_core_sni_query_reply_t *rmp;
+  sakamoto_product_sni_status_t status={0};
+  int rv=product_packet_graph_sni_query(clib_net_to_host_u64(mp->generation),
+    clib_net_to_host_u32(mp->worker),clib_net_to_host_u32(mp->slot),
+    clib_net_to_host_u64(mp->incarnation),&status);
+  REPLY_MACRO2(VL_API_PRODUCT_CORE_SNI_QUERY_REPLY, ({
+    rmp->retval=htonl(rv);
+    rmp->generation=clib_host_to_net_u64(status.generation);
+    rmp->incarnation=clib_host_to_net_u64(status.incarnation);
+    rmp->protocols=clib_host_to_net_u64(status.protocols);
+    rmp->worker=clib_host_to_net_u32(status.worker);
+    rmp->slot=clib_host_to_net_u32(status.slot);
+    rmp->result=clib_host_to_net_u32(status.result);
+    rmp->stop=clib_host_to_net_u32(status.stop);
+    rmp->attempts=clib_host_to_net_u32(status.attempts);
+    rmp->bytes=clib_host_to_net_u32(status.bytes);
+    rmp->work=clib_host_to_net_u32(status.work);
+    rmp->cache_bytes=clib_host_to_net_u32(status.cache_bytes);
+    rmp->name_length=clib_host_to_net_u32(status.name_length);
+    rmp->protocols_available=clib_host_to_net_u32(status.protocols_available);
+    memcpy(rmp->name,status.name,sizeof status.name);
+  }));
+}
+
+static void
 vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp)
 {
   product_core_main_t *pcm = &product_core_main;

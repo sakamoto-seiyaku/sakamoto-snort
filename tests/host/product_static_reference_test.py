@@ -25,7 +25,7 @@ class Packet(C.Structure):
     _fields_ = [(n, U32) for n in ('uid', 'network_context_id', 'ifindex')] + [
         (n, U16) for n in ('source_port', 'destination_port')] + [(n, U8) for n in (
         'family', 'protocol', 'direction', 'uid_known', 'direction_known', 'network_context_known', 'ifindex_known', 'ports_available')] + [
-        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')] + [('protocol_set', U64), ('protocol_set_known', U8)]
+        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')] + [('protocol_set', U64), ('protocol_set_known', U8), ('sni_result', U8)]
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
@@ -54,6 +54,8 @@ def logical_truth(expr, facts):
             return None if None in truths else True
         if True in truths: return True
         return None if None in truths else False
+    if op == 'no_sni':
+        return None if facts.get('sni') is None else facts['sni'] == 'absent'
     fact = facts[op]
     if fact is None: return None
     if op == 'lpi': return args[0] in fact
@@ -63,10 +65,15 @@ def logical_truth(expr, facts):
         return args[0] <= fact <= args[1]
     return fact == args[0]
 
+def contains_sni(expr):
+    return expr[0] == 'no_sni' or (expr[0] in ('and','or','not') and any(contains_sni(e) for e in expr[1:]))
+
 def ordered_reference(rules, facts):
     effective = sorted((r for r in rules if facts['uid'] == r['uid']),
                        key=lambda r: (r['priority'], r['order'], r['id']))
     for rank, rule in enumerate(effective, start=1):
+        if contains_sni(rule['expr']) and not ({1003,1004} & (facts.get('lpi') or set())):
+            continue
         if logical_truth(rule['expr'], facts) is True:
             return dict(rule_id=rule['id'], winner_rank=rank, action=rule['action'],
                         mode=rule['mode'], actual_action=1 if rule['mode'] else rule['action'],
@@ -79,6 +86,7 @@ def encode(expr):
     op, *args = expr
     if op in ('and', 'or', 'not'):
         return b''.join(encode(arg) for arg in args) + bytes([{'and':1, 'or':2, 'not':3}[op]])
+    if op == 'no_sni': return bytes([16,1])
     if op == 'lpi': return bytes([15])+args[0].to_bytes(4, 'little')
     if op in ('ct', 'flowdir'):
         return bytes([13 if op == 'ct' else 14, args[0]])
@@ -105,6 +113,7 @@ def packet(facts):
     p.ct_state_known, p.flow_direction_known = facts.get("ct") is not None, facts.get("flowdir") is not None
     p.protocol_set_known = facts.get("lpi") is not None
     p.protocol_set = sum(1 << (value-1001) for value in (facts.get("lpi") or set()))
+    p.sni_result = {None:0,"name":1,"absent":2}[facts.get("sni")]
     return p
 
 def source(rule):
@@ -145,7 +154,7 @@ def run(lib):
             # Compare actual split execution with identical inputs. A pre-flow
             # whole winner is final; only NoMatch runs the post-flow program.
             early = Result()
-            early_facts = facts | dict(ct=None, flowdir=None, lpi=None)
+            early_facts = facts | dict(ct=None, flowdir=None, lpi=None, sni=None)
             assert lib.product_l4_policy_match_position(view, C.byref(packet(early_facts)), 1, C.byref(early)) == 0
             optimized = early
             if not early.evaluation:
@@ -160,7 +169,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts | dict(lpi={1016}), facts | dict(lpi={1016,1017}), facts | dict(lpi={1017,1018}), facts | dict(lpi={1019}), facts | dict(lpi={1020}), facts | dict(lpi={1016,1017,1018,1019,1020}), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts | dict(lpi={1016}), facts | dict(lpi={1016,1017}), facts | dict(lpi={1017,1018}), facts | dict(lpi={1019}), facts | dict(lpi={1020}), facts | dict(lpi={1016,1017,1018,1019,1020}), facts | dict(lpi={1003},sni=None), facts | dict(lpi={1003},sni="name"), facts | dict(lpi={1003},sni="absent"), facts | dict(lpi={1020},sni="absent"), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -273,6 +282,24 @@ def run(lib):
              logical(('dport',200,300),identity=30,order=1)]
     placed(list(reversed(chain)), BASE | dict(dport=250,ct=2), 0, 30)
     placed(chain, BASE | dict(dport=150,ct=2), 0, 20)
+    # SNI applicability belongs to the whole rule, before Boolean evaluation.
+    for published in (None,set(),{1003},{1004},{1020},{1003,1008,1010},{1014}):
+        for sni in (None,'name','absent'):
+            for expr in (('no_sni',), ('not',('no_sni',)),
+                         ('or',('family',4),('no_sni',)),
+                         ('and',('family',4),('no_sni',)),
+                         ('not',('and',('family',6),('no_sni',)))):
+                for mode in (0,1):
+                    rules=[logical(expr,mode=mode),logical(('family',4),identity=20,priority=2,action=1)]
+                    compare(rules,BASE | dict(lpi=published,sni=sni))
+    # Cross index range splits, losing predicates, placement and cache guards.
+    for limits in ((1,65534),(0,65535),(100,60000)):
+        for sni in (None,'name','absent'):
+            expr=('and',('and',('sport',*limits),('dport',*limits)),('no_sni',))
+            rules=[logical(expr,mode=1),logical(('not',('no_sni',)),identity=20,priority=2),
+                   logical(('family',4),identity=30,priority=3,action=1)]
+            compare(rules,BASE | dict(lpi={1003},sni=sni,sport=123,dport=443))
+
     # Known disjoint family/protocol/device direction/address/port permits early
     # whole rules, including same-action competition and observe DROP winners.
     pairs = [(('family',6),('family',4)), (('protocol',6),('protocol',17)),

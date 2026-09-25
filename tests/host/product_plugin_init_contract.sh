@@ -65,6 +65,8 @@ sakamoto_test_error_return (int ignored, const char *format, ...)
 #define clib_error_return(...) sakamoto_test_error_return (__VA_ARGS__)
 #define clib_memset memset
 #define clib_memcpy memcpy
+#define clib_host_to_net_u32(value) (value)
+#define clib_net_to_host_u32(value) (value)
 #define clib_host_to_net_u64 value_identity_u64
 #define clib_net_to_host_u64 value_identity_u64
 static inline u64 value_identity_u64 (u64 value) { return value; }
@@ -159,6 +161,7 @@ EOF
 cat >"$work_dir/product_core.api_enum.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_ENUM_H
+#define VL_API_PRODUCT_CORE_SNI_QUERY_REPLY 22
 #define VL_API_PRODUCT_CORE_RULE_CONFIG 20
 #define VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY 21
 #define VL_API_PRODUCT_CORE_STATUS_REPLY 1
@@ -175,6 +178,8 @@ cat >"$work_dir/product_core.api_types.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_TYPES_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_TYPES_H
 #include "sakamoto_product_rule_config.h"
+typedef struct { uint64_t generation, incarnation; uint32_t worker, slot; } vl_api_product_core_sni_query_t;
+typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vl_api_product_core_sni_query_reply_t;
 typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;
 typedef struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_t;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_reply_t;
@@ -429,6 +434,7 @@ extern u16 sakamoto_test_message_id_base;
 static u16
 setup_message_id_table (void)
 {
+  (void) vl_api_product_core_sni_query_t_handler;
   (void) vl_api_product_core_status_t_handler;
   (void) vl_api_product_core_policy_apply_t_handler;
   (void) vl_api_product_core_rule_config_t_handler;
@@ -600,6 +606,9 @@ int product_vpn_udp4_adapter_start (vlib_main_t *vm, uint64_t generation)
   (void) generation;
   return 0;
 }
+int product_packet_graph_sni_query(uint64_t generation,uint32_t worker,uint32_t slot,
+  uint64_t incarnation,sakamoto_product_sni_status_t *out)
+{(void)generation;(void)worker;(void)slot;(void)incarnation;memset(out,0,sizeof *out);return -5;}
 uint32_t product_packet_graph_worker_count (void) { return 2U; }
 uint64_t product_packet_graph_hash_seed (void) { return 0x6f776e65722d3137ULL; }
 uint32_t product_packet_graph_handoff_credits (void) { return 32U; }
