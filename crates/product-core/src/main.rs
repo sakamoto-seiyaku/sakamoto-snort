@@ -1,5 +1,5 @@
 use sakamoto_product_core::{
-    ConfigRule, ErrorCode, ProductCore, ProductError, RuleConfigRequest, Status,
+    ConfigRule, DirectRule, ErrorCode, ProductCore, ProductError, RuleConfigRequest, Status,
 };
 use std::env;
 use std::path::Path;
@@ -92,6 +92,22 @@ fn main() {
         };
         match command.as_str() {
             "rule-query" if remaining.is_empty() => {}
+            "rule-replace-all" if remaining.len() == 2 => {
+                request.operation = 2;
+                request.expected_saved_revision = number(0);
+                let text = std::fs::read_to_string(&remaining[1]).unwrap_or_else(|_| usage());
+                for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    let i = request.count as usize;
+                    if i == request.rules.len() {
+                        usage();
+                    }
+                    request.rules[i] = DirectRule::parse(line).unwrap_or_else(|error| {
+                        eprintln!("rule {}: {}", i, error);
+                        usage()
+                    });
+                    request.count += 1;
+                }
+            }
             "rule-clear" if remaining.len() == 1 => {
                 request.operation = 1;
                 request.expected_saved_revision = number(0);
@@ -130,6 +146,17 @@ fn main() {
                     s.generation, s.saved_revision, s.active_revision, s.saved_rule_version,
                     s.active_rule_version, s.result, s.save_error, s.compile_error,
                     s.rule.present, s.rule.uid, s.rule.action);
+                println!("config.count={}\nconfig.active_count={}\nconfig.error_index={}\nconfig.compiler_status={}",
+                    s.count, s.active_count, s.error_index, s.compiler_status);
+                for (i, r) in s.rules[..s.count as usize].iter().enumerate() {
+                    println!("config.rule.{i}.version={}\nconfig.rule.{i}.uid={}\nconfig.rule.{i}.family={}\nconfig.rule.{i}.protocol={}\nconfig.rule.{i}.action={}", r.version, r.uid, r.family, r.protocol, r.action);
+                }
+                for (i, version) in s.active_versions[..s.active_count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    println!("config.active_version.{i}={version}");
+                }
                 if s.result != 0 {
                     std::process::exit(1);
                 }

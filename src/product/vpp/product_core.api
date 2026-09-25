@@ -318,6 +318,29 @@ typedef product_config_rule {
     u8 destination_address[4];
 };
 
+typedef product_direct_rule {
+    u64 version;
+    u64 base_version;
+    u32 uid;
+    u32 network_context;
+    u32 ifindex;
+    u32 priority;
+    u32 order;
+    u32 family;
+    u32 protocol;
+    u32 direction;
+    u32 action;
+    u32 source_prefix;
+    u32 destination_prefix;
+    u32 source_port_first;
+    u32 source_port_last;
+    u32 destination_port_first;
+    u32 destination_port_last;
+    u32 reserved;
+    u8 source_address[16];
+    u8 destination_address[16];
+};
+
 define product_core_rule_config {
     u32 client_index;
     u32 context;
@@ -326,6 +349,9 @@ define product_core_rule_config {
     u32 operation;
     u64 expected_saved_revision;
     vl_api_product_config_rule_t rule;
+    u32 count;
+    u32 reserved;
+    vl_api_product_direct_rule_t rules[256];
 };
 
 define product_core_rule_config_reply {
@@ -340,4 +366,10 @@ define product_core_rule_config_reply {
     u32 save_error;
     u32 compile_error;
     vl_api_product_config_rule_t rule;
+    u32 count;
+    u32 active_count;
+    u32 error_index;
+    u32 compiler_status;
+    vl_api_product_direct_rule_t rules[256];
+    u64 active_versions[256];
 };

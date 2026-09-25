@@ -541,6 +541,30 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
 #undef FROM_RULE
   memcpy (request.rule.source_address, mp->rule.source_address, 4);
   memcpy (request.rule.destination_address, mp->rule.destination_address, 4);
+  request.count = ntohl (mp->count); request.reserved = ntohl (mp->reserved);
+  for (unsigned i = 0; i < request.count && i < SAKAMOTO_RULE_CONFIG_MAX_RULES; ++i)
+    {
+      request.rules[i].version = clib_net_to_host_u64 (mp->rules[i].version);
+      request.rules[i].base_version = clib_net_to_host_u64 (mp->rules[i].base_version);
+      request.rules[i].uid = ntohl (mp->rules[i].uid);
+      request.rules[i].network_context = ntohl (mp->rules[i].network_context);
+      request.rules[i].ifindex = ntohl (mp->rules[i].ifindex);
+      request.rules[i].priority = ntohl (mp->rules[i].priority);
+      request.rules[i].order = ntohl (mp->rules[i].order);
+      request.rules[i].family = ntohl (mp->rules[i].family);
+      request.rules[i].protocol = ntohl (mp->rules[i].protocol);
+      request.rules[i].direction = ntohl (mp->rules[i].direction);
+      request.rules[i].action = ntohl (mp->rules[i].action);
+      request.rules[i].source_prefix = ntohl (mp->rules[i].source_prefix);
+      request.rules[i].destination_prefix = ntohl (mp->rules[i].destination_prefix);
+      request.rules[i].source_port_first = ntohl (mp->rules[i].source_port_first);
+      request.rules[i].source_port_last = ntohl (mp->rules[i].source_port_last);
+      request.rules[i].destination_port_first = ntohl (mp->rules[i].destination_port_first);
+      request.rules[i].destination_port_last = ntohl (mp->rules[i].destination_port_last);
+      request.rules[i].reserved = ntohl (mp->rules[i].reserved);
+      memcpy (request.rules[i].source_address, mp->rules[i].source_address, 16);
+      memcpy (request.rules[i].destination_address, mp->rules[i].destination_address, 16);
+    }
   sakamoto_product_rule_config_status_t status = {0};
   uint32_t result = SAKAMOTO_RULE_CONFIG_NOT_READY;
   int rv = 0;
@@ -549,7 +573,7 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
   else if (product_source_config)
     {
       if (request.operation == SAKAMOTO_RULE_CONFIG_QUERY) result = 0;
-      else if (request.operation == SAKAMOTO_RULE_CONFIG_REPLACE)
+      else if (request.operation == SAKAMOTO_RULE_CONFIG_REPLACE || request.operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL)
         result = product_rule_config_replace (product_source_config, &request,
                                               product_core_publish_source, pcm);
       else result = SAKAMOTO_RULE_CONFIG_INVALID;
@@ -576,6 +600,36 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
 
     memcpy (rmp->rule.source_address, status.rule.source_address, 4);
     memcpy (rmp->rule.destination_address, status.rule.destination_address, 4);
+    rmp->count = htonl (status.count);
+    rmp->active_count = htonl (status.active_count);
+    rmp->error_index = htonl (status.error_index);
+    rmp->compiler_status = htonl (status.compiler_status);
+    for (unsigned i = 0; i < status.count; ++i)
+      {
+        rmp->rules[i].version = clib_host_to_net_u64 (status.rules[i].version);
+        rmp->rules[i].base_version = clib_host_to_net_u64 (status.rules[i].base_version);
+        rmp->rules[i].uid = htonl (status.rules[i].uid);
+        rmp->rules[i].network_context = htonl (status.rules[i].network_context);
+        rmp->rules[i].ifindex = htonl (status.rules[i].ifindex);
+        rmp->rules[i].priority = htonl (status.rules[i].priority);
+        rmp->rules[i].order = htonl (status.rules[i].order);
+        rmp->rules[i].family = htonl (status.rules[i].family);
+        rmp->rules[i].protocol = htonl (status.rules[i].protocol);
+        rmp->rules[i].direction = htonl (status.rules[i].direction);
+        rmp->rules[i].action = htonl (status.rules[i].action);
+        rmp->rules[i].source_prefix = htonl (status.rules[i].source_prefix);
+        rmp->rules[i].destination_prefix = htonl (status.rules[i].destination_prefix);
+        rmp->rules[i].source_port_first = htonl (status.rules[i].source_port_first);
+        rmp->rules[i].source_port_last = htonl (status.rules[i].source_port_last);
+        rmp->rules[i].destination_port_first = htonl (status.rules[i].destination_port_first);
+        rmp->rules[i].destination_port_last = htonl (status.rules[i].destination_port_last);
+        rmp->rules[i].reserved = htonl (status.rules[i].reserved);
+        memcpy (rmp->rules[i].source_address, status.rules[i].source_address, 16);
+        memcpy (rmp->rules[i].destination_address, status.rules[i].destination_address, 16);
+      }
+    for (unsigned i = 0; i < status.active_count; ++i)
+      rmp->active_versions[i] = clib_host_to_net_u64 (status.active_versions[i]);
+
   }));
 }
 

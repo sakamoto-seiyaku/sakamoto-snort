@@ -10,262 +10,556 @@
 #include <sys/random.h>
 #include <unistd.h>
 
+#define SOURCE_BYTES                                                                               \
+    (24 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 112 * SAKAMOTO_RULE_CONFIG_MAX_RULES)
 struct product_rule_config {
-  char *path;
-  sakamoto_product_rule_config_status_t state;
+    char *path;
+    sakamoto_product_rule_config_status_t state;
+    uint32_t retained_count;
+    uint64_t retained[SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES];
 };
 
-static int rule_valid (const sakamoto_product_config_rule_t *);
-
-/* The first encoding is bounded, canonical ASCII, independent of C padding
- * and machine byte order. This is source data, never a compiled snapshot. */
-static int
-encode (const sakamoto_product_rule_config_status_t *s, char *text, size_t size)
-{
-  const sakamoto_product_config_rule_t *r = &s->rule;
-  return snprintf (text, size,
-    "sakamoto-rule-config/1\n%llu %llu\n%u %u %u %u %u %u %u\n"
-    "%02x%02x%02x%02x %02x%02x%02x%02x\n",
-    (unsigned long long) s->saved_revision,
-    (unsigned long long) s->saved_rule_version,
-    r->present, r->uid, r->protocol, r->direction, r->action,
-    r->source_port, r->destination_port,
-    r->source_address[0], r->source_address[1], r->source_address[2], r->source_address[3],
-    r->destination_address[0], r->destination_address[1], r->destination_address[2], r->destination_address[3]);
-}
-
-static uint32_t
-save_source (product_rule_config_t *config,
-             const sakamoto_product_rule_config_status_t *candidate)
-{
-  char bytes[512];
-  int length = encode (candidate, bytes, sizeof (bytes));
-  if (length < 0 || (size_t) length >= sizeof (bytes))
-    return SAKAMOTO_RULE_CONFIG_IO;
-  size_t path_size = strlen (config->path) + 16;
-  char *temporary = malloc (path_size);
-  char *parent = strdup (config->path);
-  if (!temporary || !parent) { free (temporary); free (parent); return SAKAMOTO_RULE_CONFIG_IO; }
-  snprintf (temporary, path_size, "%s.tmp.XXXXXX", config->path);
-  char *slash = strrchr (parent, '/');
-  if (!slash) { free (temporary); free (parent); return SAKAMOTO_RULE_CONFIG_IO; }
-  if (slash == parent) slash[1] = '\0'; else *slash = '\0';
-  int directory = open (parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  free (parent);
-  int fd = -1;
-  uint32_t result = SAKAMOTO_RULE_CONFIG_IO;
-  struct stat owner;
-  if (directory < 0 || fstat (directory, &owner) != 0) goto done;
-  fd = mkstemp (temporary);
-  if (fd < 0) goto done;
-  /* Root and VPN use one app-owned source; never leave a root-only file. */
-  if (geteuid () == 0 && fchown (fd, owner.st_uid, owner.st_gid) != 0) goto done;
-  size_t written = 0;
-  while (written < (size_t) length)
-    {
-      ssize_t count = write (fd, bytes + written, (size_t) length - written);
-      if (count < 0 && errno == EINTR) continue;
-      if (count <= 0) goto done;
-      written += (size_t) count;
+/* The encoding has explicit widths and byte order, no native structure padding.
+ * Retained values are identity high-water marks, never old rule conditions. */
+static void put(uint8_t **at, uint64_t value, unsigned width) {
+    for (unsigned i = 0; i < width; ++i) {
+        *(*at)++ = value & 255;
+        value >>= 8;
     }
-  if (fsync (fd) != 0) goto done;
-  if (close (fd) != 0) { fd = -1; goto done; }
-  fd = -1;
-  if (rename (temporary, config->path) != 0) goto done;
-  /* After rename the complete new source exists even if durability fails.
-   * Keep that saved identity truthful, but do not compile on the error. */
-  config->state.saved_revision = candidate->saved_revision;
-  config->state.saved_rule_version = candidate->saved_rule_version;
-  config->state.rule = candidate->rule;
-  if (fsync (directory) != 0) goto done;
-  result = SAKAMOTO_RULE_CONFIG_OK;
+}
+static uint64_t get(const uint8_t **at, unsigned width) {
+    uint64_t value = 0;
+    for (unsigned i = 0; i < width; ++i)
+        value |= (uint64_t) * (*at)++ << (8 * i);
+    return value;
+}
+#define RULE_FIELDS(F)                                                                             \
+    F(uid)                                                                                         \
+    F(network_context) F(ifindex) F(priority) F(order) F(family) F(protocol) F(direction)          \
+        F(action) F(source_prefix) F(destination_prefix) F(source_port_first) F(source_port_last)  \
+            F(destination_port_first) F(destination_port_last) F(reserved)
+static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
+    uint8_t *at = bytes;
+    memcpy(at, "SKRULE02", 8);
+    at += 8;
+    put(&at, config->state.saved_revision, 8);
+    put(&at, config->state.count, 4);
+    put(&at, config->retained_count, 4);
+    for (unsigned i = 0; i < config->retained_count; ++i)
+        put(&at, config->retained[i], 8);
+    for (unsigned i = 0; i < config->state.count; ++i) {
+        const sakamoto_product_direct_rule_t *r = &config->state.rules[i];
+        put(&at, r->version, 8);
+        put(&at, 0, 8);
+#define WRITE(field) put(&at, r->field, 4);
+        RULE_FIELDS(WRITE)
+#undef WRITE
+        memcpy(at, r->source_address, 16);
+        at += 16;
+        memcpy(at, r->destination_address, 16);
+        at += 16;
+    }
+    return (size_t)(at - bytes);
+}
+static void project(sakamoto_product_rule_config_status_t *s) {
+    memset(&s->rule, 0, sizeof(s->rule));
+    s->saved_rule_version = s->count ? s->rules[0].version : 0;
+    s->active_rule_version = s->active_count ? s->active_versions[0] : 0;
+    if (s->count == 1) {
+        const sakamoto_product_direct_rule_t *r = &s->rules[0];
+        s->rule.present = 1;
+        s->rule.uid = r->uid;
+        s->rule.protocol = r->protocol;
+        s->rule.direction = r->direction;
+        s->rule.action = r->action;
+        s->rule.source_port = r->source_port_first;
+        s->rule.destination_port = r->destination_port_first;
+        memcpy(s->rule.source_address, r->source_address, 4);
+        memcpy(s->rule.destination_address, r->destination_address, 4);
+    }
+}
+static int valid_version(uint64_t version) {
+    return (version >> 16) != 0 && (version & UINT16_MAX) != 0;
+}
+static int valid_rule(const sakamoto_product_direct_rule_t *r) {
+    if (r->reserved || r->uid == UINT32_MAX || (r->family != 4 && r->family != 6) ||
+        r->protocol == 0 || r->protocol > 255 ||
+        (r->direction != 0 && r->direction != 1 && r->direction != 3) ||
+        (r->action != 1 && r->action != 2) || r->source_prefix > (r->family == 4 ? 32U : 128U) ||
+        r->destination_prefix > (r->family == 4 ? 32U : 128U) ||
+        r->source_port_first > r->source_port_last || r->source_port_last > 65535 ||
+        r->destination_port_first > r->destination_port_last || r->destination_port_last > 65535)
+        return 0;
+    if (r->family == 4)
+        for (unsigned i = 4; i < 16; ++i)
+            if (r->source_address[i] || r->destination_address[i])
+                return 0;
+    return 1;
+}
+static int same_content(const sakamoto_product_direct_rule_t *a,
+                        const sakamoto_product_direct_rule_t *b) {
+#define SAME(field)                                                                                \
+    if (a->field != b->field)                                                                      \
+        return 0;
+    RULE_FIELDS(SAME)
+#undef SAME
+    return memcmp(a->source_address, b->source_address, 16) == 0 &&
+           memcmp(a->destination_address, b->destination_address, 16) == 0;
+}
+static int retained_index(const product_rule_config_t *c, uint64_t version) {
+    for (unsigned i = 0; i < c->retained_count; ++i)
+        if ((c->retained[i] >> 16) == (version >> 16))
+            return (int)i;
+    return -1;
+}
+static const sakamoto_product_direct_rule_t *current_rule(const product_rule_config_t *c,
+                                                          uint64_t version) {
+    for (unsigned i = 0; i < c->state.count; ++i)
+        if ((c->state.rules[i].version >> 16) == (version >> 16))
+            return &c->state.rules[i];
+    return NULL;
+}
+static void legacy_rule(sakamoto_product_direct_rule_t *out,
+                        const sakamoto_product_config_rule_t *in) {
+    memset(out, 0, sizeof(*out));
+    out->uid = in->uid;
+    out->family = 4;
+    out->protocol = in->protocol;
+    out->direction = in->direction;
+    out->action = in->action;
+    out->network_context = PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY;
+    out->ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY;
+    out->source_prefix = out->destination_prefix = 32;
+    out->source_port_first = out->source_port_last = in->source_port;
+    out->destination_port_first = out->destination_port_last = in->destination_port;
+    memcpy(out->source_address, in->source_address, 4);
+    memcpy(out->destination_address, in->destination_address, 4);
+}
+static uint32_t load_v1(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
+    if (length >= 512)
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    char text[512], canonical[512];
+    memcpy(text, bytes, length);
+    text[length] = 0;
+    unsigned long long revision, version;
+    unsigned a[8];
+    int end = 0;
+    sakamoto_product_config_rule_t r = {0};
+    int fields = sscanf(
+        text,
+        "sakamoto-rule-config/1\n%llu %llu\n%u %u %u %u %u %u %u\n%2x%2x%2x%2x %2x%2x%2x%2x\n%n",
+        &revision, &version, &r.present, &r.uid, &r.protocol, &r.direction, &r.action,
+        &r.source_port, &r.destination_port, &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7],
+        &end);
+    if (fields != 17 || end != (int)length || !revision || r.present > 1 ||
+        (version && !valid_version(version)) || (r.present && !version))
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    for (unsigned i = 0; i < 4; ++i) {
+        r.source_address[i] = a[i];
+        r.destination_address[i] = a[i + 4];
+    }
+    int n =
+        snprintf(canonical, sizeof(canonical),
+                 "sakamoto-rule-config/1\n%llu %llu\n%u %u %u %u %u %u %u\n%02x%02x%02x%02x "
+                 "%02x%02x%02x%02x\n",
+                 revision, version, r.present, r.uid, r.protocol, r.direction, r.action,
+                 r.source_port, r.destination_port, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+    if (n != (int)length || memcmp(canonical, bytes, length))
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    if (r.present) {
+        legacy_rule(&c->state.rules[0], &r);
+        c->state.rules[0].version = version;
+        if (!valid_rule(&c->state.rules[0]))
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+    } else {
+        sakamoto_product_config_rule_t empty = {0};
+        if (memcmp(&r, &empty, sizeof(r)))
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+    }
+    c->state.saved_revision = revision;
+    c->state.count = r.present;
+    if (version) {
+        c->retained_count = 1;
+        c->retained[0] = version;
+    }
+    project(&c->state);
+    return 0;
+}
+static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
+    if (length < 8 || memcmp(bytes, "SKRULE02", 8))
+        return load_v1(c, bytes, length);
+    if (length < 24)
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    const uint8_t *at = bytes + 8;
+    uint64_t revision = get(&at, 8);
+    uint32_t count = get(&at, 4), retained = get(&at, 4);
+    if (!revision || count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+        retained > SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES ||
+        length != 24 + 8 * (size_t)retained + 112 * (size_t)count)
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    for (unsigned i = 0; i < retained; ++i) {
+        uint64_t version = get(&at, 8);
+        if (!valid_version(version) || retained_index(c, version) >= 0)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        c->retained[c->retained_count++] = version;
+    }
+    for (unsigned i = 0; i < count; ++i) {
+        sakamoto_product_direct_rule_t *r = &c->state.rules[i];
+        r->version = get(&at, 8);
+        r->base_version = get(&at, 8);
+#define READ(field) r->field = get(&at, 4);
+        RULE_FIELDS(READ)
+#undef READ
+        memcpy(r->source_address, at, 16);
+        at += 16;
+        memcpy(r->destination_address, at, 16);
+        at += 16;
+        int index = retained_index(c, r->version);
+        if (!valid_rule(r) || r->base_version || !valid_version(r->version) || index < 0 ||
+            c->retained[index] != r->version)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        for (unsigned j = 0; j < i; ++j)
+            if ((c->state.rules[j].version >> 16) == (r->version >> 16))
+                return SAKAMOTO_RULE_CONFIG_INVALID;
+    }
+    c->state.count = count;
+    c->state.saved_revision = revision;
+    project(&c->state);
+    return 0;
+}
+static uint32_t load_source(product_rule_config_t *c) {
+    int fd = open(c->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0)
+        return SAKAMOTO_RULE_CONFIG_IO;
+    struct stat st;
+    uint8_t *bytes = malloc(SOURCE_BYTES);
+    size_t length = 0;
+    int valid = bytes && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
+                st.st_size <= SOURCE_BYTES;
+    while (valid && length < (size_t)st.st_size) {
+        ssize_t n = read(fd, bytes + length, (size_t)st.st_size - length);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            valid = 0;
+            break;
+        }
+        length += (size_t)n;
+    }
+    close(fd);
+    uint32_t result = valid ? decode(c, bytes, length) : SAKAMOTO_RULE_CONFIG_IO;
+    free(bytes);
+    if (result) {
+        memset(&c->state, 0, sizeof(c->state));
+        c->retained_count = 0;
+    }
+    return result;
+}
+static uint32_t save_source(product_rule_config_t *config, const product_rule_config_t *candidate) {
+    uint8_t *bytes = malloc(SOURCE_BYTES);
+    size_t path_size = strlen(config->path) + 16;
+    char *temporary = malloc(path_size), *parent = strdup(config->path);
+    if (!bytes || !temporary || !parent) {
+        free(bytes);
+        free(temporary);
+        free(parent);
+        return SAKAMOTO_RULE_CONFIG_IO;
+    }
+    size_t length = encode(candidate, bytes);
+    snprintf(temporary, path_size, "%s.tmp.XXXXXX", config->path);
+    char *slash = strrchr(parent, '/');
+    if (slash == parent)
+        slash[1] = 0;
+    else
+        *slash = 0;
+    int directory = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    free(parent);
+    int fd = -1;
+    uint32_t result = SAKAMOTO_RULE_CONFIG_IO;
+    struct stat owner;
+    if (directory < 0 || fstat(directory, &owner))
+        goto done;
+    fd = mkstemp(temporary);
+    if (fd < 0)
+        goto done;
+    if (geteuid() == 0 && fchown(fd, owner.st_uid, owner.st_gid))
+        goto done;
+    if (fchmod(fd, 0600))
+        goto done;
+    for (size_t written = 0; written < length;) {
+        ssize_t n = write(fd, bytes + written, length - written);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            goto done;
+        written += (size_t)n;
+    }
+    if (fsync(fd))
+        goto done;
+    if (close(fd)) {
+        fd = -1;
+        goto done;
+    }
+    fd = -1;
+    if (rename(temporary, config->path))
+        goto done;
+    /* The rename has saved complete bytes even if directory durability fails. */
+    config->state = candidate->state;
+    config->retained_count = candidate->retained_count;
+    memcpy(config->retained, candidate->retained, sizeof(config->retained));
+    if (fsync(directory)) {
+        result = SAKAMOTO_RULE_CONFIG_DURABILITY_UNCERTAIN;
+        goto done;
+    }
+    result = 0;
 done:
-  if (fd >= 0) close (fd);
-  if (directory >= 0) close (directory);
-  unlink (temporary);
-  free (temporary);
-  return result;
+    if (fd >= 0)
+        close(fd);
+    if (directory >= 0)
+        close(directory);
+    unlink(temporary);
+    free(temporary);
+    free(bytes);
+    return result;
 }
-
-static uint32_t
-load_source (product_rule_config_t *config)
-{
-  int fd = open (config->path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0) return SAKAMOTO_RULE_CONFIG_IO;
-  struct stat st;
-  char bytes[512], canonical[512];
-  size_t length = 0;
-  int valid = fstat (fd, &st) == 0 && S_ISREG (st.st_mode)
-    && st.st_size > 0 && st.st_size < (off_t) sizeof (bytes);
-  while (valid && length < sizeof (bytes) - 1)
-    {
-      ssize_t count = read (fd, bytes + length, sizeof (bytes) - 1 - length);
-      if (count < 0 && errno == EINTR) continue;
-      if (count < 0) { valid = 0; break; }
-      if (count == 0) break;
-      length += (size_t) count;
+product_rule_config_t *product_rule_config_open(const char *path) {
+    if (!path || path[0] != '/' || !path[1])
+        return NULL;
+    product_rule_config_t *c = calloc(1, sizeof(*c));
+    if (!c)
+        return NULL;
+    c->path = strdup(path);
+    if (!c->path) {
+        free(c);
+        return NULL;
     }
-  close (fd);
-  if (!valid || length != (size_t) st.st_size) return SAKAMOTO_RULE_CONFIG_IO;
-  bytes[length] = '\0';
-  sakamoto_product_rule_config_status_t loaded = {0};
-  sakamoto_product_config_rule_t *r = &loaded.rule;
-  unsigned long long revision, version;
-  unsigned addresses[8];
-  int end = 0;
-  int fields = sscanf (bytes,
-    "sakamoto-rule-config/1\n%llu %llu\n%u %u %u %u %u %u %u\n"
-    "%2x%2x%2x%2x %2x%2x%2x%2x\n%n",
-    &revision, &version, &r->present, &r->uid, &r->protocol, &r->direction,
-    &r->action, &r->source_port, &r->destination_port,
-    &addresses[0], &addresses[1], &addresses[2], &addresses[3],
-    &addresses[4], &addresses[5], &addresses[6], &addresses[7], &end);
-  if (fields != 17 || end != (int) length) return SAKAMOTO_RULE_CONFIG_INVALID;
-  loaded.saved_revision = (uint64_t) revision;
-  loaded.saved_rule_version = (uint64_t) version;
-  for (unsigned i = 0; i < 4; ++i)
-    { r->source_address[i] = addresses[i]; r->destination_address[i] = addresses[i+4]; }
-  if (!revision || !rule_valid (r)
-      || (version && (!(version >> 16) || !(version & UINT16_MAX)))
-      || (r->present && !version)) return SAKAMOTO_RULE_CONFIG_INVALID;
-  int encoded = encode (&loaded, canonical, sizeof (canonical));
-  if (encoded != (int) length || memcmp (bytes, canonical, length) != 0)
-    return SAKAMOTO_RULE_CONFIG_INVALID;
-  config->state = loaded;
-  return 0;
+    struct stat st;
+    if (lstat(path, &st) && errno == ENOENT) {
+        product_rule_config_t *empty = calloc(1, sizeof(*empty));
+        if (!empty)
+            c->state.save_error = SAKAMOTO_RULE_CONFIG_IO;
+        else {
+            empty->state.saved_revision = 1;
+            c->state.save_error = save_source(c, empty);
+            free(empty);
+        }
+    } else
+        c->state.save_error = load_source(c);
+    c->state.error_index = UINT32_MAX;
+    return c;
 }
-
-product_rule_config_t *
-product_rule_config_open (const char *path)
-{
-  if (!path || path[0] != '/') return NULL;
-  product_rule_config_t *config = calloc (1, sizeof (*config));
-  if (!config) return NULL;
-  config->path = strdup (path);
-  if (!config->path) { free (config); return NULL; }
-  struct stat existing;
-  if (lstat (path, &existing) != 0 && errno == ENOENT)
-    {
-      sakamoto_product_rule_config_status_t empty = { .saved_revision = 1 };
-      config->state.save_error = save_source (config, &empty);
+void product_rule_config_close(product_rule_config_t *c) {
+    if (c) {
+        free(c->path);
+        free(c);
     }
-  else config->state.save_error = load_source (config);
-  return config;
 }
-
-void product_rule_config_close (product_rule_config_t *config)
-{
-  if (config) { free (config->path); free (config); }
+void product_rule_config_query(const product_rule_config_t *c,
+                               sakamoto_product_rule_config_status_t *out) {
+    if (c && out)
+        *out = c->state;
 }
-
-void product_rule_config_query (const product_rule_config_t *config,
-                               sakamoto_product_rule_config_status_t *out)
-{
-  if (out) *out = config->state;
-}
-
-uint32_t product_rule_config_activate (product_rule_config_t *config,
-                                     product_rule_config_publish_t publish,
-                                     void *opaque)
-{
-  if (!config || !publish) return SAKAMOTO_RULE_CONFIG_INVALID;
-  if (config->state.save_error) return config->state.save_error;
-  const sakamoto_product_config_rule_t *source = &config->state.rule;
-  product_l4_policy_rule_t rule = {0};
-  if (source->present)
-    {
-      if (source->protocol != PRODUCT_L4_POLICY_PROTOCOL_UDP)
-        return config->state.compile_error = SAKAMOTO_RULE_CONFIG_UNSUPPORTED;
-      rule.rule_id = config->state.saved_rule_version;
-      rule.uid = source->uid;
-      rule.network_context_id = PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY;
-      rule.ifindex = PRODUCT_L4_POLICY_IFINDEX_ANY;
-      rule.reason_id = 1;
-      rule.family = PRODUCT_L4_POLICY_FAMILY_IPV4;
-      rule.protocol = (uint8_t) source->protocol;
-      rule.direction = (uint8_t) source->direction;
-      rule.action = (uint8_t) source->action;
-      rule.source_prefix_length = rule.destination_prefix_length = 32;
-      rule.source_port_first = rule.source_port_last = (uint16_t) source->source_port;
-      rule.destination_port_first = rule.destination_port_last = (uint16_t) source->destination_port;
-      memcpy (rule.source_address, source->source_address, 4);
-      memcpy (rule.destination_address, source->destination_address, 4);
+uint32_t product_rule_config_activate(product_rule_config_t *c,
+                                      product_rule_config_publish_t publish, void *opaque) {
+    if (!c || !publish)
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    if (c->state.save_error)
+        return c->state.save_error;
+    c->state.error_index = UINT32_MAX;
+    c->state.compiler_status = 0;
+    product_l4_policy_rule_t *rules = calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*rules));
+    product_l4_policy_view_t *view = malloc(sizeof(*view));
+    uint8_t *bytes = malloc(SOURCE_BYTES);
+    uint32_t result = SAKAMOTO_RULE_CONFIG_COMPILE;
+    if (!rules || !view || !bytes)
+        goto done;
+    for (unsigned i = 0; i < c->state.count; ++i) {
+        const sakamoto_product_direct_rule_t *s = &c->state.rules[i];
+        product_l4_policy_rule_t *r = &rules[i];
+        if (s->protocol != 6 && s->protocol != 17) {
+            c->state.error_index = i;
+            result = SAKAMOTO_RULE_CONFIG_UNSUPPORTED;
+            goto done;
+        }
+        r->rule_id = s->version;
+        r->uid = s->uid;
+        r->network_context_id = s->network_context;
+        r->ifindex = s->ifindex;
+        r->priority = s->priority;
+        r->order = s->order;
+        r->reason_id = 1;
+        r->family = s->family;
+        r->protocol = s->protocol;
+        r->direction = s->direction;
+        r->action = s->action;
+        r->source_prefix_length = s->source_prefix;
+        r->destination_prefix_length = s->destination_prefix;
+        r->source_port_first = s->source_port_first;
+        r->source_port_last = s->source_port_last;
+        r->destination_port_first = s->destination_port_first;
+        r->destination_port_last = s->destination_port_last;
+        memcpy(r->source_address, s->source_address, 16);
+        memcpy(r->destination_address, s->destination_address, 16);
     }
-  product_l4_policy_view_t compiled;
-  product_l4_policy_init (&compiled);
-  if (product_l4_policy_compile (&compiled, &rule, source->present)
-      != PRODUCT_L4_POLICY_STATUS_OK)
-    return config->state.compile_error = SAKAMOTO_RULE_CONFIG_COMPILE;
-  /* Hash the canonical complete source, not native struct padding. */
-  char bytes[512];
-  int length = encode (&config->state, bytes, sizeof (bytes));
-  uint64_t hash = UINT64_C(14695981039346656037);
-  for (int i = 0; i < length; ++i)
-    { hash ^= (uint8_t) bytes[i]; hash *= UINT64_C(1099511628211); }
-  if (!hash) hash = 1;
-  uint32_t result = publish (opaque, config->state.saved_revision, hash,
-                             &rule, source->present);
-  config->state.compile_error = result ? SAKAMOTO_RULE_CONFIG_PUBLISH : 0;
-  if (!result)
-    {
-      config->state.active_revision = config->state.saved_revision;
-      config->state.active_rule_version = source->present ? config->state.saved_rule_version : 0;
+    c->state.compiler_status = product_l4_policy_compile(view, rules, c->state.count);
+    if (c->state.compiler_status)
+        goto done;
+    size_t length = encode(c, bytes);
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < length; ++i) {
+        hash ^= bytes[i];
+        hash *= UINT64_C(1099511628211);
     }
-  return config->state.compile_error;
-}
-
-static int
-rule_valid (const sakamoto_product_config_rule_t *rule)
-{
-  if (rule->reserved || rule->present > 1) return 0;
-  if (!rule->present)
-    {
-      const sakamoto_product_config_rule_t empty = {0};
-      return memcmp (rule, &empty, sizeof (empty)) == 0;
+    if (!hash)
+        hash = 1;
+    result = publish(opaque, c->state.saved_revision, hash, rules, c->state.count)
+                 ? SAKAMOTO_RULE_CONFIG_PUBLISH
+                 : 0;
+    if (!result) {
+        c->state.active_revision = c->state.saved_revision;
+        c->state.active_count = c->state.count;
+        memset(c->state.active_versions, 0, sizeof(c->state.active_versions));
+        for (unsigned i = 0; i < c->state.count; ++i)
+            c->state.active_versions[i] = c->state.rules[i].version;
+        project(&c->state);
     }
-  return rule->uid != UINT32_MAX && rule->protocol > 0 && rule->protocol <= 255
-    && (rule->direction == 1 || rule->direction == 3)
-    && (rule->action == 1 || rule->action == 2)
-    && rule->source_port <= UINT16_MAX && rule->destination_port <= UINT16_MAX;
+done:
+    c->state.compile_error = result;
+    free(rules);
+    free(view);
+    free(bytes);
+    return result;
 }
-
-uint32_t product_rule_config_replace (
-  product_rule_config_t *config, const sakamoto_product_rule_config_request_t *request,
-  product_rule_config_publish_t publish, void *opaque)
-{
-  if (!config || !request || !publish || request->schema != SAKAMOTO_RULE_CONFIG_SCHEMA
-      || request->operation != SAKAMOTO_RULE_CONFIG_REPLACE || !rule_valid (&request->rule))
-    return SAKAMOTO_RULE_CONFIG_INVALID;
-  if (request->expected_saved_revision != config->state.saved_revision)
-    return SAKAMOTO_RULE_CONFIG_CONFLICT;
-  if (config->state.saved_revision == UINT64_MAX) return SAKAMOTO_RULE_CONFIG_EXHAUSTED;
-  sakamoto_product_rule_config_status_t next = config->state;
-  next.saved_revision++;
-  if (request->rule.present)
-    {
-      if (!next.saved_rule_version)
-        {
-          uint64_t identity = 0;
-          for (unsigned attempt = 0; attempt < 16 && !identity; ++attempt)
-            {
-              ssize_t count;
-              do { count = getrandom (&identity, sizeof (identity), 0); }
-              while (count < 0 && errno == EINTR);
-              if (count != sizeof (identity)) return SAKAMOTO_RULE_CONFIG_IO;
-              identity &= UINT64_C(0xffffffffffff0000);
+static uint32_t assign_version(const product_rule_config_t *old, product_rule_config_t *next,
+                               sakamoto_product_direct_rule_t *r) {
+    if (r->base_version) {
+        const sakamoto_product_direct_rule_t *prior = current_rule(old, r->base_version);
+        if (r->version || !prior || prior->version != r->base_version)
+            return SAKAMOTO_RULE_CONFIG_CONFLICT;
+        r->version = prior->version;
+        if (!same_content(r, prior)) {
+            if ((r->version & 65535) == 65535)
+                return SAKAMOTO_RULE_CONFIG_EXHAUSTED;
+            ++r->version;
+        }
+        r->base_version = 0;
+    } else if (r->version) {
+        if (!valid_version(r->version))
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        int index = retained_index(old, r->version);
+        const sakamoto_product_direct_rule_t *prior = current_rule(old, r->version);
+        if (index >= 0 &&
+            (r->version < old->retained[index] ||
+             (r->version == old->retained[index] && (!prior || !same_content(r, prior)))))
+            return SAKAMOTO_RULE_CONFIG_CONFLICT;
+    } else {
+        for (unsigned attempt = 0; attempt < 32; ++attempt) {
+            uint64_t value;
+            ssize_t count;
+            do {
+                count = getrandom(&value, sizeof(value), 0);
+            } while (count < 0 && errno == EINTR);
+            if (count != sizeof(value))
+                return SAKAMOTO_RULE_CONFIG_IO;
+            value = (value & UINT64_C(0xffffffffffff0000)) | 1;
+            if ((value >> 16) && retained_index(next, value) < 0) {
+                r->version = value;
+                break;
             }
-          if (!identity) return SAKAMOTO_RULE_CONFIG_IO;
-          next.saved_rule_version = identity | 1;
         }
-      else if (memcmp (&next.rule, &request->rule, sizeof (next.rule)) != 0)
-        {
-          if ((next.saved_rule_version & UINT16_MAX) == UINT16_MAX)
-            return SAKAMOTO_RULE_CONFIG_EXHAUSTED;
-          next.saved_rule_version++;
-        }
+        if (!r->version)
+            return SAKAMOTO_RULE_CONFIG_CONFLICT;
     }
-  next.rule = request->rule;
-  config->state.save_error = save_source (config, &next);
-  if (config->state.save_error) return config->state.save_error;
-  return product_rule_config_activate (config, publish, opaque);
+    int index = retained_index(next, r->version);
+    if (index < 0) {
+        if (next->retained_count == SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES)
+            return SAKAMOTO_RULE_CONFIG_EXHAUSTED;
+        index = next->retained_count++;
+    }
+    next->retained[index] = r->version;
+    return 0;
+}
+uint32_t product_rule_config_replace(product_rule_config_t *c,
+                                     const sakamoto_product_rule_config_request_t *request,
+                                     product_rule_config_publish_t publish, void *opaque) {
+    if (!c || !request || !publish || request->schema != SAKAMOTO_RULE_CONFIG_SCHEMA ||
+        request->reserved || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+        (request->operation != SAKAMOTO_RULE_CONFIG_REPLACE &&
+         request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL))
+        return SAKAMOTO_RULE_CONFIG_INVALID;
+    c->state.error_index = UINT32_MAX;
+    if (request->expected_saved_revision != c->state.saved_revision)
+        return SAKAMOTO_RULE_CONFIG_CONFLICT;
+    product_rule_config_t *next = malloc(sizeof(*next));
+    if (!next)
+        return SAKAMOTO_RULE_CONFIG_IO;
+    *next = *c;
+    memset(next->state.rules, 0, sizeof(next->state.rules));
+    uint32_t result = SAKAMOTO_RULE_CONFIG_INVALID;
+    if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
+        const sakamoto_product_config_rule_t *r = &request->rule;
+        if (request->count || r->reserved || r->present > 1 || c->state.count > 1)
+            goto done;
+        next->state.count = r->present;
+        if (r->present) {
+            legacy_rule(&next->state.rules[0], r);
+            if (c->state.count)
+                next->state.rules[0].base_version = c->state.rules[0].version;
+        } else {
+            sakamoto_product_config_rule_t empty = {0};
+            if (memcmp(r, &empty, sizeof(*r)))
+                goto done;
+        }
+    } else {
+        next->state.count = request->count;
+        memcpy(next->state.rules, request->rules, request->count * sizeof(request->rules[0]));
+    }
+    for (unsigned i = 0; i < next->state.count; ++i) {
+        sakamoto_product_direct_rule_t *r = &next->state.rules[i];
+        c->state.error_index = i;
+        if (!valid_rule(r)) {
+            result = SAKAMOTO_RULE_CONFIG_INVALID;
+            goto done;
+        }
+        result = assign_version(c, next, r);
+        if (result)
+            goto done;
+        for (unsigned j = 0; j < i; ++j)
+            if ((next->state.rules[j].version >> 16) == (r->version >> 16)) {
+                result = SAKAMOTO_RULE_CONFIG_CONFLICT;
+                goto done;
+            }
+    }
+    c->state.error_index = UINT32_MAX;
+    next->state.error_index = UINT32_MAX;
+    int unchanged = next->state.count == c->state.count;
+    for (unsigned i = 0; unchanged && i < next->state.count; ++i)
+        unchanged = next->state.rules[i].version == c->state.rules[i].version &&
+                    same_content(&next->state.rules[i], &c->state.rules[i]);
+    if (unchanged && c->state.saved_revision != 0) {
+        if (c->state.save_error) {
+            c->state.save_error = save_source(c, next);
+            if (c->state.save_error) {
+                result = c->state.save_error;
+                goto done;
+            }
+        }
+        result = c->state.active_revision == c->state.saved_revision && !c->state.compile_error
+                     ? 0
+                     : product_rule_config_activate(c, publish, opaque);
+        goto done;
+    }
+    if (c->state.saved_revision == UINT64_MAX) {
+        result = SAKAMOTO_RULE_CONFIG_EXHAUSTED;
+        goto done;
+    }
+    next->state.saved_revision++;
+    project(&next->state);
+    c->state.save_error = save_source(c, next);
+    result = c->state.save_error;
+    if (!result)
+        result = product_rule_config_activate(c, publish, opaque);
+done:
+    free(next);
+    return result;
 }

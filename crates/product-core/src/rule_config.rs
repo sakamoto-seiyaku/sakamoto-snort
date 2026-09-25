@@ -16,17 +16,46 @@ pub struct ConfigRule {
     pub destination_address: [u8; 4],
 }
 
+pub const MAX_CONFIG_RULES: usize = 256;
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DirectRule {
+    pub version: u64,
+    pub base_version: u64,
+    pub uid: u32,
+    pub network_context: u32,
+    pub ifindex: u32,
+    pub priority: u32,
+    pub order: u32,
+    pub family: u32,
+    pub protocol: u32,
+    pub direction: u32,
+    pub action: u32,
+    pub source_prefix: u32,
+    pub destination_prefix: u32,
+    pub source_port_first: u32,
+    pub source_port_last: u32,
+    pub destination_port_first: u32,
+    pub destination_port_last: u32,
+    pub reserved: u32,
+    pub source_address: [u8; 16],
+    pub destination_address: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct RuleConfigRequest {
     pub schema: u32,
     pub operation: u32,
     pub expected_saved_revision: u64,
     pub rule: ConfigRule,
+    pub count: u32,
+    pub reserved_full: u32,
+    pub rules: [DirectRule; MAX_CONFIG_RULES],
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct RuleConfigStatus {
     pub generation: u64,
     pub saved_revision: u64,
@@ -38,6 +67,109 @@ pub struct RuleConfigStatus {
     pub compile_error: u32,
     pub reserved: u32,
     pub rule: ConfigRule,
+    pub count: u32,
+    pub active_count: u32,
+    pub error_index: u32,
+    pub compiler_status: u32,
+    pub rules: [DirectRule; MAX_CONFIG_RULES],
+    pub active_versions: [u64; MAX_CONFIG_RULES],
+}
+
+impl DirectRule {
+    /// A transient request text, not a Rust-owned saved configuration.
+    pub fn parse(line: &str) -> Result<Self, &'static str> {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() != 16 {
+            return Err("expected 16 direct-rule fields");
+        }
+        let n = |i: usize| {
+            fields[i]
+                .parse::<u32>()
+                .map_err(|_| "invalid unsigned field")
+        };
+        let cidr = |text: &str| -> Result<(u32, u32, [u8; 16]), &'static str> {
+            let (ip, prefix) = text.split_once('/').ok_or("CIDR required")?;
+            let ip = ip
+                .parse::<std::net::IpAddr>()
+                .map_err(|_| "invalid numeric address")?;
+            let prefix = prefix.parse::<u32>().map_err(|_| "invalid prefix")?;
+            let mut bytes = [0; 16];
+            let family = match ip {
+                std::net::IpAddr::V4(a) => {
+                    bytes[..4].copy_from_slice(&a.octets());
+                    4
+                }
+                std::net::IpAddr::V6(a) => {
+                    bytes = a.octets();
+                    6
+                }
+            };
+            Ok((family, prefix, bytes))
+        };
+        let (family, source_prefix, source_address) = cidr(fields[10])?;
+        let (destination_family, destination_prefix, destination_address) = cidr(fields[11])?;
+        if family != destination_family {
+            return Err("CIDR families differ");
+        }
+        Ok(Self {
+            version: fields[0].parse().map_err(|_| "invalid version")?,
+            base_version: fields[1].parse().map_err(|_| "invalid base version")?,
+            uid: n(2)?,
+            network_context: n(3)?,
+            ifindex: n(4)?,
+            priority: n(5)?,
+            order: n(6)?,
+            protocol: n(7)?,
+            direction: n(8)?,
+            action: n(9)?,
+            family,
+            source_prefix,
+            destination_prefix,
+            source_address,
+            destination_address,
+            source_port_first: n(12)?,
+            source_port_last: n(13)?,
+            destination_port_first: n(14)?,
+            destination_port_last: n(15)?,
+            reserved: 0,
+        })
+    }
+}
+
+impl Default for RuleConfigRequest {
+    fn default() -> Self {
+        Self {
+            schema: 1,
+            operation: 0,
+            expected_saved_revision: 0,
+            rule: ConfigRule::default(),
+            count: 0,
+            reserved_full: 0,
+            rules: [DirectRule::default(); MAX_CONFIG_RULES],
+        }
+    }
+}
+impl Default for RuleConfigStatus {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            saved_revision: 0,
+            active_revision: 0,
+            saved_rule_version: 0,
+            active_rule_version: 0,
+            result: 0,
+            save_error: 0,
+            compile_error: 0,
+            reserved: 0,
+            rule: ConfigRule::default(),
+            count: 0,
+            active_count: 0,
+            error_index: u32::MAX,
+            compiler_status: 0,
+            rules: [DirectRule::default(); MAX_CONFIG_RULES],
+            active_versions: [0; MAX_CONFIG_RULES],
+        }
+    }
 }
 
 impl ProductCore {
@@ -86,8 +218,14 @@ mod tests {
     #[test]
     fn fixed_width_online_contract_retains_full_unsigned_rule_version() {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
-        assert_eq!(std::mem::size_of::<RuleConfigRequest>(), 56);
-        assert_eq!(std::mem::size_of::<RuleConfigStatus>(), 96);
+        assert_eq!(
+            std::mem::size_of::<RuleConfigRequest>(),
+            64 + 112 * MAX_CONFIG_RULES
+        );
+        assert_eq!(
+            std::mem::size_of::<RuleConfigStatus>(),
+            112 + 120 * MAX_CONFIG_RULES
+        );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,
             ..Default::default()

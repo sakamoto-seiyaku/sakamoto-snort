@@ -21,6 +21,12 @@ public final class RuleConfigurationTest {
         require(new RuleConfiguration.Status(reply).applied());
         reply[0] = 14;
         require(!new RuleConfiguration.Status(reply).applied());
+        long[] full = RuleConfiguration.completeWire("0 0 1012632 4294967295 4294967295 0 0 17 3 2 127.0.0.0/8 127.0.0.2/32 0 65535 40000 41000\n"
+                + "18364758544493051906 0 1012632 4294967295 4294967295 1 0 6 1 1 2001:db8::/32 ::1/128 1 65535 443 443");
+        require(full.length == 52 && full[0] == 0 && full[26] == 0xfedcba9876540002L);
+        require(full[7] == 4 && full[33] == 6 && full[18] == 0x7f000000L);
+        long[] mapped = RuleConfiguration.completeWire("0 0 12632 4294967295 4294967295 0 0 6 0 1 ::ffff:192.0.2.1/128 ::ffff:c000:202/128 0 65535 443 443");
+        require(mapped[7] == 6 && mapped[20] == 65535 && mapped[21] == 0xc0000201L);
         System.out.println("RuleConfiguration: exact inputs, saved/active distinction, unsigned identity, unknown transport");
     }
 }

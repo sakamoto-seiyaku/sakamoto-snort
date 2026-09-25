@@ -99,6 +99,7 @@ target_include_directories(sakamoto-product-rule-config-test PRIVATE
   src/product/include src/product/vpp)
 target_compile_features(sakamoto-product-rule-config-test PRIVATE c_std_11)
 target_compile_options(sakamoto-product-rule-config-test PRIVATE -Wall -Wextra -Werror)
+target_link_options(sakamoto-product-rule-config-test PRIVATE -Wl,--wrap=getrandom -Wl,--wrap=fsync)
 add_test(NAME sakamoto-product-rule-config-test COMMAND sakamoto-product-rule-config-test)
 add_test(NAME sakamoto-rule-config-android-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/t01-rule-configuration-test.sh")

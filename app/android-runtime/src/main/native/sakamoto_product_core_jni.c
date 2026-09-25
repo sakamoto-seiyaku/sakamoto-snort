@@ -58,6 +58,128 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleConfig (
   return result;
 }
 
+/* Shared positional layout is documented in T02_RULE_CONFIGURATION.md and
+ * checked by the Java and production VAPI boundary tests. */
+enum {
+    COMPLETE_RULE_WORDS = 26,
+    COMPLETE_REPLY_HEADER_WORDS = 13,
+    COMPLETE_SOURCE_WORD = 18,
+    COMPLETE_DESTINATION_WORD = 22,
+};
+
+JNIEXPORT jlongArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleConfig(
+    JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation, jlong expected_saved,
+    jlongArray fields) {
+    (void)type;
+    sakamoto_product_rule_config_request_t request = {.schema = SAKAMOTO_RULE_CONFIG_SCHEMA,
+                                                      .operation = (uint32_t)operation,
+                                                      .expected_saved_revision =
+                                                          (uint64_t)expected_saved};
+    sakamoto_product_rule_config_status_t status = {0};
+    uint32_t code = SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+    jsize length = fields ? (*env)->GetArrayLength(env, fields) : -1;
+    if (handle && generation > 0 && length >= 0 && length % COMPLETE_RULE_WORDS == 0 &&
+        length / COMPLETE_RULE_WORDS <= SAKAMOTO_RULE_CONFIG_MAX_RULES &&
+        (operation == 0 || operation == 2)) {
+        request.count = (uint32_t)length / COMPLETE_RULE_WORDS;
+        for (unsigned i = 0; i < request.count; ++i) {
+            jlong values[COMPLETE_RULE_WORDS];
+            (*env)->GetLongArrayRegion(env, fields, i * COMPLETE_RULE_WORDS, COMPLETE_RULE_WORDS,
+                                       values);
+            if ((*env)->ExceptionCheck(env))
+                return NULL;
+            for (unsigned j = 2; j < COMPLETE_RULE_WORDS; ++j)
+                if (values[j] < 0 || (uint64_t)values[j] > UINT32_MAX)
+                    return NULL;
+            request.rules[i].version = (uint64_t)values[0];
+            request.rules[i].base_version = (uint64_t)values[1];
+            request.rules[i].uid = (uint32_t)values[2];
+            request.rules[i].network_context = (uint32_t)values[3];
+            request.rules[i].ifindex = (uint32_t)values[4];
+            request.rules[i].priority = (uint32_t)values[5];
+            request.rules[i].order = (uint32_t)values[6];
+            request.rules[i].family = (uint32_t)values[7];
+            request.rules[i].protocol = (uint32_t)values[8];
+            request.rules[i].direction = (uint32_t)values[9];
+            request.rules[i].action = (uint32_t)values[10];
+            request.rules[i].source_prefix = (uint32_t)values[11];
+            request.rules[i].destination_prefix = (uint32_t)values[12];
+            request.rules[i].source_port_first = (uint32_t)values[13];
+            request.rules[i].source_port_last = (uint32_t)values[14];
+            request.rules[i].destination_port_first = (uint32_t)values[15];
+            request.rules[i].destination_port_last = (uint32_t)values[16];
+            request.rules[i].reserved = (uint32_t)values[17];
+            for (unsigned j = 0; j < 16; ++j) {
+                request.rules[i].source_address[j] =
+                    (uint64_t)values[COMPLETE_SOURCE_WORD + j / 4] >> (24 - (j % 4) * 8);
+                request.rules[i].destination_address[j] =
+                    (uint64_t)values[COMPLETE_DESTINATION_WORD + j / 4] >> (24 - (j % 4) * 8);
+            }
+        }
+        code =
+            sakamoto_product_core_rule_config((sakamoto_product_core_handle_t *)(uintptr_t)handle,
+                                              (uint64_t)generation, &request, &status);
+    }
+    if (status.count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
+        status.active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
+        return NULL;
+    jlong header[] = {code,
+                      (jlong)status.generation,
+                      (jlong)status.saved_revision,
+                      (jlong)status.active_revision,
+                      (jlong)status.saved_rule_version,
+                      (jlong)status.active_rule_version,
+                      status.result,
+                      status.save_error,
+                      status.compile_error,
+                      status.count,
+                      status.active_count,
+                      status.error_index,
+                      status.compiler_status};
+    jlongArray result =
+        (*env)->NewLongArray(env, COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count +
+                                      status.active_count);
+    if (!result)
+        return NULL;
+    (*env)->SetLongArrayRegion(env, result, 0, COMPLETE_REPLY_HEADER_WORDS, header);
+    for (unsigned i = 0; i < status.count; ++i) {
+        jlong values[COMPLETE_RULE_WORDS] = {(jlong)status.rules[i].version, 0};
+        values[2] = status.rules[i].uid;
+        values[3] = status.rules[i].network_context;
+        values[4] = status.rules[i].ifindex;
+        values[5] = status.rules[i].priority;
+        values[6] = status.rules[i].order;
+        values[7] = status.rules[i].family;
+        values[8] = status.rules[i].protocol;
+        values[9] = status.rules[i].direction;
+        values[10] = status.rules[i].action;
+        values[11] = status.rules[i].source_prefix;
+        values[12] = status.rules[i].destination_prefix;
+        values[13] = status.rules[i].source_port_first;
+        values[14] = status.rules[i].source_port_last;
+        values[15] = status.rules[i].destination_port_first;
+        values[16] = status.rules[i].destination_port_last;
+        values[17] = status.rules[i].reserved;
+        for (unsigned j = 0; j < 16; ++j) {
+            values[COMPLETE_SOURCE_WORD + j / 4] |= (jlong)status.rules[i].source_address[j]
+                                                    << (24 - (j % 4) * 8);
+            values[COMPLETE_DESTINATION_WORD + j / 4] |=
+                (jlong)status.rules[i].destination_address[j] << (24 - (j % 4) * 8);
+        }
+        (*env)->SetLongArrayRegion(env, result,
+                                   COMPLETE_REPLY_HEADER_WORDS + i * COMPLETE_RULE_WORDS,
+                                   COMPLETE_RULE_WORDS, values);
+    }
+    for (unsigned i = 0; i < status.active_count; ++i) {
+        jlong version = (jlong)status.active_versions[i];
+        (*env)->SetLongArrayRegion(
+            env, result, COMPLETE_REPLY_HEADER_WORDS + status.count * COMPLETE_RULE_WORDS + i, 1,
+            &version);
+    }
+    return result;
+}
+
 enum
 {
   /* Keep the S191 prefix count named for source-compatible contracts; the

@@ -7,6 +7,7 @@ public final class RuntimeControlProtocol {
 
     public static final String ACTION_START = "start";
     public static final String ACTION_QUERY = "query";
+    public static final String ACTION_COMPLETE_RULE_CONFIG = "complete_rule_config";
     public static final String ACTION_RULE_CONFIG = "rule_config";
     public static final String ACTION_STOP = "stop";
     public static final String ACTION_PROTECTION_PAUSE = "protection_pause";

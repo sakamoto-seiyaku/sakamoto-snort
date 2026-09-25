@@ -29,6 +29,127 @@ public final class RuleConfiguration {
                 ipv4(source), ipv4(destination));
     }
 
+    public static final int COMPLETE_RULE_WORDS = 26;
+    public static final int MAX_RULES = 256;
+    public static final int MAX_ACTIVE_RULES = 128;
+    private static final int COMPLETE_REPLY_HEADER_WORDS = 13;
+    private static final int SOURCE_WORD = 18, DESTINATION_WORD = 22;
+
+    /** Request-only numeric text. No hostname lookup and no second saved model. */
+    public static long[] completeWire(String text) {
+        if (text == null) throw new IllegalArgumentException("complete rules required");
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) return new long[0];
+        String[] lines = trimmed.split("[\\r\\n]+");
+        if (lines.length > MAX_RULES) throw new IllegalArgumentException("too many source rules");
+        long[] wire = new long[lines.length * COMPLETE_RULE_WORDS];
+        for (int i = 0; i < lines.length; ++i) {
+            String[] f = lines[i].trim().split("\\s+");
+            if (f.length != 16) throw new IllegalArgumentException("expected 16 direct-rule fields at " + i);
+            int at = i * COMPLETE_RULE_WORDS;
+            wire[at] = Long.parseUnsignedLong(f[0]);
+            wire[at+1] = Long.parseUnsignedLong(f[1]);
+            // UID, network, interface, priority, order; then family/protocol/direction/action.
+            for (int n = 2; n <= 6; ++n) wire[at+n] = unsigned32(f[n]);
+            for (int n = 7; n <= 9; ++n) wire[at+n+1] = unsigned32(f[n]);
+            int sourceFamily = cidr(f[10], wire, at+11, at+SOURCE_WORD);
+            int destinationFamily = cidr(f[11], wire, at+12, at+DESTINATION_WORD);
+            if (sourceFamily != destinationFamily) throw new IllegalArgumentException("CIDR families differ");
+            wire[at+7] = sourceFamily;
+            for (int n = 12; n <= 15; ++n) wire[at+n+1] = unsigned32(f[n]);
+        }
+        return wire;
+    }
+    private static long unsigned32(String text) {
+        long value = Long.parseLong(text);
+        if (value < 0 || value > 0xffffffffL) throw new IllegalArgumentException("invalid unsigned field");
+        return value;
+    }
+    private static int cidr(String text, long[] wire, int prefixAt, int addressAt) {
+        String[] f = text.split("/", -1);
+        if (f.length != 2) throw new IllegalArgumentException("numeric CIDR required");
+        byte[] bytes;
+        int family;
+        if (f[0].contains(":")) {
+            bytes = ipv6(f[0]);
+            family = 6;
+        } else {
+            int address = ipv4(f[0]); bytes = new byte[16];
+            for (int n = 0; n < 4; ++n) bytes[n] = (byte) (address >>> (24 - n*8));
+            family = 4;
+        }
+        long prefix = unsigned32(f[1]);
+        if (prefix > (family == 4 ? 32 : 128)) throw new IllegalArgumentException("invalid prefix");
+        wire[prefixAt] = prefix;
+        for (int n = 0; n < 16; ++n) wire[addressAt+n/4] |= (bytes[n] & 255L) << (24 - (n%4)*8);
+        return family;
+    }
+    private static byte[] ipv6(String text) {
+        // Preserve the explicit IPv6 family for mapped addresses; InetAddress's
+        // text factory intentionally collapses those into IPv4 objects.
+        if (!text.matches("[0-9a-fA-F:.]+")) throw new IllegalArgumentException("numeric IPv6 required");
+        if (text.contains(".")) {
+            int last = text.lastIndexOf(':');
+            int address = ipv4(text.substring(last+1));
+            text = text.substring(0, last+1) + Integer.toHexString(address >>> 16) + ":" + Integer.toHexString(address & 65535);
+        }
+        String[] halves = text.split("::", -1);
+        if (halves.length > 2) throw new IllegalArgumentException("invalid IPv6 compression");
+        String[] left = halves[0].isEmpty() ? new String[0] : halves[0].split(":", -1);
+        String[] right = halves.length == 1 || halves[1].isEmpty() ? new String[0] : halves[1].split(":", -1);
+        int used = left.length + right.length;
+        if ((halves.length == 1 && used != 8) || (halves.length == 2 && used >= 8))
+            throw new IllegalArgumentException("invalid IPv6 length");
+        byte[] bytes = new byte[16];
+        for (int i = 0; i < used; ++i) {
+            String group = i < left.length ? left[i] : right[i-left.length];
+            if (!group.matches("[0-9a-fA-F]{1,4}")) throw new IllegalArgumentException("invalid IPv6 group");
+            int value = Integer.parseInt(group, 16);
+            int at = i < left.length ? i : 8-right.length+i-left.length;
+            bytes[at*2] = (byte) (value >>> 8); bytes[at*2+1] = (byte) value;
+        }
+        return bytes;
+    }
+
+    public static final class CompleteStatus {
+        public final long transportCode, generation, savedRevision, activeRevision, result, saveError, compileError;
+        public final int count, activeCount;
+        private final long[] values;
+        public CompleteStatus(long[] reply) {
+            if (reply == null || reply.length < COMPLETE_REPLY_HEADER_WORDS) throw new IllegalArgumentException("invalid complete reply");
+            count = (int) reply[9]; activeCount = (int) reply[10];
+            if (count < 0 || count > MAX_RULES || activeCount < 0 || activeCount > MAX_RULES
+                    || reply.length != COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + activeCount)
+                throw new IllegalArgumentException("invalid complete reply size");
+            values = reply.clone(); transportCode = reply[0]; generation = reply[1];
+            savedRevision = reply[2]; activeRevision = reply[3]; result = reply[6];
+            saveError = reply[7]; compileError = reply[8];
+        }
+        public String properties() {
+            String[] names = {"transportCode", "generation", "savedRevision", "activeRevision",
+                "savedRuleVersion", "activeRuleVersion", "result", "saveError", "compileError",
+                "count", "activeCount", "errorIndex", "compilerStatus"};
+            StringBuilder out = new StringBuilder();
+            for (int i = 0; i < names.length; ++i) out.append(names[i]).append('=').append(Long.toUnsignedString(values[i])).append('\n');
+            for (int i = 0; i < count; ++i) {
+                int at = COMPLETE_REPLY_HEADER_WORDS + i * COMPLETE_RULE_WORDS;
+                out.append("rule.").append(i).append(".version=").append(Long.toUnsignedString(values[at])).append('\n');
+                out.append("rule.").append(i).append(".uid=").append(values[at+2]).append('\n');
+                out.append("rule.").append(i).append(".family=").append(values[at+7]).append('\n');
+                out.append("rule.").append(i).append(".protocol=").append(values[at+8]).append('\n');
+                out.append("rule.").append(i).append(".action=").append(values[at+10]).append('\n');
+                out.append("rule.").append(i).append(".wire=");
+                for (int j = 0; j < COMPLETE_RULE_WORDS; ++j) {
+                    if (j != 0) out.append(','); out.append(Long.toUnsignedString(values[at+j]));
+                }
+                out.append('\n');
+            }
+            for (int i = 0; i < activeCount; ++i) out.append("activeVersion.").append(i).append('=')
+                    .append(Long.toUnsignedString(values[COMPLETE_REPLY_HEADER_WORDS + count * COMPLETE_RULE_WORDS + i])).append('\n');
+            return out.toString();
+        }
+    }
+
     public static final class Rule {
         public final int present, uid, protocol, direction, action;
         public final int sourcePort, destinationPort, sourceAddress, destinationAddress;

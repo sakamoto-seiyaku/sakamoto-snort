@@ -27,6 +27,7 @@ and [build commands](../tooling/README.md) for Host checks.
 
 | Scope | Record |
 | --- | --- |
+| Complete VPP-owned direct rules, versions, failures and Root/VPN source lifecycle | [T02](2026-09-25_T02_COMPLETE_RULE_CONFIGURATION.md) |
 | Protocol expiry and deferred real 24-hour TCP test | [S236](2026-09-13_S236_PROTOCOL_EXPIRY.md) |
 | Linux network classification and projection limits | [S235](2026-09-13_S235_LINUX_NETWORK_SNAPSHOT.md) |
 | Canonical owner versus CPU placement | [S220](2026-09-13_S220_WORKER_CPU_PLACEMENT.md) |

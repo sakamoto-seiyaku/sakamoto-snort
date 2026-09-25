@@ -3,7 +3,9 @@
 // Keep the established crate-root interface; implementation modules are private.
 mod ffi;
 mod rule_config;
-pub use rule_config::{ConfigRule, RuleConfigRequest, RuleConfigStatus};
+pub use rule_config::{
+    ConfigRule, DirectRule, RuleConfigRequest, RuleConfigStatus, MAX_CONFIG_RULES,
+};
 mod session;
 
 pub use ffi::{

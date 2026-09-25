@@ -112,6 +112,34 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
 #undef COPY_RULE
       memcpy (s->rule.source_address, reply->rule.source_address, 4);
       memcpy (s->rule.destination_address, reply->rule.destination_address, 4);
+      if (reply->count > SAKAMOTO_RULE_CONFIG_MAX_RULES || reply->active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
+        { call->invalid_reply = true; call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH; return VAPI_OK; }
+      s->count = reply->count; s->active_count = reply->active_count;
+      s->error_index = reply->error_index; s->compiler_status = reply->compiler_status;
+      for (unsigned i = 0; i < s->count; ++i)
+        {
+          s->rules[i].version = reply->rules[i].version;
+          s->rules[i].base_version = reply->rules[i].base_version;
+          s->rules[i].uid = reply->rules[i].uid;
+          s->rules[i].network_context = reply->rules[i].network_context;
+          s->rules[i].ifindex = reply->rules[i].ifindex;
+          s->rules[i].priority = reply->rules[i].priority;
+          s->rules[i].order = reply->rules[i].order;
+          s->rules[i].family = reply->rules[i].family;
+          s->rules[i].protocol = reply->rules[i].protocol;
+          s->rules[i].direction = reply->rules[i].direction;
+          s->rules[i].action = reply->rules[i].action;
+          s->rules[i].source_prefix = reply->rules[i].source_prefix;
+          s->rules[i].destination_prefix = reply->rules[i].destination_prefix;
+          s->rules[i].source_port_first = reply->rules[i].source_port_first;
+          s->rules[i].source_port_last = reply->rules[i].source_port_last;
+          s->rules[i].destination_port_first = reply->rules[i].destination_port_first;
+          s->rules[i].destination_port_last = reply->rules[i].destination_port_last;
+          s->rules[i].reserved = reply->rules[i].reserved;
+          memcpy (s->rules[i].source_address, reply->rules[i].source_address, 16);
+          memcpy (s->rules[i].destination_address, reply->rules[i].destination_address, 16);
+        }
+      for (unsigned i = 0; i < s->active_count; ++i) s->active_versions[i] = reply->active_versions[i];
       call->code = SAKAMOTO_PRODUCT_OK;
     }
   return VAPI_OK;
@@ -124,7 +152,7 @@ sakamoto_product_session_rule_config (
   sakamoto_product_rule_config_status_t *status)
 {
   if (status) memset (status, 0, sizeof (*status));
-  if (!session || !generation || !request || !status)
+  if (!session || !generation || !request || !status || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
   if (pthread_mutex_lock (&session->mutex) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
@@ -146,6 +174,30 @@ sakamoto_product_session_rule_config (
 #undef COPY_RULE
   memcpy (message->payload.rule.source_address, request->rule.source_address, 4);
   memcpy (message->payload.rule.destination_address, request->rule.destination_address, 4);
+  message->payload.count = request->count; message->payload.reserved = request->reserved;
+  for (unsigned i = 0; i < request->count; ++i)
+    {
+      message->payload.rules[i].version = request->rules[i].version;
+      message->payload.rules[i].base_version = request->rules[i].base_version;
+      message->payload.rules[i].uid = request->rules[i].uid;
+      message->payload.rules[i].network_context = request->rules[i].network_context;
+      message->payload.rules[i].ifindex = request->rules[i].ifindex;
+      message->payload.rules[i].priority = request->rules[i].priority;
+      message->payload.rules[i].order = request->rules[i].order;
+      message->payload.rules[i].family = request->rules[i].family;
+      message->payload.rules[i].protocol = request->rules[i].protocol;
+      message->payload.rules[i].direction = request->rules[i].direction;
+      message->payload.rules[i].action = request->rules[i].action;
+      message->payload.rules[i].source_prefix = request->rules[i].source_prefix;
+      message->payload.rules[i].destination_prefix = request->rules[i].destination_prefix;
+      message->payload.rules[i].source_port_first = request->rules[i].source_port_first;
+      message->payload.rules[i].source_port_last = request->rules[i].source_port_last;
+      message->payload.rules[i].destination_port_first = request->rules[i].destination_port_first;
+      message->payload.rules[i].destination_port_last = request->rules[i].destination_port_last;
+      message->payload.rules[i].reserved = request->rules[i].reserved;
+      memcpy (message->payload.rules[i].source_address, request->rules[i].source_address, 16);
+      memcpy (message->payload.rules[i].destination_address, request->rules[i].destination_address, 16);
+    }
   rule_config_call_t call = { .generation = generation, .status = status,
                              .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
   vapi_error_e rv = vapi_product_core_rule_config (session->context, message, rule_config_reply, &call);
@@ -155,7 +207,7 @@ sakamoto_product_session_rule_config (
   if (rv != VAPI_OK || !call.called || call.invalid_reply
       || call.code == SAKAMOTO_PRODUCT_STALE_HANDLE) session->connected = 0;
   code = rv == VAPI_OK && call.called && !call.invalid_reply ? call.code
-    : request->operation == SAKAMOTO_RULE_CONFIG_REPLACE
+    : request->operation != SAKAMOTO_RULE_CONFIG_QUERY
       ? SAKAMOTO_PRODUCT_POLICY_OUTCOME_UNKNOWN : SAKAMOTO_PRODUCT_QUERY_FAILED;
 done:
   (void) pthread_mutex_unlock (&session->mutex);

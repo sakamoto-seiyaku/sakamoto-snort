@@ -214,6 +214,16 @@ public final class RuntimeControlBackend {
         context.startService(intent);
     }
 
+    public void completeRuleConfig(Context context, int operation, long expectedSaved, String text) {
+        long[] rules = RuleConfiguration.completeWire(text);
+        context.startService(new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG)
+                .putExtra("ruleOperation", operation).putExtra("expectedSavedRevision", expectedSaved)
+                .putExtra("completeRules", rules));
+    }
+
     public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {
         context.startService(new Intent(context, RuntimeService.class)
                 .setAction(RuntimeControlProtocol.ACTION_RULE_CONFIG)

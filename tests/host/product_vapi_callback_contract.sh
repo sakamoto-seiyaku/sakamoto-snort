@@ -306,11 +306,11 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
-    sakamoto_product_config_rule_t rule; } payload;
+    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; } payload;
 } vapi_msg_product_core_rule_config;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
   saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
-  sakamoto_product_config_rule_t rule; } vapi_payload_product_core_rule_config_reply;
+  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; } vapi_payload_product_core_rule_config_reply;
 typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
   vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
@@ -417,6 +417,7 @@ done
 cat > "$stub_dir/vapi_stub.c" <<'EOF'
 #include "vapi/vapi_stub.h"
 #include <stdlib.h>
+#include <string.h>
 
 int sakamoto_test_request_available = 1;
 int sakamoto_test_reply_available = 1;
@@ -568,9 +569,14 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
   ++sakamoto_test_rule_config_calls;
   int mode = sakamoto_test_rule_config_mode;
   if (mode == 6) return VAPI_EINVAL;
-  if (message->payload.schema != 1 || message->payload.operation != 1
+  if (message->payload.schema != 1 || (message->payload.operation != 1 && message->payload.operation != 2)
       || message->payload.expected_saved_revision != 8 || message->payload.rule.uid != 12345
       || message->payload.rule.source_address[0] != 127) abort();
+  if (message->payload.operation == 2 && (message->payload.count != 2
+      || message->payload.rules[1].version != UINT64_C(0xfedcba9876540002)
+      || message->payload.rules[1].network_context != 3 || message->payload.rules[1].ifindex != 7
+      || message->payload.rules[1].source_port_last != 65000
+      || message->payload.rules[1].source_address[15] != 1)) abort();
   vapi_payload_product_core_rule_config_reply reply = {
     .generation = message->payload.generation + (mode == 5),
     .saved_revision = 9, .active_revision = mode == 4 ? 8 : 9,
@@ -579,6 +585,11 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
     .result = mode == 4 ? 4 : 0, .compile_error = mode == 4 ? 4 : 0,
     .rule = message->payload.rule,
   };
+  reply.count = message->payload.count;
+  reply.active_count = message->payload.count;
+  memcpy (reply.rules, message->payload.rules, sizeof (reply.rules));
+  reply.active_versions[1] = UINT64_C(0xfedcba9876540001);
+  if (mode == 8) reply.count = 257;
   vapi_msg_free(context, message);
   pending_requests = mode == 1;
   if (mode == 1) return VAPI_OK;
@@ -1140,16 +1151,26 @@ main (void)
 
   sakamoto_product_policy_bundle_t bundle = valid_empty_policy_bundle ();
   current_session = &session;
-  const uint32_t config_codes[] = {0, 14, 14, 14, 0, 5, 14, 2};
+  const uint32_t config_codes[] = {0, 14, 14, 14, 0, 5, 14, 2, 14};
+  for (unsigned operation = 1; operation <= 2; ++operation)
   for (unsigned mode = 0; mode < sizeof(config_codes)/sizeof(config_codes[0]); ++mode) {
     reset_faults();
     sakamoto_test_rule_config_mode = mode;
     sakamoto_product_rule_config_request_t request = {
-      .schema = 1, .operation = 1, .expected_saved_revision = 8,
+      .schema = 1, .operation = operation, .expected_saved_revision = 8,
       .rule = {.present = 1, .uid = 12345, .protocol = 17, .direction = 3, .action = 2,
         .source_port = 32000, .destination_port = 40608, .source_address = {127,0,0,1},
         .destination_address = {127,0,0,2}}
     };
+    if (operation == 2) {
+      request.count = 2;
+      request.rules[1] = (sakamoto_product_direct_rule_t) {
+        .version = UINT64_C(0xfedcba9876540002), .uid = 12345, .network_context = 3, .ifindex = 7,
+        .family = 6, .protocol = 6, .direction = 1, .action = 2,
+        .source_port_first = 100, .source_port_last = 65000,
+        .source_address = {0x20,1,0xd,0xb8,0,0,0,0,0,0,0,0,0,0,0,1}
+      };
+    }
     sakamoto_product_rule_config_status_t config;
     int before = sakamoto_test_rule_config_calls;
     code = sakamoto_product_session_rule_config(session, 77, &request, &config);
@@ -1159,7 +1180,12 @@ main (void)
     if (!code && (config.saved_revision != 9 || config.active_revision != (mode == 4 ? 8U : 9U)
         || config.saved_rule_version != UINT64_C(0xfedcba9876540002)
         || config.result != (mode == 4 ? 4U : 0U) || config.rule.uid != 12345)) return 1;
-    if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6)
+    if (!code && operation == 2 && (config.count != 2 || config.active_count != 2
+        || config.rules[1].version != UINT64_C(0xfedcba9876540002)
+        || config.rules[1].network_context != 3 || config.rules[1].ifindex != 7
+        || config.rules[1].source_port_last != 65000 || config.rules[1].source_address[15] != 1
+        || config.active_versions[1] != UINT64_C(0xfedcba9876540001))) return 1;
+    if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode == 8)
         && expect_retired(session)) return 1;
   }
   reset_faults();

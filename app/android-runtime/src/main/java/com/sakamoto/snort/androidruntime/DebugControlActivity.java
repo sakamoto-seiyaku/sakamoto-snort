@@ -190,7 +190,9 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private TextView productView;
-    private TextView ruleConfigView;
+    private TextView ruleConfigView, completeRuleView;
+    private EditText completeRuleInput;
+    private long completeSavedRevision;
     private final EditText[] ruleInputs = new EditText[5];
     private long ruleSavedRevision;
     private Spinner appSpinner;
@@ -485,7 +487,8 @@ public class DebugControlActivity extends Activity {
     }
 
     private boolean hasInteractiveDebugExtras(Intent intent) {
-        return intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)
+        return intent.hasExtra("completeRuleText")
+                || intent.getBooleanExtra(EXTRA_DEBUG_TRAFFIC, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_UDP_TRAFFIC, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_DOWNLOAD, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)
@@ -502,6 +505,9 @@ public class DebugControlActivity extends Activity {
     private void applyControlIntent(Intent intent) {
         if (intent == null) {
             return;
+        }
+        if (intent.hasExtra("completeRuleText") && completeRuleInput != null) {
+            completeRuleInput.setText(intent.getStringExtra("completeRuleText"));
         }
         if (intent.hasExtra(EXTRA_RUNTIME_CLEANUP_FAULT)) {
             backend.setCleanupFault(this,
@@ -791,6 +797,19 @@ public class DebugControlActivity extends Activity {
         root.addView(ruleButtons, fillWrap());
         ruleConfigView = new TextView(this);
         root.addView(ruleConfigView, fillWrap());
+        completeRuleInput = new EditText(this);
+        completeRuleInput.setHint("Complete direct rules (diagnostic request)");
+        completeRuleInput.setContentDescription("Complete direct rules");
+        completeRuleInput.setMinLines(2); completeRuleInput.setMaxLines(3);
+        root.addView(completeRuleInput, fillWrap());
+        LinearLayout completeButtons = new LinearLayout(this);
+        Button replaceAll = new Button(this); replaceAll.setText("Replace all rules"); replaceAll.setAllCaps(false);
+        replaceAll.setOnClickListener(view -> submitCompleteRules(2)); completeButtons.addView(replaceAll, weighted());
+        Button queryAll = new Button(this); queryAll.setText("Query all rules"); queryAll.setAllCaps(false);
+        queryAll.setOnClickListener(view -> submitCompleteRules(0)); completeButtons.addView(queryAll, weighted());
+        root.addView(completeButtons, fillWrap());
+        completeRuleView = new TextView(this); root.addView(completeRuleView, fillWrap());
+
 
         LinearLayout appSelector = new LinearLayout(this);
         appSelector.setOrientation(LinearLayout.HORIZONTAL);
@@ -1016,6 +1035,7 @@ public class DebugControlActivity extends Activity {
 
     private void refreshStatus() {
         refreshRuleConfiguration();
+        refreshCompleteRules();
         if (statusView != null) {
             RuntimeSnapshot current = backend.query(this);
             if (requestedProfile != null
@@ -1041,6 +1061,33 @@ public class DebugControlActivity extends Activity {
         }
         if (productView != null) {
             renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()), false);
+        }
+    }
+
+    private void submitCompleteRules(int operation) {
+        try {
+            backend.completeRuleConfig(this, operation, completeSavedRevision,
+                    operation == 0 ? "" : completeRuleInput.getText().toString());
+        } catch (RuntimeException error) { completeRuleView.setText("Rule request: " + error.getMessage()); }
+    }
+
+    private void refreshCompleteRules() {
+        if (completeRuleView == null) return;
+        File file = new File(getFilesDir(), "product-state/complete-rule-config.properties");
+        if (!file.isFile() || file.length() > 262144) return;
+        try (java.io.FileInputStream stream = new java.io.FileInputStream(file)) {
+            java.util.Properties values = new java.util.Properties(); values.load(stream);
+            completeSavedRevision = Long.parseUnsignedLong(values.getProperty("savedRevision", "0"));
+            setTextIfChanged(completeRuleView, "Saved " + values.getProperty("savedRevision", "?")
+                    + " / active " + values.getProperty("activeRevision", "?")
+                    + " / rules " + values.getProperty("count", "?")
+                    + "\nResult " + values.getProperty("result", "?")
+                    + " / save " + values.getProperty("saveError", "?")
+                    + " / compile " + values.getProperty("compileError", "?")
+                    + " / rule index " + values.getProperty("errorIndex", "?")
+                    + "\n" + values.getProperty("error", ""));
+        } catch (IOException | IllegalArgumentException ignored) {
+            setTextIfChanged(completeRuleView, "Complete rule status unavailable");
         }
     }
 

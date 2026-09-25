@@ -377,6 +377,13 @@ public final class RuntimeService extends VpnService {
                     "expected " + RuntimeControlProtocol.NAME, currentMayBeActive(), currentPid()));
             return START_STICKY;
         }
+        if (RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action)) {
+            final int operation = intent.getIntExtra("ruleOperation", 0);
+            final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
+            final long[] rules = intent.getLongArrayExtra("completeRules");
+            enqueueLifecycle(() -> manageCompleteRuleConfiguration(operation, expectedSaved, rules));
+            return START_STICKY;
+        }
         if (RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)) {
             final int operation = intent.getIntExtra("ruleOperation", 0);
             final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
@@ -663,7 +670,8 @@ public final class RuntimeService extends VpnService {
                 || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)
                 || ACTION_PRODUCT_SET_L4_RULE.equals(action)
                 || ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action)
-                || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action);
+                || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)
+                || RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action);
     }
 
     private static AuthoringPolicyBundle.L4Rule parseL4RuleIntent(
@@ -1995,7 +2003,7 @@ public final class RuntimeService extends VpnService {
                 || !status.policySnapshotIdentity.startsWith("rule-config/1/"))
             return "product_policy_snapshot_identity_mismatch";
         if (!status.policyDefaultPass || status.policyGateClaimCount != 0
-                || status.policyL4RuleCount < 0 || status.policyL4RuleCount > 1
+                || status.policyL4RuleCount < 0 || status.policyL4RuleCount > RuleConfiguration.MAX_ACTIVE_RULES
                 || status.policySnapshotEmpty != (status.policyL4RuleCount == 0))
             return "product_policy_snapshot_unsupported";
         return "";
@@ -4811,6 +4819,29 @@ public final class RuntimeService extends VpnService {
         String text = RuntimeEvidenceFormatter.policyMutationFault(
                 mode, armed, status, generation, error);
         writeBestEffortEvidenceFile(S194_POLICY_MUTATION_FAULT_STATUS, text);
+    }
+
+    private void manageCompleteRuleConfiguration(int operation, long expectedSaved, long[] rules) {
+        final String path = "product-state/complete-rule-config.properties";
+        RuntimeControlNative.Session session = productCoreSession;
+        if (session == null || !session.isConnected()) {
+            writeBestEffortEvidenceFile(path, "error=management_unavailable\n"); return;
+        }
+        try {
+            if (rules == null || (operation != 0 && operation != 2))
+                throw new IllegalArgumentException("invalid complete request");
+            RuleConfiguration.CompleteStatus config = session.completeRuleConfig(operation, expectedSaved, rules);
+            RuntimeControlNative.Status packet = session.query();
+            writeBestEffortEvidenceFile(path, config.properties()
+                    + "queryElapsedMillis=" + android.os.SystemClock.elapsedRealtime() + "\n"
+                    + "winnerVersion=" + Long.toUnsignedString(packet.policyL4LastMatchRuleId) + "\n"
+                    + "winnerRevision=" + Long.toUnsignedString(packet.policyL4LastMatchRevision) + "\n"
+                    + "winnerAction=" + packet.policyL4LastMatchAction + "\n"
+                    + "evaluation=" + packet.policyL4LastEvaluationResult + "\n"
+                    + "verdict=" + packet.policyL4LastEvaluationVerdict + "\n");
+        } catch (RuntimeException error) {
+            writeBestEffortEvidenceFile(path, "error=complete_rule_configuration_request_failed\n");
+        }
     }
 
     private void manageRuleConfiguration(int operation, long expectedSaved, RuleConfiguration.Rule fields) {
