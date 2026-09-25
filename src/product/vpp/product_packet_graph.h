@@ -164,6 +164,7 @@ typedef struct
   uint32_t index_entries;
   uint32_t index_storage_bytes;
   uint32_t index_max_query_work;
+  product_l4_policy_plan_resources_t plan_resources;
   uint32_t last_match_winner_rank;
   uint32_t last_match_probes;
   uint32_t last_match_candidate_count;

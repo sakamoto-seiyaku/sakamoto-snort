@@ -765,6 +765,24 @@ product_core_worker_ready (vlib_main_t *vm)
 
 VLIB_WORKER_INIT_FUNCTION (product_core_worker_ready);
 
+static clib_error_t *
+product_rule_budget_cli (vlib_main_t *vm, unformat_input_t *input,
+                         vlib_cli_command_t *command)
+{
+  (void) input; (void) command;
+  sakamoto_product_rule_config_status_t status = {0};
+  if (product_source_config) product_rule_config_query (product_source_config, &status);
+  vlib_cli_output (vm, "rule.budget saved=%llu active=%llu compile_error=%u compiler_status=%u peak_bytes=%u limit_bytes=%u source_rules_limit=%u effective_rules_limit=%u expression_bytes_limit=%u expression_depth_limit=%u",
+    (unsigned long long) status.saved_revision, (unsigned long long) status.active_revision,
+    status.compile_error, status.compiler_status, product_rule_config_compile_peak_bytes (),
+    PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT, SAKAMOTO_RULE_CONFIG_MAX_RULES,
+    PRODUCT_L4_POLICY_MAX_RULES, PRODUCT_STATIC_EXPRESSION_BYTES, PRODUCT_STATIC_EXPRESSION_DEPTH);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_rule_budget_command, static) = {
+  .path = "show product rule-budget", .function = product_rule_budget_cli,
+};
+
 static uword
 product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
                              vlib_frame_t *frame)

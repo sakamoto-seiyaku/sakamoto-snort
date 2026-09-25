@@ -38,6 +38,7 @@
 
 #define PRODUCT_GRAPH_VECTOR_COUNT 8
 #define PRODUCT_GRAPH_WORKERS 2
+_Static_assert (PRODUCT_GRAPH_WORKERS == 2, "update rule-config query storage budget with worker layout");
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 
@@ -3549,6 +3550,7 @@ product_packet_graph_l4_status (product_packet_graph_l4_status_t *status)
       status->index_entries = resources.entries;
       status->index_storage_bytes = resources.storage_bytes;
       status->index_max_query_work = resources.max_query_work;
+      product_l4_policy_plan_resources (&snapshot.bank->view, &status->plan_resources);
       product_policy_snapshot_release (graph, &snapshot);
       /* A multi-rule view has no single active rule identity. */
       if (status->view_rule_count != 1)
@@ -4070,6 +4072,15 @@ product_policy_index_cli (vlib_main_t *vm, unformat_input_t *input,
     (unsigned long long) status.snapshot_hash,
     status.index_subtables, status.index_entries, status.index_storage_bytes,
     status.index_max_query_work);
+  vlib_cli_output (vm, "policy.plan generation=%llu revision=%llu hash=%llu direct=%u factorized=%u residual=%u conditions=%u query_state_bytes=%u compile_scratch_bytes=%u publication_peak_bytes=%u direct_limit=%u entries_limit=%u conditions_limit=%u publication_limit_bytes=%u",
+    (unsigned long long) status.active_generation,
+    (unsigned long long) status.active_revision,
+    (unsigned long long) status.snapshot_hash,
+    status.plan_resources.direct_rules, status.plan_resources.factorized_rules,
+    status.plan_resources.residual_rules, status.plan_resources.condition_items,
+    status.plan_resources.query_state_bytes, status.plan_resources.compile_scratch_bytes,
+    status.plan_resources.publication_peak_bytes, PRODUCT_L4_DIRECT_ENTRIES,
+    PRODUCT_L4_INDEX_ENTRIES, PRODUCT_L4_CONDITION_ITEMS, PRODUCT_L4_COMPILE_PEAK_LIMIT);
   return 0;
 }
 VLIB_CLI_COMMAND (product_policy_index_command, static) = {

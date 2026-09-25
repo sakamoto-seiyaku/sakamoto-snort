@@ -21,6 +21,19 @@ struct product_rule_config {
     uint64_t retained[SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES];
 };
 
+_Static_assert(SAKAMOTO_RULE_CONFIG_MAX_RULES == 256,
+               "update compiler source-array storage accounting when source capacity changes");
+uint32_t product_rule_config_compile_peak_bytes(void) {
+    product_l4_policy_plan_resources_t plan;
+    product_l4_policy_plan_resources(NULL, &plan);
+    return plan.publication_peak_bytes + 2 * sizeof(product_rule_config_t) + SOURCE_BYTES +
+        sizeof(sakamoto_product_rule_config_request_t) + sizeof(sakamoto_product_rule_config_status_t) +
+        2 * sizeof(product_l4_policy_view_t) + plan.query_state_bytes +
+        /* Group selection plus bounded recursive frames/path bookkeeping. */
+        SAKAMOTO_RULE_CONFIG_MAX_BINDINGS * SAKAMOTO_RULE_CONFIG_MAX_RULES +
+        SAKAMOTO_RULE_CONFIG_MAX_RULES + SAKAMOTO_RULE_CONFIG_MAX_DEPTH * 256 + 4 * 4096;
+}
+
 /* The encoding has explicit widths and byte order, no native structure padding.
  * Retained values are identity high-water marks, never old rule conditions. */
 static void put(uint8_t **at, uint64_t value, unsigned width) {
@@ -531,6 +544,11 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
         return c->state.save_error;
     c->state.error_index = UINT32_MAX;
     c->state.compiler_status = 0;
+    if (product_rule_config_compile_peak_bytes() > PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT) {
+        c->state.compiler_status = PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED;
+        c->state.compile_error = SAKAMOTO_RULE_CONFIG_COMPILE;
+        return c->state.compile_error;
+    }
     product_l4_policy_rule_t *rules = calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*rules));
     product_l4_policy_rule_t *effective =
         calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*effective));

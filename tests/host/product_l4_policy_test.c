@@ -746,9 +746,101 @@ test_static_expression_availability (void)
   }
 }
 
+static void
+test_factor_budget (void)
+{
+  product_l4_policy_view_t view, old;
+  product_l4_policy_rule_t rule = rule_template (1201, 21, 4, 6, 1, 0, 2);
+  rule.source_port_first = rule.destination_port_first = 1;
+  rule.source_port_last = rule.destination_port_last = 65534;
+  CHECK (product_l4_policy_compile (&view, &rule, 1) == 0, "large range product compiles");
+  product_l4_policy_plan_resources_t plan;
+  product_l4_policy_plan_resources (&view, &plan);
+  CHECK (plan.factorized_rules == 1 && plan.direct_rules == 0 && plan.residual_rules == 0,
+         "900 complete range combinations retain two interval factors");
+  product_l4_policy_compile_budget_t budget = product_l4_policy_default_budget ();
+  budget.factor_rules = 0;
+  CHECK (product_l4_policy_compile_with_budget (&view, &rule, 1, &budget) == 0,
+         "factor budget exhaustion uses a complete residual plan");
+  product_l4_policy_plan_resources (&view, &plan);
+  CHECK (plan.residual_rules == 1, "residual alternative is observable");
+  old = view;
+  budget.index_entries = 0;
+  CHECK (product_l4_policy_compile_with_budget (&view, &rule, 1, &budget)
+         == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED, "all legal plans exceeding total entries reject");
+  CHECK (!memcmp (&view, &old, sizeof view), "failed compiler preserves caller view");
+  budget = product_l4_policy_default_budget ();
+  budget.condition_items = 8;
+  CHECK (product_l4_policy_compile_with_budget (&view, &rule, 1, &budget)
+         == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED, "condition budget rejects complete view");
+  CHECK (!memcmp (&view, &old, sizeof view), "condition failure preserves old view");
+  budget = product_l4_policy_default_budget ();
+  budget.peak_bytes = plan.publication_peak_bytes - 1;
+  CHECK (product_l4_policy_compile_with_budget (&view, &rule, 1, &budget)
+         == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED, "publication overlap participates in budget");
+  CHECK (!memcmp (&view, &old, sizeof view), "peak failure preserves old view");
+  budget.peak_bytes++;
+  CHECK (product_l4_policy_compile_with_budget (&view, &rule, 1, &budget) == 0,
+         "exact complete storage budget is admitted");
+  /* Complementary halves, direction changes and PRE/POST never accumulate. */
+  const uint16_t ports[][2] = {{1,0},{0,1},{1,1},{65535,1},{1,65535},{65534,65534}};
+  for (unsigned i = 0; i < sizeof ports / sizeof ports[0]; ++i)
+    {
+      product_l4_policy_packet_t packet = packet_template (21, 4, 6, ports[i][0], ports[i][1]);
+      packet.direction = i % 2 ? PRODUCT_L4_POLICY_DIRECTION_INPUT : PRODUCT_L4_POLICY_DIRECTION_OUTPUT;
+      product_l4_policy_match_result_t match;
+      CHECK (product_l4_policy_match (&view, &packet, &match) == 0, "factor query completes");
+      CHECK (match.rule_id == ((i == 2 || i == 5) ? 1201U : 0U), "factors only complete within current query");
+      CHECK (product_l4_policy_match_position (&view, &packet, PRODUCT_L4_POLICY_POSITION_POST, &match) == 0
+             && !match.rule_id, "PRE factors cannot complete at POST");
+    }
+  product_l4_policy_rule_t many[PRODUCT_L4_POLICY_MAX_RULES];
+  for (unsigned i = 0; i < PRODUCT_L4_POLICY_MAX_RULES; ++i)
+    {
+      many[i] = rule; many[i].rule_id += i;
+      many[i].source_port_first = many[i].destination_port_first = 1;
+      many[i].source_port_last = many[i].destination_port_last = 6;
+    }
+  CHECK (product_l4_policy_compile (&view, many, PRODUCT_L4_POLICY_MAX_RULES) == 0,
+         "whole-view expansion pressure cannot reject a legal smaller plan");
+  product_l4_policy_plan_resources (&view, &plan);
+  CHECK (plan.direct_rules > 0 && plan.factorized_rules > 0
+         && plan.direct_rules + plan.factorized_rules == PRODUCT_L4_POLICY_MAX_RULES,
+         "shared view mixes expansion and complete factor plans within capacity");
+  product_l4_policy_packet_t packet = packet_template (21, 4, 6, 3, 3);
+  product_l4_policy_match_result_t match;
+  CHECK (product_l4_policy_match (&view, &packet, &match) == 0 && match.rule_id == 1201,
+         "budget pressure preserves full Rank winner");
+
+}
+
+static void
+test_exact_range_plan (void)
+{
+  product_l4_policy_view_t view;
+  product_l4_policy_rule_t rule = rule_template (1200, 21, 4, 6, 1, 0, 2);
+  rule.source_port_first = 1; rule.source_port_last = 6;
+  rule.destination_port_first = 1; rule.destination_port_last = 6;
+  CHECK (product_l4_policy_compile (&view, &rule, 1) == 0, "small range plan compiles");
+  product_l4_policy_index_resources_t resources;
+  product_l4_policy_index_resources (&view, &resources);
+  CHECK (resources.entries == 16, "two four-mask ranges expand to sixteen complete entries");
+  for (unsigned source = 0; source <= 7; ++source)
+    for (unsigned destination = 0; destination <= 7; ++destination)
+      {
+        product_l4_policy_packet_t packet = packet_template (21, 4, 6, source, destination);
+        product_l4_policy_match_result_t result;
+        CHECK (product_l4_policy_match (&view, &packet, &result) == 0, "range query completes");
+        CHECK (result.rule_id == ((source >= 1 && source <= 6 && destination >= 1 && destination <= 6) ? 1200U : 0U), "exact range winner");
+        CHECK (result.probes <= 1, "fragments never repeat a whole-rule check");
+      }
+}
+
 int
 main (void)
 {
+  test_exact_range_plan ();
+  test_factor_budget ();
   CHECK (PRODUCT_L4_POLICY_DIRECTION_INPUT == 1
            && PRODUCT_L4_POLICY_DIRECTION_OUTPUT == 3,
          "device direction domain must remain INPUT=1 and OUTPUT=3");

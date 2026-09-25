@@ -31,6 +31,13 @@ class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
         ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'probes', 'probe_limit', 'subject_probes', 'candidate_count', 'subtable_probes', 'key_probes')]
 
+class Budget(C.Structure):
+    _fields_ = [(n, U32) for n in ('direct_entries', 'index_entries', 'factor_rules', 'condition_items', 'peak_bytes')]
+
+class Plan(C.Structure):
+    _fields_ = [(n, U32) for n in ('direct_rules', 'factorized_rules', 'residual_rules', 'condition_items',
+                                  'query_state_bytes', 'compile_scratch_bytes', 'publication_peak_bytes')]
+
 # No production opcodes, compiled entries, indexes, masks or caches here.
 def logical_truth(expr, facts):
     op, *args = expr
@@ -61,7 +68,7 @@ def ordered_reference(rules, facts):
                         mode=rule['mode'], actual_action=1 if rule['mode'] else rule['action'],
                         reason_id=rule['reason'], priority=rule['priority'], order=rule['order'])
     # The matcher returns NoMatch/NONE; graph completion supplies default ALLOW.
-    return dict(rule_id=0, action=0, actual_action=0)
+    return dict(rule_id=0, action=0, actual_action=0, mode=0, reason_id=0, priority=0, order=0, winner_rank=0)
 
 # This request adapter does not participate in reference evaluation.
 def encode(expr):
@@ -110,32 +117,38 @@ BASE = dict(uid=17, family=4, protocol=17, direction=3, network=1, interface=9,
 
 def run(lib):
     count = 0
+    lib.product_l4_policy_default_budget.restype = Budget
+    lib.product_l4_policy_compile_with_budget.argtypes = [C.c_void_p, C.POINTER(Rule), C.c_size_t, C.POINTER(Budget)]
     def compare(rules, facts, hand_winner=None):
         nonlocal count
         expected = ordered_reference(rules, facts)
         if hand_winner is not None: assert expected['rule_id'] == hand_winner, (rules, facts, expected, hand_winner)
         raw = (Rule*len(rules))(*(source(r) for r in rules))
-        # Public compiler owns its opaque output; the test never inspects it.
-        view = C.create_string_buffer(128*1024)
-        assert lib.product_l4_policy_compile(view, raw, len(rules)) == 0
-        result = Result()
-        assert lib.product_l4_policy_match(view, C.byref(packet(facts)), C.byref(result)) == 0
-        actual = {key: getattr(result, key) for key in expected}
-        assert actual == expected, (rules, facts, expected, actual)
-        # Compare actual split execution with identical inputs. A pre-flow
-        # whole winner is final; only NoMatch runs the post-flow program.
-        early = Result()
-        early_facts = facts | dict(ct=None, flowdir=None)
-        assert lib.product_l4_policy_match_position(view, C.byref(packet(early_facts)), 1, C.byref(early)) == 0
-        optimized = early
-        if not early.evaluation:
-            optimized = Result()
-            assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), 2, C.byref(optimized)) == 0
-        assert {key: getattr(optimized, key) for key in expected} == expected, (rules, facts, expected, optimized.rule_id)
-        if expected['rule_id']:
-            assert result.evaluation == 1 and result.stage_verdict == (expected['actual_action'] == 2)
-        else: assert result.evaluation == 0
-        count += 1
+        for path in ('direct', 'factorized', 'residual'):
+            # Public compiler owns its opaque output; the test never inspects it.
+            view = C.create_string_buffer(128*1024)
+            budget = lib.product_l4_policy_default_budget()
+            if path != 'direct': budget.direct_entries = 0
+            if path == 'residual': budget.factor_rules = 0
+            assert lib.product_l4_policy_compile_with_budget(view, raw, len(rules), C.byref(budget)) == 0
+            result = Result()
+            assert lib.product_l4_policy_match(view, C.byref(packet(facts)), C.byref(result)) == 0
+            actual = {key: getattr(result, key) for key in expected}
+            assert actual == expected, (rules, facts, expected, actual)
+            # Compare actual split execution with identical inputs. A pre-flow
+            # whole winner is final; only NoMatch runs the post-flow program.
+            early = Result()
+            early_facts = facts | dict(ct=None, flowdir=None)
+            assert lib.product_l4_policy_match_position(view, C.byref(packet(early_facts)), 1, C.byref(early)) == 0
+            optimized = early
+            if not early.evaluation:
+                optimized = Result()
+                assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), 2, C.byref(optimized)) == 0
+            assert {key: getattr(optimized, key) for key in expected} == expected, (rules, facts, expected, optimized.rule_id)
+            if expected['rule_id']:
+                assert result.evaluation == 1 and result.stage_verdict == (expected['actual_action'] == 2)
+            else: assert result.evaluation == 0
+            count += 1
 
     def placed(rules, facts, pre_id, post_id):
         raw = (Rule*len(rules))(*(source(r) for r in rules))
@@ -146,6 +159,23 @@ def run(lib):
             assert lib.product_l4_policy_match_position(view, C.byref(packet(facts)), position, C.byref(result)) == 0
             assert result.rule_id == identity, (position, identity, result.rule_id)
         compare(rules, facts)
+
+    # T10: 16 / 32 / 900 exact-mask products and every range edge, with
+    # same-action competitors, observe mode and dynamic whole-rule placement.
+    # Expected truth is inclusive arithmetic in the independent logical AST.
+    for source_range, destination_range in [((1,6),(1,6)), ((1,6),(1,30)),
+                                             ((1,65534),(1,65534)), ((0,65535),(0,65535))]:
+        intervals = ('and', ('sport',*source_range), ('dport',*destination_range))
+        for mode in (0,1):
+            rules = [logical(('and', intervals, ('ct',2)), identity=30, priority=1, mode=mode),
+                     logical(intervals, identity=20, priority=1, order=1, mode=mode),
+                     logical(('or',('network',7),('not',('interface',9))),identity=10,priority=2),
+                     logical(('family',4),identity=40,priority=3,action=1)]
+            for sport in (0,1,3,6,7,30,31,65534,65535,None):
+                for dport in (0,1,6,7,30,31,65534,65535,None):
+                    for ct in (None,1,2):
+                        compare(list(reversed(rules)), BASE | dict(sport=sport,dport=dport,ct=ct,
+                            network=None,interface=9))
 
     # T09: equal masks across priority, same action/different winners, residual
     # failure and equal-priority order/id bounds despite reverse table layout.
@@ -289,7 +319,7 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06/T07/T08/T09 independent ordered and split reference: {count} complete winner comparisons PASS')
+    print(f'T06/T07/T08/T09/T10 independent ordered and split reference (three plans): {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

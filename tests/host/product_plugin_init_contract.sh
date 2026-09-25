@@ -43,6 +43,16 @@ static inline void vlib_worker_thread_barrier_sync(vlib_main_t *vm) { (void)vm; 
 static inline void vlib_worker_thread_barrier_release(vlib_main_t *vm) { (void)vm; }
 typedef struct { int unused; } vlib_buffer_t;
 typedef struct { const char *message; } clib_error_t;
+typedef struct { int unused; } unformat_input_t;
+typedef struct vlib_cli_command vlib_cli_command_t;
+struct vlib_cli_command {
+  const char *path;
+  clib_error_t *(*function)(vlib_main_t *, unformat_input_t *, vlib_cli_command_t *);
+};
+#define VLIB_CLI_COMMAND(name, storage) storage vlib_cli_command_t name __attribute__((used))
+static inline void vlib_cli_output(vlib_main_t *vm, const char *format, ...) {
+  (void) vm; (void) format;
+}
 extern clib_error_t sakamoto_test_error;
 static inline clib_error_t *
 sakamoto_test_error_return (int ignored, const char *format, ...)

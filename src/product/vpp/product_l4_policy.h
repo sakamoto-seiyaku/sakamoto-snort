@@ -147,6 +147,8 @@ typedef struct
   product_l4_policy_rule_t source;
   uint32_t winner_rank;
   uint8_t position;
+  uint8_t plan;
+  uint16_t factor_first[2], factor_last[2];
 } product_l4_policy_compiled_rule_t;
 
 typedef struct
@@ -157,7 +159,14 @@ typedef struct
   uint8_t requires_flow; /* At least one whole rule is post-flow. */
 } product_l4_policy_uid_bucket_t;
 
-/* Private fixed candidate index: one conservative entry per whole rule. */
+/* Private fixed candidate index; entries always refer to whole rules. */
+#define PRODUCT_L4_DIRECT_ENTRIES 32
+#define PRODUCT_L4_INDEX_ENTRIES 256
+#define PRODUCT_L4_PLAN_DIRECT 1
+#define PRODUCT_L4_PLAN_FACTORIZED 2
+#define PRODUCT_L4_PLAN_RESIDUAL 3
+#define PRODUCT_L4_CONDITION_ITEMS (PRODUCT_L4_POLICY_MAX_RULES * (PRODUCT_STATIC_EXPRESSION_BYTES + 9))
+#define PRODUCT_L4_COMPILE_PEAK_LIMIT (384U * 1024U)
 #define PRODUCT_L4_INDEX_KEY_BYTES 42
 #define PRODUCT_L4_INDEX_SLOTS 16
 #define PRODUCT_L4_INDEX_NONE UINT16_MAX
@@ -171,12 +180,24 @@ typedef struct {
 
 typedef struct {
   uint8_t key[PRODUCT_L4_INDEX_KEY_BYTES];
-  uint16_t next;
+  uint16_t next, rule;
 } product_l4_policy_index_entry_t;
 
 typedef struct {
   uint32_t subtables, entries, storage_bytes, max_query_work;
 } product_l4_policy_index_resources_t;
+
+/* Native compiler seam, not a source-format setting or cross-language ABI.
+ * Budgets may reduce optimization, but never permit incomplete evaluation.
+ * Fixed storage bounds are counted even when only part of an array is used. */
+typedef struct {
+  uint32_t direct_entries, index_entries, factor_rules, condition_items, peak_bytes;
+} product_l4_policy_compile_budget_t;
+
+typedef struct {
+  uint32_t direct_rules, factorized_rules, residual_rules, condition_items;
+  uint32_t query_state_bytes, compile_scratch_bytes, publication_peak_bytes;
+} product_l4_policy_plan_resources_t;
 
 /*
  * Fixed storage makes the compiled view usable from a VPP worker without a
@@ -189,8 +210,9 @@ typedef struct
   uint32_t uid_bucket_count;
   uint32_t max_probes;
   uint32_t subtable_count;
-  product_l4_policy_subtable_t subtables[PRODUCT_L4_POLICY_MAX_RULES];
-  product_l4_policy_index_entry_t entries[PRODUCT_L4_POLICY_MAX_RULES];
+  uint32_t entry_count;
+  product_l4_policy_subtable_t subtables[PRODUCT_L4_INDEX_ENTRIES];
+  product_l4_policy_index_entry_t entries[PRODUCT_L4_INDEX_ENTRIES];
   product_l4_policy_compiled_rule_t rules[PRODUCT_L4_POLICY_MAX_RULES];
   product_l4_policy_uid_bucket_t
     uid_buckets[PRODUCT_L4_POLICY_MAX_UID_BUCKETS];
@@ -236,6 +258,13 @@ int product_l4_policy_requires_flow (const product_l4_policy_view_t *, uint32_t 
 
 void product_l4_policy_index_resources (const product_l4_policy_view_t *,
                                         product_l4_policy_index_resources_t *);
+
+product_l4_policy_compile_budget_t product_l4_policy_default_budget (void);
+void product_l4_policy_plan_resources (const product_l4_policy_view_t *,
+                                       product_l4_policy_plan_resources_t *);
+product_l4_policy_status_t product_l4_policy_compile_with_budget (
+  product_l4_policy_view_t *, const product_l4_policy_rule_t *, size_t,
+  const product_l4_policy_compile_budget_t *);
 
 void product_l4_policy_init (product_l4_policy_view_t *view);
 

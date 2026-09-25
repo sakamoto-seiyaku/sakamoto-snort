@@ -306,39 +306,117 @@ index_mask (const static_envelope_t *e, uint8_t *mask, uint8_t *key)
     }
 }
 
-static void
-build_index (product_l4_policy_view_t *view)
+/* Minimal disjoint prefix cover of one inclusive 16-bit interval. At most
+ * 30 pieces; arithmetic uses 32 bits so 0..65535 cannot wrap. */
+static unsigned
+range_cover (uint16_t first, uint16_t last, uint16_t low[32], uint16_t high[32])
 {
-  /* Reverse insertion yields complete-Rank ordered collision chains. Subtable
-   * physical order intentionally differs from precedence. */
+  unsigned count = 0;
+  for (uint32_t at = first; at <= last;)
+    {
+      uint32_t size = at ? at & (0U - at) : 65536U;
+      while (size > (uint32_t) last - at + 1) size >>= 1;
+      low[count] = (uint16_t) at;
+      high[count++] = (uint16_t) (at + size - 1);
+      at += size;
+    }
+  return count;
+}
+
+static void
+index_insert (product_l4_policy_view_t *view, unsigned subject,
+              unsigned rule, const static_envelope_t *envelope)
+{
+  unsigned number = view->entry_count++;
+  product_l4_policy_index_entry_t *entry = &view->entries[number];
+  uint8_t mask[PRODUCT_L4_INDEX_KEY_BYTES];
+  index_mask (envelope, mask, entry->key);
+  unsigned table = 0;
+  while (table < view->subtable_count
+         && (view->subtables[table].subject != subject
+             || memcmp (view->subtables[table].mask, mask, sizeof mask))) ++table;
+  product_l4_policy_subtable_t *t = &view->subtables[table];
+  if (table == view->subtable_count)
+    {
+      ++view->subtable_count;
+      memcpy (t->mask, mask, sizeof mask);
+      t->subject = (uint16_t) subject;
+      for (unsigned h = 0; h < PRODUCT_L4_INDEX_SLOTS; ++h)
+        t->heads[h] = PRODUCT_L4_INDEX_NONE;
+    }
+  t->first_rank = (uint16_t) view->rules[rule].winner_rank;
+  unsigned slot = index_hash (entry->key);
+  entry->rule = (uint16_t) rule;
+  entry->next = t->heads[slot];
+  t->heads[slot] = (uint16_t) number;
+}
+
+/* General disjunction/negation retains its bounded source program. We do not
+ * distribute AND over OR or pretend a hull is an exact Boolean expansion. */
+static int
+range_plan_eligible (const product_l4_policy_rule_t *rule)
+{
+  for (unsigned at = 0; at < rule->expression_length;)
+    {
+      unsigned op = rule->expression[at++];
+      if (op == PRODUCT_STATIC_OR || op == PRODUCT_STATIC_NOT) return 0;
+      at += expression_operand_bytes (op);
+    }
+  return 1;
+}
+
+static void
+build_index (product_l4_policy_view_t *view, const product_l4_policy_compile_budget_t *budget)
+{
+  /* Reserve one legal residual entry for every remaining rule before spending
+   * spare entries. Reverse insertion keeps collision chains in complete Rank.
+   * Exhausting an optimization budget falls back, never truncates a rule. */
+  unsigned remaining = view->rule_count, factors = 0;
   for (unsigned subject = 0; subject < view->uid_bucket_count; ++subject)
     {
       const product_l4_policy_uid_bucket_t *bucket = &view->uid_buckets[subject];
       for (unsigned n = bucket->rule_count; n; --n)
         {
           unsigned rule = bucket->first_rule + n - 1;
-          uint8_t mask[PRODUCT_L4_INDEX_KEY_BYTES];
           static_envelope_t e = rule_envelope (&view->rules[rule].source);
-          product_l4_policy_index_entry_t *entry = &view->entries[rule];
-          index_mask (&e, mask, entry->key);
-          unsigned table = 0;
-          while (table < view->subtable_count
-                 && (view->subtables[table].subject != subject
-                     || memcmp (view->subtables[table].mask, mask, sizeof mask)))
-            ++table;
-          product_l4_policy_subtable_t *t = &view->subtables[table];
-          if (table == view->subtable_count)
+          uint16_t low[2][32], high[2][32];
+          unsigned a = range_cover (e.low[ENVELOPE_SOURCE_PORT], e.high[ENVELOPE_SOURCE_PORT], low[0], high[0]);
+          unsigned b = range_cover (e.low[ENVELOPE_DESTINATION_PORT], e.high[ENVELOPE_DESTINATION_PORT], low[1], high[1]);
+          --remaining;
+          int eligible = range_plan_eligible (&view->rules[rule].source);
+          if (eligible && !e.empty && a * b <= budget->direct_entries
+              && a * b + view->entry_count + remaining <= budget->index_entries)
             {
-              ++view->subtable_count;
-              memcpy (t->mask, mask, sizeof mask);
-              t->subject = (uint16_t) subject;
-              for (unsigned h = 0; h < PRODUCT_L4_INDEX_SLOTS; ++h)
-                t->heads[h] = PRODUCT_L4_INDEX_NONE;
+              view->rules[rule].plan = PRODUCT_L4_PLAN_DIRECT;
+              for (unsigned i = 0; i < a; ++i)
+              for (unsigned j = 0; j < b; ++j)
+                {
+                  static_envelope_t piece = e;
+                  piece.low[ENVELOPE_SOURCE_PORT] = low[0][i];
+                  piece.high[ENVELOPE_SOURCE_PORT] = high[0][i];
+                  piece.low[ENVELOPE_DESTINATION_PORT] = low[1][j];
+                  piece.high[ENVELOPE_DESTINATION_PORT] = high[1][j];
+                  index_insert (view, subject, rule, &piece);
+                }
             }
-          t->first_rank = (uint16_t) view->rules[rule].winner_rank;
-          unsigned slot = index_hash (entry->key);
-          entry->next = t->heads[slot];
-          t->heads[slot] = (uint16_t) rule;
+          else
+            {
+              product_l4_policy_compiled_rule_t *compiled = &view->rules[rule];
+              compiled->plan = PRODUCT_L4_PLAN_RESIDUAL;
+              if (eligible && !e.empty && factors < budget->factor_rules
+                  && (e.low[ENVELOPE_SOURCE_PORT] || e.high[ENVELOPE_SOURCE_PORT] != UINT16_MAX
+                      || e.low[ENVELOPE_DESTINATION_PORT] || e.high[ENVELOPE_DESTINATION_PORT] != UINT16_MAX))
+                {
+                  compiled->plan = PRODUCT_L4_PLAN_FACTORIZED;
+                  ++factors;
+                  for (unsigned side = 0; side < 2; ++side)
+                    {
+                      compiled->factor_first[side] = e.low[ENVELOPE_SOURCE_PORT + side];
+                      compiled->factor_last[side] = e.high[ENVELOPE_SOURCE_PORT + side];
+                    }
+                }
+              index_insert (view, subject, rule, &e);
+            }
         }
     }
 }
@@ -351,12 +429,79 @@ product_l4_policy_index_resources (const product_l4_policy_view_t *view,
   memset (resources, 0, sizeof *resources);
   if (!view) return;
   resources->subtables = view->subtable_count;
-  resources->entries = view->rule_count;
+  resources->entries = view->entry_count;
   resources->storage_bytes = sizeof *view;
   /* Subject binary search + all table inspections + all chained keys + all
    * complete residuals. No query truncation or partial-best return. */
   resources->max_query_work = PRODUCT_L4_POLICY_MAX_SUBJECT_PROBES
-    + view->subtable_count + 2 * view->max_probes;
+    + view->subtable_count + view->entry_count + view->max_probes;
+}
+
+/* These are representation bytes, not process RSS or a latency promise.
+ * Four views cover two protected banks, management preflight and publication.
+ * The two caller source arrays are conservatively at the 256-source capacity.
+ * Fixed frame reserves cover scalar/validation scratch; allocator metadata
+ * and existing thread-stack reservation are outside these storage totals. */
+static uint32_t
+compile_scratch_bytes (void)
+{
+  return (PRODUCT_L4_POLICY_MAX_RULES + PRODUCT_STATIC_EXPRESSION_BYTES + 4)
+    * sizeof (static_envelope_t) + 4 * 32 * sizeof (uint16_t)
+    + 4 * PRODUCT_L4_INDEX_KEY_BYTES + 4096;
+}
+
+static uint32_t
+query_state_bytes (void)
+{
+  return PRODUCT_L4_POLICY_MAX_RULES + PRODUCT_STATIC_EXPRESSION_BYTES
+    + 3 * PRODUCT_L4_INDEX_KEY_BYTES + sizeof (static_envelope_t) + 512;
+}
+
+static uint32_t
+publication_peak_bytes (void)
+{
+  return 4 * sizeof (product_l4_policy_view_t)
+    + 2 * 256 * sizeof (product_l4_policy_rule_t)
+    + compile_scratch_bytes () + query_state_bytes ();
+}
+
+product_l4_policy_compile_budget_t
+product_l4_policy_default_budget (void)
+{
+  return (product_l4_policy_compile_budget_t) {
+    PRODUCT_L4_DIRECT_ENTRIES, PRODUCT_L4_INDEX_ENTRIES,
+    PRODUCT_L4_POLICY_MAX_RULES, PRODUCT_L4_CONDITION_ITEMS,
+    PRODUCT_L4_COMPILE_PEAK_LIMIT
+  };
+}
+
+static unsigned
+condition_items (const product_l4_policy_rule_t *rule)
+{
+  /* Nine fixed source predicate slots plus every bytecode operator/leaf. */
+  unsigned count = 9;
+  for (unsigned at = 0; at < rule->expression_length; ++count)
+    at += 1 + expression_operand_bytes (rule->expression[at]);
+  return count;
+}
+
+void
+product_l4_policy_plan_resources (const product_l4_policy_view_t *view,
+                                  product_l4_policy_plan_resources_t *resources)
+{
+  if (!resources) return;
+  memset (resources, 0, sizeof *resources);
+  resources->query_state_bytes = query_state_bytes ();
+  resources->compile_scratch_bytes = compile_scratch_bytes ();
+  resources->publication_peak_bytes = publication_peak_bytes ();
+  if (!view) return;
+  for (unsigned i = 0; i < view->rule_count; ++i)
+    {
+      if (view->rules[i].plan == PRODUCT_L4_PLAN_DIRECT) ++resources->direct_rules;
+      else if (view->rules[i].plan == PRODUCT_L4_PLAN_FACTORIZED) ++resources->factorized_rules;
+      else ++resources->residual_rules;
+      resources->condition_items += condition_items (&view->rules[i].source);
+    }
 }
 
 static void
@@ -383,25 +528,34 @@ product_l4_policy_init (product_l4_policy_view_t *view)
 }
 
 product_l4_policy_status_t
-product_l4_policy_compile (product_l4_policy_view_t *view,
+product_l4_policy_compile_with_budget (product_l4_policy_view_t *view,
                            const product_l4_policy_rule_t *rules,
-                           size_t rule_count)
+                           size_t rule_count, const product_l4_policy_compile_budget_t *budget)
 {
   size_t input_index;
   uint32_t bucket_index;
   uint32_t rule_index;
 
-  if (view == NULL || (rule_count != 0 && rules == NULL))
+  if (view == NULL || budget == NULL || (rule_count != 0 && rules == NULL)
+      || budget->direct_entries > PRODUCT_L4_DIRECT_ENTRIES
+      || budget->index_entries > PRODUCT_L4_INDEX_ENTRIES
+      || budget->factor_rules > PRODUCT_L4_POLICY_MAX_RULES)
     return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
-  if (rule_count > PRODUCT_L4_POLICY_MAX_RULES)
+  if (rule_count > PRODUCT_L4_POLICY_MAX_RULES
+      || rule_count > budget->index_entries
+      || publication_peak_bytes () > budget->peak_bytes)
     return PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED;
 
+  unsigned items = 0;
   for (input_index = 0; input_index < rule_count; input_index++)
     {
       product_l4_policy_status_t status = validate_rule (&rules[input_index]);
       size_t prior_index;
       if (status != PRODUCT_L4_POLICY_STATUS_OK)
         return status;
+      items += condition_items (&rules[input_index]);
+      if (items > budget->condition_items)
+        return PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED;
       for (prior_index = 0; prior_index < input_index; prior_index++)
         if (rules[prior_index].rule_id == rules[input_index].rule_id
             && rules[prior_index].uid == rules[input_index].uid)
@@ -439,8 +593,16 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
       bucket_index++;
     }
   view->uid_bucket_count = bucket_index;
-  build_index (view);
+  build_index (view, budget);
   return PRODUCT_L4_POLICY_STATUS_OK;
+}
+
+product_l4_policy_status_t
+product_l4_policy_compile (product_l4_policy_view_t *view,
+                           const product_l4_policy_rule_t *rules, size_t count)
+{
+  product_l4_policy_compile_budget_t budget = product_l4_policy_default_budget ();
+  return product_l4_policy_compile_with_budget (view, rules, count, &budget);
 }
 
 static int
@@ -737,6 +899,7 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
   memcpy (values.address_low[1], packet->destination_address, 16);
   index_bounds (&values, packet_key, unused);
   unsigned best = UINT32_MAX;
+  uint8_t checked[PRODUCT_L4_POLICY_MAX_RULES] = {0};
   for (index = 0; index < view->subtable_count; ++index)
     {
       const product_l4_policy_subtable_t *table = &view->subtables[index];
@@ -748,12 +911,20 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
       for (unsigned entry = table->heads[index_hash (key)];
            entry != PRODUCT_L4_INDEX_NONE; entry = view->entries[entry].next)
         {
-          const product_l4_policy_compiled_rule_t *compiled = &view->rules[entry];
+          unsigned rule = view->entries[entry].rule;
+          const product_l4_policy_compiled_rule_t *compiled = &view->rules[rule];
           if (compiled->winner_rank >= best) break;
           ++result->key_probes;
           if ((position && compiled->position != position)
-              || memcmp (key, view->entries[entry].key, sizeof key)) continue;
+              || memcmp (key, view->entries[entry].key, sizeof key) || checked[rule]) continue;
+          checked[rule] = 1;
           ++result->probes;
+          /* These independent interval factors are a necessary candidate test.
+           * Only the complete source evaluator supplies availability, Boolean
+           * truth, winner identity and actions. All conjunction state is local. */
+          if (compiled->plan == PRODUCT_L4_PLAN_FACTORIZED
+              && (!port_matches (packet->source_port, compiled->factor_first[0], compiled->factor_last[0])
+                  || !port_matches (packet->destination_port, compiled->factor_first[1], compiled->factor_last[1]))) continue;
           if (!rule_matches (&compiled->source, packet)
               || !expression_matches (&compiled->source, packet)) continue;
           best = compiled->winner_rank;

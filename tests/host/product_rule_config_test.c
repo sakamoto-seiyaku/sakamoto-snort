@@ -962,7 +962,63 @@ static void ct_publication_failure(void) {
     product_rule_config_close(config);unlink(path);rmdir(directory);
 }
 
+static void large_plan_save_failure(void) {
+    char directory[] = "/tmp/sakamoto-factor-config-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {
+        .schema = 1, .operation = 2, .expected_saved_revision = 1, .count = 128};
+    for (unsigned i = 0; i < 129; ++i)
+        request.rules[i] = (sakamoto_product_direct_rule_t) {
+            .version = ((uint64_t)(1000 + i) << 16) | 1, .uid = 17,
+            .network_context = UINT32_MAX, .ifindex = UINT32_MAX,
+            .family = 4, .protocol = 6, .priority = i + 1, .action = 2,
+            .source_port_first = 1, .source_port_last = 65534,
+            .destination_port_first = 1, .destination_port_last = 65534};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_l4_policy_plan_resources_t plan;
+    product_l4_policy_plan_resources(&runtime.view, &plan);
+    assert(plan.factorized_rules == 128 && !plan.direct_rules && !plan.residual_rules);
+    assert(product_rule_config_compile_peak_bytes() >= plan.publication_peak_bytes);
+    assert(product_rule_config_compile_peak_bytes() <= PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    uint64_t old_version = status.rules[0].version, old_revision = status.active_revision;
+    product_l4_policy_packet_t packet = {.uid = 17, .uid_known = 1, .family = 4,
+        .protocol = 6, .ports_available = 1, .source_port = 32768, .destination_port = 32768};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == old_version && match.winner_rank == 1 && match.actual_action == 2);
+    request.expected_saved_revision = status.saved_revision;
+    request.count = 129;
+    request.rules[0].base_version = old_version; request.rules[0].version = 0;
+    request.rules[0].action = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(!status.save_error && status.compiler_status == PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED);
+    assert(status.count == 129 && status.saved_revision == old_revision + 1);
+    assert(status.active_revision == old_revision && status.active_count == 128);
+    assert(status.rules[0].version == old_version + 1 && status.rules[0].action == 1);
+    assert(runtime.publications == 1 && runtime.revision == old_revision);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == old_version && match.winner_rank == 1 && match.actual_action == 2);
+    product_rule_config_close(config);
+    config = product_rule_config_open(path);
+    product_rule_config_query(config, &status);
+    assert(status.count == 129 && status.rules[0].version == old_version + 1 && status.rules[0].action == 1);
+    assert(status.saved_revision == old_revision + 1);
+    request.expected_saved_revision = status.saved_revision; request.count = 128;
+    memcpy(request.rules, status.rules, sizeof(request.rules));
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == old_version + 1 && match.winner_rank == 1 && match.actual_action == 1);
+    product_rule_config_close(config); unlink(path); rmdir(directory);
+}
+
 int main(void) {
+    large_plan_save_failure();
     ct_publication_failure();
     static_expression_save_and_publish(0);
     static_expression_save_and_publish(1);

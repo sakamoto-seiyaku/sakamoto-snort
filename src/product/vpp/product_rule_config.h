@@ -10,6 +10,14 @@
  * It must preserve the preceding snapshot on failure. No worker sees this
  * mutable source object. */
 typedef struct product_rule_config product_rule_config_t;
+
+#define PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT (1024U * 1024U)
+/* Conservative complete policy storage overlap for the current two-worker
+ * runtime: compiler views/sources, saved/candidate configuration, serialization,
+ * request/status adaptation, and both caller-local empty views/query scratch.
+ * Excludes existing thread-stack reservation, API transport pools and allocator
+ * metadata; this is a representation budget, not a process-RSS cap. */
+uint32_t product_rule_config_compile_peak_bytes (void);
 typedef uint32_t (*product_rule_config_publish_t) (
   void *, uint64_t revision, uint64_t hash,
   const product_l4_policy_rule_t *, uint32_t count);
