@@ -29,7 +29,7 @@ class Packet(C.Structure):
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
-        ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'probes', 'probe_limit', 'subject_probes', 'candidate_count')]
+        ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'probes', 'probe_limit', 'subject_probes', 'candidate_count', 'subtable_probes', 'key_probes')]
 
 # No production opcodes, compiled entries, indexes, masks or caches here.
 def logical_truth(expr, facts):
@@ -147,6 +147,36 @@ def run(lib):
             assert result.rule_id == identity, (position, identity, result.rule_id)
         compare(rules, facts)
 
+    # T09: equal masks across priority, same action/different winners, residual
+    # failure and equal-priority order/id bounds despite reverse table layout.
+    for reverse in (False, True):
+        rules = [logical(('and', ('dport',100,199), ('network',7)), identity=30, priority=1, order=0),
+                 logical(('and', ('dport',100,199), ('ct',2)), identity=20, priority=1, order=1),
+                 logical(('dport',100,199), identity=10, priority=1, order=1),
+                 logical(('dport',0,65535), identity=40, priority=2, action=1)]
+        if reverse: rules.reverse()
+        for port in (0, 99, 100, 127, 128, 150, 199, 200, 255, 65535):
+            for network in (None, 1, 7):
+                for ct in (None,1,2):
+                    compare(rules, BASE | dict(dport=port, network=network, ct=ct))
+    # 128 distinct exact keys share one mask; pigeonhole forces hash collisions.
+    # Every winner and NoMatch is checked; rejected high Rank keys cannot hide a
+    # later matching key. Every candidate remains one whole source identity.
+    rules = [logical(('dport',p,p), identity=1000+p, priority=p%3, order=127-p)
+             for p in range(128)]
+    for port in range(130):
+        compare(list(reversed(rules)), BASE | dict(dport=port))
+    raw = (Rule*len(rules))(*(source(r) for r in rules))
+    view = C.create_string_buffer(128*1024)
+    assert lib.product_l4_policy_compile(view, raw, len(rules)) == 0
+    resources = (U32*4)()
+    lib.product_l4_policy_index_resources(view, resources)
+    assert resources[0] == 1 and resources[1] == 128
+    result = Result()
+    assert lib.product_l4_policy_match(view, C.byref(packet(BASE | dict(dport=129))), C.byref(result)) == 0
+    assert result.probes == 0 and result.key_probes <= 128
+    assert result.subtable_probes + result.key_probes + result.probes + result.subject_probes <= resources[3]
+
     # A -> B -> C: C is disjoint from dynamic A but overlaps propagated B.
     # All priorities tie: explicit order then identity must drive propagation.
     chain = [logical(('and',('ct',2),('dport',100,100)),identity=10,order=0),
@@ -259,7 +289,7 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06/T07/T08 independent ordered and split reference: {count} complete winner comparisons PASS')
+    print(f'T06/T07/T08/T09 independent ordered and split reference: {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

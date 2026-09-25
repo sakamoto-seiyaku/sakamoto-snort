@@ -157,6 +157,27 @@ typedef struct
   uint8_t requires_flow; /* At least one whole rule is post-flow. */
 } product_l4_policy_uid_bucket_t;
 
+/* Private fixed candidate index: one conservative entry per whole rule. */
+#define PRODUCT_L4_INDEX_KEY_BYTES 42
+#define PRODUCT_L4_INDEX_SLOTS 16
+#define PRODUCT_L4_INDEX_NONE UINT16_MAX
+
+typedef struct {
+  uint8_t mask[PRODUCT_L4_INDEX_KEY_BYTES];
+  uint16_t heads[PRODUCT_L4_INDEX_SLOTS];
+  uint16_t first_rank;
+  uint16_t subject;
+} product_l4_policy_subtable_t;
+
+typedef struct {
+  uint8_t key[PRODUCT_L4_INDEX_KEY_BYTES];
+  uint16_t next;
+} product_l4_policy_index_entry_t;
+
+typedef struct {
+  uint32_t subtables, entries, storage_bytes, max_query_work;
+} product_l4_policy_index_resources_t;
+
 /*
  * Fixed storage makes the compiled view usable from a VPP worker without a
  * hot-path allocation.  The arrays are an implementation detail for callers;
@@ -167,6 +188,9 @@ typedef struct
   uint32_t rule_count;
   uint32_t uid_bucket_count;
   uint32_t max_probes;
+  uint32_t subtable_count;
+  product_l4_policy_subtable_t subtables[PRODUCT_L4_POLICY_MAX_RULES];
+  product_l4_policy_index_entry_t entries[PRODUCT_L4_POLICY_MAX_RULES];
   product_l4_policy_compiled_rule_t rules[PRODUCT_L4_POLICY_MAX_RULES];
   product_l4_policy_uid_bucket_t
     uid_buckets[PRODUCT_L4_POLICY_MAX_UID_BUCKETS];
@@ -189,6 +213,8 @@ typedef struct
   uint32_t probe_limit;
   uint32_t subject_probes;
   uint32_t candidate_count;
+  uint32_t subtable_probes;
+  uint32_t key_probes;
 } product_l4_policy_match_result_t;
 
 product_l4_policy_status_t product_static_expression_validate (const uint8_t *, uint32_t);
@@ -207,6 +233,9 @@ product_l4_policy_status_t product_l4_policy_match_position (
 
 /* Only placement is queried; no partial matching or candidate filtering. */
 int product_l4_policy_requires_flow (const product_l4_policy_view_t *, uint32_t uid);
+
+void product_l4_policy_index_resources (const product_l4_policy_view_t *,
+                                        product_l4_policy_index_resources_t *);
 
 void product_l4_policy_init (product_l4_policy_view_t *view);
 

@@ -26,7 +26,9 @@ uid_map = Path('/proc/self/uid_map').read_text().split()
 assert int(uid_map[2]) > 12002, 'two real mapped UIDs required'
 env = dict(os.environ, LD_LIBRARY_PATH=str(artifact/'lib'))
 vppctl = stage/'source/build-root/install-vpp-native/vpp/bin/vppctl'
-runtime = ROOT/('build-output/product-vpp-runtime-t08-'+output.name)
+# Keep every VPP Unix socket below sockaddr_un.sun_path, including stats.sock.
+runtime_tag = hashlib.sha256(str(output).encode()).hexdigest()[:12]
+runtime = ROOT/('build-output/product-vpp-runtime-'+runtime_tag)
 generation = 25901
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
@@ -102,7 +104,7 @@ process = None; log = None; hooked = []
 def start(label):
     global process, log, runtime, generation
     generation = 25901 if label == "first" else 25602
-    runtime = ROOT/("build-output/product-vpp-runtime-t08-"+output.name+"-"+label)
+    runtime = ROOT/("build-output/product-vpp-runtime-"+runtime_tag+"-"+label)
     launch.update(PRODUCT_RUNTIME_DIR=str(runtime), PRODUCT_GENERATION=str(generation))
     log = (output/(label+'-vpp.log')).open('w')
     process = subprocess.Popen(['bash', str(ROOT/'tools/product/run-host-vpp.sh')], env=launch,
@@ -157,6 +159,7 @@ def configure(label, prior, protocol, scenario, mode=0):
     assert status['config.result']=='0' and status['config.saved_revision']==status['config.active_revision'],status
     result.setdefault('configurations',[]).append(dict(label=label,revision=int(status['config.active_revision']),
         source=label+'-source.conf',query=label+'-apply.txt',scenario=scenario,mode=mode,protocol=protocol))
+    cli(label+'-index', 'show product policy-index', 'show runtime', 'show memory')
     return status
 
 class Client:
@@ -184,7 +187,7 @@ class Client:
         if not receive_only:assert self.read()['kind']=='sent'
         answer=self.read();assert (answer['kind']=='received' and bytes.fromhex(answer['data']).decode()==nonce)==delivered,answer
         time.sleep(.1);drain(label+'-drain')
-        queried=api(label+'-query','rule-query');cli(label+'-flow','show product flows')
+        queried=api(label+'-query','rule-query');cli(label+'-flow','show product flows', 'show product policy-index', 'show runtime')
         result['cases'].append(dict(label=label,client=self.label,protocol=self.protocol,port=self.port,nonce=nonce,
             delivered=delivered,receive_only=receive_only,revision=int(status['config.active_revision']),
             before=label+'-before.txt',query=label+'-query.txt',response=answer))
@@ -246,6 +249,7 @@ try:
     # may wait for a worker barrier and must not be part of the race trigger.
     response=client.read();assert response['kind']=='timeout',response
     status=api('race-new-observe-apply','rule-query')
+    cli('race-new-observe-index', 'show product policy-index', 'show runtime', 'show memory')
     (output/'race-new-observe-source.conf').write_bytes((config_dir/'rules.conf').read_bytes())
     result['configurations'].append(dict(label='race-new-observe',revision=int(status['config.active_revision']),
         source='race-new-observe-source.conf',query='race-new-observe-apply.txt',scenario='early-drop',mode=1,protocol=17))
@@ -253,7 +257,7 @@ try:
     result['race']=dict(nonce=nonce,old_revision=old_revision,new_revision=int(status['config.active_revision']),
                         response=answer,port=43300)
     client.exchange('race-new-packet',status);client.close()
-    cli('final-flow','show product flows');api('final-query','rule-query')
+    cli('final-flow','show product flows', 'show product policy-index', 'show runtime');api('final-query','rule-query')
     stop('first');result['status']='RAW_COMPLETE';result['process_absent']=True
 finally:
     for client in clients:

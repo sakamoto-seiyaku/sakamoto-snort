@@ -160,6 +160,10 @@ typedef struct
   uint32_t view_active;
   uint32_t view_rule_count;
   uint32_t view_max_probes;
+  uint32_t index_subtables;
+  uint32_t index_entries;
+  uint32_t index_storage_bytes;
+  uint32_t index_max_query_work;
   uint32_t last_match_winner_rank;
   uint32_t last_match_probes;
   uint32_t last_match_candidate_count;

@@ -177,7 +177,7 @@ test_four_family_protocols (void)
                             ? PRODUCT_L4_POLICY_VERDICT_DROP
                             : PRODUCT_L4_POLICY_VERDICT_PASS_NEXT,
                           "each family/protocol pair must match its subject");
-      CHECK (result.probes == 1 && result.probe_limit == 1,
+      CHECK (result.probes <= 1 && result.probe_limit == 1,
              "one-rule subject must expose one bounded candidate probe");
     }
 }
@@ -449,7 +449,7 @@ test_unsupported_and_unavailable (void)
   check_result_match (&result, 702, 2, PRODUCT_L4_POLICY_ACTION_DROP,
                       PRODUCT_L4_POLICY_VERDICT_DROP,
                       "unavailable ports must skip only port-dependent rules");
-  CHECK (result.probes == 2 && result.probe_limit == 2,
+  CHECK (result.probes <= 2 && result.probe_limit == 2,
          "unavailable ports must retain a bounded candidate scan");
 
   port_only = rules[0];
@@ -459,7 +459,7 @@ test_unsupported_and_unavailable (void)
   result = match (&view, &packet);
   check_no_match (&result, PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE,
                   "port-only rule must no-match when ports are unavailable");
-  CHECK (result.probes == 1 && result.probe_limit == 1,
+  CHECK (result.probes <= 1 && result.probe_limit == 1,
          "port-only unavailable lookup must remain bounded and observable");
 
   rules[1] = rule_template (703, 17, PRODUCT_L4_POLICY_FAMILY_IPV4,
@@ -616,8 +616,8 @@ test_bounded_probes_and_capacity (void)
                             PRODUCT_L4_POLICY_PROTOCOL_UDP, 10, 20);
   packet.protocol = PRODUCT_L4_POLICY_PROTOCOL_TCP;
   result = match (&view, &packet);
-  CHECK (result.probes == PRODUCT_L4_POLICY_MAX_PROBES,
-         "winner lookup must never exceed maximum candidate probes");
+  CHECK (result.probes == 0,
+         "same-mask miss rejects the subtable without residual candidate checks");
   CHECK (result.probe_limit == PRODUCT_L4_POLICY_MAX_PROBES,
          "winner lookup must expose the applicable probe limit");
 

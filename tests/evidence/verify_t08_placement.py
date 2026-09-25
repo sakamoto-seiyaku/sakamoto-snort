@@ -42,6 +42,17 @@ def records(text, prefix):
             for index, line in enumerate(text.splitlines()) if line.startswith(prefix)]
 
 
+def claimed_probe_tokens(text, run, profile='root'):
+    """Select only the representative endpoint traffic, excluding port reuse."""
+    pixel='serial' in run
+    ports={str(case['port']) for case in run['cases'] if case.get('profile','root')==profile}
+    return {row['token'] for _,row in records(text,'s216 stage=admit ')
+            if row.get('uid')==str(run['uid'] if pixel else 12001)
+            and ((row.get('src_port') in ports and row.get('dst_port')=='40610')
+                 or (row.get('dst_port') in ports and row.get('src_port')=='40610'))
+            and row.get('protocol') in (('6',) if pixel else ('6','17'))}
+
+
 def one(rows, **identity):
     selected = [(index, row) for index, row in rows
                 if all(row.get(key) == str(value) for key, value in identity.items())]
@@ -235,18 +246,23 @@ def query_observation(query, pixel, trace):
     assert wanted[:5] == (0,0,0,0,0), 'query winner/action/counters lack a matching packet prefix'
 
 
-def unchanged_flow_query(directory, before, after, port):
+def unchanged_flow_query(directory, before, after, port, protocol=6, uid=None):
     """True early DROP preserves existing entry, tracker and expiry deadline."""
     def selected(name):
         text=(directory/name).read_text()
         entries=[row for _,row in records(text,'flow.entry ')
-                 if str(port) in (row['port_a'],row['port_b'])]
+                 if {str(port),'40610'} == {row['port_a'],row['port_b']}
+                 and row['protocol']==str(protocol) and (uid is None or row['uid']==str(uid))]
         assert len(entries)==1, 'authoritative existing Flow query'
         entry=entries[0]
         other={prefix: [row for _,row in records(text,prefix)
                        if row['worker']==entry['worker'] and row['slot']==entry['slot']]
                for prefix in ('flow.timer ','flow.tcp ')}
         assert len(other['flow.timer '])==1
+        # Other live flows may reorder the shared timer heap. Deadline, timeout
+        # and incarnation must stay fixed; the internal array position need not.
+        other['flow.timer ']=[{k:value for k,value in row.items() if k!='heap_position'}
+                              for row in other['flow.timer ']]
         return entry,other
     assert selected(before)==selected(after), 'early DROP changed Flow/CT/activity/expiry/attribution'
 
@@ -257,9 +273,9 @@ def verify(directory):
     pixel = 'serial' in run
     run['baseline'] = run['source_sha256'] == '6f129ee294adae922746ebbbe5cad78b19a3cfde49dbcf48a314aae519382930'
     assert run['status'] == 'RAW_COMPLETE' and run['process_absent'] and not run.get('error') and not run.get('cleanup_error')
-    if run.get('baseline'):
+    if run.get('baseline') or run['source_sha256'] == '43bae86c42a14f1c6370338cd3896a5dc906f1b922b5a3de7440adbc37872133':
         build_path=Path(run['build']);build=json.loads(build_path.read_text())
-        assert build['source_sha256']=='6f129ee294adae922746ebbbe5cad78b19a3cfde49dbcf48a314aae519382930', 'pinned T07 comparator'
+        assert build['source_sha256']==run['source_sha256'], 'pinned T07/T08 comparator'
         assert hashlib.sha256(json.dumps(build['files'],sort_keys=True,separators=(',',':')).encode()).hexdigest()==build['source_sha256']
         for name,expected in build['files'].items():
             if expected is not None: assert digest(build_path.parent/'source'/name)==expected
@@ -331,7 +347,7 @@ def verify(directory):
                     if case['label'].endswith('early-drop') and not run.get('baseline'):
                         assert session['early_drops']>0
                         unchanged_flow_query(directory,case['label']+'-initial-flow.txt',
-                                             case['label']+'-blocked-flow.txt',case['port'])
+                                             case['label']+'-blocked-flow.txt',case['port'],6,run['uid'])
                     first = json.loads((directory/(case['label']+'-first_echo.json')).read_text())
                     blocked = json.loads((directory/(case['label']+'-return_timeout.json')).read_text())
                     assert first['echoes'] == blocked['echoes'] == 1 and blocked['timeouts'] >= 1
@@ -391,7 +407,7 @@ def verify(directory):
         assert all(next(s for s in sessions.values() if s['source_port']==port)['early_drops']>0 for port in (43101,43201,43300))
         for protocol,port in [('tcp',43101),('udp',43201)]:
             unchanged_flow_query(directory,protocol+'-early-drop-initial-flow.txt',
-                                 protocol+'-early-drop-blocked-flow.txt',port)
+                                 protocol+'-early-drop-blocked-flow.txt',port,6 if protocol=='tcp' else 17,12001)
         for port in (43102, 43202):
             session = next(s for s in sessions.values() if s['source_port'] == port)
             assert session['drops'] == 0

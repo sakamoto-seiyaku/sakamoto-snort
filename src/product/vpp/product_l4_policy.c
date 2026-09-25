@@ -256,6 +256,109 @@ place_rules (product_l4_policy_view_t *view)
     }
 }
 
+/* Canonical network-order bytes avoid padding, alignment and host-endian keys.
+ * Interval common prefixes are supersets: complete residual checks decide. */
+static void
+index_bounds (const static_envelope_t *e, uint8_t *low, uint8_t *high)
+{
+  for (unsigned i = 0; i < ENVELOPE_AXES; ++i)
+    {
+      low[2*i] = (uint8_t) (e->low[i] >> 8);
+      low[2*i+1] = (uint8_t) e->low[i];
+      high[2*i] = (uint8_t) (e->high[i] >> 8);
+      high[2*i+1] = (uint8_t) e->high[i];
+    }
+  memcpy (low + 10, e->address_low, 32);
+  memcpy (high + 10, e->address_high, 32);
+}
+
+static unsigned
+index_hash (const uint8_t *key)
+{
+  uint32_t hash = UINT32_C (2166136261);
+  for (unsigned i = 0; i < PRODUCT_L4_INDEX_KEY_BYTES; ++i)
+    hash = (hash ^ key[i]) * UINT32_C (16777619);
+  return hash % PRODUCT_L4_INDEX_SLOTS;
+}
+
+static void
+index_mask (const static_envelope_t *e, uint8_t *mask, uint8_t *key)
+{
+  uint8_t low[PRODUCT_L4_INDEX_KEY_BYTES], high[PRODUCT_L4_INDEX_KEY_BYTES];
+  index_bounds (e, low, high);
+  /* Each numeric axis/address has its own interval prefix. */
+  for (unsigned field = 0; field < 7; ++field)
+    {
+      unsigned start = field < 5 ? field * 2 : 10 + (field - 5) * 16;
+      unsigned length = field < 5 ? 2 : 16;
+      int differing = e->empty;
+      for (unsigned i = start; i < start + length; ++i)
+        {
+          uint8_t m = 0;
+          for (unsigned bit = 128; bit; bit >>= 1)
+            {
+              differing |= (low[i] & bit) != (high[i] & bit);
+              if (!differing) m |= (uint8_t) bit;
+            }
+          mask[i] = m;
+          key[i] = low[i] & m;
+        }
+    }
+}
+
+static void
+build_index (product_l4_policy_view_t *view)
+{
+  /* Reverse insertion yields complete-Rank ordered collision chains. Subtable
+   * physical order intentionally differs from precedence. */
+  for (unsigned subject = 0; subject < view->uid_bucket_count; ++subject)
+    {
+      const product_l4_policy_uid_bucket_t *bucket = &view->uid_buckets[subject];
+      for (unsigned n = bucket->rule_count; n; --n)
+        {
+          unsigned rule = bucket->first_rule + n - 1;
+          uint8_t mask[PRODUCT_L4_INDEX_KEY_BYTES];
+          static_envelope_t e = rule_envelope (&view->rules[rule].source);
+          product_l4_policy_index_entry_t *entry = &view->entries[rule];
+          index_mask (&e, mask, entry->key);
+          unsigned table = 0;
+          while (table < view->subtable_count
+                 && (view->subtables[table].subject != subject
+                     || memcmp (view->subtables[table].mask, mask, sizeof mask)))
+            ++table;
+          product_l4_policy_subtable_t *t = &view->subtables[table];
+          if (table == view->subtable_count)
+            {
+              ++view->subtable_count;
+              memcpy (t->mask, mask, sizeof mask);
+              t->subject = (uint16_t) subject;
+              for (unsigned h = 0; h < PRODUCT_L4_INDEX_SLOTS; ++h)
+                t->heads[h] = PRODUCT_L4_INDEX_NONE;
+            }
+          t->first_rank = (uint16_t) view->rules[rule].winner_rank;
+          unsigned slot = index_hash (entry->key);
+          entry->next = t->heads[slot];
+          t->heads[slot] = (uint16_t) rule;
+        }
+    }
+}
+
+void
+product_l4_policy_index_resources (const product_l4_policy_view_t *view,
+                                   product_l4_policy_index_resources_t *resources)
+{
+  if (!resources) return;
+  memset (resources, 0, sizeof *resources);
+  if (!view) return;
+  resources->subtables = view->subtable_count;
+  resources->entries = view->rule_count;
+  resources->storage_bytes = sizeof *view;
+  /* Subject binary search + all table inspections + all chained keys + all
+   * complete residuals. No query truncation or partial-best return. */
+  resources->max_query_work = PRODUCT_L4_POLICY_MAX_SUBJECT_PROBES
+    + view->subtable_count + 2 * view->max_probes;
+}
+
 static void
 insert_compiled_rule (product_l4_policy_view_t *view,
                       const product_l4_policy_rule_t *rule)
@@ -336,6 +439,7 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
       bucket_index++;
     }
   view->uid_bucket_count = bucket_index;
+  build_index (view);
   return PRODUCT_L4_POLICY_STATUS_OK;
 }
 
@@ -622,15 +726,37 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
 
   result->candidate_count = bucket->rule_count;
   result->probe_limit = bucket->rule_count;
-  for (index = 0; index < bucket->rule_count; index++)
+  uint8_t packet_key[PRODUCT_L4_INDEX_KEY_BYTES], unused[PRODUCT_L4_INDEX_KEY_BYTES];
+  static_envelope_t values = envelope_any ();
+  values.low[ENVELOPE_FAMILY] = packet->family;
+  values.low[ENVELOPE_PROTOCOL] = packet->protocol;
+  values.low[ENVELOPE_DIRECTION] = packet->direction;
+  values.low[ENVELOPE_SOURCE_PORT] = packet->source_port;
+  values.low[ENVELOPE_DESTINATION_PORT] = packet->destination_port;
+  memcpy (values.address_low[0], packet->source_address, 16);
+  memcpy (values.address_low[1], packet->destination_address, 16);
+  index_bounds (&values, packet_key, unused);
+  unsigned best = UINT32_MAX;
+  for (index = 0; index < view->subtable_count; ++index)
     {
-      const product_l4_policy_compiled_rule_t *compiled =
-        &view->rules[bucket->first_rule + index];
-      if (position && compiled->position != position) continue;
-      result->probes++;
-      if (rule_matches (&compiled->source, packet)
-          && expression_matches (&compiled->source, packet))
+      const product_l4_policy_subtable_t *table = &view->subtables[index];
+      ++result->subtable_probes;
+      if (table->subject != (unsigned) (bucket - view->uid_buckets)
+          || table->first_rank >= best) continue;
+      uint8_t key[PRODUCT_L4_INDEX_KEY_BYTES];
+      for (unsigned i = 0; i < sizeof key; ++i) key[i] = packet_key[i] & table->mask[i];
+      for (unsigned entry = table->heads[index_hash (key)];
+           entry != PRODUCT_L4_INDEX_NONE; entry = view->entries[entry].next)
         {
+          const product_l4_policy_compiled_rule_t *compiled = &view->rules[entry];
+          if (compiled->winner_rank >= best) break;
+          ++result->key_probes;
+          if ((position && compiled->position != position)
+              || memcmp (key, view->entries[entry].key, sizeof key)) continue;
+          ++result->probes;
+          if (!rule_matches (&compiled->source, packet)
+              || !expression_matches (&compiled->source, packet)) continue;
+          best = compiled->winner_rank;
           result->evaluation = PRODUCT_L4_POLICY_EVALUATION_MATCH;
           result->action = compiled->source.action;
           result->mode = compiled->source.mode;
@@ -645,9 +771,11 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
           result->priority = compiled->source.priority;
           result->order = compiled->source.order;
           result->winner_rank = compiled->winner_rank;
-          return PRODUCT_L4_POLICY_STATUS_OK;
+          break;
         }
     }
+  if (result->evaluation == PRODUCT_L4_POLICY_EVALUATION_MATCH)
+    return PRODUCT_L4_POLICY_STATUS_OK;
   result->no_match_reason = packet->ports_available
                               ? PRODUCT_L4_POLICY_NO_MATCH_NO_RULE
                               : PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE;

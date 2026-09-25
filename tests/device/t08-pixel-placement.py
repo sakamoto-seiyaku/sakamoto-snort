@@ -17,6 +17,7 @@ SERIAL = None
 BASE = '/data/user/0/'+PKG+'/files/profiles/root/vpp'
 p = argparse.ArgumentParser()
 p.add_argument('--serial')
+p.add_argument('--allow-downgrade', action='store_true', help='Permit the pinned debug baseline APK')
 p.add_argument('--serial-from',type=Path)
 p.add_argument('--endpoint',default='192.168.4.5')
 p.add_argument('--build', type=Path, required=True)
@@ -161,6 +162,7 @@ def configure(label,prior,scenario,mode=0):
     result.setdefault('configurations',[]).append(dict(label=label,profile=result['lifetimes'][-1]['profile'],
         revision=int(status['activeRevision']),source=label+'-source.conf',query=label+'-apply.properties',
         scenario=scenario,mode=mode,protocol=6))
+    cli(label+'-index', 'show product policy-index', 'show runtime', 'show memory')
     return status
 
 def launch(label,profile,port,mode='policy'):
@@ -211,7 +213,7 @@ def finished(case):
 try:
     before=state();assert before.get('state')=='stopped' and before.get('mayBeActive')=='false',before
     assert digest(build['apk'])==build['apk_sha256']
-    save('install.txt',adb('install','-r',build['apk'],timeout=60))
+    save('install.txt',adb('install','-r',*(['-d'] if args.allow_downgrade else []),build['apk'],timeout=60))
     package=save('package.txt',adb('shell','dumpsys','package',PKG));native=re.search(r'codePath=(\S+)',package)[1]+'/lib/arm64'
     installed=save('installed-native.txt',adb('shell','sha256sum',*[native+'/'+n for n in sorted(build['native_sha256'])]))
     assert {Path(line.split()[1]).name:line.split()[0] for line in installed.splitlines()}==build['native_sha256']
@@ -241,12 +243,12 @@ try:
             case['initial_revision']=int(status['activeRevision'])
             phase(case,'first_echo')
             case['initial_query']=label+'-initial-query.properties';query(label+'-initial')
-            cli(label+'-initial-flow','show product flows')
+            cli(label+'-initial-flow','show product flows', 'show product policy-index', 'show runtime')
             status=configure(label+'-enforce',status,condition,0)
             case['blocked_revision']=int(status['activeRevision'])
             case['before']=label+'-blocked-before-query.properties';query(label+'-blocked-before')
             release(case);phase(case,'return_timeout')
-            cli(label+'-blocked-flow','show product flows')
+            cli(label+'-blocked-flow','show product flows', 'show product policy-index', 'show runtime')
             case['blocked_query']=label+'-blocked-query.properties';q=query(label+'-blocked')
             assert int(q['actualDrops'])>0,q
             save(label+'-blocked.log',app('files/profiles/'+profile+'/vpp/logs/vpp-stdout.log'))
@@ -254,7 +256,7 @@ try:
             case['recovered_revision']=int(status['activeRevision'])
             finished(case)
             case['query']=label+'-recovered-query.properties';query(label+'-recovered')
-            cli(label+'-recovered-flow','show product flows')
+            cli(label+'-recovered-flow','show product flows', 'show product policy-index', 'show runtime')
         status=configure(profile+'-static-first',status,'static-first')
         case=launch(profile+'-static-first',profile,baseport+2,'fin')
         case['initial_revision']=int(status['activeRevision']);finished(case)

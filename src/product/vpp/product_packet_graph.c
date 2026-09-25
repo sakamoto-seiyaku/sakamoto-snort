@@ -2892,6 +2892,9 @@ product_packet_graph_l4_view_evaluate (
 {
   product_l4_policy_packet_t packet;
   product_l4_policy_view_t empty_view;
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  u64 query_started = snapshot->trace ? product_packet_event_clock_ns () : 0;
+#endif
   product_packet_graph_l4_packet_projection (lease, &packet);
   packet.ct_state = snapshot->ct.state;
   packet.ct_state_known = snapshot->ct.state != PRODUCT_CT_UNKNOWN;
@@ -2902,7 +2905,20 @@ product_packet_graph_l4_view_evaluate (
       product_l4_policy_init (&empty_view);
       return product_l4_policy_evaluate (&empty_view, &packet, match);
     }
-  return product_l4_policy_match_position (&snapshot->bank->view, &packet, snapshot->position, match);
+  product_l4_policy_status_t status = product_l4_policy_match_position (
+    &snapshot->bank->view, &packet, snapshot->position, match);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  if (snapshot->trace)
+    fprintf (stderr, "t09 event=query token=%llu generation=%llu revision=%llu snapshot_hash=%llu position=%u status=%u rule=%llu rank=%u masks=%u keys=%u residuals=%u subject_probes=%u query_ns=%llu\n",
+      (unsigned long long) lease->origin_obligation_id,
+      (unsigned long long) snapshot->identity.generation,
+      (unsigned long long) snapshot->identity.revision,
+      (unsigned long long) snapshot->bank->snapshot_hash, snapshot->position, status,
+      (unsigned long long) match->rule_id, match->winner_rank,
+      match->subtable_probes, match->key_probes, match->probes, match->subject_probes,
+      (unsigned long long) (product_packet_event_clock_ns () - query_started));
+#endif
+  return status;
 }
 
 static void
@@ -3527,6 +3543,12 @@ product_packet_graph_l4_status (product_packet_graph_l4_status_t *status)
       status->snapshot_hash = snapshot.bank->snapshot_hash;
       status->view_rule_count = snapshot.bank->view.rule_count;
       status->view_max_probes = snapshot.bank->view.max_probes;
+      product_l4_policy_index_resources_t resources;
+      product_l4_policy_index_resources (&snapshot.bank->view, &resources);
+      status->index_subtables = resources.subtables;
+      status->index_entries = resources.entries;
+      status->index_storage_bytes = resources.storage_bytes;
+      status->index_max_query_work = resources.max_query_work;
       product_policy_snapshot_release (graph, &snapshot);
       /* A multi-rule view has no single active rule identity. */
       if (status->view_rule_count != 1)
@@ -4033,6 +4055,25 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
 }
 VLIB_CLI_COMMAND (product_flow_status_command, static) = {
   .path = "show product flows", .function = product_flow_status_cli,
+};
+
+static clib_error_t *
+product_policy_index_cli (vlib_main_t *vm, unformat_input_t *input,
+                           vlib_cli_command_t *command)
+{
+  (void) input; (void) command;
+  product_packet_graph_l4_status_t status;
+  product_packet_graph_l4_status (&status);
+  vlib_cli_output (vm, "policy.index generation=%llu revision=%llu hash=%llu masks=%u entries=%u view_bytes=%u max_query_work=%u",
+    (unsigned long long) status.active_generation,
+    (unsigned long long) status.active_revision,
+    (unsigned long long) status.snapshot_hash,
+    status.index_subtables, status.index_entries, status.index_storage_bytes,
+    status.index_max_query_work);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_policy_index_command, static) = {
+  .path = "show product policy-index", .function = product_policy_index_cli,
 };
 
 static clib_error_t *

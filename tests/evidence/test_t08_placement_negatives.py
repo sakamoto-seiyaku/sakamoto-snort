@@ -18,7 +18,7 @@ rejected = []
 faults = ['process', 'artifact', 'runtime_generation', 'winner', 'rank', 'mode', 'actual_action',
           'ct_fact', 'flow_direction', 'missing_observation', 'flow_identity', 'observation_count',
           'source_expression', 'query_winner', 'query_hits', 'endpoint', 'completion', 'cleanup',
-          'placement', 'platform_witness', 'early_flow_touch', 'early_flow_query']
+          'placement', 'platform_witness', 'early_flow_touch', 'early_flow_query', 'early_timer_deadline']
 for fault in faults:
     with tempfile.TemporaryDirectory(prefix='t08-negative-') as temporary:
         target = Path(temporary)/'run'
@@ -26,6 +26,10 @@ for fault in faults:
         path = target/'result.json'; run = json.loads(path.read_text()); pixel = 'serial' in run
         trace = target/('root-stop.log' if pixel else 'first-vpp.log')
         text = trace.read_text()
+        tokens=verifier.claimed_probe_tokens(text,run)
+        def claimed(line):
+            token=re.search(r'\btoken=(\d+)',line)
+            return token and token.group(1) in tokens
         if fault == 'process':
             run['process_absent'] = False
         elif fault == 'artifact':
@@ -34,7 +38,7 @@ for fault in faults:
             if pixel: run['lifetimes'][0]['generation'] += 1
             else: run['generation'] += 1
         elif fault in ('winner', 'rank', 'mode', 'actual_action', 'ct_fact', 'flow_direction'):
-            line = next(line for line in text.splitlines() if line.startswith('s209 event=l4 ') and 'actual_action=2 ' in line)
+            line = next(line for line in text.splitlines() if line.startswith('s209 event=l4 ') and claimed(line) and 'actual_action=2 ' in line)
             key, value = {'winner': ('rule', 999), 'rank': ('rank', 9), 'mode': ('mode', 1),
                           'actual_action': ('actual_action', 1), 'ct_fact': ('ct_state', 1),
                           'flow_direction': ('flow_dir', 0)}[fault]
@@ -42,11 +46,11 @@ for fault in faults:
             assert altered != line
             text = text.replace(line, altered, 1)
         elif fault in ('missing_observation', 'observation_count'):
-            line = next(line for line in text.splitlines() if line.startswith('s208 event=observe '))
+            line = next(line for line in text.splitlines() if line.startswith('s208 event=observe ') and claimed(line))
             altered = '' if fault == 'missing_observation' else re.sub(r'\bpackets=\d+', 'packets=999', line)
             text = text.replace(line, altered, 1)
         elif fault == 'flow_identity':
-            line = next(line for line in text.splitlines() if line.startswith('s222 event=tcp_update '))
+            line = next(line for line in text.splitlines() if line.startswith('s222 event=tcp_update ') and claimed(line))
             text = text.replace(line, re.sub(r'\bincarnation=\d+', 'incarnation=999', line), 1)
         elif fault == 'source_expression':
             source = target/run['configurations'][0]['source']; raw = bytearray(source.read_bytes())
@@ -64,24 +68,25 @@ for fault in faults:
             index = next(i for i, line in enumerate(lines) if json.loads(line)['kind'] == 'tcp_recv')
             del lines[index]; endpoint.write_text('\n'.join(lines)+'\n')
         elif fault == 'completion':
-            line = next(line for line in text.splitlines() if line.startswith('s242 event=verdict_syscall ') and 'verdict=0 ' in line)
+            line = next(line for line in text.splitlines() if line.startswith('s242 event=verdict_syscall ') and claimed(line) and 'verdict=0 ' in line)
             text = text.replace(line, line.replace('verdict=0 ', 'verdict=1 '), 1)
         elif fault == 'cleanup':
             line = next(line for line in text.splitlines() if line.startswith('s242 event=stop_native_zero '))
             text = text.replace(line, line.replace('pending=0 ', 'pending=1 '), 1)
         elif fault == 'placement':
             lines = text.splitlines()
-            index = next(i for i, line in enumerate(lines) if line.startswith('s209 event=l4 '))
+            index = next(i for i, line in enumerate(lines) if line.startswith('s209 event=l4 ') and claimed(line))
             line = lines.pop(index)
-            index = next(i for i, line in enumerate(lines) if line.startswith('s208 event=observe '))
+            index = next(i for i, line in enumerate(lines) if line.startswith('s208 event=observe ') and claimed(line))
             lines.insert(index, line); text = '\n'.join(lines)+'\n'
-        elif fault == 'early_flow_query':
+        elif fault in ('early_flow_query','early_timer_deadline'):
             query=target/('root-early-drop-blocked-flow.txt' if pixel else 'tcp-early-drop-blocked-flow.txt')
-            query.write_text(re.sub(r'last_seen=\d+','last_seen=999999999',query.read_text()))
+            field='last_seen' if fault=='early_flow_query' else 'deadline_us'
+            query.write_text(re.sub(field+r'=\d+',field+'=999999999',query.read_text()))
         elif fault == 'early_flow_touch':
-            match=next(line for line in text.splitlines() if line.startswith('s209 event=l4 ') and 'actual_action=2 ' in line and 'position=1 ' in line)
+            match=next(line for line in text.splitlines() if line.startswith('s209 event=l4 ') and claimed(line) and 'actual_action=2 ' in line and 'position=1 ' in line)
             token=re.search(r'\btoken=(\d+)',match)[1]
-            flow=next(line for line in text.splitlines() if line.startswith('s208 event=observe '))
+            flow=next(line for line in text.splitlines() if line.startswith('s208 event=observe ') and claimed(line))
             flow=re.sub(r'\btoken=\d+','token='+token,flow)
             text+='\n'+flow+'\n'
         elif pixel:
