@@ -228,6 +228,7 @@ typedef struct
   u32 sequence;
   u32 trace;
   u32 hold_us;
+  product_ct_facts_t ct; /* Packet-local result; not stored in the immutable bank. */
 } product_policy_snapshot_t;
 
 typedef struct
@@ -442,6 +443,7 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
                                __ATOMIC_SEQ_CST);
           continue;
         }
+      snapshot->ct = (product_ct_facts_t) {0};
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
       snapshot->sequence = sequence;
@@ -482,7 +484,8 @@ static void product_packet_graph_flow_pools_flush (
   product_packet_graph_main_t *graph);
 static void product_packet_graph_flow_observe (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
-  const product_packet_graph_policy_evaluation_t *evaluation, int trace);
+  const product_packet_graph_policy_evaluation_t *evaluation, int trace,
+  product_flow_entry_observation_t *observed);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static int product_fragment_dispatch (vlib_main_t *, vlib_node_runtime_t *,
                                       u32, const product_buffer_metadata_t *);
@@ -2540,10 +2543,52 @@ product_packet_graph_l4_packet_projection (
     }
 }
 
+static const char *
+product_packet_graph_flow_failure (product_packet_lease_t *lease, u16 worker,
+                                   product_flow_entry_status_t status)
+{
+  if (status != PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
+      && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER
+      && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION)
+    product_packet_graph_main.flow_mutation_errors[worker]++;
+  if (status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
+      && product_packet_bypass_flow_capacity (lease) == PRODUCT_PACKET_OK)
+    return "capacity_bypass";
+  if (lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+    {
+      lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+      lease->terminal_count = 1;
+      lease->runtime_drop_reason = PRODUCT_PACKET_DROP_FLOW_MUTATION;
+    }
+  return "runtime_drop";
+}
+
+/* Both placements record the complete decision under the packet's identity;
+ * unexpected recording failure keeps the existing runtime-failure contract. */
+static product_flow_entry_status_t
+product_packet_graph_flow_record_decision (
+  product_flow_runtime_t *pool, const product_flow_entry_t *entry,
+  const product_packet_graph_policy_evaluation_t *evaluation,
+  product_packet_lease_t *lease, u16 worker)
+{
+  product_flow_policy_identity_t identity = {
+    evaluation->generation, evaluation->revision, evaluation->snapshot_hash
+  };
+  product_flow_entry_status_t status = product_flow_entry_set_decision (
+    pool, entry, &identity,
+    evaluation->verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP
+      ? PRODUCT_FLOW_ENTRY_DECISION_DROP : PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,
+    evaluation->rule_id, evaluation->reason_id);
+  if (status != PRODUCT_FLOW_ENTRY_STATUS_OK)
+    (void) product_packet_graph_flow_failure (lease, worker, status);
+  return status;
+}
+
 static void
 product_packet_graph_flow_observe (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
-  const product_packet_graph_policy_evaluation_t *evaluation, int trace)
+  const product_packet_graph_policy_evaluation_t *evaluation, int trace,
+  product_flow_entry_observation_t *observed)
 {
   if (!vm || !lease || !evaluation || vm->thread_index == 0
       || vm->thread_index > PRODUCT_GRAPH_WORKERS || evaluation->terminal_preserved
@@ -2585,34 +2630,18 @@ product_packet_graph_flow_observe (
     {
       /* Revision zero is the existing bootstrap default-pass view. It creates
        * flow facts but no cached policy decision before the first snapshot. */
-      if (entry && packet.policy.revision != 0)
-        status = product_flow_entry_set_decision (
-          pool, entry, &packet.policy, PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT,
-          evaluation->rule_id, evaluation->reason_id);
-
-    }
-  else if (status == PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP)
-    {
-      event = "early_drop";
-    }
-  if (status != PRODUCT_FLOW_ENTRY_STATUS_OK
-      && status != PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP)
-    {
-      event = "runtime_drop";
-      if (status != PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
-          && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_OWNER
-          && status != PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION)
-        product_packet_graph_main.flow_mutation_errors[worker]++;
-      if (status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED
-          && product_packet_bypass_flow_capacity (lease) == PRODUCT_PACKET_OK)
-        event = "capacity_bypass";
-      else if (lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+      if (observed) *observed = observation;
+      if (!observed && entry && packet.policy.revision != 0)
         {
-          lease->terminal_intent = PRODUCT_PACKET_INTENT_DROP_RUNTIME;
-          lease->terminal_count = 1;
-          lease->runtime_drop_reason = PRODUCT_PACKET_DROP_FLOW_MUTATION;
+          status = product_packet_graph_flow_record_decision (
+            pool, entry, evaluation, lease, worker);
+          if (status != PRODUCT_FLOW_ENTRY_STATUS_OK) event = "runtime_drop";
         }
     }
+  else if (status == PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP)
+    event = "early_drop";
+  else
+    event = product_packet_graph_flow_failure (lease, worker, status);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (trace)
     {
@@ -2862,6 +2891,10 @@ product_packet_graph_l4_view_evaluate (
   product_l4_policy_packet_t packet;
   product_l4_policy_view_t empty_view;
   product_packet_graph_l4_packet_projection (lease, &packet);
+  packet.ct_state = snapshot->ct.state;
+  packet.ct_state_known = snapshot->ct.state != PRODUCT_CT_UNKNOWN;
+  packet.flow_direction = snapshot->ct.direction;
+  packet.flow_direction_known = snapshot->ct.direction != PRODUCT_FLOW_DIRECTION_UNKNOWN;
   if (snapshot->bank->generation != graph->generation)
     {
       product_l4_policy_init (&empty_view);
@@ -3589,12 +3622,12 @@ product_packet_graph_policy_stage_snapshot (
     graph, lease, snapshot, &matched_view);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (snapshot->trace)
-    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mode=%u actual_action=%u candidates=%u rank=%u status=%u mono_ns=%llu\n",
+    fprintf (stderr, "s209 event=l4 token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mode=%u actual_action=%u candidates=%u rank=%u status=%u ct_state=%u flow_dir=%u mono_ns=%llu\n",
       (unsigned long long) lease->origin_obligation_id, vlib_get_thread_index (),
       (unsigned long long) snapshot->identity.generation, (unsigned long long) snapshot->identity.revision,
       (unsigned long long) snapshot->bank->snapshot_hash, (unsigned long long) matched_view.rule_id,
       matched_view.action, matched_view.mode, matched_view.actual_action, matched_view.candidate_count,
-      matched_view.winner_rank, matcher_status, (unsigned long long) product_packet_event_clock_ns ());
+      matched_view.winner_rank, matcher_status, snapshot->ct.state, snapshot->ct.direction, (unsigned long long) product_packet_event_clock_ns ());
 #endif
   clib_atomic_fetch_add_relax (&graph->policy_l4_evaluations, 1);
   evaluation->stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4;
@@ -3692,10 +3725,36 @@ product_packet_graph_policy_on_owner (
       (unsigned long long) snapshot.identity.snapshot_hash, snapshot.bank_index, snapshot.sequence,
       (unsigned long long) product_packet_event_clock_ns ());
 #endif
+  int post_flow = snapshot.bank->generation == graph->generation
+    && (lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
+    && product_l4_policy_requires_flow (&snapshot.bank->view, lease->platform.uid);
+  product_flow_entry_observation_t observation = {0};
+  if (post_flow && lease->policy_owner_ready
+      && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
+    {
+      /* All competing rules move together. This is fact acquisition, not an
+       * early ALLOW winner, and therefore cannot bypass a higher Rank. */
+      product_packet_graph_policy_evaluation_t pending = {
+        .generation = snapshot.identity.generation,
+        .revision = snapshot.identity.revision,
+        .snapshot_hash = snapshot.identity.snapshot_hash,
+        .verdict = PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT,
+      };
+      product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
+      snapshot.ct = observation.tracker.facts;
+    }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
     lease, evaluation, &snapshot);
-  if (result == PRODUCT_PACKET_OK)
-    product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace);
+  if (result == PRODUCT_PACKET_OK && !post_flow)
+    product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, 0);
+  else if (result == PRODUCT_PACKET_OK && observation.entry
+           && !evaluation->terminal_preserved && snapshot.identity.revision)
+    {
+      u16 owner_worker = (u16) vlib_get_worker_index (vm->thread_index);
+      product_flow_runtime_t *pool = graph->flow_pools[owner_worker];
+      (void) product_packet_graph_flow_record_decision (
+        pool, observation.entry, evaluation, lease, owner_worker);
+    }
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
   if (worker)
     {

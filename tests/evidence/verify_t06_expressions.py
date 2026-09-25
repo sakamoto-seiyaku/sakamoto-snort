@@ -34,6 +34,9 @@ def expression(raw):
         elif op==3:stack.append(('not',stack.pop()))
         elif op in (4,5,6):
             stack.append(({4:'family',5:'protocol',6:'direction'}[op],raw[at]));at+=1
+        elif op in (13,14):
+            assert raw[at] in ((1,2,3) if op==13 else (1,2))
+            stack.append(('ct' if op==13 else 'flowdir',raw[at]));at+=1
         elif op in (7,8):
             stack.append(('network' if op==7 else 'interface',struct.unpack_from('<I',raw,at)[0]));at+=4
         elif op in (9,10):

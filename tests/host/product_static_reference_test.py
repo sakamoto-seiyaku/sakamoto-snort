@@ -25,7 +25,7 @@ class Packet(C.Structure):
     _fields_ = [(n, U32) for n in ('uid', 'network_context_id', 'ifindex')] + [
         (n, U16) for n in ('source_port', 'destination_port')] + [(n, U8) for n in (
         'family', 'protocol', 'direction', 'uid_known', 'direction_known', 'network_context_known', 'ifindex_known', 'ports_available')] + [
-        ('source_address', U8*16), ('destination_address', U8*16)]
+        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')]
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
@@ -68,6 +68,8 @@ def encode(expr):
     op, *args = expr
     if op in ('and', 'or', 'not'):
         return b''.join(encode(arg) for arg in args) + bytes([{'and':1, 'or':2, 'not':3}[op]])
+    if op in ('ct', 'flowdir'):
+        return bytes([13 if op == 'ct' else 14, args[0]])
     if op in ('family', 'protocol', 'direction'):
         return bytes([{'family':4, 'protocol':5, 'direction':6}[op], args[0]])
     if op in ('network', 'interface'):
@@ -87,6 +89,8 @@ def packet(facts):
     p.source_port, p.destination_port = facts['sport'] or 0, facts['dport'] or 0
     p.source_address[:] = ipaddress.ip_address(facts['src']).packed.ljust(16, b'\0')
     p.destination_address[:] = ipaddress.ip_address(facts['dst']).packed.ljust(16, b'\0')
+    p.ct_state, p.flow_direction = facts.get("ct") or 0, facts.get("flowdir") or 0
+    p.ct_state_known, p.flow_direction_known = facts.get("ct") is not None, facts.get("flowdir") is not None
     return p
 
 def source(rule):
@@ -102,7 +106,7 @@ def logical(expr, identity=10, priority=1, order=0, action=2, mode=0, uid=17):
     return dict(expr=expr, id=identity, priority=priority, order=order, action=action, mode=mode, uid=uid, reason=identity+100)
 
 BASE = dict(uid=17, family=4, protocol=17, direction=3, network=1, interface=9,
-            src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535)
+            src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535, ct=None, flowdir=None)
 
 def run(lib):
     count = 0
@@ -146,6 +150,21 @@ def run(lib):
         assert logical_truth(expr, facts) is truth
         compare([logical(expr)], facts, 10 if truth is True else 0)
         compare([logical(('not', expr))], facts, 10 if truth is False else 0)
+    # Hand-calibrated CT leaves, independent availability, and mixed Rank.
+    for state in (None, 1, 2, 3):
+        for direction in (None, 1, 2):
+            facts = BASE | dict(ct=state, flowdir=direction)
+            for expr, hit in [(('ct',2),state==2), (('flowdir',2),direction==2),
+                              (('not',('ct',2)),state in (1,3)),
+                              (('or',('ct',2),('family',4)),True)]:
+                compare([logical(expr)],facts,10 if hit else 0)
+            dynamic=logical(('and',('ct',2),('flowdir',2)),priority=1)
+            static=logical(('family',4),identity=11,priority=2,action=1)
+            compare([static,dynamic],facts,10 if state==2 and direction==2 else 11)
+            dynamic['mode']=1
+            compare([static,dynamic],facts,10 if state==2 and direction==2 else 11)
+            static['priority']=0
+            compare([dynamic,static],facts,11)
     # Full three-valued truth tables, including false AND unknown then NOT.
     truths = [False, True, None]
     and_expected = [[False,False,False],[False,True,None],[False,None,None]]
@@ -170,7 +189,7 @@ def run(lib):
     # Deterministic AST generation, independent ordered evaluation, both endpoint
     # orientations and availability values; no compiled plan feeds expectations.
     rng = random.Random(257)
-    leaves = [c[0] for c in cases]
+    leaves = [c[0] for c in cases] + [('ct',1),('ct',2),('ct',3),('flowdir',1),('flowdir',2)]
     def tree(depth):
         if not depth or rng.randrange(3)==0: return rng.choice(leaves)
         op = rng.choice(['and','or','not'])
@@ -182,14 +201,15 @@ def run(lib):
             while len(encode(expr)) > 64: expr = tree(3)
             rules.append(logical(expr, identity=100+j, priority=rng.randrange(3),
                                  order=rng.randrange(3), action=rng.choice([1,2]), mode=rng.randrange(2)))
-        facts = BASE | dict(network=rng.choice([1,2,None]), interface=rng.choice([9,10,None]),
+        facts = BASE | dict(ct=rng.choice([None,1,2,3]),flowdir=rng.choice([None,1,2]),
+                            network=rng.choice([1,2,None]), interface=rng.choice([9,10,None]),
                             direction=rng.choice([1,3,None]), sport=rng.choice([0,1,65534,65535]),
                             dport=rng.choice([0,1,65534,65535]), protocol=rng.choice([6,17]))
         if i%3==0: facts.update(family=6,src='2001:db8::1',dst='2001:db8:1::2')
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06 independent ordered reference: {count} complete winner comparisons PASS')
+    print(f'T06/T07 independent ordered reference: {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

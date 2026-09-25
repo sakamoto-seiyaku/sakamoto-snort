@@ -53,10 +53,12 @@ final class FlowStackTcpProbe {
                 int port = f.getInt("port"), source = f.getInt("source"), size = f.optInt("bytes", 4096);
                 int connectMs = f.optInt("connectTimeoutMs", 15000), chunk = f.optInt("writeChunkBytes", 0);
                 int holdMs = f.optInt("holdTimeoutMs", 20000);
+                int readDeadlineMs = f.optInt("readDeadlineMs", 20000);
                 if (port < 1 || port > 65535 || source < 1024 || source > 65535
                         || size < 256 || size > 32768
                         || connectMs < 100 || connectMs > 15000 || chunk < 0 || chunk > size
                         || holdMs < 1000 || holdMs > 60000
+                        || readDeadlineMs < 1000 || readDeadlineMs > 45000
                         || !Arrays.asList("fin", "rst", "refusal", "failure", "policy", "hold").contains(mode)) return;
             }
         } catch (Exception invalid) { return; }
@@ -88,9 +90,15 @@ final class FlowStackTcpProbe {
                             sockets.set(index, socket);
                             socket.setReuseAddress(true);
                             socket.setTcpNoDelay(true);
-                            socket.bind(new InetSocketAddress(InetAddress.getByName(endpoint.getAddress().length == 4
-                                    ? VpnTunPlatformSession.IPV4_ADDRESS : VpnTunPlatformSession.IPV6_ADDRESS),
-                                    config.getInt("source")));
+                            // Root uses the ordinary route-selected local address; VPN
+                            // retains its existing explicit inner-address binding.
+                            if (config.optBoolean("bindDefault")) {
+                                socket.bind(new InetSocketAddress(config.getInt("source")));
+                            } else {
+                                socket.bind(new InetSocketAddress(InetAddress.getByName(endpoint.getAddress().length == 4
+                                        ? VpnTunPlatformSession.IPV4_ADDRESS : VpnTunPlatformSession.IPV6_ADDRESS),
+                                        config.getInt("source")));
+                            }
                             result.put("local", socket.getLocalSocketAddress().toString());
                             ready.countDown(); announced = true;
                             if (!go.await(6, TimeUnit.SECONDS)) throw new IllegalStateException("start deadline");
@@ -108,7 +116,8 @@ final class FlowStackTcpProbe {
                             try {
                                 socket.connect(new InetSocketAddress(endpoint, config.getInt("port")),
                                         config.optInt("connectTimeoutMs", 15000));
-                                result.put("connectedMs", SystemClock.elapsedRealtime());
+                                result.put("connectedMs", SystemClock.elapsedRealtime())
+                                        .put("local", socket.getLocalSocketAddress().toString());
                                 phase(app, nonce, index, result, "connected");
                                 if (mode.equals("refusal") || mode.equals("failure")) {
                                     socket.setSoTimeout(mode.equals("failure") ? 3000 : 10000);
@@ -144,7 +153,7 @@ final class FlowStackTcpProbe {
                                         }
                                         byte[] response = new byte[request.length];
                                         int received = 0;
-                                        long deadline = SystemClock.elapsedRealtime() + 20000;
+                                        long deadline = SystemClock.elapsedRealtime() + config.optInt("readDeadlineMs", 20000);
                                         while (received < response.length && SystemClock.elapsedRealtime() < deadline) {
                                             try {
                                                 int count = input.read(response, received, response.length - received);

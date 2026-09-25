@@ -91,6 +91,12 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-ct-policy-test
+  tests/host/product_ct_policy_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-ct-policy-test PRIVATE
+  sakamoto_product_l4_policy sakamoto_product_flow_entry)
+target_compile_options(sakamoto-product-ct-policy-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-ct-policy-test COMMAND sakamoto-product-ct-policy-test)
 add_test(NAME sakamoto-product-static-reference-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_static_reference_test.py")
 add_executable(sakamoto-product-rule-config-test

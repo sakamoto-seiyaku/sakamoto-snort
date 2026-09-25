@@ -22,7 +22,8 @@ typedef enum {
   PRODUCT_STATIC_DIRECTION = 6, PRODUCT_STATIC_NETWORK = 7,
   PRODUCT_STATIC_INTERFACE = 8, PRODUCT_STATIC_SOURCE_CIDR = 9,
   PRODUCT_STATIC_DESTINATION_CIDR = 10, PRODUCT_STATIC_SOURCE_PORT = 11,
-  PRODUCT_STATIC_DESTINATION_PORT = 12
+  PRODUCT_STATIC_DESTINATION_PORT = 12,
+  PRODUCT_EXPRESSION_CT_STATE = 13, PRODUCT_EXPRESSION_FLOW_DIRECTION = 14
 } product_static_opcode_t;
 
 #define PRODUCT_L4_POLICY_MAX_RULES UINT32_C (128)
@@ -135,6 +136,10 @@ typedef struct
   uint8_t ports_available;
   uint8_t source_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];
   uint8_t destination_address[PRODUCT_L4_POLICY_ADDRESS_BYTES];
+  uint8_t ct_state; /* NEW=1, ESTABLISHED=2, INVALID=3; not transport state. */
+  uint8_t flow_direction; /* ORIG=1, REPLY=2, independent of device direction. */
+  uint8_t ct_state_known;
+  uint8_t flow_direction_known;
 } product_l4_policy_packet_t;
 
 typedef struct
@@ -148,6 +153,7 @@ typedef struct
   uint32_t uid;
   uint32_t first_rule;
   uint32_t rule_count;
+  uint8_t requires_flow; /* Conservative placement for the complete UID view. */
 } product_l4_policy_uid_bucket_t;
 
 /*
@@ -185,6 +191,9 @@ typedef struct
 } product_l4_policy_match_result_t;
 
 product_l4_policy_status_t product_static_expression_validate (const uint8_t *, uint32_t);
+
+/* Only placement is queried; no partial matching or candidate filtering. */
+int product_l4_policy_requires_flow (const product_l4_policy_view_t *, uint32_t uid);
 
 void product_l4_policy_init (product_l4_policy_view_t *view);
 

@@ -93,6 +93,35 @@ validate_rule (const product_l4_policy_rule_t *rule)
   return product_static_expression_validate (rule->expression, rule->expression_length);
 }
 
+static unsigned
+expression_operand_bytes (unsigned op)
+{
+  if ((op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION)
+      || op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
+    return 1;
+  if (op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE
+      || op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT)
+    return 4;
+  if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
+    return 18;
+  return 0;
+}
+
+/* Validated source only; skip operands so data bytes cannot become dependencies. */
+static int
+expression_requires_flow (const product_l4_policy_rule_t *rule)
+{
+  for (unsigned at = 0; at < rule->expression_length;)
+    {
+      unsigned op = rule->expression[at++];
+      if (op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
+        return 1;
+      if (op <= PRODUCT_STATIC_NOT) continue;
+      at += expression_operand_bytes (op);
+    }
+  return 0;
+}
+
 static void
 insert_compiled_rule (product_l4_policy_view_t *view,
                       const product_l4_policy_rule_t *rule)
@@ -159,6 +188,8 @@ product_l4_policy_compile (product_l4_policy_view_t *view,
              && view->rules[rule_index].source.uid == uid)
         {
           view->rules[rule_index].winner_rank = rank++;
+          view->uid_buckets[bucket_index].requires_flow |=
+            expression_requires_flow (&view->rules[rule_index].source);
           rule_index++;
         }
 
@@ -242,14 +273,13 @@ product_static_expression_validate (const uint8_t *bytes, uint32_t length)
           if (depth > max_depth) max_depth = depth;
           continue;
         }
-      if (op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION) size = 1;
-      else if (op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE || op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT) size = 4;
-      else if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR) size = 18;
-      else return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
-      if (size > length - at)
+      size = expression_operand_bytes (op);
+      if (!size || size > length - at)
         return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
       const uint8_t *arg = bytes + at;
-      if ((op == PRODUCT_STATIC_FAMILY && !supported_family (arg[0]))
+      if ((op == PRODUCT_EXPRESSION_CT_STATE && (arg[0] < 1 || arg[0] > 3))
+          || (op == PRODUCT_EXPRESSION_FLOW_DIRECTION && (arg[0] < 1 || arg[0] > 2))
+          || (op == PRODUCT_STATIC_FAMILY && !supported_family (arg[0]))
           || (op == PRODUCT_STATIC_DIRECTION && arg[0] != 1 && arg[0] != 3)
           || ((op == PRODUCT_STATIC_SOURCE_PORT || op == PRODUCT_STATIC_DESTINATION_PORT)
               && expression_number (arg, 2) > expression_number (arg + 2, 2))
@@ -290,6 +320,14 @@ expression_matches (const product_l4_policy_rule_t *rule,
               value = op == PRODUCT_STATIC_AND ? (left == 0 || right == 0 ? 0 : left == 1 && right == 1 ? 1 : 2)
                               : (left == 1 || right == 1 ? 1 : left == 0 && right == 0 ? 0 : 2);
             }
+        }
+      else if (op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION)
+        {
+          if (op == PRODUCT_EXPRESSION_CT_STATE && packet->ct_state_known)
+            value = packet->ct_state == arg[0];
+          if (op == PRODUCT_EXPRESSION_FLOW_DIRECTION && packet->flow_direction_known)
+            value = packet->flow_direction == arg[0];
+          ++at;
         }
       else if (op <= PRODUCT_STATIC_DIRECTION)
         {
@@ -385,6 +423,15 @@ find_uid_bucket (const product_l4_policy_view_t *view, uint32_t uid,
         high = middle;
     }
   return NULL;
+}
+
+int
+product_l4_policy_requires_flow (const product_l4_policy_view_t *view, uint32_t uid)
+{
+  if (!view || uid == UINT32_MAX) return 0;
+  uint32_t probes = 0;
+  const product_l4_policy_uid_bucket_t *bucket = find_uid_bucket (view, uid, &probes);
+  return bucket && bucket->requires_flow;
 }
 
 static void

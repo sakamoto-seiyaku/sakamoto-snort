@@ -32,7 +32,10 @@ assert '__ATOMIC_SEQ_CST' in publish
 claim=body('product_policy_snapshot_acquire');release=body('product_policy_snapshot_release')
 assert claim.index('__atomic_fetch_add')<claim.index('snapshot->bank =') and '__ATOMIC_SEQ_CST' in claim and '__ATOMIC_SEQ_CST' in release
 owner=body('product_packet_graph_policy_on_owner')
-assert owner.index('product_policy_snapshot_acquire')<owner.index('product_packet_graph_policy_stage_snapshot')<owner.index('product_packet_graph_flow_observe')<owner.index('product_policy_snapshot_release')
+assert owner.index('product_policy_snapshot_acquire') < owner.index('product_packet_graph_flow_observe') < owner.index('product_packet_graph_policy_stage_snapshot') < owner.rindex('product_packet_graph_flow_observe') < owner.index('product_policy_snapshot_release')
+assert 'if (post_flow && lease->policy_owner_ready' in owner
+assert 'result == PRODUCT_PACKET_OK && !post_flow' in owner
+assert 'product_l4_policy_requires_flow' in owner
 stage=body('product_packet_graph_policy_stage_snapshot')
 assert 'product_packet_graph_policy_gate_drop' not in graph
 assert 'product_policy_snapshot_acquire' not in stage and 'policy_publish_sequence' not in stage
