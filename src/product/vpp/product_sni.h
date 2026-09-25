@@ -5,6 +5,8 @@
 #define PRODUCT_SNI_NAME_BYTES 254U
 #define PRODUCT_TCP_CACHE_SIDE_BYTES 4096U
 #define PRODUCT_TCP_CACHE_RANGES 16U
+#define PRODUCT_QUIC_CRYPTO_BYTES 4096U
+#define PRODUCT_QUIC_CRYPTO_RANGES 32U
 #define PRODUCT_SNI_MAX_PACKETS 20U
 #define PRODUCT_SNI_TIMEOUT_US UINT64_C(5000000)
 typedef enum { PRODUCT_SNI_UNAVAILABLE, PRODUCT_SNI_NAME, PRODUCT_SNI_ABSENT } product_sni_result_t;
@@ -23,6 +25,15 @@ typedef struct {
   uint16_t contiguous[2];
   uint8_t started[2], range_count[2];
 } product_tcp_byte_cache_t;
+/* A distinct CRYPTO offset space, never TCP sequence numbers or UDP packets.
+ * The transport tag selects this member of Flow's reserved storage union. */
+typedef struct {
+  uint8_t bytes[PRODUCT_QUIC_CRYPTO_BYTES];
+  struct { uint16_t first, last; } ranges[PRODUCT_QUIC_CRYPTO_RANGES];
+  uint64_t largest_pn;
+  uint16_t length, contiguous;
+  uint8_t dcid[20], dcid_size, direction, anchored, range_count;
+} product_quic_crypto_t;
 typedef struct {
   uint64_t started_us, deadline_us;
   uint32_t bytes, work;

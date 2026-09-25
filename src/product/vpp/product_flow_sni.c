@@ -139,13 +139,20 @@ unsigned product_sni_parse_hello(const uint8_t *p,const product_hello_span_t *sp
   memcpy(s->name,name,sizeof name);
   return PRODUCT_SNI_COMPLETE;
 }
+uint32_t product_flow_sni_retained_bytes(const product_flow_entry_t *entry)
+{
+  if(entry->key.protocol==17) return entry->quic_crypto.length;
+  if(entry->key.protocol==6) return entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1];
+  return 0;
+}
 void product_flow_sni_stop(product_flow_entry_t *entry,unsigned reason)
 {
   if(!entry->sni.stop) entry->sni.stop=(uint8_t)reason;
   entry->sni.deadline_us=0;
   /* Return all logical cache ranges immediately; reserved capacity belongs
    * to the preallocated Flow pool and can never become a parser-slot quota. */
-  memset(&entry->tcp_bytes,0,sizeof entry->tcp_bytes);
+  if(entry->key.protocol==17) memset(&entry->quic_crypto,0,sizeof entry->quic_crypto);
+  else memset(&entry->tcp_bytes,0,sizeof entry->tcp_bytes);
 }
 void product_flow_sni_observe(product_flow_entry_t *entry,
   const product_packet_facts_t *facts,const uint8_t *payload,uint32_t length)

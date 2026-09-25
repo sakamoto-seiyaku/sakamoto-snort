@@ -2660,9 +2660,9 @@ product_packet_graph_flow_observe (
           (unsigned long long)packet.policy.generation, worker, observation.slot,
           (unsigned long long)entry->incarnation, entry->sni.result, entry->sni.stop,
           entry->sni.attempts, entry->sni.bytes, entry->sni.work,
-          entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1],
+          product_flow_sni_retained_bytes(entry),
           entry->sni.result==PRODUCT_SNI_NAME?entry->sni.name:"-");
-      if (trace)
+      if (trace && entry->key.protocol==6)
         fprintf (stderr, "t14 event=tcp_cache token=%llu generation=%llu worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u\n",
           (unsigned long long)lease->origin_obligation_id,
           (unsigned long long)packet.policy.generation, worker, observation.slot,
@@ -2672,6 +2672,14 @@ product_packet_graph_flow_observe (
           entry->tcp_bytes.range_count[0],entry->tcp_bytes.range_count[1],
           entry->tcp_bytes.range_count[0]?entry->tcp_bytes.ranges[0][entry->tcp_bytes.range_count[0]-1].last:0,
           entry->tcp_bytes.range_count[1]?entry->tcp_bytes.ranges[1][entry->tcp_bytes.range_count[1]-1].last:0);
+      if (trace && entry->key.protocol==17)
+        fprintf (stderr, "t16 event=quic_crypto token=%llu generation=%llu worker=%u slot=%u incarnation=%llu retained=%u contiguous=%u ranges=%u span=%u anchored=%u largest_pn=%llu\n",
+          (unsigned long long)lease->origin_obligation_id,
+          (unsigned long long)packet.policy.generation, worker, observation.slot,
+          (unsigned long long)entry->incarnation, entry->quic_crypto.length,
+          entry->quic_crypto.contiguous,entry->quic_crypto.range_count,
+          entry->quic_crypto.range_count?entry->quic_crypto.ranges[entry->quic_crypto.range_count-1].last:0,
+          entry->quic_crypto.anchored,(unsigned long long)entry->quic_crypto.largest_pn);
       if (trace)
         fprintf (stderr, "t12 event=lpi token=%llu generation=%llu worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u status=%u\n",
           (unsigned long long) lease->origin_obligation_id,
@@ -4113,9 +4121,9 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
           vlib_cli_output (vm, "flow.sni worker=%u slot=%u incarnation=%llu result=%u stop=%u attempts=%u bytes=%u work=%u cache_bytes=%u name=%s",
             worker, slot, (unsigned long long)e->incarnation, e->sni.result,
             e->sni.stop, e->sni.attempts, e->sni.bytes, e->sni.work,
-            e->tcp_bytes.length[0]+e->tcp_bytes.length[1],
+            product_flow_sni_retained_bytes(e),
             e->sni.result==PRODUCT_SNI_NAME?e->sni.name:"-");
-          vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
+          if(e->key.protocol==6) vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
             worker, slot, (unsigned long long)e->incarnation,
             e->tcp_bytes.length[0],e->tcp_bytes.length[1],
             e->tcp_bytes.contiguous[0],e->tcp_bytes.contiguous[1],
@@ -4123,6 +4131,12 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             e->tcp_bytes.range_count[0]?e->tcp_bytes.ranges[0][e->tcp_bytes.range_count[0]-1].last:0,
             e->tcp_bytes.range_count[1]?e->tcp_bytes.ranges[1][e->tcp_bytes.range_count[1]-1].last:0,
             (unsigned)sizeof e->tcp_bytes,PRODUCT_TCP_CACHE_RANGES,PRODUCT_TCP_CACHE_SIDE_BYTES);
+          if(e->key.protocol==17) vlib_cli_output (vm, "flow.quic_crypto worker=%u slot=%u incarnation=%llu retained=%u contiguous=%u ranges=%u span=%u anchored=%u largest_pn=%llu reserved=%u range_limit=%u span_limit=%u",
+            worker,slot,(unsigned long long)e->incarnation,e->quic_crypto.length,
+            e->quic_crypto.contiguous,e->quic_crypto.range_count,
+            e->quic_crypto.range_count?e->quic_crypto.ranges[e->quic_crypto.range_count-1].last:0,
+            e->quic_crypto.anchored,(unsigned long long)e->quic_crypto.largest_pn,
+            (unsigned)sizeof e->quic_crypto,PRODUCT_QUIC_CRYPTO_RANGES,PRODUCT_QUIC_CRYPTO_BYTES);
           vlib_cli_output (vm, "flow.lpi worker=%u slot=%u incarnation=%llu available=%u protocols=%llu attempts=%u bytes=%u stop=%u outcome=%u stop_reason=%s",
             worker, slot, (unsigned long long)e->incarnation, e->lpi.available,
             (unsigned long long)e->lpi.protocols, e->lpi.attempts, e->lpi.bytes,
@@ -4547,7 +4561,7 @@ int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
     out->protocols=entry->lpi.protocols;out->protocols_available=entry->lpi.available;
     out->result=entry->sni.result;out->stop=entry->sni.stop;out->attempts=entry->sni.attempts;
     out->bytes=entry->sni.bytes;out->work=entry->sni.work;
-    out->cache_bytes=entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1];
+    out->cache_bytes=product_flow_sni_retained_bytes(entry);
     out->name_length=entry->sni.name_length;memcpy(out->name,entry->sni.name,sizeof out->name);
     rv=0;
   }

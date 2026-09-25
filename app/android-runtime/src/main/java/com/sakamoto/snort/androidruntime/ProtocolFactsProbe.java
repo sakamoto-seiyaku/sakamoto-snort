@@ -400,6 +400,36 @@ final class ProtocolFactsProbe {
                 socket.send(new DatagramPacket(prelude, prelude.length));
                 receiveDatagram(socket, preludeReply);
             }
+            if (plan.has("t16Sequence")) {
+                org.json.JSONArray sequence = plan.getJSONArray("t16Sequence");
+                if (sequence.length() < 1 || sequence.length() > 20)
+                    throw new IllegalArgumentException("QUIC sequence count");
+                org.json.JSONArray replies = new org.json.JSONArray();
+                for (int i = 0; i < sequence.length(); ++i) {
+                    byte[] packet = hex(sequence.getString(i));
+                    if (packet.length < 1200 || packet.length > 4096)
+                        throw new IllegalArgumentException("Initial size");
+                    socket.send(new DatagramPacket(packet, packet.length));
+                    if (plan.optBoolean("rawInitial")) {
+                        socket.setSoTimeout(5000); receiveDatagram(socket, packet);
+                    } else {
+                        socket.setSoTimeout(50);
+                        try {
+                            for (int j = 0; j < 8; ++j) {
+                                DatagramPacket reply = new DatagramPacket(new byte[4096], 4096);
+                                socket.receive(reply);
+                                replies.put(toHex(Arrays.copyOf(reply.getData(), reply.getLength())));
+                            }
+                        } catch (SocketTimeoutException drained) { }
+                    }
+                }
+                result.put("sequenceReplies", replies);
+                if (plan.optBoolean("assemblyTimeout")) {
+                    long began = android.os.SystemClock.elapsedRealtimeNanos();
+                    Thread.sleep(5100);
+                    result.put("timeoutWaitNs", android.os.SystemClock.elapsedRealtimeNanos() - began);
+                }
+            } else {
             byte[] initial = hex(plan.getString("t15InitialHex"));
             socket.send(new DatagramPacket(initial, initial.length));
             boolean initialBlocked = plan.optBoolean("initialBlocked");
@@ -421,8 +451,9 @@ final class ProtocolFactsProbe {
                 try { for (int i = 0; i < 8; ++i) { reply.setLength(4096); socket.receive(reply); } }
                 catch (SocketTimeoutException drained) { }
             }
+            }
             gate(app, nonce, result, "quic_ready");
-            if (plan.optBoolean("policyBlocked") && !initialBlocked) {
+            if (plan.optBoolean("policyBlocked") && !plan.optBoolean("initialBlocked")) {
                 byte[] blocked = ("T15-" + nonce + ":blocked").getBytes(StandardCharsets.US_ASCII);
                 socket.setSoTimeout(1200); socket.send(new DatagramPacket(blocked, blocked.length));
                 try { socket.receive(new DatagramPacket(new byte[4096], 4096));
@@ -459,7 +490,7 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("t15InitialHex")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);

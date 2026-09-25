@@ -75,9 +75,9 @@ def cases():
         wire = protect(crypto(named[cut:],cut)+b'\x01'+crypto(named[:cut]))
         yield f'spans-{cut}', wire, 1, 1, 'example.test'
     for size in range(len(absent)):
-        yield f'incomplete-{size}', protect(crypto(absent[:size])), 0, 11, ''
-    yield 'gap', protect(crypto(named[1:],1)), 0, 11, ''
-    yield 'overlap', protect(crypto(named[:20])+crypto(named[19:],19)), 0, 11, ''
+        yield f'incomplete-{size}', protect(crypto(absent[:size])), 0, 0, ''
+    yield 'gap', protect(crypto(named[1:],1)), 0, 0, ''
+    yield 'overlap', protect(crypto(named[:20])+crypto(named[19:],19)), 1, 1, 'example.test'
     yield 'malformed-hello', protect(crypto(b'\x01\x00\x00\x01\x03')), 0, 2, ''
     yield 'malformed-name', protect(crypto(hello('bad..test'))), 0, 2, ''
     yield 'unknown-frame', protect(crypto(named)+b'\x1f'), 0, 3, ''

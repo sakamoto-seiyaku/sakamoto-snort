@@ -1,5 +1,9 @@
 # T15 QUIC v1 Initial producer
 
+[T16](T16_QUIC_CRYPTO_ASSEMBLY.md) extends the original single-Initial slice
+below with bounded retained CRYPTO assembly. Its incomplete/running, PN,
+coalescing and retained-resource rules supersede those T15 limits.
+
 The existing identity-validated `product_flow_entry_identify` operation accepts
 borrowed UDP payloads and produces the same SNI/name/confirmed-absence contract
 as [T13](T13_TLS_SNI_FACTS.md). QUIC results publish QUIC, never an additional

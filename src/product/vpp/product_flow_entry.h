@@ -125,7 +125,12 @@ typedef struct
   uint8_t timeout_class;
   product_lpi_state_t lpi;
   product_sni_state_t sni;
-  product_tcp_byte_cache_t tcp_bytes;
+  /* key.protocol selects the independent lifetime/offset representation.
+   * Neither transport borrows the other's semantics or adds a parser quota. */
+  union {
+    product_tcp_byte_cache_t tcp_bytes;
+    product_quic_crypto_t quic_crypto;
+  };
   /* The typed key is the protocol tag; every tracker shares this one pool. */
   union {
     product_tcp_state_t tcp;
@@ -253,6 +258,7 @@ product_flow_entry_status_t product_flow_entry_identify (
 
 /* Private owner composition after packet/identity validation. */
 void product_flow_runtime_features_changed (product_flow_runtime_t *, uint32_t);
+uint32_t product_flow_sni_retained_bytes (const product_flow_entry_t *);
 void product_flow_sni_stop (product_flow_entry_t *, unsigned);
 void product_flow_sni_observe (product_flow_entry_t *, const product_packet_facts_t *,
                                const uint8_t *, uint32_t);
