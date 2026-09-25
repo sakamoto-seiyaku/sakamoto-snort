@@ -123,7 +123,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         }
     }
     if (handle && generation > 0 && valid && rule_count <= SAKAMOTO_RULE_CONFIG_MAX_RULES &&
-        (operation == 0 || operation == 2)) {
+        (operation == 0 || operation == 2 || operation == 3)) {
         request.count = rule_count;
         for (unsigned i = 0; i < request.count; ++i) {
             jlong values[COMPLETE_RULE_WORDS];

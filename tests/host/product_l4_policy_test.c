@@ -482,7 +482,7 @@ test_unsupported_and_unavailable (void)
   packet.family = PRODUCT_L4_POLICY_FAMILY_IPV4;
   packet.protocol = 1;
   result = match (&view, &packet);
-  check_no_match (&result, PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_PROTOCOL,
+  check_no_match (&result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
                   "unsupported protocol must be PASS_NEXT with no winner");
   packet.protocol = PRODUCT_L4_POLICY_PROTOCOL_TCP;
   packet.direction_known = 1;

@@ -36,6 +36,21 @@ public final class RuleConfigurationTest {
         groupedReply[40] = 1; groupedReply[41] = 1; groupedReply[42] = 1;
         System.arraycopy(graph, 31, groupedReply, 43, 9);
         require(new RuleConfiguration.CompleteStatus(groupedReply).properties().contains("binding.0=7,1012632,2,10,1\n"));
+        long[] disable = RuleConfiguration.networkDisable(1012632, 1, true);
+        require(disable[2] == 1012632 && disable[3] == 1 && disable[10] == 2);
+        require(disable[7] == 0 && disable[8] == 0 && disable[14] == 65535);
+        require(RuleConfiguration.networkDisable(1012632, 1, false)[10] == 1);
+        require(RuleConfiguration.networkDisable(1012632, 3, true)[3] == 4);
+        java.util.Properties projection = new java.util.Properties();
+        projection.setProperty("count", "1");
+        StringBuilder wire = new StringBuilder("1,0");
+        for (int i = 2; i < disable.length; ++i) wire.append(',').append(disable[i]);
+        projection.setProperty("rule.0.wire", wire.toString());
+        require(RuleConfiguration.networkDisabled(projection, 1012632, 1));
+        require(!RuleConfiguration.networkDisabled(projection, 1012632, 2));
+        require(!RuleConfiguration.networkDisabled(projection, 1012633, 1));
+        require(java.util.Arrays.equals(disable, RuleConfiguration.completeWire(
+                "0 0 1012632 1 4294967295 0 0 0 0 2 * * 0 65535 0 65535")));
         System.out.println("RuleConfiguration: exact inputs, saved/active distinction, unsigned identity, unknown transport");
     }
 }

@@ -64,8 +64,8 @@ rule_precedes (const product_l4_policy_rule_t *left,
 static product_l4_policy_status_t
 validate_rule (const product_l4_policy_rule_t *rule)
 {
-  if (rule == NULL || !supported_family (rule->family)
-      || !supported_protocol (rule->protocol)
+  if (rule == NULL || (rule->family && !supported_family (rule->family))
+      || (rule->protocol && !supported_protocol (rule->protocol))
       || !supported_direction (rule->direction)
       || rule->uid == UINT32_MAX || rule->rule_id == 0
       || rule->reason_id == 0 || rule->mode > 1
@@ -81,6 +81,10 @@ validate_rule (const product_l4_policy_rule_t *rule)
                            rule->destination_port_last))
     return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
 
+  if ((!rule->family && (rule->source_prefix_length || rule->destination_prefix_length
+                        || memcmp(rule->source_address, (uint8_t[16]){0}, 16)
+                        || memcmp(rule->destination_address, (uint8_t[16]){0}, 16))))
+    return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
   if (rule->family == PRODUCT_L4_POLICY_FAMILY_IPV4
       && (!ipv4_address_is_canonical (rule->source_address)
           || !ipv4_address_is_canonical (rule->destination_address)))
@@ -214,7 +218,8 @@ static int
 rule_matches (const product_l4_policy_rule_t *rule,
               const product_l4_policy_packet_t *packet)
 {
-  if (rule->family != packet->family || rule->protocol != packet->protocol)
+  if ((rule->family && rule->family != packet->family)
+      || (rule->protocol && rule->protocol != packet->protocol))
     return 0;
   if (rule->direction != PRODUCT_L4_POLICY_DIRECTION_ANY
       && (!packet->direction_known || rule->direction != packet->direction))
@@ -226,7 +231,8 @@ rule_matches (const product_l4_policy_rule_t *rule,
   if (rule->ifindex != PRODUCT_L4_POLICY_IFINDEX_ANY
       && (!packet->ifindex_known || rule->ifindex != packet->ifindex))
     return 0;
-  if (!packet->ports_available && rule_requires_ports (rule))
+  int ports_available = packet->ports_available && supported_protocol (packet->protocol);
+  if (!ports_available && rule_requires_ports (rule))
     return 0;
   return address_matches (rule->family, rule->source_address,
                           packet->source_address,
@@ -234,7 +240,7 @@ rule_matches (const product_l4_policy_rule_t *rule,
          && address_matches (rule->family, rule->destination_address,
                              packet->destination_address,
                              rule->destination_prefix_length)
-         && (!packet->ports_available
+         && (!ports_available
              || (port_matches (packet->source_port, rule->source_port_first,
                                rule->source_port_last)
                  && port_matches (packet->destination_port,
@@ -295,11 +301,6 @@ product_l4_policy_match (const product_l4_policy_view_t *view,
   if (!supported_family (packet->family))
     {
       result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_FAMILY;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
-  if (!supported_protocol (packet->protocol))
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_PROTOCOL;
       return PRODUCT_L4_POLICY_STATUS_OK;
     }
   if (packet->direction_known && !supported_direction (packet->direction))

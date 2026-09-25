@@ -72,8 +72,9 @@ typedef enum
  * A source rule.  rule_id and reason_id are nonzero stable identities; uid
  * must be a complete UID rather than UINT32_MAX.  IPv4 addresses use the
  * first four bytes in network order and require bytes 4..15 to be zero; IPv6
- * uses all sixteen bytes.  A prefix length of zero means any address within
- * the explicitly selected family.
+ * uses all sixteen bytes. Family zero is a wildcard and requires zero address
+ * bytes and prefixes. Protocol zero is a wildcard; port predicates still need
+ * available TCP/UDP ports. A zero prefix means any address in that family.
  */
 typedef struct
 {

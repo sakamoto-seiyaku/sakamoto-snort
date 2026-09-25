@@ -193,6 +193,7 @@ public class DebugControlActivity extends Activity {
     private TextView ruleConfigView, completeRuleView;
     private EditText completeRuleInput;
     private long completeSavedRevision;
+    private java.util.Properties completeRuleProjection;
     private final EditText[] ruleInputs = new EditText[5];
     private long ruleSavedRevision;
     private Spinner appSpinner;
@@ -1062,6 +1063,7 @@ public class DebugControlActivity extends Activity {
         if (productView != null) {
             renderProductProjection(ProductCatalogProjectionStore.read(getFilesDir()), false);
         }
+        updateSelectedApplicationButtons(selectedApplicationRow());
     }
 
     private void submitCompleteRules(int operation) {
@@ -1074,10 +1076,15 @@ public class DebugControlActivity extends Activity {
     private void refreshCompleteRules() {
         if (completeRuleView == null) return;
         File file = new File(getFilesDir(), "product-state/complete-rule-config.properties");
+        completeRuleProjection = null;
         if (!file.isFile() || file.length() > 262144) return;
         try (java.io.FileInputStream stream = new java.io.FileInputStream(file)) {
             java.util.Properties values = new java.util.Properties(); values.load(stream);
             completeSavedRevision = Long.parseUnsignedLong(values.getProperty("savedRevision", "0"));
+            RuntimeSnapshot current = backend.query(this);
+            if ("0".equals(values.getProperty("transportCode"))
+                    && Long.parseUnsignedLong(values.getProperty("generation", "0")) == current.generation
+                    && current.isActive()) completeRuleProjection = values;
             setTextIfChanged(completeRuleView, "Saved " + values.getProperty("savedRevision", "?")
                     + " / active " + values.getProperty("activeRevision", "?")
                     + " / rules " + values.getProperty("count", "?")
@@ -1085,6 +1092,11 @@ public class DebugControlActivity extends Activity {
                     + " / save " + values.getProperty("saveError", "?")
                     + " / compile " + values.getProperty("compileError", "?")
                     + " / rule index " + values.getProperty("errorIndex", "?")
+                    + "\nWinner " + values.getProperty("winnerVersion", "0")
+                    + " / declared " + values.getProperty("winnerAction", "0")
+                    + " / actual verdict " + values.getProperty("verdict", "0")
+                    + "\nHits " + values.getProperty("logicalHits", "0")
+                    + " / actual drops " + values.getProperty("actualDrops", "0")
                     + "\n" + values.getProperty("error", ""));
         } catch (IOException | IllegalArgumentException ignored) {
             setTextIfChanged(completeRuleView, "Complete rule status unavailable");
@@ -1290,9 +1302,14 @@ public class DebugControlActivity extends Activity {
         if (button == null) {
             return;
         }
-        button.setEnabled(false);
-        button.setText(row == null ? "Block " + context.wireName
-                : row.networkGateButtonLabel(context));
+        boolean available = row != null && completeRuleProjection != null;
+        boolean disabled = false;
+        if (available) {
+            try { disabled = RuleConfiguration.networkDisabled(completeRuleProjection, row.fullUid, context.wireId); }
+            catch (IllegalArgumentException error) { available = false; }
+        }
+        button.setEnabled(available);
+        button.setText((disabled ? "Open " : "Block ") + context.wireName);
     }
 
     private void renderSelectedApplicationIcon(ProductCatalogFormatter.EntryRow row) {
@@ -1362,11 +1379,11 @@ public class DebugControlActivity extends Activity {
     private void toggleSelectedNetworkGate(AuthoringPolicyBundle.NetworkContextId context) {
         ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
         ApplicationSubjectId subjectId = row == null ? selectedApplicationSubjectId : row.subjectId;
-        if (subjectId == null || row == null || !row.canToggleGate()) {
-            action("No selected available catalog app for Network Gate.");
+        if (subjectId == null || row == null || completeRuleProjection == null) {
+            action("Query online rules before changing network access.");
             return;
         }
-        boolean blocked = !row.isNetworkGateBlocked(context);
+        boolean blocked = !RuleConfiguration.networkDisabled(completeRuleProjection, subjectId.uid, context.wireId);
         backend.setNetworkGate(this, subjectId, context, blocked);
         action("Network Gate " + (blocked ? "block" : "open")
                 + " requested for " + context.wireName

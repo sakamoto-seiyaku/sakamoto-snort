@@ -105,12 +105,16 @@ static int valid_version(uint64_t version) {
     return (version >> 16) != 0 && (version & UINT16_MAX) != 0;
 }
 static int valid_rule(const sakamoto_product_direct_rule_t *r) {
-    if (r->reserved || (r->family != 4 && r->family != 6) || r->protocol == 0 ||
+    if (r->reserved || (r->family != 0 && r->family != 4 && r->family != 6) ||
         r->protocol > 255 || (r->direction != 0 && r->direction != 1 && r->direction != 3) ||
         (r->action != 1 && r->action != 2) || r->source_prefix > (r->family == 4 ? 32U : 128U) ||
         r->destination_prefix > (r->family == 4 ? 32U : 128U) ||
         r->source_port_first > r->source_port_last || r->source_port_last > 65535 ||
         r->destination_port_first > r->destination_port_last || r->destination_port_last > 65535)
+        return 0;
+    if ((!r->family && (r->source_prefix || r->destination_prefix ||
+                        memcmp(r->source_address, (uint8_t[16]){0}, 16) ||
+                        memcmp(r->destination_address, (uint8_t[16]){0}, 16))))
         return 0;
     if (r->family == 4)
         for (unsigned i = 4; i < 16; ++i)
@@ -524,7 +528,7 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     for (unsigned i = 0; i < c->state.count; ++i) {
         const sakamoto_product_direct_rule_t *s = &c->state.rules[i];
         product_l4_policy_rule_t *r = &rules[i];
-        if (s->protocol != 6 && s->protocol != 17) {
+        if (s->protocol != 0 && s->protocol != 6 && s->protocol != 17) {
             c->state.error_index = i;
             result = SAKAMOTO_RULE_CONFIG_UNSUPPORTED;
             goto done;
@@ -666,7 +670,8 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     if (!c || !request || !publish || request->schema != SAKAMOTO_RULE_CONFIG_SCHEMA ||
         request->reserved || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
         (request->operation != SAKAMOTO_RULE_CONFIG_REPLACE &&
-         request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL))
+         request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL &&
+         request->operation != SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE))
         return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.error_index = UINT32_MAX;
     if (request->expected_saved_revision != c->state.saved_revision)
@@ -694,6 +699,43 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
             sakamoto_product_config_rule_t empty = {0};
             if (memcmp(r, &empty, sizeof(*r)))
                 goto done;
+        }
+    } else if (request->operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE) {
+        if (request->count != 1 || request->graph.group_count || request->graph.edge_count ||
+            request->graph.binding_count || request->rules[0].uid == UINT32_MAX ||
+            request->rules[0].version || request->rules[0].base_version ||
+            !valid_rule(&request->rules[0]))
+            goto done;
+        *next = *c;
+        sakamoto_product_direct_rule_t target = request->rules[0];
+        target.action = 2;
+        target.priority = target.order = 0;
+        unsigned found = next->state.count;
+        for (unsigned i = 0; i < next->state.count; ++i)
+            if (same_content(&target, &next->state.rules[i])) {
+                if (found != next->state.count) { result = SAKAMOTO_RULE_CONFIG_CONFLICT; goto done; }
+                found = i;
+            }
+        if (request->rules[0].action == 2 && found == next->state.count) {
+            if (next->state.count == SAKAMOTO_RULE_CONFIG_MAX_RULES) {
+                result = SAKAMOTO_RULE_CONFIG_LIMIT; goto done;
+            }
+            next->state.rules[next->state.count++] = target;
+        } else if (request->rules[0].action == 1 && found < next->state.count) {
+            for (unsigned i = 0; i < next->state.graph.edge_count; ++i) {
+                sakamoto_product_group_edge_t *e = &next->state.graph.edges[i];
+                if (e->kind != 1) continue;
+                if (e->target == found) { result = SAKAMOTO_RULE_CONFIG_REFERENCE; goto done; }
+                if (e->target > found) --e->target;
+            }
+            for (unsigned i = 0; i < next->state.graph.binding_count; ++i) {
+                sakamoto_product_rule_binding_t *b = &next->state.graph.bindings[i];
+                if (b->kind != 1) continue;
+                if (b->target == found) { result = SAKAMOTO_RULE_CONFIG_REFERENCE; goto done; }
+                if (b->target > found) --b->target;
+            }
+            memmove(&next->state.rules[found], &next->state.rules[found+1],
+                    (--next->state.count - found) * sizeof(target));
         }
     } else {
         next->state.graph = request->graph;

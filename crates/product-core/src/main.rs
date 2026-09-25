@@ -95,8 +95,12 @@ fn main() {
         };
         match command.as_str() {
             "rule-query" if remaining.is_empty() => {}
-            "rule-replace-all" if remaining.len() == 2 => {
-                request.operation = 2;
+            "rule-replace-all" | "rule-network-disable" if remaining.len() == 2 => {
+                request.operation = if command == "rule-network-disable" {
+                    3
+                } else {
+                    2
+                };
                 request.expected_saved_revision = number(0);
                 let text = std::fs::read_to_string(&remaining[1]).unwrap_or_else(|_| usage());
                 for line in text.lines().filter(|line| !line.trim().is_empty()) {

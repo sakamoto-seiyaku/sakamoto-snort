@@ -3107,8 +3107,9 @@ public final class AndroidRuntimeContractTest {
                 "Product UI projection exposes app-row Gate toggle labels");
         check(!projection.rows.get(0).canToggleGate(),
                 "Product UI disables Gate toggle for available but unbound application rows");
-        check(projection.displayText.contains("gate wifi=blocked mobile=open vpn=open"),
-                "Product UI projection display text includes app-row Gate state");
+        check(projection.displayText.contains("network rules: online source")
+                        && !projection.displayText.contains("gate wifi="),
+                "catalog does not present retired Gate state as online rule truth");
         check(projection.displayText.contains("l4Rules=1"),
                 "Product UI projection display text includes app-row L4 rule state");
         check(projection.firstBoundSubjectId.equals(work),

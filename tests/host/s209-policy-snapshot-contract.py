@@ -14,7 +14,7 @@ def body(name):
   level+=(graph[i]=='{')-(graph[i]=='}')
   if level==0:return graph[start:i]
  raise AssertionError('unclosed function '+name)
-for name in ['product_packet_graph_policy_stage_snapshot','product_packet_graph_flow_observe','product_packet_graph_policy_gate_drop','product_packet_graph_l4_view_evaluate']:
+for name in ['product_packet_graph_policy_stage_snapshot','product_packet_graph_flow_observe','product_packet_graph_l4_view_evaluate']:
  f=body(name);assert 'policy_writer_lock' not in f,name
 f=body('product_packet_graph_flow_observe')
 assert 'vlib_get_worker_index (vm->thread_index)' in f and 'flow_pools[worker]' in f
@@ -34,9 +34,9 @@ assert claim.index('__atomic_fetch_add')<claim.index('snapshot->bank =') and '__
 owner=body('product_packet_graph_policy_on_owner')
 assert owner.index('product_policy_snapshot_acquire')<owner.index('product_packet_graph_policy_stage_snapshot')<owner.index('product_packet_graph_flow_observe')<owner.index('product_policy_snapshot_release')
 stage=body('product_packet_graph_policy_stage_snapshot')
-assert stage.index('product_packet_graph_policy_gate_drop')<stage.index('product_packet_graph_l4_view_evaluate')
+assert 'product_packet_graph_policy_gate_drop' not in graph
 assert 'product_policy_snapshot_acquire' not in stage and 'policy_publish_sequence' not in stage
-assert 'product_packet_graph_gate_rule_matches' in body('product_packet_graph_policy_gate_drop')
+assert 'gate_table;' not in graph
 assert re.search(r'VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY, 1',plugin)
 assert 'policy_packet_lock_acquisitions' in body('product_packet_graph_policy_writer_lock')
 print('S209 current-worker counters, no Flow locks, immutable reader lifetime and writer-only publication audit: PASS')

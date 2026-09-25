@@ -213,7 +213,6 @@ typedef struct
 {
   /* Published banks are immutable.  Reader counts prevent reuse while a
    * worker is still evaluating the previous active bank. */
-  product_packet_graph_gate_table_t gate_table;
   product_l4_policy_view_t view;
   u64 generation;
   u64 revision;
@@ -2522,7 +2521,9 @@ product_packet_graph_l4_packet_projection (
   packet->source_port = facts->source_port;
   packet->destination_port = facts->destination_port;
   /* L4 availability controls only port predicates in the matcher. */
-  packet->ports_available = facts->l4_status == PRODUCT_PACKET_L4_COMPLETE;
+  packet->ports_available = facts->l4_status == PRODUCT_PACKET_L4_COMPLETE
+    && (facts->protocol == PRODUCT_L4_POLICY_PROTOCOL_TCP
+        || facts->protocol == PRODUCT_L4_POLICY_PROTOCOL_UDP);
 
   if (facts->ip_family == PRODUCT_L4_POLICY_FAMILY_IPV4)
     {
@@ -2695,241 +2696,6 @@ product_packet_graph_flow_observe (
 #else
   (void) buffer_index; (void) trace; (void) event;
 #endif
-}
-
-typedef struct
-{
-  u64 generation;
-  u64 revision;
-  u64 snapshot_hash;
-  product_packet_graph_gate_entry_t rule;
-  u32 winner_rank;
-  u32 probes;
-  u32 candidate_count;
-  u32 no_match_reason;
-} product_packet_graph_gate_match_t;
-
-static int
-product_packet_graph_gate_address_matches (
-  u8 family, const u8 rule_address[PRODUCT_L4_POLICY_ADDRESS_BYTES],
-  const u8 packet_address[PRODUCT_L4_POLICY_ADDRESS_BYTES], u8 prefix_length)
-{
-  u32 bytes;
-  u32 full_bytes;
-  u8 remaining_bits;
-  u32 index;
-
-  if (family == PRODUCT_L4_POLICY_FAMILY_IPV4)
-    bytes = 4;
-  else if (family == PRODUCT_L4_POLICY_FAMILY_IPV6)
-    bytes = 16;
-  else
-    return 0;
-  full_bytes = prefix_length / 8U;
-  remaining_bits = (u8) (prefix_length % 8U);
-  for (index = 0; index < full_bytes; index++)
-    if (rule_address[index] != packet_address[index])
-      return 0;
-  if (remaining_bits != 0 && full_bytes < bytes)
-    {
-      u8 mask = (u8) (UINT8_C (0xff) << (8U - remaining_bits));
-      if ((rule_address[full_bytes] & mask)
-          != (packet_address[full_bytes] & mask))
-        return 0;
-    }
-  return 1;
-}
-
-static int
-product_packet_graph_gate_address_is_zero (const u8 address[16])
-{
-  u32 index;
-  for (index = 0; index < 16; index++)
-    if (address[index] != 0)
-      return 0;
-  return 1;
-}
-
-static int
-product_packet_graph_gate_entry_valid (
-  const product_packet_graph_gate_entry_t *entry)
-{
-  u32 max_prefix;
-  u32 index;
-
-  if (entry == 0 || entry->rule_id == 0 || entry->uid == UINT32_MAX
-      || entry->network_context_id == 0 || entry->reason_id == 0
-      || entry->ifindex == 0
-      || (entry->action != PRODUCT_L4_POLICY_ACTION_ALLOW
-          && entry->action != PRODUCT_L4_POLICY_ACTION_DROP)
-      || entry->source_port_first > entry->source_port_last
-      || entry->destination_port_first > entry->destination_port_last)
-    return 0;
-
-  if (entry->family == 0)
-    {
-      if (entry->source_prefix_length != 0
-          || entry->destination_prefix_length != 0
-          || !product_packet_graph_gate_address_is_zero (entry->source_address)
-          || !product_packet_graph_gate_address_is_zero (
-            entry->destination_address))
-        return 0;
-    }
-  else if (entry->family == PRODUCT_L4_POLICY_FAMILY_IPV4
-           || entry->family == PRODUCT_L4_POLICY_FAMILY_IPV6)
-    {
-      max_prefix = entry->family == PRODUCT_L4_POLICY_FAMILY_IPV4 ? 32 : 128;
-      if (entry->source_prefix_length > max_prefix
-          || entry->destination_prefix_length > max_prefix)
-        return 0;
-      if (entry->family == PRODUCT_L4_POLICY_FAMILY_IPV4)
-        for (index = 4; index < 16; index++)
-          if (entry->source_address[index] != 0
-              || entry->destination_address[index] != 0)
-            return 0;
-    }
-  else
-    return 0;
-
-  if (entry->protocol != 0 && entry->protocol != PRODUCT_L4_POLICY_PROTOCOL_TCP
-      && entry->protocol != PRODUCT_L4_POLICY_PROTOCOL_UDP)
-    return 0;
-  if (entry->direction != PRODUCT_L4_POLICY_DIRECTION_ANY
-      && entry->direction != PRODUCT_L4_POLICY_DIRECTION_INPUT
-      && entry->direction != PRODUCT_L4_POLICY_DIRECTION_OUTPUT)
-    return 0;
-  return 1;
-}
-
-static int
-product_packet_graph_gate_rule_precedes (
-  const product_packet_graph_gate_entry_t *left,
-  const product_packet_graph_gate_entry_t *right)
-{
-  if (left->priority != right->priority)
-    return left->priority < right->priority;
-  if (left->order != right->order)
-    return left->order < right->order;
-  return left->rule_id < right->rule_id;
-}
-
-static int
-product_packet_graph_gate_rule_requires_ports (
-  const product_packet_graph_gate_entry_t *rule)
-{
-  return rule->source_port_first != PRODUCT_L4_POLICY_PORT_FIRST_ANY
-         || rule->source_port_last != PRODUCT_L4_POLICY_PORT_LAST_ANY
-         || rule->destination_port_first != PRODUCT_L4_POLICY_PORT_FIRST_ANY
-         || rule->destination_port_last != PRODUCT_L4_POLICY_PORT_LAST_ANY;
-}
-
-static int
-product_packet_graph_gate_rule_matches (
-  const product_packet_graph_gate_entry_t *rule,
-  const product_l4_policy_packet_t *packet, u32 *no_match_reason)
-{
-  if (no_match_reason != 0)
-    *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE;
-  if (!packet->uid_known || packet->uid == UINT32_MAX)
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_UID;
-      return 0;
-    }
-  if (packet->uid != rule->uid)
-    return 0;
-  if (rule->network_context_id != PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY
-      && !packet->network_context_known)
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_CONTEXT;
-      return 0;
-    }
-  if (rule->network_context_id != PRODUCT_L4_POLICY_NETWORK_CONTEXT_ANY
-      && packet->network_context_id != rule->network_context_id)
-    return 0;
-  if (rule->ifindex != PRODUCT_L4_POLICY_IFINDEX_ANY)
-    {
-      if (!packet->ifindex_known)
-        {
-          if (no_match_reason != 0)
-            *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_IFINDEX;
-          return 0;
-        }
-      if (packet->ifindex != rule->ifindex)
-        return 0;
-    }
-  if (rule->direction != PRODUCT_L4_POLICY_DIRECTION_ANY)
-    {
-      if (!packet->direction_known)
-        {
-          if (no_match_reason != 0)
-            *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_DIRECTION;
-          return 0;
-        }
-      if (packet->direction != rule->direction)
-        return 0;
-    }
-  if (rule->family != 0 && packet->family != rule->family)
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_FAMILY;
-      return 0;
-    }
-  if (rule->protocol != 0 && packet->protocol != rule->protocol)
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PROTOCOL;
-      return 0;
-    }
-  if (rule->family != 0
-      && (!product_packet_graph_gate_address_matches (
-            rule->family, rule->source_address, packet->source_address,
-            rule->source_prefix_length)
-          || !product_packet_graph_gate_address_matches (
-            rule->family, rule->destination_address, packet->destination_address,
-            rule->destination_prefix_length)))
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_ADDRESS;
-      return 0;
-    }
-  if (!packet->ports_available
-      && product_packet_graph_gate_rule_requires_ports (rule))
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE;
-      return 0;
-    }
-  if (packet->ports_available
-      && (packet->source_port < rule->source_port_first
-          || packet->source_port > rule->source_port_last
-          || packet->destination_port < rule->destination_port_first
-          || packet->destination_port > rule->destination_port_last))
-    {
-      if (no_match_reason != 0)
-        *no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORT;
-      return 0;
-    }
-  return 1;
-}
-
-static void
-product_packet_graph_gate_table_insert (
-  product_packet_graph_gate_table_t *table,
-  const product_packet_graph_gate_entry_t *entry)
-{
-  u32 index = table->entry_count;
-  while (index > 0
-         && product_packet_graph_gate_rule_precedes (
-           entry, &table->entries[index - 1]))
-    {
-      table->entries[index] = table->entries[index - 1];
-      index--;
-    }
-  table->entries[index] = *entry;
-  table->entry_count++;
-  table->max_probes = table->entry_count;
 }
 
 enum
@@ -3321,23 +3087,13 @@ product_packet_graph_gate_status (product_packet_graph_gate_status_t *status)
   status->active_generation = bank->generation;
   status->active_revision = bank->revision;
   status->snapshot_hash = bank->snapshot_hash;
-  status->active_entry_count = bank->gate_table.entry_count;
-  status->max_probes = bank->gate_table.max_probes;
+  status->active_entry_count = 0;
+  status->max_probes = 0;
   status->rule_id = 0;
   status->subject_uid = UINT32_MAX;
   status->network_context_id = 0;
   status->blocked = 0;
   status->reason_id = 0;
-  if (bank->gate_table.entry_count == 1)
-    {
-      const product_packet_graph_gate_entry_t *entry =
-        &bank->gate_table.entries[0];
-      status->rule_id = entry->rule_id;
-      status->subject_uid = entry->uid;
-      status->network_context_id = entry->network_context_id;
-      status->blocked = entry->action == PRODUCT_L4_POLICY_ACTION_DROP;
-      status->reason_id = entry->reason_id;
-    }
   product_policy_snapshot_release (graph, &snapshot);
 
   status->last_match_revision = clib_atomic_load_acq_n (
@@ -3479,14 +3235,11 @@ product_packet_graph_publish_policy_bundle (
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_packet_graph_l4_policy_bank_t *bank;
-  product_packet_graph_gate_table_t gate_table;
   product_l4_policy_view_t compiled_view;
   product_l4_policy_status_t compile_status;
   u32 sequence;
   u32 active_bank;
   u32 inactive_bank;
-  u32 index;
-  u32 prior_index;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u64 reuse_begin_ns, publish_begin_ns;
 #endif
@@ -3503,29 +3256,12 @@ product_packet_graph_publish_policy_bundle (
     return PRODUCT_PACKET_INVALID_ARGUMENT;
   if (clib_atomic_load_acq_n (&graph->flow_pools_initialized) == 0)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
-  clib_memset (&gate_table, 0, sizeof (gate_table));
-  for (index = 0; index < bundle->gate_entry_count; index++)
-    {
-      const product_packet_graph_gate_entry_t *entry =
-        &bundle->gate_entries[index];
-      if (!product_packet_graph_gate_entry_valid (entry))
-        return PRODUCT_PACKET_INVALID_ARGUMENT;
-      for (prior_index = 0; prior_index < index; prior_index++)
-        if (bundle->gate_entries[prior_index].rule_id == entry->rule_id)
-          return PRODUCT_PACKET_INVALID_ARGUMENT;
-      product_packet_graph_gate_table_insert (&gate_table, entry);
-    }
-  for (index = 0; index < bundle->l4_rule_count; index++)
-    {
-      const product_l4_policy_rule_t *rule = &bundle->l4_rules[index];
-      if (rule->network_context_id == 0 || rule->uid == UINT32_MAX)
-        return PRODUCT_PACKET_INVALID_ARGUMENT;
-      for (prior_index = 0; prior_index < bundle->gate_entry_count;
-           prior_index++)
-        if (bundle->gate_entries[prior_index].rule_id == rule->rule_id)
-          return PRODUCT_PACKET_INVALID_ARGUMENT;
-    }
-
+  /* Retired Gate input cannot create a second runtime policy family. */
+  if (bundle->gate_entry_count != 0)
+    return PRODUCT_PACKET_INVALID_ARGUMENT;
+  for (u32 index = 0; index < bundle->l4_rule_count; ++index)
+    if (bundle->l4_rules[index].network_context_id == 0)
+      return PRODUCT_PACKET_INVALID_ARGUMENT;
   product_l4_policy_init (&compiled_view);
   compile_status = product_l4_policy_compile (
     &compiled_view, bundle->l4_rules, bundle->l4_rule_count);
@@ -3552,7 +3288,6 @@ product_packet_graph_publish_policy_bundle (
   reuse_begin_ns = product_packet_event_clock_ns ();
 #endif
   bank = &graph->l4_policy_banks[inactive_bank];
-  bank->gate_table = gate_table;
   bank->view = compiled_view;
   bank->generation = bundle->generation;
   bank->revision = bundle->revision;
@@ -3563,32 +3298,16 @@ product_packet_graph_publish_policy_bundle (
 #endif
   __atomic_store_n (&graph->policy_publish_sequence, sequence + 1U,
                      __ATOMIC_SEQ_CST);
-  /* GateTable and its L4 view become visible with the same even sequence. */
+  /* Publish the one ordinary rule view under the protected bank sequence. */
   clib_atomic_store_rel_n (&graph->gate_policy_revision, bundle->revision);
   clib_atomic_store_rel_n (&graph->gate_policy_snapshot_hash,
                            bundle->snapshot_hash);
-  if (gate_table.entry_count == 1)
-    {
-      const product_packet_graph_gate_entry_t *entry = &gate_table.entries[0];
-      clib_atomic_store_rel_n (&graph->gate_policy_rule_id,
-                               entry->rule_id);
-      clib_atomic_store_rel_n (&graph->gate_policy_subject_uid,
-                               entry->uid);
-      clib_atomic_store_rel_n (&graph->gate_policy_network_context_id,
-                               entry->network_context_id);
-      clib_atomic_store_rel_n (&graph->gate_policy_blocked,
-                               entry->action == PRODUCT_L4_POLICY_ACTION_DROP);
-      clib_atomic_store_rel_n (&graph->gate_policy_reason_id,
-                               entry->reason_id);
-    }
-  else
-    {
-      clib_atomic_store_rel_n (&graph->gate_policy_rule_id, 0);
-      clib_atomic_store_rel_n (&graph->gate_policy_subject_uid, UINT32_MAX);
-      clib_atomic_store_rel_n (&graph->gate_policy_network_context_id, 0);
-      clib_atomic_store_rel_n (&graph->gate_policy_blocked, 0);
-      clib_atomic_store_rel_n (&graph->gate_policy_reason_id, 0);
-    }
+  clib_atomic_store_rel_n (&graph->gate_policy_rule_id, 0);
+  clib_atomic_store_rel_n (&graph->gate_policy_subject_uid, UINT32_MAX);
+  clib_atomic_store_rel_n (&graph->gate_policy_network_context_id, 0);
+  clib_atomic_store_rel_n (&graph->gate_policy_blocked, 0);
+  clib_atomic_store_rel_n (&graph->gate_policy_reason_id, 0);
+
   clib_atomic_store_rel_n (&graph->l4_policy_revision, bundle->revision);
   clib_atomic_store_rel_n (&graph->l4_policy_snapshot_hash,
                            bundle->snapshot_hash);
@@ -3646,9 +3365,7 @@ product_packet_graph_publish_policy_bundle (
   clib_atomic_store_rel_n (&graph->gate_table_last_probes, 0);
   clib_atomic_store_rel_n (&graph->gate_table_last_candidate_count, 0);
   clib_atomic_store_rel_n (&graph->gate_table_last_no_match_reason,
-                           gate_table.entry_count == 0
-                             ? PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE
-                             : 0);
+                           PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE);
   clib_atomic_store_rel_n (&graph->gate_table_last_match_action, 0);
   clib_atomic_store_rel_n (&graph->gate_table_last_match_reason_id, 0);
   __atomic_store_n (&graph->l4_policy_active_bank, inactive_bank, __ATOMIC_SEQ_CST);
@@ -3803,111 +3520,6 @@ product_packet_graph_l4_status (product_packet_graph_l4_status_t *status)
 }
 
 static int
-product_packet_graph_policy_gate_drop (
-  product_packet_graph_main_t *graph, const product_packet_lease_t *lease,
-  const product_policy_snapshot_t *snapshot, product_packet_graph_gate_match_t *matched)
-{
-  product_l4_policy_packet_t packet;
-  const product_packet_graph_l4_policy_bank_t *bank = snapshot->bank;
-  u32 index, first_no_match_reason;
-  clib_memset (matched, 0, sizeof (*matched));
-  matched->generation = snapshot->identity.generation;
-  matched->revision = snapshot->identity.revision;
-  matched->snapshot_hash = snapshot->identity.snapshot_hash;
-
-  first_no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE;
-  product_packet_graph_l4_packet_projection (lease, &packet);
-  if (bank->generation == graph->generation)
-    for (index = 0; index < bank->gate_table.entry_count; index++)
-      {
-        const product_packet_graph_gate_entry_t *entry = &bank->gate_table.entries[index];
-        u32 no_match_reason = PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE;
-        matched->probes++;
-        if (product_packet_graph_gate_rule_matches (entry, &packet, &no_match_reason))
-          {
-            matched->candidate_count++;
-            if (matched->rule.rule_id == 0)
-              {
-                matched->rule = *entry;
-                matched->winner_rank = index + 1U;
-              }
-          }
-        else if (first_no_match_reason == PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE
-                 && no_match_reason != PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NO_RULE)
-          first_no_match_reason = no_match_reason;
-      }
-  matched->no_match_reason = matched->rule.rule_id != 0
-    ? PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_NONE : first_no_match_reason;
-
-  clib_atomic_store_rel_n (&graph->gate_table_last_match_revision,
-                           matched->rule.rule_id == 0 ? 0 : matched->revision);
-  clib_atomic_store_rel_n (&graph->gate_table_last_match_rule_id,
-                           matched->rule.rule_id);
-  clib_atomic_store_rel_n (&graph->gate_table_last_winner_rank,
-                           matched->rule.rule_id == 0 ? 0
-                                                      : matched->winner_rank);
-  clib_atomic_store_rel_n (&graph->gate_table_last_probes, matched->probes);
-  clib_atomic_store_rel_n (&graph->gate_table_last_candidate_count,
-                           matched->candidate_count);
-  clib_atomic_store_rel_n (&graph->gate_table_last_no_match_reason,
-                           matched->no_match_reason);
-  clib_atomic_store_rel_n (&graph->gate_table_last_match_action,
-                           matched->rule.rule_id == 0 ? 0
-                                                      : matched->rule.action);
-  clib_atomic_store_rel_n (&graph->gate_table_last_match_reason_id,
-                           matched->rule.rule_id == 0
-                             ? 0
-                             : matched->rule.reason_id);
-  return matched->rule.rule_id != 0;
-}
-
-static void
-product_packet_graph_gate_policy_from_match (
-  const product_packet_graph_gate_match_t *matched,
-  product_packet_graph_gate_policy_t *policy)
-{
-  if (matched == 0 || policy == 0)
-    return;
-  clib_memset (policy, 0, sizeof (*policy));
-  policy->revision = matched->revision;
-  policy->snapshot_hash = matched->snapshot_hash;
-  policy->rule_id = matched->rule.rule_id;
-  policy->subject_uid = matched->rule.uid;
-  policy->network_context_id = matched->rule.network_context_id;
-  policy->blocked = matched->rule.action == PRODUCT_L4_POLICY_ACTION_DROP;
-  policy->reason_id = matched->rule.reason_id;
-}
-
-static void
-product_packet_graph_record_policy_drop (
-  product_packet_graph_main_t *graph, const product_packet_lease_t *lease,
-  const product_packet_graph_gate_policy_t *matched)
-{
-  if (graph == 0 || lease == 0 || matched == 0)
-    return;
-
-  clib_atomic_fetch_add_relax (&graph->policy_drop_records, 1);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_revision,
-                           matched->revision);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_rule_id, matched->rule_id);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_completion_attempts,
-                           lease->terminal_count);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_uid, lease->platform.uid);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_network_context,
-                           (u32) lease->platform.network_context_id);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_reason_id,
-                           matched->reason_id);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_verdict,
-                           PRODUCT_POLICY_VERDICT_DROP);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_winner,
-                           PRODUCT_NETWORK_GATE_WINNER_NETWORK_GATE);
-  clib_atomic_store_rel_n (&graph->policy_last_drop_uid_known,
-                           !!(lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN));
-  clib_atomic_store_rel_n (&graph->policy_last_drop_device_direction,
-                           lease->platform.direction);
-}
-
-static int
 product_packet_graph_l4_policy_view_active (product_packet_graph_main_t *graph)
 {
   return graph != 0 && clib_atomic_load_acq_n (&graph->l4_policy_view_active) != 0;
@@ -3940,8 +3552,6 @@ product_packet_graph_policy_stage_snapshot (
   const product_policy_snapshot_t *snapshot)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  product_packet_graph_gate_match_t gate_match;
-  product_packet_graph_gate_policy_t matched_gate;
   product_l4_policy_match_result_t matched_view;
   product_packet_result_t result;
   clib_memset (evaluation, 0, sizeof (*evaluation));
@@ -3960,40 +3570,6 @@ product_packet_graph_policy_stage_snapshot (
     }
   if (!lease->policy_owner_ready)
     return PRODUCT_PACKET_ORDER_VIOLATION;
-
-  /* Every stage consumes this one protected bank. Publication never causes a
-   * bound packet to restart evaluation against a different policy revision. */
-  int gate_claim = product_packet_graph_policy_gate_drop (
-    graph, lease, snapshot, &gate_match);
-#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-  if (snapshot->trace)
-    fprintf (stderr, "s209 event=gate token=%llu thread=%u generation=%llu revision=%llu snapshot_hash=%llu rule=%llu action=%u mono_ns=%llu\n",
-      (unsigned long long) lease->origin_obligation_id, vlib_get_thread_index (),
-      (unsigned long long) gate_match.generation, (unsigned long long) gate_match.revision,
-      (unsigned long long) gate_match.snapshot_hash, (unsigned long long) gate_match.rule.rule_id,
-      gate_match.rule.action, (unsigned long long) product_packet_event_clock_ns ());
-#endif
-  if (gate_claim)
-    clib_atomic_fetch_add_relax (&graph->policy_gate_evaluations, 1);
-  if (gate_claim && gate_match.rule.action == PRODUCT_L4_POLICY_ACTION_DROP)
-    {
-      evaluation->stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_GATE;
-      evaluation->rule_id = gate_match.rule.rule_id;
-      evaluation->reason_id = gate_match.rule.reason_id;
-      evaluation->verdict = PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP;
-      evaluation->matched = 1;
-      evaluation->winner = PRODUCT_NETWORK_GATE_WINNER_NETWORK_GATE;
-      result = product_packet_set_terminal (lease, PRODUCT_PACKET_INTENT_DROP_RUNTIME);
-      if (result == PRODUCT_PACKET_OK)
-        {
-          lease->runtime_drop_reason = PRODUCT_PACKET_DROP_POLICY_GATE;
-          product_packet_graph_gate_policy_from_match (&gate_match, &matched_gate);
-          product_packet_graph_record_policy_drop (graph, lease, &matched_gate);
-          clib_atomic_fetch_add_relax (&graph->policy_stage_drops, 1);
-        }
-      product_packet_graph_record_policy_stage (graph, evaluation);
-      return result;
-    }
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (snapshot->hold_us)

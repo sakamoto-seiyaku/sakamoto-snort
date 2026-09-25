@@ -56,6 +56,182 @@ static uint32_t publish(void *opaque, uint64_t revision, uint64_t hash,
     return 0;
 }
 
+static void ordinary_network_disable(void) {
+    random_at = 0; /* deterministic creation identities for hand-decided Rank ties */
+    char directory[] = "/tmp/sakamoto-network-disable-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256];
+    snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {
+        .schema = 1, .operation = 3, .expected_saved_revision = 1, .count = 1,
+        .rules = {{.uid = 12345, .network_context = 1, .ifindex = UINT32_MAX,
+                   .direction = 3, .action = 2,
+                   .source_port_last = 65535, .destination_port_last = 65535}}};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    assert(status.count == 1 && status.rules[0].priority == 0);
+    product_l4_policy_packet_t packet = {.uid = 12345, .uid_known = 1,
+        .network_context_id = 1, .network_context_known = 1,
+        .direction = 3, .direction_known = 1, .family = 6, .protocol = 58};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[0].version && match.actual_action == 2);
+    packet.network_context_id = 2;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(!match.rule_id);
+    /* An ordinary allow exception wins the priority/order tie by logical ID.
+     * Moving only its order behind the disable reverses the actual winner. */
+    sakamoto_product_rule_config_request_t exception = {
+        .schema = 1, .operation = 2, .expected_saved_revision = status.saved_revision,
+        .count = 2};
+    exception.rules[0] = status.rules[0];
+    exception.rules[1] = status.rules[0];
+    exception.rules[1].version = UINT64_C(65537);
+    exception.rules[1].action = 1;
+    assert(product_rule_config_replace(config, &exception, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    packet.network_context_id = 1;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == UINT64_C(65537) && match.action == 1 && match.actual_action == 1);
+    exception.expected_saved_revision = status.saved_revision;
+    exception.rules[1].version = 0;
+    exception.rules[1].base_version = UINT64_C(65537);
+    exception.rules[1].order = 1;
+    assert(product_rule_config_replace(config, &exception, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[0].version && match.actual_action == 2);
+    exception.expected_saved_revision = status.saved_revision;
+    exception.count = 1;
+    assert(product_rule_config_replace(config, &exception, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    /* Shared group observes DROP; the direct switch wins while present. */
+    sakamoto_product_rule_config_request_t grouped = {
+        .schema = 1, .operation = 2, .expected_saved_revision = status.saved_revision,
+        .count = 2, .graph = {.group_count = 1, .edge_count = 1, .binding_count = 2,
+            .groups = {10}, .edges = {{10, 1, 1}},
+            .bindings = {{1, 12345, 2, 10, 1}, {2, 23456, 2, 10, 0}}}};
+    grouped.rules[0] = status.rules[0];
+    grouped.rules[1] = status.rules[0];
+    grouped.rules[1].version = 0; grouped.rules[1].uid = UINT32_MAX;
+    grouped.rules[1].priority = UINT32_MAX;
+    assert(product_rule_config_replace(config, &grouped, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    packet.network_context_id = 1;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[0].version && match.actual_action == 2);
+    packet.uid = 23456;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[1].version && match.actual_action == 2);
+    uint64_t shared_version = status.rules[1].version;
+    packet.uid = 12345;
+    request.expected_saved_revision = status.saved_revision;
+    request.rules[0].action = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.count == 1 && status.active_count == 2);
+    assert(status.graph.edges[0].target == 0 && status.rules[0].version == shared_version);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == shared_version && match.action == 2 && match.actual_action == 1);
+    /* Ordinary complete editing can promote an allow exception ahead of fallback. */
+    grouped.expected_saved_revision = status.saved_revision;
+    grouped.graph = status.graph;
+    grouped.rules[0] = status.rules[0];
+    grouped.rules[1] = request.rules[0];
+    grouped.rules[1].priority = 10; grouped.rules[1].action = 1;
+    assert(product_rule_config_replace(config, &grouped, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == status.rules[1].version && match.actual_action == 1);
+    product_rule_config_close(config);
+    unlink(path); rmdir(directory);
+}
+
+static void network_disable_scope_and_failures(void) {
+    char directory[] = "/tmp/sakamoto-network-scope-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path, sizeof(path), "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_request_t request = {
+        .schema = 1, .operation = 3, .expected_saved_revision = 1, .count = 1,
+        .rules = {{.uid = 12345, .network_context = 1, .ifindex = 7,
+            .family = 4, .protocol = 0, .direction = 3, .action = 2,
+            .source_prefix = 24, .destination_prefix = 24,
+            .source_address = {192,0,2}, .destination_address = {198,51,100},
+            .source_port_first = 0, .source_port_last = 0,
+            .destination_port_first = 0, .destination_port_last = 65535}}};
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    uint64_t version = status.rules[0].version, revision = status.saved_revision;
+    request.expected_saved_revision = revision;
+    unsigned publications = runtime.publications;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == revision && status.rules[0].version == version &&
+           runtime.publications == publications);
+    product_l4_policy_packet_t packet = {.uid = 12345, .uid_known = 1,
+        .network_context_id = 1, .network_context_known = 1, .ifindex = 7, .ifindex_known = 1,
+        .family = 4, .protocol = 17, .direction = 3, .direction_known = 1,
+        .ports_available = 1, .source_port = 0, .destination_port = 443,
+        .source_address = {192,0,2,1}, .destination_address = {198,51,100,2}};
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime.view, &packet, &match) == 0);
+    assert(match.rule_id == version && match.actual_action == 2);
+    for (unsigned outside = 0; outside < 13; ++outside) {
+        product_l4_policy_packet_t other = packet;
+        switch (outside) {
+        case 0: other.uid++; break;
+        case 1: other.uid_known = 0; break;
+        case 2: other.network_context_id = 2; break;
+        case 3: other.network_context_known = 0; break;
+        case 4: other.ifindex = 8; break;
+        case 5: other.ifindex_known = 0; break;
+        case 6: other.direction = 1; break;
+        case 7: other.direction_known = 0; break;
+        case 8: other.source_address[2] = 3; break;
+        case 9: other.destination_address[2] = 101; break;
+        case 10: other.source_port = 1; break;
+        case 11: other.ports_available = 0; break;
+        case 12: other.protocol = 1; break; /* ICMP has no port zero predicate. */
+        }
+        assert(product_l4_policy_match(&runtime.view, &other, &match) == 0);
+        assert(!match.rule_id && match.stage_verdict == PRODUCT_L4_POLICY_VERDICT_PASS_NEXT);
+    }
+    request.expected_saved_revision--;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_CONFLICT);
+    request.expected_saved_revision++;
+    /* An ordinary source is editable and referencable, never a protected kind. */
+    sakamoto_product_rule_config_request_t full = {.schema = 1, .operation = 2,
+        .expected_saved_revision = revision, .count = 1,
+        .graph = {.group_count = 1, .edge_count = 1, .groups = {10}, .edges = {{10,1,0}}}};
+    full.rules[0] = status.rules[0];
+    assert(product_rule_config_replace(config, &full, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    request.expected_saved_revision = status.saved_revision;
+    request.rules[0].action = 1;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_REFERENCE);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == request.expected_saved_revision && status.rules[0].version == version);
+    full.expected_saved_revision = status.saved_revision;
+    full.graph = (sakamoto_product_rule_graph_t){0};
+    full.count = 2; full.rules[1] = full.rules[0]; full.rules[1].version = 0;
+    assert(product_rule_config_replace(config, &full, publish, &runtime) == 0);
+    product_rule_config_query(config, &status);
+    request.expected_saved_revision = status.saved_revision;
+    assert(product_rule_config_replace(config, &request, publish, &runtime) == SAKAMOTO_RULE_CONFIG_CONFLICT);
+    product_rule_config_close(config);
+    config = product_rule_config_open(path);
+    product_rule_config_query(config, &status);
+    assert(status.count == 2 && status.rules[0].protocol == 0);
+    assert(product_rule_config_activate(config, publish, &runtime) == 0);
+    product_rule_config_close(config); unlink(path); rmdir(directory);
+}
+
 static void reusable_groups(void) {
     char directory[] = "/tmp/sakamoto-rule-groups-XXXXXX";
     assert(mkdtemp(directory));
@@ -680,6 +856,8 @@ static void legacy_source_migration(void) {
 
 int main(void) {
     complete_configuration();
+    network_disable_scope_and_failures();
+    ordinary_network_disable();
     reusable_groups();
     graph_resource_boundaries();
     ordinary_group_fallback();

@@ -29,6 +29,33 @@ public final class RuleConfiguration {
                 ipv4(source), ipv4(destination));
     }
 
+    public static long[] networkDisable(int uid, int network, boolean blocked) {
+        if (uid < 0 || network <= 0) throw new IllegalArgumentException("network scope required");
+        long[] rule = new long[COMPLETE_RULE_WORDS];
+        rule[2] = uid;
+        // The legacy UI enum uses 3 for VPN; platform facts use context 4.
+        rule[3] = network == 3 ? 4 : network; rule[4] = 0xffffffffL;
+        rule[10] = blocked ? 2 : 1;
+        rule[14] = rule[16] = 65535;
+        return rule;
+    }
+
+    /** Read-only projection of ordinary source rules used by the existing toggle. */
+    public static boolean networkDisabled(java.util.Properties source, int uid, int network) {
+        long[] scope = networkDisable(uid, network, true);
+        int count = Integer.parseInt(source.getProperty("count"));
+        if (count < 0 || count > MAX_RULES) throw new IllegalArgumentException("invalid source count");
+        for (int i = 0; i < count; ++i) {
+            String[] fields = source.getProperty("rule." + i + ".wire", "").split(",", -1);
+            if (fields.length != COMPLETE_RULE_WORDS) throw new IllegalArgumentException("invalid rule projection");
+            boolean equal = true;
+            for (int j = 2; j < COMPLETE_RULE_WORDS; ++j)
+                equal &= Long.parseUnsignedLong(fields[j]) == scope[j];
+            if (equal) return true;
+        }
+        return false;
+    }
+
     public static final int COMPLETE_RULE_WORDS = 26;
     public static final int MAX_RULES = 256;
     public static final int MAX_ACTIVE_RULES = 128;
@@ -96,6 +123,7 @@ public final class RuleConfiguration {
         return value;
     }
     private static int cidr(String text, long[] wire, int prefixAt, int addressAt) {
+        if (text.equals("*")) return 0;
         String[] f = text.split("/", -1);
         if (f.length != 2) throw new IllegalArgumentException("numeric CIDR required");
         byte[] bytes;

@@ -593,7 +593,7 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
   else if (product_source_config)
     {
       if (request.operation == SAKAMOTO_RULE_CONFIG_QUERY) result = 0;
-      else if (request.operation == SAKAMOTO_RULE_CONFIG_REPLACE || request.operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL)
+      else if (request.operation == SAKAMOTO_RULE_CONFIG_REPLACE || request.operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL || request.operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE)
         result = product_rule_config_replace (product_source_config, &request,
                                               product_core_publish_source, pcm);
       else result = SAKAMOTO_RULE_CONFIG_INVALID;

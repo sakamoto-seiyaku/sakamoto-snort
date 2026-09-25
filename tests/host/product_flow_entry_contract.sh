@@ -100,7 +100,7 @@ assert 'key_equal (&entry->key, &assignment->key)' in source
 for field in ('a->kind != b->kind', 'a->ip_family != b->ip_family', 'a->protocol != b->protocol', 'a->query_class == b->query_class', 'a->transport.query.identifier == b->transport.query.identifier', 'a->transport.ports.a == b->transport.ports.a', 'a->transport.ports.b == b->transport.ports.b'):
     assert field in source, field
 text=(root/'src/product/vpp/product_packet_graph.c').read_text()
-flow=text.split('static void\nproduct_packet_graph_flow_observe (',1)[1].split('typedef struct',1)[0]
+flow=text.split('static void\nproduct_packet_graph_flow_observe (',1)[1].split('enum\n{\n  PRODUCT_PACKET_GRAPH_L4_MATCH_ASSOCIATION_NONE',1)[0]
 assert 'vlib_get_worker_index (vm->thread_index)' in flow and 'flow_pools[worker]' in flow
 assert 'product_packet_graph_policy_writer_lock' not in flow and 'product_owner_assign (' not in flow
 assert 'flow_pools[lease' not in flow and 'flow_pools[owner' not in flow

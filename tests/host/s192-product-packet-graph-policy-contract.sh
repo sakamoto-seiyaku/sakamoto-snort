@@ -63,11 +63,6 @@ grep -q 'PRODUCT_PACKET_GRAPH_GATE_TABLE_MAX_ENTRIES' "$graph_header"
 grep -q 'product_packet_graph_gate_table_t' "$graph_header"
 grep -q 'gate_entries' "$graph_header"
 grep -q 'gate_entry_count' "$graph_header"
-grep -q 'gate_table.entry_count' "$graph_source"
-grep -q 'gate_table.max_probes' "$graph_source"
-grep -q 'product_packet_graph_gate_table_insert' "$graph_source"
-grep -q 'product_packet_graph_gate_rule_precedes' "$graph_source"
-grep -q 'return left->rule_id < right->rule_id' "$graph_source"
 grep -q 'gate_table_last_match_rule_id' "$graph_source"
 grep -q 'gate_table_last_winner_rank' "$graph_source"
 grep -q 'gate_table_last_no_match_reason' "$graph_source"
@@ -146,13 +141,9 @@ policy_body="$(awk '
   in_stage { print }
   in_stage && /^}/ { exit }
 ' "$graph_source")"
-gate_line="$(printf '%s\n' "$policy_body" | grep -n \
-  'product_packet_graph_policy_gate_drop' | head -n1 | cut -d: -f1)"
-view_eval_line="$(printf '%s\n' "$policy_body" | grep -n \
-  'product_packet_graph_l4_view_evaluate' | head -n1 | cut -d: -f1)"
-[[ -n "$gate_line" && -n "$view_eval_line" &&
-   "$gate_line" -lt "$view_eval_line" ]] ||
-  fail "Gate must precede the shared immutable L4 stage"
+if printf '%s\n' "$policy_body" | grep -q 'product_packet_graph_policy_gate_drop'; then
+  fail "retired Gate precedence remains in the packet path"
+fi
 printf '%s\n' "$policy_body" | grep -q 'PRODUCT_PACKET_INTENT_DROP_RUNTIME' ||
   fail "policy stage does not own terminal DROP"
 printf '%s\n' "$policy_body" | grep -q 'PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT' ||
@@ -175,10 +166,8 @@ body=s.split('static product_packet_result_t\nproduct_packet_graph_policy_on_own
 assert body.index('product_policy_snapshot_acquire') < body.index('product_packet_graph_policy_stage_snapshot') < body.index('product_packet_graph_flow_observe') < body.index('product_policy_snapshot_release')
 assert 'product_flow_entry_publish_revision' not in s
 assert 'product_packet_graph_l4_match (' not in s
-gate=s.split('static int\nproduct_packet_graph_policy_gate_drop (',1)[1].split('static void\nproduct_packet_graph_gate_policy_from_match',1)[0]
-assert 'product_packet_graph_gate_rule_matches (entry, &packet, &no_match_reason)' in gate
-assert 'index < bank->gate_table.entry_count' in gate
-assert 'matched->rule = *entry' in gate
+assert 'product_packet_graph_policy_gate_drop' not in s
+assert 'gate_table;' not in s
 PY_SNAPSHOT
 projection_body="$(awk '
   /^product_packet_graph_l4_packet_projection \(/ { in_projection = 1 }
@@ -314,9 +303,6 @@ for gate_vector in drop_ok range_ok ipv6_ok address_ok ifindex_ok \
     fail "GateTable fixture omits vector: $gate_vector"
 done
 grep -q 'gate_table_last_match_action' "$graph_source"
-grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_PORTS_UNAVAILABLE' "$graph_source"
-grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_UID' "$graph_source"
-grep -q 'PRODUCT_PACKET_GRAPH_GATE_NO_MATCH_UNKNOWN_CONTEXT' "$graph_source"
 grep -q 'PRODUCT_L4_POLICY_IFINDEX_ANY' "$repo_root/src/product/vpp/product_rule_config.c"
 # The shared typed projection above replaces the former scalar address reader.
 

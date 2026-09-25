@@ -129,6 +129,9 @@ impl DirectRule {
                 .map_err(|_| "invalid unsigned field")
         };
         let cidr = |text: &str| -> Result<(u32, u32, [u8; 16]), &'static str> {
+            if text == "*" {
+                return Ok((0, 0, [0; 16]));
+            }
             let (ip, prefix) = text.split_once('/').ok_or("CIDR required")?;
             let ip = ip
                 .parse::<std::net::IpAddr>()

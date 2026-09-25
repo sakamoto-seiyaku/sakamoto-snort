@@ -220,12 +220,7 @@ public final class ProductCatalogFormatter {
                         .append(row.availability)
                         .append(" | bound ")
                         .append(row.bound ? "yes" : "no")
-                        .append(" | gate wifi=")
-                        .append(row.wifiGateBlocked ? "blocked" : "open")
-                        .append(" mobile=")
-                        .append(row.mobileGateBlocked ? "blocked" : "open")
-                        .append(" vpn=")
-                        .append(row.vpnGateBlocked ? "blocked" : "open");
+                        .append(" | network rules: online source");
                 out.append(" | l4Rules=")
                         .append(row.l4RuleCount);
             }
@@ -329,9 +324,7 @@ public final class ProductCatalogFormatter {
         public String toString() {
             return label + " | " + profileLabel + " | uid " + fullUid
                     + (bound ? " | bound" : " | unbound")
-                    + " | gate wifi=" + (wifiGateBlocked ? "blocked" : "open")
-                    + " mobile=" + (mobileGateBlocked ? "blocked" : "open")
-                    + " vpn=" + (vpnGateBlocked ? "blocked" : "open")
+                    + " | network rules: online source"
                     + " | l4Rules=" + l4RuleCount;
         }
     }

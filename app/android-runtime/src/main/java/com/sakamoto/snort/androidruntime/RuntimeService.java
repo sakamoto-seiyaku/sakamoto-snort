@@ -397,7 +397,7 @@ public final class RuntimeService extends VpnService {
             return START_STICKY;
         }
         if (ACTION_PRODUCT_BIND_APP.equals(action) || ACTION_PRODUCT_UNBIND_APP.equals(action)
-                || ACTION_PRODUCT_SET_NETWORK_GATE.equals(action) || ACTION_PRODUCT_SET_L4_RULE.equals(action)) {
+                || ACTION_PRODUCT_SET_L4_RULE.equals(action)) {
             enqueueLifecycle(() -> writeBestEffortEvidenceFile("product-state/rule-config.properties",
                     "error=legacy_authoring_retired\n"));
             return START_NOT_STICKY;
@@ -4934,7 +4934,7 @@ public final class RuntimeService extends VpnService {
             writeBestEffortEvidenceFile(path, "error=management_unavailable\n"); return;
         }
         try {
-            if (rules == null || (operation != 0 && operation != 2))
+            if (rules == null || (operation != 0 && operation != 2 && operation != 3))
                 throw new IllegalArgumentException("invalid complete request");
             RuleConfiguration.CompleteStatus config = session.completeRuleConfig(operation, expectedSaved, rules);
             RuntimeControlNative.Status packet = session.query();
@@ -6697,23 +6697,23 @@ public final class RuntimeService extends VpnService {
     private void setProductNetworkGate(ApplicationSubjectId subjectId,
                                        AuthoringPolicyBundle.NetworkContextId context,
                                        boolean blocked) {
-        if (productBackend == null) {
-            stopIfInactive();
+        final String path = "product-state/complete-rule-config.properties";
+        RuntimeControlNative.Session session = productCoreSession;
+        if (session == null || !session.isConnected()) {
+            writeBestEffortEvidenceFile(path, "error=management_unavailable\n");
             return;
         }
-        ProductStore.MutationResult result =
-                productBackend.setNetworkGate(subjectId, context, blocked);
-        if (result.persisted) {
-            appendLog("product_control=network_gate subject=" + subjectId.encode()
-                    + " context=" + context.wireName
-                    + " blocked=" + blocked);
-        } else {
-            publishProductMutationFailure("product_network_gate_failed", result,
-                    "Network Gate mutation could not be applied");
+        try {
+            RuleConfiguration.CompleteStatus current = session.completeRuleConfig(0, 0L, new long[0]);
+            if (current.transportCode != 0) {
+                writeBestEffortEvidenceFile(path, "error=network_disable_query_failed\n");
+                return;
+            }
+            long[] scope = RuleConfiguration.networkDisable(subjectId.uid, context.wireId, blocked);
+            manageCompleteRuleConfiguration(3, current.savedRevision, scope);
+        } catch (RuntimeException error) {
+            writeBestEffortEvidenceFile(path, "error=network_disable_request_failed\n");
         }
-        refreshProductCatalogProjection("network_gate");
-        refreshProductActivityProjection("network_gate", subjectId);
-        stopIfInactive();
     }
 
     private void setProductL4Rule(AuthoringPolicyBundle.L4Rule rule) {
