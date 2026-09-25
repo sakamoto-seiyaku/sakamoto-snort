@@ -156,13 +156,31 @@ static void complete_configuration(void) {
     config = product_rule_config_open(path);
     product_rule_config_query(config, &status);
     assert(status.count == 129 && status.active_revision == 0 && status.save_error == 0);
+    /* A new process has no old in-memory snapshot to rescue readiness. */
+    memset(&runtime, 0, sizeof(runtime));
+    uint64_t saved_revision = status.saved_revision;
+    uint64_t saved_version = status.rules[0].version;
     assert(product_rule_config_activate(config, publish, &runtime) == SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(status.compile_error == SAKAMOTO_RULE_CONFIG_COMPILE);
+    assert(status.saved_revision == saved_revision && status.active_revision == 0);
+    assert(status.count == 129 && status.rules[0].version == saved_version);
+    assert(runtime.publications == 0 && runtime.revision == 0);
+    request.expected_saved_revision = saved_revision;
+    memcpy(request.rules, status.rules, sizeof(request.rules));
+    assert(product_rule_config_replace(config, &request, publish, &runtime) ==
+           SAKAMOTO_RULE_CONFIG_COMPILE);
+    product_rule_config_query(config, &status);
+    assert(status.saved_revision == saved_revision && status.count == 129);
+    assert(status.active_revision == 0 && runtime.publications == 0);
     request.expected_saved_revision = status.saved_revision;
     request.count = 2;
     memcpy(request.rules, status.rules, sizeof(request.rules));
     assert(product_rule_config_replace(config, &request, publish, &runtime) == 0);
     product_rule_config_query(config, &status);
     assert(status.active_count == 2 && status.active_revision == status.saved_revision);
+    assert(status.saved_revision == saved_revision + 1 && status.rules[0].version == saved_version);
+    assert(runtime.publications == 1 && !status.compile_error);
     product_rule_config_close(config);
     unlink(path);
     rmdir(directory);

@@ -7,6 +7,15 @@ public final class ProductCoreLifecycle {
 
     private ProductCoreLifecycle() {}
 
+    /** An unstarted repair generation has no native TUN control listener to drain. */
+    public static boolean requiresVpnDrain(boolean captureStarted,
+                                            RuntimeControlNative.Status status) {
+        return captureStarted || status == null || status.code != 0
+                || !status.coreReady || !status.generationLive
+                || status.policyActiveRevision != 0L || status.productGraphEnabled != 0
+                || status.vpnTunFdAttached != 0;
+    }
+
     /**
      * Validate one Product Core reply against the installed product manifest.
      * The returned value is empty only when the reply is ready.
@@ -16,6 +25,22 @@ public final class ProductCoreLifecycle {
                                   int expectedAbiVersion, int expectedApiVersion,
                                   RuntimeControlNative.Status status,
                                   boolean expectedAdapterAvailable) {
+        String management = validateManagement(generation, expectedArtifactId,
+                expectedApiIdentity, expectedVppRevision, expectedAbiVersion,
+                expectedApiVersion, status);
+        if (!management.isEmpty()) return management;
+        if (status.adapterAvailable != expectedAdapterAvailable
+                || status.protectionRunning != expectedAdapterAvailable) {
+            return "product_core_not_ready";
+        }
+        return "";
+    }
+
+    /** Control availability is independent of policy and packet capture readiness. */
+    public static String validateManagement(long generation, String expectedArtifactId,
+                                  String expectedApiIdentity, String expectedVppRevision,
+                                  int expectedAbiVersion, int expectedApiVersion,
+                                  RuntimeControlNative.Status status) {
         if (generation <= 0L || status == null) {
             return "product_protocol_mismatch";
         }
@@ -49,8 +74,6 @@ public final class ProductCoreLifecycle {
             return "product_worker_layout_mismatch";
         }
         if (!status.coreReady
-                || status.adapterAvailable != expectedAdapterAvailable
-                || status.protectionRunning != expectedAdapterAvailable
                 || !status.pluginLoaded || !status.vapiHandleLive || !status.generationLive
                 || status.artifactId.isEmpty() || status.apiIdentity.isEmpty()) {
             return "product_core_not_ready";

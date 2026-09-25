@@ -55,7 +55,12 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
     def test_root_authorization_and_dual_stack_lanes(self):
         service = source(JAVA + "RuntimeService.java")
         start = body(service, "startProductCoreRuntime")
-        self.ordered(start, "!rootCommandAvailable()", "installProductRootNfqueueHook()", "builder.start()")
+        self.ordered(start, "!rootCommandAvailable()", "builder.start()")
+        self.assertNotIn("installProductRootNfqueueHook()", start)
+        capture = body(service, "continueProductCoreStartup")
+        self.ordered(capture, "awaitInitialPolicy(session, process)",
+                     "reconcileProductEmptyPolicy(session", "installProductRootNfqueueHook()",
+                     "productCaptureStarted = true", "publishProductCoreRunning(")
         install = body(service, "installProductRootNfqueueHook")
         self.require(
             install,
@@ -122,10 +127,16 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
                      "network_generation = 0", "clib_memset (&product_network_snapshot, 0")
 
     def test_vpn_validation_is_not_product_protection(self):
-        start = body(source(JAVA + "RuntimeService.java"), "startProductCoreRuntime")
+        service = source(JAVA + "RuntimeService.java")
+        start = body(service, "startProductCoreRuntime")
         self.ordered(start, "!adapter.productLaunchAllowed && !vpnGraphValidation",
-                     "builder.start()", "NativeTunFdClient.attach(")
-        self.require(start, "vpnTunSession.releaseFd(), getApplicationInfo().uid",
+                     "builder.start()")
+        self.assertNotIn("establishPacketAdapterSession(adapter)", start)
+        capture = body(service, "continueProductCoreStartup")
+        self.ordered(capture, "awaitInitialPolicy(session, process)",
+                     "reconcileProductEmptyPolicy(session",
+                     "establishPacketAdapterSession(adapter)", "NativeTunFdClient.attach(")
+        self.require(capture, "vpnTunSession.releaseFd(), getApplicationInfo().uid",
                      "status.vpnTunFdAttached != 1 || status.adapterAvailable || status.protectionRunning",
                      'throw new IOException("TUN graph handoff/readiness mismatch")')
         platform = source(JAVA + "VpnTunPlatformSession.java")

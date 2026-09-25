@@ -903,6 +903,10 @@ public final class RuntimeService extends VpnService {
             RuntimeProfile runningProfile = activeProfile == null
                     ? RuntimeProfile.ROOT : activeProfile;
             if (selected == runningProfile) {
+                if (!productCaptureStarted) {
+                    continueProductCoreStartup();
+                    return;
+                }
                 appendLog("start ignored: exactly one runtime is already active");
                 queryProductCoreRuntime();
                 return;
@@ -934,13 +938,13 @@ public final class RuntimeService extends VpnService {
             productProcessAlive = false;
             productSessionLive = false;
         }
-        VpnTunPlatformSession pendingVpnTunSession = null;
         if (productProcessAlive || productSessionLive) {
             failProductCoreGeneration("product_core_session_missing",
                     "Product Core handles are inconsistent for the active generation");
             return;
         }
         activeProfile = selected;
+        productCaptureStarted = false;
         activeWorkerPlacement = requestedWorkerPlacement;
         initializeProfilePaths(selected);
         vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
@@ -1057,15 +1061,6 @@ public final class RuntimeService extends VpnService {
                     productVppRevision, "", generation))) {
                 return;
             }
-            pendingVpnTunSession = establishPacketAdapterSession(adapter);
-            if (adapter.requiresVpnPlatformSession && pendingVpnTunSession == null) {
-                return;
-            }
-            if (selected == RuntimeProfile.ROOT && !installProductRootNfqueueHook()) {
-                failProductCoreGeneration("root_nfqueue_hook_install_failed",
-                        "Root NFQUEUE INPUT/OUTPUT hooks could not be installed before Product Core launch");
-                return;
-            }
             prepareProductCoreProfile(profileRoot, nativeDir, owner);
             productCoreOwnerWritten = true;
             File ruleDirectory = new File(getFilesDir(), "rule-configuration");
@@ -1128,6 +1123,63 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             productCoreSession = session;
+            monitorProductCoreExit(process);
+            continueProductCoreStartup();
+        } catch (Exception error) {
+            Log.e(TAG, "Product Core startup failed", error);
+            if (!productCoreOwnerWritten && productCorePreflightClean
+                    && !processAlive(vppProcess)
+                    && !(productCoreSession != null && productCoreSession.isConnected())) {
+                // Preflight proved every existing owner gone. A preparation
+                // interruption therefore owns only this new profile and can
+                // repair it before the next explicit fresh START.
+                boolean repaired = profileRoot == null || !profileRoot.exists()
+                        || cleanProductCoreProfile(profileRoot);
+                publishError(repaired ? "runtime_start_failed" : "cleanup_failed",
+                        repaired ? messageOf(error)
+                                : messageOf(error) + "; interrupted profile repair failed",
+                        !repaired, ProductCoreLifecycle.UNKNOWN_PID);
+                if (recoverVpnFlowStackAfterFailure(repaired,
+                        "runtime_start_failed", messageOf(error))) return;
+                stopIfInactive();
+                return;
+            }
+            failProductCoreGeneration("runtime_start_failed", messageOf(error));
+        }
+    }
+
+    private boolean productCaptureStarted;
+
+    /** Resume only the platform phase; a healthy repair session keeps its identity. */
+    private void continueProductCoreStartup() {
+        RuntimeProfile selected = activeProfile;
+        ProductPacketAdapterContract adapter = ProductPacketAdapterContract.forProfile(selected);
+        RuntimeControlNative.Session session = productCoreSession;
+        Process process = vppProcess;
+        VpnTunPlatformSession pendingVpnTunSession = null;
+        try {
+            File runtime = new File(profileRoot, "runtime");
+            RuntimeControlNative.Status status = awaitInitialPolicy(session, process);
+            if (status == null) return;
+            boolean adapterReadinessExact = status != null
+                    && status.adapterAvailable == adapter.adapterReadyOnStart;
+            if (!adapterReadinessExact) {
+                failProductCoreGeneration("product_adapter_readiness_mismatch",
+                        "Product Core VAPI adapter readiness does not match the selected profile");
+                return;
+            }
+            RuntimeControlNative.Status reconciled =
+                    reconcileProductEmptyPolicy(session, "startup_reconcile");
+            if (reconciled == null) {
+                failProductCoreGeneration(productCoreConnectFailureCode.isEmpty()
+                                ? "product_policy_reconcile_failed"
+                                : productCoreConnectFailureCode,
+                        productCoreConnectFailureMessage.isEmpty()
+                                ? "Product policy reconcile failed"
+                                : productCoreConnectFailureMessage);
+                return;
+            }
+            status = reconciled;
             if (selected == RuntimeProfile.ROOT || vpnGraphValidation) {
                 final long networkGeneration = generation;
                 platformNetworkSnapshots = new PlatformNetworkSnapshots(
@@ -1141,12 +1193,14 @@ public final class RuntimeService extends VpnService {
                         }));
                 platformNetworkSnapshots.start();
             }
-            RuntimeControlNative.Status status = session.lastStatus();
-            boolean adapterReadinessExact = status != null
-                    && status.adapterAvailable == adapter.adapterReadyOnStart;
-            if (!adapterReadinessExact) {
-                failProductCoreGeneration("product_adapter_readiness_mismatch",
-                        "Product Core VAPI adapter readiness does not match the selected profile");
+            pendingVpnTunSession = establishPacketAdapterSession(adapter);
+            if (adapter.requiresVpnPlatformSession && pendingVpnTunSession == null) {
+                failProductCoreGeneration("vpn_tun_establish_failed", "VPN platform session is unavailable");
+                return;
+            }
+            if (selected == RuntimeProfile.ROOT && !installProductRootNfqueueHook()) {
+                failProductCoreGeneration("root_nfqueue_hook_install_failed",
+                        "Root NFQUEUE INPUT/OUTPUT hooks could not be installed");
                 return;
             }
             if (selected == RuntimeProfile.VPN && vpnGraphValidation) {
@@ -1265,18 +1319,6 @@ public final class RuntimeService extends VpnService {
                     return;
                 }
             }
-            RuntimeControlNative.Status reconciled =
-                    reconcileProductEmptyPolicy(session, "startup_reconcile");
-            if (reconciled == null) {
-                failProductCoreGeneration(productCoreConnectFailureCode.isEmpty()
-                                ? "product_policy_reconcile_failed"
-                                : productCoreConnectFailureCode,
-                        productCoreConnectFailureMessage.isEmpty()
-                                ? "Product policy reconcile failed"
-                                : productCoreConnectFailureMessage);
-                return;
-            }
-            status = reconciled;
             if (!s187WorkerCoreConfigMatches(status)) {
                 failProductCoreGeneration("worker_placement_mismatch",
                         "VPP worker placement differs from the requested CPU order");
@@ -1288,6 +1330,7 @@ public final class RuntimeService extends VpnService {
                         "Validated worker placement could not be persisted");
                 return;
             }
+            productCaptureStarted = true;
             if (!publishProductCoreRunning(status, ProductCoreLifecycle.UNKNOWN_PID)) {
                 failProductCoreGeneration("runtime_state_persistence_unavailable",
                         "Product Core identity could not be published");
@@ -1296,29 +1339,76 @@ public final class RuntimeService extends VpnService {
             appendLog("product_core=running generation=" + generation
                     + " api=" + status.apiIdentity + " adapter=" + adapter.adapterName
                     + " protection=" + status.protectionRunning);
-            monitorProductCoreExit(process);
         } catch (Exception error) {
-            Log.e(TAG, "Product Core startup failed", error);
             closeVpnTunSessionQuietly(pendingVpnTunSession);
-            if (!productCoreOwnerWritten && productCorePreflightClean
-                    && !processAlive(vppProcess)
-                    && !(productCoreSession != null && productCoreSession.isConnected())) {
-                // Preflight proved every existing owner gone. A preparation
-                // interruption therefore owns only this new profile and can
-                // repair it before the next explicit fresh START.
-                boolean repaired = profileRoot == null || !profileRoot.exists()
-                        || cleanProductCoreProfile(profileRoot);
-                publishError(repaired ? "runtime_start_failed" : "cleanup_failed",
-                        repaired ? messageOf(error)
-                                : messageOf(error) + "; interrupted profile repair failed",
-                        !repaired, ProductCoreLifecycle.UNKNOWN_PID);
-                if (recoverVpnFlowStackAfterFailure(repaired,
-                        "runtime_start_failed", messageOf(error))) return;
-                stopIfInactive();
-                return;
-            }
             failProductCoreGeneration("runtime_start_failed", messageOf(error));
         }
+    }
+
+    /** A policy error is repairable; timeout/control/Adapter faults are not policy errors. */
+    private RuntimeControlNative.Status awaitInitialPolicy(RuntimeControlNative.Session session,
+                                                           Process process) throws InterruptedException {
+        for (int attempt = 0; attempt < HEALTH_ATTEMPTS; ++attempt) {
+            if (process == null || !process.isAlive() || session == null || !session.isConnected()) {
+                failProductCoreGeneration("product_core_session_missing", "Management runtime is unavailable");
+                return null;
+            }
+            RuntimeControlNative.Status status = session.query();
+            String validation = validateProductManagement(status);
+            if (!validation.isEmpty()) {
+                failProductCoreGeneration(validation, "Management status validation failed");
+                return null;
+            }
+            RuleConfiguration.CompleteStatus config = session.completeRuleConfig(0, 0L, new long[0]);
+            if (config.transportCode != 0 || config.generation != generation) {
+                failProductCoreGeneration("product_core_query_failed", "Rule configuration query failed");
+                return null;
+            }
+            if (config.activeRevision == 0 && (config.compileError != 0 || config.saveError != 0)) {
+                publishProductManagement(status, config);
+                return null;
+            }
+            ProductPacketAdapterContract adapter = ProductPacketAdapterContract.forProfile(activeProfile);
+            if (config.activeRevision != 0 && status.policyActiveRevision == config.activeRevision
+                    && status.adapterAvailable == adapter.adapterReadyOnStart
+                    && status.productGraphEnabled != 0) return status;
+            Thread.sleep(HEALTH_RETRY_MILLIS);
+        }
+        failProductCoreGeneration("product_adapter_readiness_mismatch",
+                "Policy or Adapter startup did not become ready");
+        return null;
+    }
+
+    private String validateProductManagement(RuntimeControlNative.Status status) {
+        return ProductCoreLifecycle.validateManagement(generation, productArtifactId,
+                productApiIdentity, productVppRevision, productAbiVersion, productApiVersion, status);
+    }
+
+    private void publishProductManagement(RuntimeControlNative.Status status,
+                                          RuleConfiguration.CompleteStatus config) {
+        String code = config.activeRevision == 0 ? "rule_configuration_not_active" : "capture_not_started";
+        publish(new RuntimeSnapshot(RuntimeSnapshot.STATE_ERROR, activeProfile,
+                VppHealthHandshake.PROTOCOL, status.vppRevision, status.artifactId, deviceAbi(),
+                "ok", status.adapterAvailable
+                        ? ProductPacketAdapterContract.forProfile(activeProfile).adapterName
+                        : RuntimeSnapshot.ADAPTER_UNAVAILABLE,
+                code, config.activeRevision == 0 ? "VPP source configuration requires correction"
+                        : "Policy ready; start to enable platform capture", true,
+                ProductCoreLifecycle.UNKNOWN_PID, generation, System.currentTimeMillis(), false));
+        writeStartupReadiness(status, config);
+    }
+
+    private void writeStartupReadiness(RuntimeControlNative.Status status,
+                                       RuleConfiguration.CompleteStatus config) {
+        writeBestEffortEvidenceFile("product-state/startup-readiness.properties",
+                "generation=" + generation + "\nmanagementReady=" + validateProductManagement(status).isEmpty()
+                + "\npolicyReady=" + (config.activeRevision != 0)
+                + "\nadapterReady=" + status.adapterAvailable
+                + "\ncaptureStarted=" + productCaptureStarted
+                + "\nprotectionRunning=" + (productCaptureStarted && status.protectionRunning)
+                + "\nsavedRevision=" + Long.toUnsignedString(config.savedRevision)
+                + "\nactiveRevision=" + Long.toUnsignedString(config.activeRevision)
+                + "\nsaveError=" + config.saveError + "\ncompileError=" + config.compileError + "\n");
     }
 
     /**
@@ -1373,9 +1463,9 @@ public final class RuntimeService extends VpnService {
                 if (status != null && status.code != 0) {
                     validation = ProductCoreLifecycle.failureCode(status);
                 } else {
-                    validation = ProductCoreLifecycle.validate(generation, productArtifactId,
+                    validation = ProductCoreLifecycle.validateManagement(generation, productArtifactId,
                             productApiIdentity, productVppRevision, productAbiVersion,
-                            productApiVersion, status, adapter.adapterReadyOnStart);
+                            productApiVersion, status);
                 }
                 if (validation.isEmpty()) {
                     return session;
@@ -1409,9 +1499,9 @@ public final class RuntimeService extends VpnService {
                 if (!session.isConnected() || (status != null && status.code != 0)) {
                     validation = ProductCoreLifecycle.failureCode(status);
                 } else {
-                    validation = ProductCoreLifecycle.validate(generation, productArtifactId,
+                    validation = ProductCoreLifecycle.validateManagement(generation, productArtifactId,
                             productApiIdentity, productVppRevision, productAbiVersion,
-                            productApiVersion, status, adapter.adapterReadyOnStart);
+                            productApiVersion, status);
                 }
                 if (session.isConnected() && validation.isEmpty()) {
                     return session;
@@ -1468,6 +1558,20 @@ public final class RuntimeService extends VpnService {
             return;
         }
         RuntimeControlNative.Status status = session.query();
+        String managementValidation = validateProductManagement(status);
+        if (!managementValidation.isEmpty()) {
+            failProductCoreGeneration(managementValidation, "Management query failed");
+            return;
+        }
+        if (!productCaptureStarted) {
+            RuleConfiguration.CompleteStatus config = session.completeRuleConfig(0, 0L, new long[0]);
+            if (config.transportCode != 0 || config.generation != generation) {
+                failProductCoreGeneration("product_core_query_failed", "Rule configuration query failed");
+                return;
+            }
+            publishProductManagement(status, config);
+            return;
+        }
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(activeProfile);
         String validation;
@@ -2510,6 +2614,8 @@ public final class RuntimeService extends VpnService {
                     + generation);
             return true;
         }
+        if (!productCaptureStarted || status.policyActiveRevision == 0L) return false;
+        writeStartupReadiness(status, productCoreSession.completeRuleConfig(0, 0L, new long[0]));
         ProductPacketAdapterContract adapter =
                 ProductPacketAdapterContract.forProfile(activeProfile);
         String adapterReadiness = status.adapterAvailable ? adapter.adapterName : RuntimeSnapshot.ADAPTER_UNAVAILABLE;
@@ -4958,6 +5064,7 @@ public final class RuntimeService extends VpnService {
         if (clean) {
             productCoreSession = null;
             vppProcess = null;
+            productCaptureStarted = false;
             clearProfileHandles();
         }
         publishError(clean ? code : "cleanup_failed",
@@ -5052,7 +5159,11 @@ public final class RuntimeService extends VpnService {
         if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation
                 && processAlive(vppProcess) && productCoreSession != null
                 && productCoreSession.isConnected()) {
-            tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
+            RuntimeControlNative.Status status = productCoreSession.query();
+            if (!validateProductManagement(status).isEmpty()
+                    || ProductCoreLifecycle.requiresVpnDrain(productCaptureStarted, status)) {
+                tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
+            }
             appendLog("s213 native_tun_drain=" + tunClosed);
             if (vpnHevValidation) archiveHevNativeLog("s237-last-stop.log");
         }
@@ -5946,6 +6057,7 @@ public final class RuntimeService extends VpnService {
             }
             productCoreSession = null;
             vppProcess = null;
+            productCaptureStarted = false;
             clearProfileHandles();
             boolean published = publish(RuntimeSnapshot.stopped(
                     current.profile, current.generation));
@@ -6018,6 +6130,7 @@ public final class RuntimeService extends VpnService {
         }
         productCoreSession = null;
         vppProcess = null;
+        productCaptureStarted = false;
         clearProfileHandles();
         RuntimeProfile selected = activeProfile == null ? RuntimeProfile.ROOT : activeProfile;
         boolean published = publish(destroying

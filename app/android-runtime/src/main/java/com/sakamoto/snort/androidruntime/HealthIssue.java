@@ -9,6 +9,7 @@ public final class HealthIssue {
     public static final String CATEGORY_APPLY_FAILURE = "apply_failure";
     public static final String CATEGORY_PAUSED = "paused";
     public static final String CATEGORY_RECOVERY = "recovery";
+    public static final String CATEGORY_START_REQUIRED = "start_required";
 
     public final String category;
     public final String code;
@@ -42,6 +43,14 @@ public final class HealthIssue {
         }
         String code = snapshot.errorCode;
         String message = snapshot.errorMessage;
+        if ("rule_configuration_not_active".equals(code)) {
+            return new HealthIssue(CATEGORY_APPLY_FAILURE, code, message,
+                    "Correct the saved rules, then start protection.", true);
+        }
+        if ("capture_not_started".equals(code)) {
+            return new HealthIssue(CATEGORY_START_REQUIRED, code, message,
+                    "Start protection when you are ready.", true);
+        }
         if (RuntimeSnapshot.ERROR_USER_PAUSE.equals(code)) {
             return new HealthIssue(CATEGORY_PAUSED, code, message,
                     "Resume protection when you are ready.", true);

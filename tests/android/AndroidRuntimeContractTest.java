@@ -414,6 +414,10 @@ public final class AndroidRuntimeContractTest {
                 "repeated runtime failures stop automatic restart and request intervention");
         check(!policy.recoverable("root_authorization_required"),
                 "permission failures are surfaced to the user instead of auto-restarted");
+        check(!policy.vpnFlowStackRecoverable("rule_configuration_not_active")
+                        && !policy.recoverable("rule_configuration_not_active")
+                        && !policy.vpnFlowStackRecoverable("capture_not_started"),
+                "saved configuration errors and pending capture do not trigger crash recovery");
     }
 
     private static void runtimeStateWriterCanInjectPersistenceFailure() throws Exception {
@@ -1508,6 +1512,30 @@ public final class AndroidRuntimeContractTest {
                         "product_core.api/1.0.0@abcd1234",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready),
                 "the exact live core-only Product Core generation is ready");
+        check(ProductCoreLifecycle.validateManagement(42L, "product-core",
+                        "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready).isEmpty(),
+                "healthy management remains usable without an active policy or Adapter");
+        String[] managementValues = readyValues.clone();
+        managementValues[72] = managementValues[73] = "0";
+        RuntimeControlNative.Status managementOnly = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) managementValues, 0);
+        check(!ProductCoreLifecycle.requiresVpnDrain(false, managementOnly),
+                "a management-only generation with no graph, policy or TUN needs no TUN drain");
+        check(ProductCoreLifecycle.requiresVpnDrain(false, ready),
+                "a graph activated by online repair still needs native drain before platform capture");
+        check(ProductCoreLifecycle.requiresVpnDrain(true, ready),
+                "a started platform capture must always attempt its native drain");
+        check(ProductCoreLifecycle.requiresVpnDrain(false, null),
+                "missing control evidence cannot authorize skipping the native drain");
+        managementValues[0] = "7";
+        RuntimeControlNative.Status failedManagement = (RuntimeControlNative.Status) parser.invoke(
+                null, (Object) managementValues, 0);
+        check("product_core_query_failed".equals(ProductCoreLifecycle.validateManagement(
+                        42L, "product-core", "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, failedManagement))
+                        && ProductCoreLifecycle.requiresVpnDrain(false, failedManagement),
+                "an unavailable control query stays an infrastructure fault during policy repair");
 
         readyValues[1] = "41";
         RuntimeControlNative.Status stale = (RuntimeControlNative.Status) parser.invoke(
@@ -1516,6 +1544,10 @@ public final class AndroidRuntimeContractTest {
                         "product_core.api/1.0.0@abcd1234",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, stale),
                 "a status from another generation is not ready");
+        check("product_generation_mismatch".equals(ProductCoreLifecycle.validateManagement(
+                        42L, "product-core", "product_core.api/1.0.0@abcd1234",
+                        "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, stale)),
+                "management repair does not bypass generation fencing");
 
         readyValues[1] = "42";
         readyValues[3] = "1";
@@ -3792,6 +3824,20 @@ public final class AndroidRuntimeContractTest {
                         false, -1L), capabilities);
         check(HealthIssue.CATEGORY_PERMISSION.equals(permission.healthIssue.category),
                 "HealthIssue maps permission failure without calling it a runtime crash");
+        RuntimeSummary invalidSource = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.ROOT, "", "", "", "",
+                        "rule_configuration_not_active", "Saved configuration requires correction",
+                        true, -1L), capabilities);
+        check(HealthIssue.CATEGORY_APPLY_FAILURE.equals(invalidSource.healthIssue.category)
+                        && invalidSource.healthIssue.action.contains("saved rules")
+                        && !invalidSource.healthIssue.action.contains("previous snapshot"),
+                "startup policy failure asks for online correction, not runtime cleanup or a nonexistent snapshot");
+        RuntimeSummary repairedSource = RuntimeSummary.fromSnapshot(
+                RuntimeSnapshot.error(RuntimeProfile.VPN, "", "", "", "",
+                        "capture_not_started", "Policy ready", true, -1L), capabilities);
+        check("start_required".equals(repairedSource.healthIssue.category)
+                        && repairedSource.healthIssue.action.contains("Start"),
+                "repaired policy awaits explicit Start without implying a runtime fault or automatic recovery");
         RuntimeSummary transport = RuntimeSummary.fromSnapshot(
                 RuntimeSnapshot.error(RuntimeProfile.VPN, "", "", "", "",
                         "vpn_hev_transport_start_failed", "HEV failed",

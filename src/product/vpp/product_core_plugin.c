@@ -77,6 +77,8 @@ typedef struct
 
 product_core_main_t product_core_main;
 static product_rule_config_t *product_source_config;
+static int product_core_waiting_for_policy;
+extern vlib_node_registration_t product_core_start_adapters_node;
 
 static uint32_t
 product_core_publish_source (void *opaque, uint64_t revision, uint64_t hash,
@@ -579,6 +581,10 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
       else result = SAKAMOTO_RULE_CONFIG_INVALID;
     }
   if (product_source_config) product_rule_config_query (product_source_config, &status);
+  if (!rv && !result && request.operation != SAKAMOTO_RULE_CONFIG_QUERY
+      && status.active_revision && product_core_waiting_for_policy)
+    vlib_process_signal_event (pcm->vlib_main,
+                               product_core_start_adapters_node.index, 1, 0);
   REPLY_MACRO2 (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
     rmp->retval = htonl (rv);
     rmp->generation = clib_host_to_net_u64 (pcm->generation);
@@ -734,11 +740,26 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
         return 0;
       vlib_process_wait_for_event_or_clock (vm, 0.001);
     }
-  vlib_worker_thread_barrier_sync (vm);
-  (void) (product_core_profile_is_root ()
-    ? product_root_nfqueue_adapter_start (vm, pcm->generation)
-    : product_vpn_tun_start (vm, pcm->generation));
-  vlib_worker_thread_barrier_release (vm);
+  for (;;)
+    {
+      vlib_worker_thread_barrier_sync (vm);
+      int started = product_core_profile_is_root ()
+        ? product_root_nfqueue_adapter_start (vm, pcm->generation)
+        : product_vpn_tun_start (vm, pcm->generation);
+      vlib_worker_thread_barrier_release (vm);
+      sakamoto_product_rule_config_status_t config = {0};
+      if (product_source_config)
+        product_rule_config_query (product_source_config, &config);
+      /* Only a source failure is an online repair wait. Adapter/control
+       * failures keep their existing bounded supervisor recovery. */
+      if (started || config.active_revision
+          || (!config.compile_error && !config.save_error))
+        break;
+      product_core_waiting_for_policy = 1;
+      vlib_process_wait_for_event (vm);
+      (void) vlib_process_get_events (vm, 0);
+      product_core_waiting_for_policy = 0;
+    }
   return 0;
 }
 
