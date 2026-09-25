@@ -157,6 +157,7 @@ typedef struct
   uint32_t first_rule;
   uint32_t rule_count;
   uint8_t requires_flow; /* At least one whole rule is post-flow. */
+  uint8_t dependencies; /* Conservative union for the entire application. */
 } product_l4_policy_uid_bucket_t;
 
 /* Private fixed candidate index; entries always refer to whole rules. */
@@ -287,5 +288,49 @@ product_l4_policy_evaluate (const product_l4_policy_view_t *view,
 product_l4_policy_status_t
 product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
                              uint64_t rule_id, uint32_t *winner_rank);
+
+/* Dependency contract: all static values/availability are conservatively
+ * guarded. Dynamic producers must add their dependency and canonical projection
+ * here before their predicates can be cached. Never summarize only the winner. */
+#define PRODUCT_POLICY_DEP_STATIC 1U
+#define PRODUCT_POLICY_DEP_CT 2U
+#define PRODUCT_POLICY_CACHE_CAPACITY 128U
+#define PRODUCT_POLICY_CACHE_MAX_CAPACITY 128U
+
+typedef struct {
+  uint64_t generation, revision, snapshot_hash, flow_incarnation;
+} product_policy_cache_identity_t;
+
+typedef struct {
+  product_policy_cache_identity_t identity;
+  product_l4_policy_packet_t packet;
+  uint32_t position;
+  uint32_t dependencies;
+} product_policy_cache_guard_t;
+
+typedef struct {
+  product_policy_cache_guard_t guard;
+  product_l4_policy_match_result_t result;
+  uint8_t valid;
+} product_policy_cache_entry_t;
+
+typedef struct {
+  /* Zero chooses the measured default. Set once before owner admission;
+   * storage is fixed even for a smaller active capacity. */
+  uint32_t capacity, occupied;
+  uint64_t hits, misses, replacements;
+  product_policy_cache_entry_t entries[PRODUCT_POLICY_CACHE_MAX_CAPACITY];
+} product_policy_cache_t;
+
+/* Owner-only synchronous operation; NULL cache means ordinary matching.
+ * No borrowed view/Flow pointer survives. Identity is from the protected packet
+ * snapshot and the current observation, never a slot index or a fact version.
+ * Full semantic results are retained; leaf/index work is zero on hits.
+ * subject_probes includes the guard dependency lookup on both paths.
+ * Errors are never cached. Caller owns the common attribution/accounting path. */
+product_l4_policy_status_t product_l4_policy_match_cached (
+  product_policy_cache_t *, const product_l4_policy_view_t *,
+  const product_l4_policy_packet_t *, const product_policy_cache_identity_t *,
+  product_l4_policy_position_t, product_l4_policy_match_result_t *);
 
 #endif

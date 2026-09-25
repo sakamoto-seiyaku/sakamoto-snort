@@ -231,6 +231,8 @@ typedef struct
   u32 hold_us;
   product_ct_facts_t ct; /* Packet-local result; not stored in the immutable bank. */
   product_l4_policy_position_t position;
+  product_policy_cache_t *cache; /* Current owner only; packet lifetime. */
+  u64 flow_incarnation;
 } product_policy_snapshot_t;
 
 typedef struct
@@ -238,6 +240,7 @@ typedef struct
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
   u64 acquired, released, retired, mismatches;
   u64 generation, revision, snapshot_hash;
+  product_policy_cache_t cache;
 } product_policy_worker_t;
 
 
@@ -446,6 +449,8 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
           continue;
         }
       snapshot->ct = (product_ct_facts_t) {0};
+      snapshot->cache = 0;
+      snapshot->flow_incarnation = 0;
       snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
@@ -2895,6 +2900,7 @@ product_packet_graph_l4_view_evaluate (
   product_l4_policy_view_t empty_view;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u64 query_started = snapshot->trace ? product_packet_event_clock_ns () : 0;
+  u64 previous_hits = snapshot->cache ? snapshot->cache->hits : 0;
 #endif
   product_packet_graph_l4_packet_projection (lease, &packet);
   packet.ct_state = snapshot->ct.state;
@@ -2906,9 +2912,24 @@ product_packet_graph_l4_view_evaluate (
       product_l4_policy_init (&empty_view);
       return product_l4_policy_evaluate (&empty_view, &packet, match);
     }
-  product_l4_policy_status_t status = product_l4_policy_match_position (
-    &snapshot->bank->view, &packet, snapshot->position, match);
+  product_policy_cache_identity_t identity = {
+    snapshot->identity.generation, snapshot->identity.revision,
+    snapshot->identity.snapshot_hash, snapshot->flow_incarnation
+  };
+  product_l4_policy_status_t status = product_l4_policy_match_cached (
+    snapshot->cache, &snapshot->bank->view, &packet, &identity, snapshot->position, match);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  if (snapshot->trace)
+    fprintf (stderr, "t11 event=cache token=%llu generation=%llu revision=%llu snapshot_hash=%llu incarnation=%llu position=%u hit=%u status=%u evaluation=%u rule=%llu rank=%u mode=%u declared=%u actual=%u reason=%u priority=%u order=%u hits=%llu misses=%llu\n",
+      (unsigned long long) lease->origin_obligation_id,
+      (unsigned long long) identity.generation, (unsigned long long) identity.revision,
+      (unsigned long long) identity.snapshot_hash, (unsigned long long) identity.flow_incarnation,
+      snapshot->position, snapshot->cache && snapshot->cache->hits != previous_hits,
+      status, match->evaluation, (unsigned long long) match->rule_id,
+      match->winner_rank, match->mode, match->action, match->actual_action,
+      match->reason_id, match->priority, match->order,
+      (unsigned long long) (snapshot->cache ? snapshot->cache->hits : 0),
+      (unsigned long long) (snapshot->cache ? snapshot->cache->misses : 0));
   if (snapshot->trace)
     fprintf (stderr, "t09 event=query token=%llu generation=%llu revision=%llu snapshot_hash=%llu position=%u status=%u rule=%llu rank=%u masks=%u keys=%u residuals=%u subject_probes=%u query_ns=%llu\n",
       (unsigned long long) lease->origin_obligation_id,
@@ -3735,6 +3756,7 @@ product_packet_graph_policy_on_owner (
   product_policy_worker_t *worker = vm->thread_index > 0 && vm->thread_index <= PRODUCT_GRAPH_WORKERS
     ? &graph->policy_workers[vlib_get_worker_index (vm->thread_index)] : 0;
   snapshot.trace = trace;
+  snapshot.cache = worker ? &worker->cache : 0;
   if (worker)
     {
       snapshot.hold_us = __atomic_exchange_n (
@@ -3776,6 +3798,7 @@ product_packet_graph_policy_on_owner (
       };
       product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
       snapshot.ct = observation.tracker.facts;
+      snapshot.flow_incarnation = observation.entry ? observation.entry->incarnation : 0;
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
@@ -3977,6 +4000,11 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
       product_flow_runtime_snapshot_t snapshot = product_flow_runtime_snapshot (g->flow_pools[worker]);
       const product_flow_runtime_snapshot_t *pool = &snapshot;
       const product_policy_worker_t *policy = &g->policy_workers[worker];
+      vlib_cli_output (vm, "policy.cache worker=%u capacity=%u occupied=%u storage_bytes=%u hits=%llu misses=%llu replacements=%llu",
+        worker, policy->cache.capacity ? policy->cache.capacity : PRODUCT_POLICY_CACHE_CAPACITY,
+        policy->cache.occupied, (unsigned) sizeof (policy->cache),
+        (unsigned long long) policy->cache.hits, (unsigned long long) policy->cache.misses,
+        (unsigned long long) policy->cache.replacements);
       vlib_cli_output (vm, "policy.worker worker=%u acquired=%llu released=%llu retired=%llu mismatches=%llu generation=%llu revision=%llu snapshot_hash=%llu",
         worker, (unsigned long long) policy->acquired, (unsigned long long) policy->released,
         (unsigned long long) policy->retired, (unsigned long long) policy->mismatches,

@@ -582,6 +582,9 @@ product_l4_policy_compile_with_budget (product_l4_policy_view_t *view,
           view->rules[rule_index].winner_rank = rank++;
           view->uid_buckets[bucket_index].requires_flow |=
             view->rules[rule_index].position == PRODUCT_L4_POLICY_POSITION_POST;
+          view->uid_buckets[bucket_index].dependencies |= PRODUCT_POLICY_DEP_STATIC;
+          if (expression_requires_flow (&view->rules[rule_index].source))
+            view->uid_buckets[bucket_index].dependencies |= PRODUCT_POLICY_DEP_CT;
           rule_index++;
         }
 
@@ -984,4 +987,89 @@ product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
       }
   *winner_rank = 0;
   return PRODUCT_L4_POLICY_STATUS_NOT_FOUND;
+}
+
+/* Canonical bytes avoid caller padding/uninitialized irrelevant dynamic data.
+ * Static over-guarding is intentional: application/platform changes and opposite
+ * packet endpoints/directions cannot silently share a result. */
+static void
+cache_guard (product_policy_cache_guard_t *guard,
+             const product_l4_policy_packet_t *packet,
+             const product_policy_cache_identity_t *identity,
+             product_l4_policy_position_t position, unsigned dependencies)
+{
+  memset (guard, 0, sizeof (*guard));
+  guard->identity = *identity;
+  guard->position = position;
+  guard->dependencies = dependencies;
+#define COPY(field) guard->packet.field = packet->field
+  COPY(uid); COPY(uid_known); COPY(family); COPY(protocol);
+  COPY(direction); COPY(direction_known); COPY(network_context_id);
+  COPY(network_context_known); COPY(ifindex); COPY(ifindex_known);
+  COPY(source_port); COPY(destination_port); COPY(ports_available);
+  memcpy (guard->packet.source_address, packet->source_address, 16);
+  memcpy (guard->packet.destination_address, packet->destination_address, 16);
+  if (dependencies & PRODUCT_POLICY_DEP_CT)
+    {
+      COPY(ct_state); COPY(ct_state_known);
+      COPY(flow_direction); COPY(flow_direction_known);
+    }
+#undef COPY
+}
+
+product_l4_policy_status_t
+product_l4_policy_match_cached (
+  product_policy_cache_t *cache, const product_l4_policy_view_t *view,
+  const product_l4_policy_packet_t *packet,
+  const product_policy_cache_identity_t *identity,
+  product_l4_policy_position_t position, product_l4_policy_match_result_t *result)
+{
+  if (!cache)
+    return product_l4_policy_match_position (view, packet, position, result);
+  if (!view || !packet || !identity || !result
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST
+      || cache->capacity > PRODUCT_POLICY_CACHE_MAX_CAPACITY)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  uint32_t probes = 0;
+  const product_l4_policy_uid_bucket_t *bucket = packet->uid_known
+    ? find_uid_bucket (view, packet->uid, &probes) : NULL;
+  product_policy_cache_guard_t guard;
+  cache_guard (&guard, packet, identity, position,
+               bucket ? bucket->dependencies : PRODUCT_POLICY_DEP_STATIC);
+  uint64_t hash = UINT64_C (14695981039346656037);
+  const unsigned char *bytes = (const unsigned char *) &guard;
+  for (size_t i = 0; i < sizeof (guard); ++i)
+    hash = (hash ^ bytes[i]) * UINT64_C (1099511628211);
+  /* Mix high bits before reducing to a power-of-two capacity. Sequential Flow
+   * incarnations correlated with endpoint ports otherwise cluster in low bits. */
+  hash ^= hash >> 33;
+  hash *= UINT64_C (0xff51afd7ed558ccd);
+  hash ^= hash >> 33;
+  hash *= UINT64_C (0xc4ceb9fe1a85ec53);
+  hash ^= hash >> 33;
+  unsigned capacity = cache->capacity ? cache->capacity : PRODUCT_POLICY_CACHE_CAPACITY;
+  product_policy_cache_entry_t *entry = &cache->entries[hash % capacity];
+  if (entry->valid && !memcmp (&entry->guard, &guard, sizeof (guard)))
+    {
+      ++cache->hits;
+      *result = entry->result;
+      result->probes = 0;
+      result->subject_probes = probes;
+      result->subtable_probes = result->key_probes = 0;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+  ++cache->misses;
+  product_l4_policy_status_t status = product_l4_policy_match_position (
+    view, packet, position, result);
+  if (status == PRODUCT_L4_POLICY_STATUS_OK)
+    {
+      result->subject_probes += probes;
+      if (entry->valid) ++cache->replacements;
+      else ++cache->occupied;
+      entry->guard = guard;
+      entry->result = *result;
+      entry->valid = 1;
+    }
+  return status;
 }

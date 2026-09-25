@@ -91,6 +91,10 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-policy-cache-test tests/host/product_policy_cache_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-policy-cache-test PRIVATE sakamoto_product_l4_policy sakamoto_product_flow_entry)
+target_compile_options(sakamoto-product-policy-cache-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-policy-cache-test COMMAND sakamoto-product-policy-cache-test)
 add_executable(sakamoto-product-ct-policy-test
   tests/host/product_ct_policy_test.c src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-ct-policy-test PRIVATE

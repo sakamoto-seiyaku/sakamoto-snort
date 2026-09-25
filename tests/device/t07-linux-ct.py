@@ -17,6 +17,7 @@ parser.add_argument('--stage', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--rule-session',type=Path,required=True)
+parser.add_argument('--cache-validation',action='store_true')
 args = parser.parse_args()
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -25,7 +26,8 @@ uid_map = Path('/proc/self/uid_map').read_text().split()
 assert int(uid_map[2]) > 12002, 'two real mapped UIDs required'
 env = dict(os.environ, LD_LIBRARY_PATH=str(artifact/'lib'))
 vppctl = stage/'source/build-root/install-vpp-native/vpp/bin/vppctl'
-runtime = ROOT/('build-output/product-vpp-runtime-t07-'+output.name)
+runtime_tag = hashlib.sha256(str(output).encode()).hexdigest()[:12]
+runtime = ROOT/('build-output/product-vpp-runtime-'+runtime_tag)
 generation = 25801
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
@@ -101,7 +103,7 @@ process = None; log = None; hooked = []
 def start(label):
     global process, log, runtime, generation
     generation = 25801 if label == "first" else 25602
-    runtime = ROOT/("build-output/product-vpp-runtime-t07-"+output.name+"-"+label)
+    runtime = ROOT/("build-output/product-vpp-runtime-"+runtime_tag+"-"+label)
     launch.update(PRODUCT_RUNTIME_DIR=str(runtime), PRODUCT_GENERATION=str(generation))
     log = (output/(label+'-vpp.log')).open('w')
     process = subprocess.Popen(['bash', str(ROOT/'tools/product/run-host-vpp.sh')], env=launch,
@@ -180,7 +182,7 @@ class Client:
         if not receive_only:assert self.read()['kind']=='sent'
         answer=self.read();assert (answer['kind']=='received' and bytes.fromhex(answer['data']).decode()==nonce)==delivered,answer
         time.sleep(.1);drain(label+'-drain')
-        queried=api(label+'-query','rule-query');cli(label+'-flow','show product flow')
+        queried=api(label+'-query','rule-query');cli(label+'-flow','show product flows')
         result['cases'].append(dict(label=label,client=self.label,protocol=self.protocol,port=self.port,nonce=nonce,
             delivered=delivered,receive_only=receive_only,revision=int(status['config.active_revision']),
             before=label+'-before.txt',query=label+'-query.txt',response=answer))
@@ -250,7 +252,41 @@ try:
     result['race']=dict(nonce=nonce,old_revision=old_revision,new_revision=int(status['config.active_revision']),
                         response=answer,port=43300)
     client.exchange('race-new-packet',status);client.close()
-    cli('final-flow','show product flow');api('final-query','rule-query')
+    cli('final-flow','show product flows');api('final-query','rule-query')
+    if args.cache_validation:
+        # T11 extends this actual traffic seam with same-slot reuse while
+        # retaining old cache entries. No artificial packet/fact producer.
+        result['cache_validation']=True
+        client=Client('cache-reuse','udp',43400)
+        reuse=[]
+        for label in ('cache-cold','cache-hot','cache-hot-again'):
+            client.exchange(label,status);reuse.append(result['cases'].pop())
+        text=cli('cache-before-close','show product flows','show product flow-end')
+        entries=[dict(w.split('=',1) for w in line.split()[1:] if '=' in w)
+                 for line in text.splitlines() if line.startswith('flow.entry ')]
+        old=next(e for e in entries if '43400' in (e['port_a'],e['port_b']))
+        cli('cache-close',f"product flow-end close owner {old['worker']} slot {old['slot']} generation {generation} incarnation {old['incarnation']}")
+        deadline=time.monotonic()+5
+        while True:
+            text=cli('cache-after-close','show product flows','show product flow-end')
+            entries=[dict(w.split('=',1) for w in line.split()[1:] if '=' in w)
+                     for line in text.splitlines() if line.startswith('flow.entry ')]
+            if not any(e['worker']==old['worker'] and e['slot']==old['slot'] for e in entries) and 'flow-end.buffers=0' in text: break
+            assert time.monotonic()<deadline,'FlowEnd release deadline'
+            time.sleep(.02)
+        for label in ('cache-reused-cold','cache-reused-hot'):
+            client.exchange(label,status);reuse.append(result['cases'].pop())
+        text=cli('cache-final-flow','show product flows','show product flow-end')
+        entries=[dict(w.split('=',1) for w in line.split()[1:] if '=' in w)
+                 for line in text.splitlines() if line.startswith('flow.entry ')]
+        new=next(e for e in entries if '43400' in (e['port_a'],e['port_b']))
+        assert old['slot']==new['slot'] and old['worker']==new['worker']
+        assert old['incarnation']!=new['incarnation']
+        cache=[dict(w.split('=',1) for w in line.split()[1:] if '=' in w)
+               for line in text.splitlines() if line.startswith('policy.cache ')]
+        assert sum(int(c['hits']) for c in cache)>0 and sum(int(c['misses']) for c in cache)>0
+        result['cache_reuse']=dict(old=old,new=new,cases=reuse,counters=cache)
+        client.close()
     stop('first');result['status']='RAW_COMPLETE';result['process_absent']=True
 finally:
     for client in clients:

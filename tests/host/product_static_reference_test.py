@@ -31,6 +31,9 @@ class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
         ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'probes', 'probe_limit', 'subject_probes', 'candidate_count', 'subtable_probes', 'key_probes')]
 
+class CacheIdentity(C.Structure):
+    _fields_ = [(n, U64) for n in ("generation", "revision", "snapshot_hash", "flow_incarnation")]
+
 class Budget(C.Structure):
     _fields_ = [(n, U32) for n in ('direct_entries', 'index_entries', 'factor_rules', 'condition_items', 'peak_bytes')]
 
@@ -148,6 +151,30 @@ def run(lib):
             if expected['rule_id']:
                 assert result.evaluation == 1 and result.stage_verdict == (expected['actual_action'] == 2)
             else: assert result.evaluation == 0
+            # T11: same complete result through cold and hot worker-private
+            # queries, then availability/value changes against this same cache.
+            cache = C.create_string_buffer(64*1024)
+            identity = CacheIdentity(1, count+1, 123, 1)
+            for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
+                                               interface=None, direction=None), facts):
+                wanted = ordered_reference(rules, changed)
+                for repeat in range(2):
+                    cached = Result()
+                    assert lib.product_l4_policy_match_cached(cache, view, C.byref(packet(changed)),
+                        C.byref(identity), 0, C.byref(cached)) == 0
+                    assert {key:getattr(cached,key) for key in wanted} == wanted, (path,rules,changed,wanted,cached.rule_id)
+                    if repeat: assert cached.probes == cached.key_probes == cached.subtable_probes == 0
+            # Split queries share storage, never partial evidence or results.
+            for repeat in range(2):
+                pre = Result()
+                assert lib.product_l4_policy_match_cached(cache,view,C.byref(packet(early_facts)),
+                    C.byref(identity),1,C.byref(pre)) == 0
+                final = pre
+                if not pre.evaluation:
+                    final = Result()
+                    assert lib.product_l4_policy_match_cached(cache,view,C.byref(packet(facts)),
+                        C.byref(identity),2,C.byref(final)) == 0
+                assert {key:getattr(final,key) for key in expected} == expected
             count += 1
 
     def placed(rules, facts, pre_id, post_id):
@@ -319,7 +346,7 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06/T07/T08/T09/T10 independent ordered and split reference (three plans): {count} complete winner comparisons PASS')
+    print(f'T06–T11 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:

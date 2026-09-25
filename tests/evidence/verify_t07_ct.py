@@ -166,11 +166,20 @@ def verify_trace(text, profile, generation, ports, configs, uid):
         state = (1 if flags == 2 else 2) if facts['protocol'] == 6 else (2 if session['reply'] else 1)
         if facts['uid'] == uid:
             assert tracker['ct_state'] == str(state) and tracker['flow_dir'] == str(direction), 'independent CT facts'
-            assert match['ct_state'] == str(state) and match['flow_dir'] == str(direction), 'matcher facts availability'
-            assert value['tracker_index'] < value['match_index'], 'affected complete view must be post-flow'
+            if int(match.get('position',2))==1:
+                assert value['config']['rules'][1]['priority']==0, 'only proven static-first winner is PRE'
+                assert match['ct_state']==match['flow_dir']=='0'
+                assert value['match_index']<value['flow_index'], 'early ALLOW retains winner before Flow maintenance'
+            else:
+                assert match['ct_state'] == str(state) and match['flow_dir'] == str(direction), 'matcher facts availability'
+                assert value['tracker_index'] < value['match_index'], 'affected complete view must be post-flow'
         else:
             assert facts['uid'] is None, 'unexpected application subject'
-            assert match['ct_state'] == match['flow_dir'] == '0'
+            if int(match.get('position',0))==2:
+                assert match['ct_state']==str(state) and match['flow_dir']==str(direction)
+                assert tracker['ct_state']==str(state) and tracker['flow_dir']==str(direction)
+            else:
+                assert match['ct_state'] == match['flow_dir'] == '0'
         assert tracker['incarnation'] == session['incarnation'], 'policy update changed Flow identity'
         session['packets'] += 1
         assert int(flow['packets']) == session['packets'], 'observation missing, duplicated or rolled back'

@@ -21,6 +21,7 @@ p.add_argument('--serial-from',type=Path)
 p.add_argument('--endpoint',default='192.168.4.5')
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--cache-validation',action='store_true')
 args = p.parse_args()
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
 assert SERIAL and SERIAL != 'unknown'
@@ -237,12 +238,12 @@ try:
             case['initial_revision']=int(status['activeRevision'])
             phase(case,'first_echo')
             case['initial_query']=label+'-initial-query.properties';query(label+'-initial')
-            cli(label+'-initial-flow','show product flow')
+            cli(label+'-initial-flow','show product flows')
             status=configure(label+'-enforce',status,expression,0)
             case['blocked_revision']=int(status['activeRevision'])
             case['before']=label+'-blocked-before-query.properties';query(label+'-blocked-before')
             release(case);phase(case,'return_timeout')
-            cli(label+'-blocked-flow','show product flow')
+            cli(label+'-blocked-flow','show product flows')
             case['blocked_query']=label+'-blocked-query.properties';q=query(label+'-blocked')
             assert int(q['actualDrops'])>0,q
             save(label+'-blocked.log',app('files/profiles/'+profile+'/vpp/logs/vpp-stdout.log'))
@@ -250,12 +251,20 @@ try:
             case['recovered_revision']=int(status['activeRevision'])
             finished(case)
             case['query']=label+'-recovered-query.properties';query(label+'-recovered')
-            cli(label+'-recovered-flow','show product flow')
+            cli(label+'-recovered-flow','show product flows')
         status=configure(profile+'-static-first',status,'0e02',0,0)
         case=launch(profile+'-static-first',profile,baseport+2,'fin')
         case['initial_revision']=int(status['activeRevision']);finished(case)
         case['query']=profile+'-static-first-query.properties';query(profile+'-static-first')
-        cli(profile+'-final-flow','show product flow','show product flow-stack')
+        cli(profile+'-final-flow','show product flows','show product flow-stack')
+        if args.cache_validation:
+            text=cli(profile+'-cache-counters','show product flows')
+            cache=[dict(w.split('=',1) for w in line.split()[1:] if '=' in w)
+                   for line in text.splitlines() if line.startswith('policy.cache ')]
+            assert len(cache)==2 and sum(int(c['hits']) for c in cache)>0
+            assert sum(int(c['misses']) for c in cache)>0
+            result.setdefault('cache_counters',{})[profile]=cache
+            result['cache_validation']=True
         stop(profile,profile)
     result['status']='RAW_COMPLETE';result['process_absent']=True
 except Exception as error:

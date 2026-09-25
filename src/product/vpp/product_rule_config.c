@@ -29,6 +29,7 @@ uint32_t product_rule_config_compile_peak_bytes(void) {
     return plan.publication_peak_bytes + 2 * sizeof(product_rule_config_t) + SOURCE_BYTES +
         sizeof(sakamoto_product_rule_config_request_t) + sizeof(sakamoto_product_rule_config_status_t) +
         2 * sizeof(product_l4_policy_view_t) + plan.query_state_bytes +
+        2 * sizeof(product_policy_cache_t) +
         /* Group selection plus bounded recursive frames/path bookkeeping. */
         SAKAMOTO_RULE_CONFIG_MAX_BINDINGS * SAKAMOTO_RULE_CONFIG_MAX_RULES +
         SAKAMOTO_RULE_CONFIG_MAX_RULES + SAKAMOTO_RULE_CONFIG_MAX_DEPTH * 256 + 4 * 4096;
