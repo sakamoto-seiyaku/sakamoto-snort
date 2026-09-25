@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_entry.h"
+#include "product_hello.h"
 #include <string.h>
 
 /* RFC5246 6.2/7.4.1.2 and RFC8446 4.1.2/5.1. Record spans refer into the
@@ -9,7 +10,7 @@
 #define TLS_WORK_LIMIT 131072U
 typedef struct {
   const uint8_t *bytes;
-  struct { unsigned at, size; } spans[TLS_RECORDS];
+  product_hello_span_t spans[TLS_RECORDS];
   unsigned count, span, offset, position, size;
 } hello_reader_t;
 static unsigned u16(const uint8_t *p) { return (unsigned)p[0]*256+p[1]; }
@@ -82,6 +83,20 @@ static unsigned client_hello(const uint8_t *p,unsigned n,product_sni_state_t *s)
     if(wanted && r.size>=wanted) break;
   }
   if(!wanted || r.size<wanted) return PRODUCT_SNI_RUNNING;
+  return product_sni_parse_hello(p,r.spans,r.count,r.size,s);
+}
+unsigned product_sni_parse_hello(const uint8_t *p,const product_hello_span_t *spans,
+  unsigned count,unsigned total,product_sni_state_t *s)
+{
+  hello_reader_t r={.bytes=p,.count=count,.size=total};
+  memcpy(r.spans,spans,count*sizeof *spans);
+  if(total<4) return PRODUCT_SNI_RUNNING;
+  unsigned type=take(&r,1),wanted=take(&r,3)+4;
+  r.span=r.offset=r.position=0;
+  if(type!=1) return PRODUCT_SNI_UNSUPPORTED;
+  if(wanted<45) return PRODUCT_SNI_MALFORMED;
+  if(wanted>PRODUCT_TCP_CACHE_SIDE_BYTES-5) return PRODUCT_SNI_BYTE_BUDGET;
+  if(wanted>total) return PRODUCT_SNI_RUNNING;
   if(wanted>TLS_WORK_LIMIT-s->work) return PRODUCT_SNI_BYTE_BUDGET;
   s->work+=wanted;r.size=wanted;
   skip(&r,4);
@@ -137,6 +152,7 @@ void product_flow_sni_observe(product_flow_entry_t *entry,
 {
   product_sni_state_t *s=&entry->sni;
   if(s->stop) return;
+  if(facts->protocol==17) {product_flow_quic_observe(entry,payload,length);return;}
   if(facts->protocol!=6) {product_flow_sni_stop(entry,PRODUCT_SNI_UNSUPPORTED);return;}
   if(s->attempts && entry->last_seen-s->started_us>=PRODUCT_SNI_TIMEOUT_US) {
     product_flow_sni_stop(entry,PRODUCT_SNI_TIMEOUT);return;

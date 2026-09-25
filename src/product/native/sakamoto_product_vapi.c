@@ -90,7 +90,7 @@ static vapi_error_e sni_reply(vapi_ctx_t context, void *opaque, vapi_error_e rv,
   if(reply->retval) {call->code=SAKAMOTO_PRODUCT_STALE_HANDLE;return VAPI_OK;}
   if(reply->generation!=call->generation || reply->incarnation!=call->incarnation
      || reply->worker!=call->worker || reply->slot!=call->slot
-     || reply->result>2 || reply->stop>8 || reply->name_length>=254
+     || reply->result>2 || reply->stop>12 || reply->name_length>=254
      || (reply->result==1 ? !reply->name_length : reply->name_length!=0)
      || reply->name[reply->name_length]) {call->invalid=true;return VAPI_OK;}
 #define COPY(field) call->out->field=reply->field

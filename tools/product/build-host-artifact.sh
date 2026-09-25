@@ -255,6 +255,8 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "source.revision=$actual_revision"
   echo "vpp.stage.profile=host"
   echo "product.host.evidence=$host_evidence"
+  echo "quic.crypto=mbedtls-3.6.7-aes-gcm-sha256-static-c"
+  echo "quic.version=1"
   echo "vpp.runtime.closure.sha256=$runtime_closure_sha256"
   echo "vpp.source.closure.sha256=$source_closure_sha256"
   echo "vpp.source.tree.sha256=$source_tree_sha256"

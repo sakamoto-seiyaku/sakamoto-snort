@@ -728,6 +728,8 @@ vppBinary=lib/arm64-v8a/libvpp_runtime.so
 productCore=lib/arm64-v8a/libsakamoto_product_core.so
 runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
 productPlugin=lib/arm64-v8a/$plugin_name
+quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c
+quicVersion=1
 generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
 bridgeSource=src/product/native/sakamoto_product_vapi.c
 EOF
@@ -899,7 +901,7 @@ build_apk_only() {
     die "product stage has an invalid owned marker"
   [[ -f "$product_manifest" && ! -L "$product_manifest" ]] || \
     die "product stage manifest is missing"
-  for manifest_key in artifactId apiIdentity abiVersion apiVersion vppBinarySha256; do
+  for manifest_key in artifactId apiIdentity abiVersion apiVersion vppBinarySha256 quicCrypto quicVersion; do
     strict_manifest_value "$product_manifest" "$manifest_key" >/dev/null
   done
   require_product_manifest_line() {
@@ -954,6 +956,8 @@ build_apk_only() {
   require_product_manifest_line "productCore=lib/arm64-v8a/libsakamoto_product_core.so"
   require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"
   require_product_manifest_line "productPlugin=lib/arm64-v8a/$plugin_name"
+  require_product_manifest_line "quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c"
+  require_product_manifest_line "quicVersion=1"
   require_product_manifest_line "generatedVapi=generated-vapi/vapi/product_core.api.vapi.h"
   require_product_manifest_line "bridgeSource=src/product/native/sakamoto_product_vapi.c"
 
@@ -1106,6 +1110,8 @@ build_apk_only() {
   cat "$repo_root/third_party/libprotoident/README.md" \
       "$repo_root/third_party/libprotoident/COPYING.LESSER" \
       "$repo_root/third_party/libprotoident/COPYING" > "$payload_assets/product-lpi-notices.txt"
+  cat "$repo_root/third_party/mbedtls/README.md" \
+      "$repo_root/third_party/mbedtls/LICENSE" > "$payload_assets/product-quic-crypto-notices.txt"
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"

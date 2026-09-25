@@ -73,13 +73,20 @@ for identity in ("policy_generation == policy->generation", "policy_revision == 
 
 PY
 
+cmake -S "$repo_root" -B "$fixture_root/build" -G Ninja >/dev/null
+cmake --build "$fixture_root/build" --target sakamoto_quic_crypto >/dev/null
 cc -std=c11 -Wall -Wextra -Werror -pedantic \
   -I"$repo_root/src/product/vpp" \
+  -I"$repo_root/third_party/mbedtls/include" \
+  -I"$repo_root/third_party/mbedtls" -DMBEDTLS_CONFIG_FILE='"product_config.h"' \
   "$repo_root/src/product/vpp/product_packet.c" \
   "$repo_root/src/product/vpp/product_flow_udp.c" \
   "$repo_root/src/product/vpp/product_flow_icmp.c" \
   "$repo_root/src/product/vpp/product_flow_tcp.c" \
-  "$source" "$repo_root/src/product/vpp/product_flow_sni.c" "$test_source" -o "$fixture_root/product-flow-entry-test"
+  "$source" "$repo_root/src/product/vpp/product_flow_sni.c" \
+  "$repo_root/src/product/vpp/product_flow_quic.c" "$test_source" \
+  "$fixture_root/build/third_party/mbedtls/libsakamoto_quic_crypto.a" \
+  -o "$fixture_root/product-flow-entry-test"
 
 "$fixture_root/product-flow-entry-test"
 

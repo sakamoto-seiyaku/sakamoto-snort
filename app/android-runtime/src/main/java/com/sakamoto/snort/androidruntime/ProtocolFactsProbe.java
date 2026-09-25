@@ -37,6 +37,14 @@ final class ProtocolFactsProbe {
             bytes[i] = (byte) Integer.parseInt(value.substring(i * 2, i * 2 + 2), 16);
         return bytes;
     }
+    private static String toHex(byte[] bytes) {
+        StringBuilder value = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            value.append(Character.forDigit((b & 255) >>> 4, 16));
+            value.append(Character.forDigit(b & 15, 16));
+        }
+        return value.toString();
+    }
     private static void report(Context app, String nonce, JSONObject value, String phase) throws Exception {
         value.put("phase", phase).put("phaseMs", SystemClock.elapsedRealtime());
         File destination = new File(app.getFilesDir(), "product-state/t12-" + nonce + ".json");
@@ -380,6 +388,57 @@ final class ProtocolFactsProbe {
             result.put("echoes", 25); gate(app, nonce, result, "budget_done");
         }
     }
+    private static void quicInitial(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.setReuseAddress(true); socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port); socket.setSoTimeout(5000);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            byte[] prelude = hex(plan.getString("preludeHex"));
+            byte[] preludeReply = hex(plan.getString("preludeReplyHex"));
+            for (int i = 0; i < 2; ++i) {
+                socket.send(new DatagramPacket(prelude, prelude.length));
+                receiveDatagram(socket, preludeReply);
+            }
+            byte[] initial = hex(plan.getString("t15InitialHex"));
+            socket.send(new DatagramPacket(initial, initial.length));
+            boolean initialBlocked = plan.optBoolean("initialBlocked");
+            if (initialBlocked) {
+                socket.setSoTimeout(1200);
+                try { socket.receive(new DatagramPacket(new byte[4096], 4096));
+                    throw new IllegalStateException("expected Initial policy timeout"); }
+                catch (SocketTimeoutException expected) { result.put("initialTimeout", true); }
+            } else if (plan.optBoolean("rawInitial")) {
+                receiveDatagram(socket, initial);
+                result.put("rawInitialReceived", true);
+            } else {
+                DatagramPacket reply = new DatagramPacket(new byte[4096], 4096);
+                socket.receive(reply);
+                if (reply.getLength() < 20 || (reply.getData()[0] & 0xc0) != 0xc0)
+                    throw new IllegalStateException("QUIC Initial response");
+                result.put("initialReplyHex", toHex(Arrays.copyOf(reply.getData(), reply.getLength())));
+                socket.setSoTimeout(250);
+                try { for (int i = 0; i < 8; ++i) { reply.setLength(4096); socket.receive(reply); } }
+                catch (SocketTimeoutException drained) { }
+            }
+            gate(app, nonce, result, "quic_ready");
+            if (plan.optBoolean("policyBlocked") && !initialBlocked) {
+                byte[] blocked = ("T15-" + nonce + ":blocked").getBytes(StandardCharsets.US_ASCII);
+                socket.setSoTimeout(1200); socket.send(new DatagramPacket(blocked, blocked.length));
+                try { socket.receive(new DatagramPacket(new byte[4096], 4096));
+                    throw new IllegalStateException("expected QUIC policy timeout"); }
+                catch (SocketTimeoutException expected) { result.put("blockedTimeout", true); }
+                gate(app, nonce, result, "blocked");
+            }
+            socket.setSoTimeout(5000);
+            for (int i = 0; i < 25; ++i) {
+                byte[] message = ("T15-" + nonce + ":" + i).getBytes(StandardCharsets.US_ASCII);
+                socket.send(new DatagramPacket(message, message.length));
+                receiveDatagram(socket, message);
+            }
+            result.put("echoes", 25); gate(app, nonce, result, "budget_done");
+        }
+    }
     static void start(Context context, String text) {
         final JSONObject plan;
         final String nonce;
@@ -400,7 +459,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("t15InitialHex")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r3Protocol").equals("socks5")) proxy(app, plan, result, nonce, endpoint, local, source, port);

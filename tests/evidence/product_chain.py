@@ -10,7 +10,7 @@ def write(p,d):Path(p).write_text(json.dumps(d,indent=2)+'\n')
 def source_files():
  # Include dependency source, reviewed fork patches, and staging/build logic:
  # changing any of these invalidates an earlier installed-binary claim.
- names=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z','src/product','app/android-runtime','crates/product-core','Cargo.toml','Cargo.lock','.cargo','third_party/hev','third_party/libprotoident','resources/application-protocol-catalog','tools/generate_application_protocol_catalog.py','tools/product'],cwd=ROOT,text=True).split('\0')
+ names=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard','-z','src/product','app/android-runtime','crates/product-core','Cargo.toml','Cargo.lock','.cargo','third_party/hev','third_party/libprotoident','third_party/mbedtls','resources/application-protocol-catalog','tools/generate_application_protocol_catalog.py','tools/product'],cwd=ROOT,text=True).split('\0')
  return {n:digest(ROOT/n) if (ROOT/n).is_file() else None for n in sorted(set(names)) if n}
 def source_snapshot(out):
  files=source_files()

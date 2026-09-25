@@ -188,6 +188,9 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/hev"
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/libprotoident"
                  "${CMAKE_CURRENT_BINARY_DIR}/libprotoident")
 
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/mbedtls"
+                 "${CMAKE_CURRENT_BINARY_DIR}/mbedtls")
+
 option(SAKAMOTO_PRODUCT_HOST_EVIDENCE
   "Build the Host-only installed Product graph evidence seam" OFF)
 set(SAKAMOTO_PRODUCT_PACKET_GRAPH_SOURCE product_packet_graph.c)
@@ -231,6 +234,7 @@ add_vpp_plugin(product_core
     product_flow_entry.c
     product_flow_lpi.c
     product_flow_sni.c
+    product_flow_quic.c
     product_flow_end.c
     product_flow_expiry.c
     product_flow_udp.c
@@ -256,7 +260,7 @@ target_include_directories(product_core_plugin PRIVATE
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
 )
-target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi)
+target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)

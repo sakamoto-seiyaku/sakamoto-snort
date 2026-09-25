@@ -804,6 +804,7 @@ vapi_error_e vapi_product_core_sni_query(vapi_ctx_t context,vapi_msg_product_cor
   if(sakamoto_test_sni_mode==4) {pending_requests=1;return VAPI_OK;}
   if(sakamoto_test_sni_mode==5) reply.name_length=254;
   if(sakamoto_test_sni_mode==7) reply.retval=-5;
+  if(sakamoto_test_sni_mode>=8) {reply.result=0;reply.stop=(uint32_t)sakamoto_test_sni_mode+1;}
   return callback(context,opaque,VAPI_OK,true,&reply);
 }
 
@@ -1473,14 +1474,15 @@ main (void)
     }
   reset_faults();
   extern int sakamoto_test_sni_mode;
-  for(int mode=0;mode<8;++mode) {
+  for(int mode=0;mode<13;++mode) {
     sakamoto_test_sni_mode=mode;
     sakamoto_product_sni_status_t facts={0};
     if(sakamoto_product_session_connect(path,77U,&session,&status)) return 1;
-    uint32_t expected=mode==0?SAKAMOTO_PRODUCT_OK:mode==7?SAKAMOTO_PRODUCT_STALE_HANDLE:SAKAMOTO_PRODUCT_QUERY_FAILED;
+    uint32_t expected=(mode==0 || (mode>=8 && mode<=11))?SAKAMOTO_PRODUCT_OK:mode==7?SAKAMOTO_PRODUCT_STALE_HANDLE:SAKAMOTO_PRODUCT_QUERY_FAILED;
     code=sakamoto_product_session_sni_query(session,77U,1,2,3,&facts);
     if(code!=expected || (mode==0 && (facts.result!=2 || facts.incarnation!=3))
-       || (mode!=0 && facts.result)) return 1;
+       || (mode!=0 && facts.result)
+       || (mode>=8 && mode<=11 && facts.stop!=(uint32_t)mode+1)) return 1;
     if(mode>0 && mode<7 && sakamoto_product_session_sni_query(session,77U,1,2,3,&facts)!=SAKAMOTO_PRODUCT_STALE_HANDLE) return 1;
     sakamoto_product_session_destroy(session);session=NULL;
   }

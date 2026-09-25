@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.18)
 
 project(sakamoto_snort_workspace LANGUAGES C CXX)
 add_subdirectory(third_party/libprotoident)
+add_subdirectory(third_party/mbedtls)
 
 # The former C++ sucre-snort daemon, its host model, and its NDK/APK staging
 # target were deliberately removed. This workspace tests standalone C semantics
@@ -50,6 +51,7 @@ add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
   src/product/vpp/product_flow_lpi.c
   src/product/vpp/product_flow_sni.c
+  src/product/vpp/product_flow_quic.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
   src/product/vpp/product_flow_icmp.c
@@ -57,7 +59,7 @@ add_library(sakamoto_product_flow_entry STATIC
 target_include_directories(sakamoto_product_flow_entry PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src/product/vpp"
 )
-target_link_libraries(sakamoto_product_flow_entry PUBLIC sakamoto_lpi)
+target_link_libraries(sakamoto_product_flow_entry PUBLIC sakamoto_lpi sakamoto_quic_crypto)
 target_compile_features(sakamoto_product_flow_entry PRIVATE c_std_11)
 target_compile_options(sakamoto_product_flow_entry PRIVATE -Wall -Wextra -Werror)
 
@@ -95,6 +97,10 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-flow-quic-test tests/host/product_flow_quic_test.c src/product/vpp/product_packet.c)
+target_link_libraries(sakamoto-product-flow-quic-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy)
+target_compile_options(sakamoto-product-flow-quic-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-flow-quic-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/quic_initial_vectors.py" $<TARGET_FILE:sakamoto-product-flow-quic-test>)
 add_executable(sakamoto-product-policy-cache-test tests/host/product_policy_cache_test.c src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-policy-cache-test PRIVATE sakamoto_product_l4_policy sakamoto_product_flow_entry)
 target_compile_options(sakamoto-product-policy-cache-test PRIVATE -Wall -Wextra -Werror -pedantic)

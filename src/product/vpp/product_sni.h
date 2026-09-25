@@ -10,7 +10,9 @@
 typedef enum { PRODUCT_SNI_UNAVAILABLE, PRODUCT_SNI_NAME, PRODUCT_SNI_ABSENT } product_sni_result_t;
 typedef enum { PRODUCT_SNI_RUNNING, PRODUCT_SNI_COMPLETE, PRODUCT_SNI_MALFORMED,
   PRODUCT_SNI_UNSUPPORTED, PRODUCT_SNI_SEQUENCE, PRODUCT_SNI_BYTE_BUDGET,
-  PRODUCT_SNI_PACKET_BUDGET, PRODUCT_SNI_TIMEOUT, PRODUCT_SNI_FLOW_END } product_sni_stop_t;
+  PRODUCT_SNI_PACKET_BUDGET, PRODUCT_SNI_TIMEOUT, PRODUCT_SNI_FLOW_END,
+  PRODUCT_SNI_QUIC_VERSION, PRODUCT_SNI_QUIC_AUTH, PRODUCT_SNI_QUIC_INCOMPLETE,
+  PRODUCT_SNI_CRYPTO_ERROR } product_sni_stop_t;
 /* One TCP-owned cache, independent directional sequence spaces. TLS borrows
  * these bytes synchronously and retains only small result/attempt metadata. */
 typedef struct {

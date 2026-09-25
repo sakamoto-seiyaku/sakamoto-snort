@@ -1,10 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_entry.h"
+#include "product_hello.h"
 #include "product_protocol_catalog.h"
 #include "../../../third_party/libprotoident/adapter.h"
 #include <string.h>
 
-int product_lpi_init (void) { return sakamoto_lpi_init (); }
+int product_lpi_init (void)
+{
+  int rc=sakamoto_lpi_init ();
+  return rc ? rc : product_quic_init ();
+}
 
 /* RFC 9000 16/17.2.2, RFC 9369 3.2. Header recognition only: authentication
  * and CRYPTO/SNI assembly belong to the later QUIC producer. Never use ports
@@ -604,7 +609,7 @@ product_flow_entry_status_t product_flow_entry_identify (
   /* TLS has its own bounded lifetime. Reassembly can finish after recognition
    * stops on duplicate wire traffic; publish its valid evidence independently. */
   if (entry->sni.result) {
-    state->protocols |= product_protocol_bit (1003);
+    state->protocols |= product_protocol_bit (facts->protocol==17 ? 1004 : 1003);
     state->available = 1;
   }
   if (state->stop_reason || !length) return PRODUCT_FLOW_ENTRY_STATUS_OK;
@@ -633,7 +638,7 @@ product_flow_entry_status_t product_flow_entry_identify (
   alias = resolve_guess (alias,facts,payload,length,&companion,state,side);
   uint64_t result = product_protocol_bit (product_protocol_provider_id (alias))
     | product_protocol_bit (product_protocol_provider_id (companion));
-  if (entry->sni.result) result |= product_protocol_bit (1003);
+  if (entry->sni.result) result |= product_protocol_bit (facts->protocol==17 ? 1004 : 1003);
   state->last_outcome = result ? PRODUCT_LPI_MAPPED : alias ? PRODUCT_LPI_UNMAPPED : PRODUCT_LPI_MISS;
   state->protocols |= result;
   state->available = state->protocols != 0;
