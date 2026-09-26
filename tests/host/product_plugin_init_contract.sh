@@ -155,6 +155,11 @@ cat >"$work_dir/vlibapi/api_helper_macros.h" <<'EOF'
     rmp = (void *) (uintptr_t) 1U; \
     body; \
   } while (0)
+#define REPLY_MACRO2_ZERO(message_id, body) REPLY_MACRO2(message_id, body)
+static inline void *vl_api_client_index_to_registration (uint32_t index) {
+  (void) index;
+  return (void *) (uintptr_t) 1U;
+}
 #endif
 EOF
 
@@ -181,8 +186,8 @@ cat >"$work_dir/product_core.api_types.h" <<'EOF'
 typedef struct { uint64_t generation, incarnation; uint32_t worker, slot; } vl_api_product_core_sni_query_t;
 typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vl_api_product_core_sni_query_reply_t;
 typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;
-typedef struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_t;
-typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; } vl_api_product_core_rule_config_reply_t;
+typedef struct { uint32_t client_index; uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision; vl_api_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } vl_api_product_core_rule_config_t;
+typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision, saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error; vl_api_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } vl_api_product_core_rule_config_reply_t;
 typedef struct {
   int32_t retval;
   uint32_t abi_version;
@@ -692,6 +697,9 @@ cc -std=c11 -Wall -Wextra -Werror \
   -I"$work_dir" -I"$repo_root/src/product/include" -I"$repo_root/src/product/vpp" \
   "$repo_root/src/product/vpp/product_rule_config.c" \
   "$repo_root/src/product/vpp/product_l4_policy.c" \
-  "$work_dir/harness.c" -o "$work_dir/plugin-init-contract"
+  "$repo_root/src/product/vpp/product_domains.c" \
+  "$repo_root/src/product/vpp/product_domains_memory.c" \
+  "$repo_root/src/product/vpp/product_domains_rax.c" \
+  "$work_dir/harness.c" -lm -o "$work_dir/plugin-init-contract"
 "$work_dir/plugin-init-contract"
 echo "sakamoto production VPP plugin init contract: PASS"

@@ -166,7 +166,8 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
       memcpy (s->rule.source_address, reply->rule.source_address, 4);
       memcpy (s->rule.destination_address, reply->rule.destination_address, 4);
       if (reply->count > SAKAMOTO_RULE_CONFIG_MAX_RULES || reply->active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
-          reply->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || reply->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || reply->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+          reply->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || reply->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || reply->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
+          reply->domains.list_count > SAKAMOTO_DOMAIN_MAX_LISTS || reply->domains.entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES)
         { call->invalid_reply = true; call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH; return VAPI_OK; }
       s->count = reply->count; s->active_count = reply->active_count;
       s->error_index = reply->error_index; s->compiler_status = reply->compiler_status;
@@ -213,6 +214,18 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
       s->graph.bindings[i].target = reply->graph.bindings[i].target;
       s->graph.bindings[i].mode = reply->graph.bindings[i].mode;
       }
+      s->domains.list_count = reply->domains.list_count;
+      s->domains.entry_count = reply->domains.entry_count;
+      for (unsigned i = 0; i < s->domains.entry_count; ++i) {
+        if (reply->domains.entries[i].list >= s->domains.list_count ||
+            reply->domains.entries[i].mode > 1 || reply->domains.entries[i].length > 253) {
+          call->invalid_reply = true; call->code = SAKAMOTO_PRODUCT_PROTOCOL_MISMATCH; return VAPI_OK;
+        }
+        s->domains.entries[i].list = reply->domains.entries[i].list;
+        s->domains.entries[i].mode = reply->domains.entries[i].mode;
+        s->domains.entries[i].length = reply->domains.entries[i].length;
+        memcpy(s->domains.entries[i].name, reply->domains.entries[i].name, SAKAMOTO_DOMAIN_NAME_BYTES);
+      }
       for (unsigned i = 0; i < s->active_count; ++i) s->active_versions[i] = reply->active_versions[i];
       call->code = SAKAMOTO_PRODUCT_OK;
     }
@@ -227,7 +240,8 @@ sakamoto_product_session_rule_config (
 {
   if (status) memset (status, 0, sizeof (*status));
   if (!session || !generation || !request || !status || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
-      request->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || request->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || request->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+      request->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || request->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || request->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
+      request->domains.list_count > SAKAMOTO_DOMAIN_MAX_LISTS || request->domains.entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
   if (pthread_mutex_lock (&session->mutex) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
@@ -292,6 +306,14 @@ sakamoto_product_session_rule_config (
     message->payload.graph.bindings[i].kind = request->graph.bindings[i].kind;
     message->payload.graph.bindings[i].target = request->graph.bindings[i].target;
     message->payload.graph.bindings[i].mode = request->graph.bindings[i].mode;
+  }
+  message->payload.domains.list_count = request->domains.list_count;
+  message->payload.domains.entry_count = request->domains.entry_count;
+  for (unsigned i = 0; i < request->domains.entry_count; ++i) {
+    message->payload.domains.entries[i].list = request->domains.entries[i].list;
+    message->payload.domains.entries[i].mode = request->domains.entries[i].mode;
+    message->payload.domains.entries[i].length = request->domains.entries[i].length;
+    memcpy(message->payload.domains.entries[i].name, request->domains.entries[i].name, SAKAMOTO_DOMAIN_NAME_BYTES);
   }
   rule_config_call_t call = { .generation = generation, .status = status,
                              .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };

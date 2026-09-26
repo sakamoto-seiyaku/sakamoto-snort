@@ -13,7 +13,7 @@
 #define SOURCE_BYTES                                                                               \
     (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
      4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
-     20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+     20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS + 8 + 268 * SAKAMOTO_DOMAIN_MAX_ENTRIES)
 struct product_rule_config {
     char *path;
     sakamoto_product_rule_config_status_t state;
@@ -26,7 +26,7 @@ _Static_assert(SAKAMOTO_RULE_CONFIG_MAX_RULES == 256,
 uint32_t product_rule_config_compile_peak_bytes(void) {
     product_l4_policy_plan_resources_t plan;
     product_l4_policy_plan_resources(NULL, &plan);
-    return plan.publication_peak_bytes + 2 * sizeof(product_rule_config_t) + SOURCE_BYTES +
+    return 3 * PRODUCT_DOMAINS_MAX_BYTES + plan.publication_peak_bytes + 2 * sizeof(product_rule_config_t) + SOURCE_BYTES +
         sizeof(sakamoto_product_rule_config_request_t) + sizeof(sakamoto_product_rule_config_status_t) +
         2 * sizeof(product_l4_policy_view_t) + plan.query_state_bytes +
         2 * sizeof(product_policy_cache_t) +
@@ -58,7 +58,7 @@ static uint64_t get(const uint8_t **at, unsigned width) {
             F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE04", 8);
+    memcpy(at, "SKRULE05", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -98,6 +98,14 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
         put(&at, b->kind, 4);
         put(&at, b->target, 4);
         put(&at, b->mode, 4);
+    }
+    const sakamoto_product_domains_t *domains = &config->state.domains;
+    put(&at, domains->list_count, 4);
+    put(&at, domains->entry_count, 4);
+    for (unsigned i = 0; i < domains->entry_count; ++i) {
+        const sakamoto_product_domain_entry_t *e = &domains->entries[i];
+        put(&at, e->list, 4); put(&at, e->mode, 4); put(&at, e->length, 4);
+        memcpy(at, e->name, sizeof e->name); at += sizeof e->name;
     }
     return (size_t)(at - bytes);
 }
@@ -323,8 +331,19 @@ static uint32_t validate_graph(const sakamoto_product_rule_config_status_t *s) {
     }
     return 0;
 }
+static uint32_t validate_domains(sakamoto_product_rule_config_status_t *state) {
+    if (product_domains_normalize(&state->domains)) return SAKAMOTO_RULE_CONFIG_INVALID;
+    uint64_t declared = state->domains.list_count == 64 ? UINT64_MAX :
+        (UINT64_C(1) << state->domains.list_count) - 1;
+    for (unsigned i = 0; i < state->count; ++i)
+        if (product_static_expression_domain_references(state->rules[i].expression,
+                state->rules[i].expression_length) & ~declared)
+            return SAKAMOTO_RULE_CONFIG_REFERENCE;
+    return 0;
+}
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    int v4 = length >= 8 && !memcmp(bytes, "SKRULE04", 8);
+    int v5 = length >= 8 && !memcmp(bytes, "SKRULE05", 8);
+    int v4 = v5 || (length >= 8 && !memcmp(bytes, "SKRULE04", 8));
     int v3 = v4 || (length >= 8 && !memcmp(bytes, "SKRULE03", 8));
     if (length < 8 || (!v3 && memcmp(bytes, "SKRULE02", 8)))
         return load_v1(c, bytes, length);
@@ -377,7 +396,7 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         if (g->group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS ||
             g->edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES ||
             g->binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
-            (size_t)(bytes + length - at) !=
+            (size_t)(bytes + length - at) <
                 4U * g->group_count + 12U * g->edge_count + 20U * g->binding_count)
             return SAKAMOTO_RULE_CONFIG_INVALID;
         for (unsigned i = 0; i < g->group_count; ++i)
@@ -399,6 +418,21 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         if (error)
             return error;
     }
+    if (v5) {
+        if ((size_t)(bytes + length - at) < 8) return SAKAMOTO_RULE_CONFIG_INVALID;
+        sakamoto_product_domains_t *domains = &c->state.domains;
+        domains->list_count = get(&at, 4); domains->entry_count = get(&at, 4);
+        if (domains->entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES ||
+            (size_t)(bytes + length - at) != 268U * domains->entry_count)
+            return SAKAMOTO_RULE_CONFIG_INVALID;
+        for (unsigned i = 0; i < domains->entry_count; ++i) {
+            sakamoto_product_domain_entry_t *e = &domains->entries[i];
+            e->list = get(&at, 4); e->mode = get(&at, 4); e->length = get(&at, 4);
+            memcpy(e->name, at, sizeof e->name); at += sizeof e->name;
+        }
+    }
+    uint32_t domain_error = validate_domains(&c->state);
+    if (domain_error) return domain_error;
     if (at != bytes + length)
         return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.saved_revision = revision;
@@ -550,6 +584,7 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
         c->state.compile_error = SAKAMOTO_RULE_CONFIG_COMPILE;
         return c->state.compile_error;
     }
+    product_domains_t *domains = NULL;
     product_l4_policy_rule_t *rules = calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*rules));
     product_l4_policy_rule_t *effective =
         calloc(SAKAMOTO_RULE_CONFIG_MAX_RULES, sizeof(*effective));
@@ -630,6 +665,12 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     c->state.compiler_status = product_l4_policy_compile(view, effective, effective_count);
     if (c->state.compiler_status)
         goto done;
+    int domain_status = product_domains_build(&c->state.domains, &domains);
+    if (domain_status) {
+        c->state.compiler_status = domain_status == PRODUCT_DOMAINS_MEMORY ?
+            PRODUCT_L4_POLICY_STATUS_CAPACITY_EXCEEDED : PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
+        goto done;
+    }
     size_t length = encode(c, bytes);
     uint64_t hash = UINT64_C(14695981039346656037);
     for (size_t i = 0; i < length; ++i) {
@@ -638,10 +679,11 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     }
     if (!hash)
         hash = 1;
-    result = publish(opaque, c->state.saved_revision, hash, effective, effective_count)
+    result = publish(opaque, c->state.saved_revision, hash, effective, effective_count, domains)
                  ? SAKAMOTO_RULE_CONFIG_PUBLISH
                  : 0;
     if (!result) {
+        domains = NULL; /* Complete snapshot now owns the tree. */
         c->state.active_revision = c->state.saved_revision;
         c->state.active_count = effective_count;
         memset(c->state.active_versions, 0, sizeof(c->state.active_versions));
@@ -650,6 +692,7 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
         project(&c->state);
     }
 done:
+    product_domains_destroy(domains);
     c->state.compile_error = result;
     free(effective);
     free(rules);
@@ -724,10 +767,13 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     *next = *c;
     memset(next->state.rules, 0, sizeof(next->state.rules));
     memset(&next->state.graph, 0, sizeof(next->state.graph));
+    memset(&next->state.domains, 0, sizeof(next->state.domains));
     uint32_t result = SAKAMOTO_RULE_CONFIG_INVALID;
     if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
         const sakamoto_product_config_rule_t *r = &request->rule;
-        if (request->count || r->reserved || r->present > 1 ||
+        if (request->domains.list_count || request->domains.entry_count ||
+            c->state.domains.list_count || c->state.domains.entry_count ||
+            request->count || r->reserved || r->present > 1 ||
             (r->present && r->uid == UINT32_MAX) || c->state.count > 1 ||
             c->state.graph.group_count || c->state.graph.binding_count ||
             request->graph.group_count || request->graph.edge_count || request->graph.binding_count)
@@ -743,7 +789,8 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
                 goto done;
         }
     } else if (request->operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE) {
-        if (request->count != 1 || request->graph.group_count || request->graph.edge_count ||
+        if (request->domains.list_count || request->domains.entry_count ||
+            request->count != 1 || request->graph.group_count || request->graph.edge_count ||
             request->graph.binding_count || request->rules[0].uid == UINT32_MAX ||
             request->rules[0].version || request->rules[0].base_version ||
             !valid_rule(&request->rules[0]))
@@ -781,6 +828,7 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
         }
     } else {
         next->state.graph = request->graph;
+        next->state.domains = request->domains;
         next->state.count = request->count;
         memcpy(next->state.rules, request->rules, request->count * sizeof(request->rules[0]));
     }
@@ -801,13 +849,15 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
             }
     }
     c->state.error_index = UINT32_MAX;
-    result = validate_graph(&next->state);
+    result = validate_domains(&next->state);
+    if (!result) result = validate_graph(&next->state);
     if (result)
         goto done;
     c->state.error_index = UINT32_MAX;
     next->state.error_index = UINT32_MAX;
     int unchanged =
         next->state.count == c->state.count &&
+        !memcmp(&next->state.domains, &c->state.domains, sizeof(next->state.domains)) &&
         next->state.graph.group_count == c->state.graph.group_count &&
         next->state.graph.edge_count == c->state.graph.edge_count &&
         next->state.graph.binding_count == c->state.graph.binding_count &&

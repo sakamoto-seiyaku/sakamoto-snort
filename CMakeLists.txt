@@ -23,6 +23,15 @@ target_link_libraries(sakamoto_product_host_fixture_abi PUBLIC pthread)
 # The stateless L4 policy view is a VPP-native C module with a standalone Host
 # semantic seam.  It deliberately does not depend on VPP, Android, or the
 # public Product ABI so the shared rule semantics can be tested independently.
+add_library(sakamoto_product_domains STATIC
+  src/product/vpp/product_domains.c
+  src/product/vpp/product_domains_memory.c
+  src/product/vpp/product_domains_rax.c)
+target_include_directories(sakamoto_product_domains PUBLIC src/product/include src/product/vpp)
+target_compile_features(sakamoto_product_domains PRIVATE c_std_11)
+target_compile_options(sakamoto_product_domains PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sakamoto_product_domains PUBLIC m)
+
 add_library(sakamoto_product_l4_policy STATIC
   src/product/vpp/product_l4_policy.c
 )
@@ -97,8 +106,13 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_executable(sakamoto-product-domains-test tests/host/product_domains_test.c)
+target_link_libraries(sakamoto-product-domains-test PRIVATE sakamoto_product_domains)
+target_link_options(sakamoto-product-domains-test PRIVATE -Wl,--wrap=product_domains_memory_alloc -Wl,--wrap=product_domains_memory_free)
+target_compile_options(sakamoto-product-domains-test PRIVATE -Wall -Wextra -Werror -pedantic)
+add_test(NAME sakamoto-product-domains-test COMMAND sakamoto-product-domains-test)
 add_executable(sakamoto-product-flow-quic-test tests/host/product_flow_quic_test.c src/product/vpp/product_packet.c)
-target_link_libraries(sakamoto-product-flow-quic-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy)
+target_link_libraries(sakamoto-product-flow-quic-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
 target_compile_options(sakamoto-product-flow-quic-test PRIVATE -Wall -Wextra -Werror -pedantic)
 add_test(NAME sakamoto-product-flow-quic-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/quic_initial_vectors.py" $<TARGET_FILE:sakamoto-product-flow-quic-test>)
 add_test(NAME sakamoto-product-quic-assembly-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/quic_crypto_sequences.py" $<TARGET_FILE:sakamoto-product-flow-quic-test>)
@@ -122,7 +136,9 @@ target_include_directories(sakamoto-product-rule-config-test PRIVATE
   src/product/include src/product/vpp)
 target_compile_features(sakamoto-product-rule-config-test PRIVATE c_std_11)
 target_compile_options(sakamoto-product-rule-config-test PRIVATE -Wall -Wextra -Werror)
-target_link_options(sakamoto-product-rule-config-test PRIVATE -Wl,--wrap=getrandom -Wl,--wrap=fsync)
+target_link_libraries(sakamoto-product-rule-config-test PRIVATE sakamoto_product_domains)
+target_link_options(sakamoto-product-rule-config-test PRIVATE -Wl,--wrap=getrandom -Wl,--wrap=fsync -Wl,--wrap=malloc -Wl,--wrap=calloc
+  -Wl,--wrap=product_domains_memory_alloc -Wl,--wrap=product_domains_memory_free)
 add_test(NAME sakamoto-product-rule-config-test COMMAND sakamoto-product-rule-config-test)
 add_test(NAME sakamoto-rule-config-android-contract
   COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/android/t01-rule-configuration-test.sh")
@@ -269,5 +285,5 @@ add_test(NAME sakamoto-product-protocol-catalog-test
 add_executable(sakamoto-product-flow-sni-test tests/host/product_flow_sni_test.c
   src/product/vpp/product_packet.c)
 target_compile_options(sakamoto-product-flow-sni-test PRIVATE -Wall -Wextra -Werror -pedantic)
-target_link_libraries(sakamoto-product-flow-sni-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy)
+target_link_libraries(sakamoto-product-flow-sni-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
 add_test(NAME sakamoto-product-flow-sni-test COMMAND sakamoto-product-flow-sni-test)

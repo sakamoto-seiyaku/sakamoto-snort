@@ -2,6 +2,7 @@
 
 cmake_minimum_required(VERSION 3.18)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.tcp" DESTINATION share/licenses/sakamoto)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/rax/LICENSE" DESTINATION share/licenses/sakamoto RENAME rax-LICENSE)
 project(sakamoto_product_core_plugin LANGUAGES C CXX)
 
 include(GNUInstallDirs)
@@ -231,6 +232,9 @@ add_vpp_plugin(product_core
     product_fragment.c
     product_l4_policy.c
     product_rule_config.c
+    product_domains.c
+    product_domains_memory.c
+    product_domains_rax.c
     product_flow_entry.c
     product_flow_lpi.c
     product_flow_sni.c
@@ -256,11 +260,13 @@ add_vpp_plugin(product_core
     vpp-plugin-core
 )
 target_include_directories(product_core_plugin PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
+  PRODUCT_DOMAINS_VPP_HEAP=1
 )
-target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto)
+target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto m)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)

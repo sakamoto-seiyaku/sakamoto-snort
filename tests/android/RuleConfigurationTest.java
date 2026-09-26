@@ -42,6 +42,26 @@ public final class RuleConfigurationTest {
             try { RuleConfiguration.completeWire("0 0 1 0 0 0 0 0 0 2 * * 0 65535 0 65535 " + hex); throw new AssertionError(hex); }
             catch (IllegalArgumentException expected) {}
         }
+        long[] domain = RuleConfiguration.completeWire("lists 64\ndomain 63 descendants Example.COM.\n"
+                + "0 0 1 4294967295 4294967295 0 0 6 0 2 * * 0 65535 0 65535 113f");
+        require(domain.length == 7+43+67 && domain[0] == -2 && domain[5] == 64 && domain[6] == 1);
+        require(domain[50] == 63 && domain[51] == 1 && domain[52] == 12 && domain[53] == 0x4578616dL);
+        for (String invalid : new String[]{"lists 65", "lists 1\ndomain 1 exact a.example", "lists 1\ndomain 0 glob a.example",
+                "lists 1\ndomain 0 exact é.example", "lists 1\ndomain 0 exact " + "x".repeat(255)}) {
+            try { RuleConfiguration.completeWire(invalid); throw new AssertionError(invalid); }
+            catch (IllegalArgumentException expected) {}
+        }
+        long[] domainReply = new long[13+3+2+67];
+        domainReply[16] = 64; domainReply[17] = 1;
+        System.arraycopy(domain,50,domainReply,18,67);
+        domainReply[20] = 11; // VPP normalized one trailing dot.
+        domainReply[21] = 0x6578616dL; domainReply[23] = 0x636f6d00L;
+        String domainProperties = new RuleConfiguration.CompleteStatus(domainReply).properties();
+        require(domainProperties.contains("domainListCount=64\ndomainEntryCount=1\n"));
+        require(domainProperties.contains("domain.0.list=63\ndomain.0.mode=1\ndomain.0.name=example.com\n"));
+        domainReply[20] = 256;
+        try { new RuleConfiguration.CompleteStatus(domainReply); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) {}
         long[] disable = RuleConfiguration.networkDisable(1012632, 1, true);
         require(disable[2] == 1012632 && disable[3] == 1 && disable[10] == 2);
         require(disable[7] == 0 && disable[8] == 0 && disable[14] == 65535);

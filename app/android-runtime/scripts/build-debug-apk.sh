@@ -729,6 +729,7 @@ productCore=lib/arm64-v8a/libsakamoto_product_core.so
 runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so
 productPlugin=lib/arm64-v8a/$plugin_name
 quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c
+domainMatcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible
 quicVersion=1
 generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
 bridgeSource=src/product/native/sakamoto_product_vapi.c
@@ -957,6 +958,7 @@ build_apk_only() {
   require_product_manifest_line "runtimeControl=lib/arm64-v8a/libsakamoto_runtime_control.so"
   require_product_manifest_line "productPlugin=lib/arm64-v8a/$plugin_name"
   require_product_manifest_line "quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c"
+  require_product_manifest_line "domainMatcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible"
   require_product_manifest_line "quicVersion=1"
   require_product_manifest_line "generatedVapi=generated-vapi/vapi/product_core.api.vapi.h"
   require_product_manifest_line "bridgeSource=src/product/native/sakamoto_product_vapi.c"
@@ -1107,6 +1109,7 @@ build_apk_only() {
   install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
   python3 "$repo_root/tools/product/hev-notices.py" --output "$payload_assets/hev-notices.txt"
   install -m 0644 "$repo_root/src/product/NOTICE.tcp" "$payload_assets/product-tcp-notices.txt"
+  cat "$repo_root/third_party/rax/README.md" "$repo_root/third_party/rax/LICENSE" > "$payload_assets/product-domain-notices.txt"
   cat "$repo_root/third_party/libprotoident/README.md" \
       "$repo_root/third_party/libprotoident/COPYING.LESSER" \
       "$repo_root/third_party/libprotoident/COPYING" > "$payload_assets/product-lpi-notices.txt"

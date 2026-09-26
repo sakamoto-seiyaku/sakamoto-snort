@@ -91,6 +91,41 @@ impl Default for RuleGraph {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
+pub struct DomainEntry {
+    pub list: u32,
+    pub mode: u32,
+    pub length: u32,
+    pub name: [u8; 256],
+}
+impl Default for DomainEntry {
+    fn default() -> Self {
+        Self {
+            list: 0,
+            mode: 0,
+            length: 0,
+            name: [0; 256],
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Domains {
+    pub list_count: u32,
+    pub entry_count: u32,
+    pub entries: [DomainEntry; 256],
+}
+impl Default for Domains {
+    fn default() -> Self {
+        Self {
+            list_count: 0,
+            entry_count: 0,
+            entries: [DomainEntry::default(); 256],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct RuleConfigRequest {
     pub schema: u32,
     pub operation: u32,
@@ -100,6 +135,7 @@ pub struct RuleConfigRequest {
     pub reserved_full: u32,
     pub rules: [DirectRule; MAX_CONFIG_RULES],
     pub graph: RuleGraph,
+    pub domains: Domains,
 }
 
 #[repr(C)]
@@ -122,6 +158,7 @@ pub struct RuleConfigStatus {
     pub rules: [DirectRule; MAX_CONFIG_RULES],
     pub active_versions: [u64; MAX_CONFIG_RULES],
     pub graph: RuleGraph,
+    pub domains: Domains,
 }
 
 impl DirectRule {
@@ -215,6 +252,44 @@ impl RuleConfigRequest {
                 .map_err(|_| "invalid unsigned graph field")
         };
         match f[0] {
+            "lists" => {
+                if f.len() != 2 || self.domains.list_count != 0 {
+                    return Err("invalid list declaration");
+                }
+                let count = n(1)?;
+                if count > 64 {
+                    return Err("too many domain lists");
+                }
+                self.domains.list_count = count;
+            }
+            "domain" => {
+                if f.len() != 4 || self.domains.entry_count >= 256 {
+                    return Err("invalid domain fields/count");
+                }
+                let list = n(1)?;
+                let mode = match f[2] {
+                    "exact" => 0,
+                    "descendants" => 1,
+                    _ => return Err("invalid domain mode"),
+                };
+                let name = f[3].as_bytes();
+                if list >= self.domains.list_count
+                    || name.is_empty()
+                    || name.len() > 254
+                    || !name.is_ascii()
+                {
+                    return Err("invalid domain list/name; use ASCII A-labels");
+                }
+                let mut entry = DomainEntry {
+                    list,
+                    mode,
+                    length: name.len() as u32,
+                    ..Default::default()
+                };
+                entry.name[..name.len()].copy_from_slice(name);
+                self.domains.entries[self.domains.entry_count as usize] = entry;
+                self.domains.entry_count += 1;
+            }
             "group" => {
                 if f.len() != 2 || self.graph.group_count == 64 {
                     return Err("invalid group count/fields");
@@ -269,6 +344,7 @@ impl Default for RuleConfigRequest {
             reserved_full: 0,
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
             graph: RuleGraph::default(),
+            domains: Domains::default(),
         }
     }
 }
@@ -291,6 +367,7 @@ impl Default for RuleConfigStatus {
             compiler_status: 0,
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
             graph: RuleGraph::default(),
+            domains: Domains::default(),
             active_versions: [0; MAX_CONFIG_RULES],
         }
     }
@@ -340,6 +417,29 @@ impl ProductCore {
 mod tests {
     use super::*;
     #[test]
+    fn complete_domain_source_survives_the_request_adapter() {
+        let mut request = RuleConfigRequest::default();
+        request.push_line("lists 64").unwrap();
+        request
+            .push_line("domain 63 descendants Example.COM.")
+            .unwrap();
+        assert_eq!(request.domains.list_count, 64);
+        assert_eq!(request.domains.entry_count, 1);
+        let entry = request.domains.entries[0];
+        assert_eq!((entry.list, entry.mode, entry.length), (63, 1, 12));
+        assert_eq!(&entry.name[..12], b"Example.COM.");
+        assert!(entry.name[12..].iter().all(|b| *b == 0));
+        assert_eq!(std::mem::size_of::<DomainEntry>(), 268);
+        assert_eq!(std::mem::size_of::<Domains>(), 68616);
+        for bad in [
+            "domain 64 exact a.example",
+            "domain 0 glob a.example",
+            "domain 0 exact é.example",
+        ] {
+            assert!(request.push_line(bad).is_err());
+        }
+    }
+    #[test]
     fn expression_bytes_survive_the_request_adapter() {
         let line = "0 0 17 4294967295 4294967295 1 0 0 0 2 * * 0 65535 0 65535";
         let r = DirectRule::parse(&format!("{line} 0701000000030cffffffff02")).unwrap();
@@ -358,11 +458,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
         assert_eq!(
             std::mem::size_of::<RuleConfigRequest>(),
-            64 + 184 * MAX_CONFIG_RULES + 8976
+            64 + 184 * MAX_CONFIG_RULES + 8976 + 68616
         );
         assert_eq!(
             std::mem::size_of::<RuleConfigStatus>(),
-            112 + 192 * MAX_CONFIG_RULES + 8976
+            112 + 192 * MAX_CONFIG_RULES + 8976 + 68616
         );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,

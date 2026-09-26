@@ -256,6 +256,7 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "vpp.stage.profile=host"
   echo "product.host.evidence=$host_evidence"
   echo "quic.crypto=mbedtls-3.6.7-aes-gcm-sha256-static-c"
+  echo "domain.matcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible"
   echo "quic.version=1"
   echo "vpp.runtime.closure.sha256=$runtime_closure_sha256"
   echo "vpp.source.closure.sha256=$source_closure_sha256"

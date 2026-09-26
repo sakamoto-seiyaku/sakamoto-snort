@@ -159,10 +159,13 @@ def verify_trace(text,profile,generation,ports,configurations,uid,observe=protoc
             wanted=expected if post else dict(rule_id=0,winner_rank=0,action=0,actual_action=0,mode=0,reason_id=0,priority=0,order=0)
             for actual,want in [('rule','rule_id'),('rank','winner_rank'),('declared','action'),('actual','actual_action'),('mode','mode'),('reason','reason_id'),('priority','priority'),('order','order')]:
                 assert int(query[actual])==wanted[want],('complete cache result',actual,value['token'])
-            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi','sni')}
+            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi','sni','name','domain_source')}
             guarded['lpi']=sorted(session['protocols']) if post and rules else []
             guarded['available']=bool(mask) if post and rules else False
-            if features: guarded['sni']=facts.get('sni') if post and rules else None
+            if features:
+                guarded['sni']=facts.get('sni') if post and rules else None
+                if 'domain_source' in facts:
+                    guarded['domain_memberships']=reference.domain_memberships(facts) if post and rules else 0
             guard=(session['worker'],value['identity'],query['incarnation'],query['position'],json.dumps(guarded,sort_keys=True))
             if query['hit']=='1':
                 assert guard in past_guards and past_guards[guard]==wanted,'cache hit lacks identical complete prior guard/result'

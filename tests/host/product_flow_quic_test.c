@@ -2,6 +2,7 @@
 #include "product_flow_entry.h"
 #include "product_protocol_catalog.h"
 #include "product_l4_policy.h"
+#include "product_domain_consumer.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,6 +153,7 @@ static void sequence(const char *path)
     assert(product_flow_sni_retained_bytes(o.entry)==retained);
     assert(!strcmp(o.entry->sni.name,result==1?"example.test":""));
     cache_transition(o.entry,result);
+    domain_consumer(o.entry,result,result==1?"example.test":"",17);
     /* Policy revisions retain both partial ranges and already published facts. */
     ++input.policy.revision;
     ++step;++input.timestamp;
@@ -301,6 +303,7 @@ int main(int argc,char **argv)
   assert(!(o.entry->lpi.protocols & product_protocol_bit(1003)));
   if(expected_stop) assert(!product_flow_sni_retained_bytes(o.entry));
   cache_transition(o.entry,expected_result);
+  domain_consumer(o.entry,expected_result,name,17);
   /* Published parser state is stable across a policy revision and fenced
    * against stale identities; a reused slot starts an independent attempt. */
   product_sni_state_t saved=o.entry->sni;

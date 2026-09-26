@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('t13_base',ROOT/'tests/evidence/verify_t12_lpi.py')
 t=importlib.util.module_from_spec(spec);spec.loader.exec_module(t)
 records,one,props,digest=t.records,t.one,t.props,t.digest
+domains=t.module('t18_domains',ROOT/'tests/evidence/domain_evidence.py')
 
 def configurations(directory,run,pixel):
     answer={}
@@ -13,7 +14,8 @@ def configurations(directory,run,pixel):
         path=directory/item['source'];source=t.source.source(path)
         t.source.query_source(source,props(directory/item['query']),pixel)
         assert source['revision']==item['revision']
-        assert [r['expression'] for r in source['rules']]==[b'\x10\x01',b'\x10\x01\x03',b'']
+        if run.get('domain_policy'): domains.configuration(source,item)
+        else: assert [r['expression'] for r in source['rules']]==[b'\x10\x01',b'\x10\x01\x03',b'']
         assert [r['priority'] for r in source['rules']]==[10,20,100]
         assert [r['action'] for r in source['rules']]==[2,2,1]
         rules=sorted(t.logical_rules(source,run['uid'] if pixel else 12001),key=lambda r:r['priority'])
@@ -61,6 +63,8 @@ def feature_oracle(text,cases,fixtures):
         if mode=='malformed' and 'first_payload' in session:assert row['stop']=='2' and row['cache_bytes']=='0'
         if mode=='truncated':assert row['stop'] in ('0','7','8')
         facts['sni']=session.get('sni');value['sni']=row
+        if value['config'].get('domain_count'):
+            facts.update(name='example.test' if wanted==1 else '',domain_source=domains.source_lists(value['config']))
     return feature
 
 def query(directory,case,packets,pixel):
@@ -101,6 +105,7 @@ def verify(directory):
     assert digest(directory/'fixtures.json')==run['fixtures_sha256']
     fixtures=json.loads((directory/'fixtures.json').read_text())
     configs=configurations(directory,run,pixel)
+    if run.get('domain_policy'):domains.build_binding(directory,run,build,props)
     endpoint=[json.loads(line) for line in (directory/'endpoint.jsonl').read_text().splitlines()]
     assert endpoint[0]['kind']=='ready' and endpoint[0]['port']==40640
     if pixel:
@@ -123,6 +128,7 @@ def verify(directory):
         packets,sessions,totals,_=t.verify_trace(text,profile,generation,ports,configs,uid,observe,
                                                feature_oracle(text,cases,fixtures))
         entries={c['label']:query(directory,c,packets,pixel) for c in cases}
+        if run.get('domain_policy'):totals['list_only_winner_changes']=domains.transitions(cases,packets,configs,profile)
         ready=next(c for c in cases if c['mode']=='truncated' and c['phase']=='ready')
         expired=next(c for c in cases if c['mode']=='truncated' and c['phase']=='expired')
         assert entries[ready['label']]['packets']==entries[expired['label']]['packets'],'timeout must not need another packet'
@@ -160,10 +166,10 @@ def verify(directory):
         counters=(directory/(profile+'-final.txt' if pixel else 'final-counters.txt')).read_text()
         runtime_rows=records(counters,'flow.runtime ');assert len(runtime_rows)==2
         for _,row in runtime_rows:
-            assert int(row['capacity'])==1024 and int(row['entry_bytes'])==8888
-            assert int(row['allocated_bytes'])==9122120 and row['capacity_misses']=='0'
+            assert int(row['capacity'])==1024 and int(row['entry_bytes'])==(9024 if run.get('domain_policy') else 8888)
+            assert int(row['allocated_bytes'])==(9261384 if run.get('domain_policy') else 9122120) and row['capacity_misses']=='0'
         for _,row in records(counters,'policy.cache '):
-            assert row['storage_bytes']=='23584' and row['capacity']=='128'
+            assert row['storage_bytes']==('24608' if run.get('domain_policy') else '23584') and row['capacity']=='128'
         # Packet terminal intent and completed native outcome are both required.
         # The five-second parser deadline is not a packet holding window.
         terminal=records(text,'s216 stage=terminal ')

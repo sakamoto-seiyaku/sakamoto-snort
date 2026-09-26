@@ -25,7 +25,22 @@ class Packet(C.Structure):
     _fields_ = [(n, U32) for n in ('uid', 'network_context_id', 'ifindex')] + [
         (n, U16) for n in ('source_port', 'destination_port')] + [(n, U8) for n in (
         'family', 'protocol', 'direction', 'uid_known', 'direction_known', 'network_context_known', 'ifindex_known', 'ports_available')] + [
-        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')] + [('protocol_set', U64), ('protocol_set_known', U8), ('sni_result', U8)]
+        ('source_address', U8*16), ('destination_address', U8*16)] + [(n, U8) for n in ('ct_state', 'flow_direction', 'ct_state_known', 'flow_direction_known')] + [('protocol_set', U64), ('protocol_set_known', U8), ('sni_result', U8), ('domain_lists', U64)]
+
+class DomainEntry(C.Structure):
+    _fields_ = [('list',U32),('mode',U32),('length',U32),('name',U8*256)]
+class DomainSource(C.Structure):
+    _fields_ = [('list_count',U32),('entry_count',U32),('entries',DomainEntry*256)]
+
+DOMAIN_LISTS = {
+    0: [('exact','example.com')],
+    1: [('descendants','example.com')],
+    2: [('descendants','com')],
+    3: [('exact','xn--bcher-kva.example')],
+    4: [('descendants','foo.example.com')],
+    63: [('exact','other.test')],
+}
+DOMAIN_BACKEND = None
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
@@ -56,6 +71,15 @@ def logical_truth(expr, facts):
         return None if None in truths else False
     if op == 'no_sni':
         return None if facts.get('sni') is None else facts['sni'] == 'absent'
+    if op == 'domain':
+        if facts.get('sni') is None: return None
+        if facts['sni'] == 'absent': return False
+        labels = facts.get('name','example.com').lower().split('.')
+        for mode, domain in facts.get("domain_source", DOMAIN_LISTS).get(args[0], []):
+            wanted = domain.split('.')
+            if labels == wanted or (mode == 'descendants' and len(labels) > len(wanted) and labels[-len(wanted):] == wanted):
+                return True
+        return False
     fact = facts[op]
     if fact is None: return None
     if op == 'lpi': return args[0] in fact
@@ -65,8 +89,13 @@ def logical_truth(expr, facts):
         return args[0] <= fact <= args[1]
     return fact == args[0]
 
+def domain_memberships(facts):
+    if facts.get('sni') != 'name': return 0
+    return sum(1 << number for number in facts.get('domain_source', DOMAIN_LISTS)
+               if logical_truth(('domain',number), facts))
+
 def contains_sni(expr):
-    return expr[0] == 'no_sni' or (expr[0] in ('and','or','not') and any(contains_sni(e) for e in expr[1:]))
+    return expr[0] in ('no_sni','domain') or (expr[0] in ('and','or','not') and any(contains_sni(e) for e in expr[1:]))
 
 def ordered_reference(rules, facts):
     effective = sorted((r for r in rules if facts['uid'] == r['uid']),
@@ -87,6 +116,7 @@ def encode(expr):
     if op in ('and', 'or', 'not'):
         return b''.join(encode(arg) for arg in args) + bytes([{'and':1, 'or':2, 'not':3}[op]])
     if op == 'no_sni': return bytes([16,1])
+    if op == 'domain': return bytes([17,args[0]])
     if op == 'lpi': return bytes([15])+args[0].to_bytes(4, 'little')
     if op in ('ct', 'flowdir'):
         return bytes([13 if op == 'ct' else 14, args[0]])
@@ -114,6 +144,8 @@ def packet(facts):
     p.protocol_set_known = facts.get("lpi") is not None
     p.protocol_set = sum(1 << (value-1001) for value in (facts.get("lpi") or set()))
     p.sni_result = {None:0,"name":1,"absent":2}[facts.get("sni")]
+    if p.sni_result == 1 and DOMAIN_BACKEND:
+        p.domain_lists = DOMAIN_BACKEND(facts.get('name','example.com'))
     return p
 
 def source(rule):
@@ -132,6 +164,21 @@ BASE = dict(uid=17, family=4, protocol=17, direction=3, network=1, interface=9,
             src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535, ct=None, flowdir=None, lpi=None)
 
 def run(lib):
+    global DOMAIN_BACKEND
+    lib.product_domains_build.argtypes = [C.POINTER(DomainSource),C.POINTER(C.c_void_p)]
+    lib.product_domains_match.argtypes = [C.c_void_p,C.c_char_p,C.c_size_t]
+    lib.product_domains_match.restype = U64
+    lib.product_domains_destroy.argtypes = [C.c_void_p]
+    domains = DomainSource(list_count=64)
+    for number, entries in DOMAIN_LISTS.items():
+        for mode, name in entries:
+            raw_name=name.encode('ascii')
+            entry=domains.entries[domains.entry_count]
+            entry.list=number;entry.mode=int(mode=='descendants');entry.length=len(raw_name)
+            entry.name[:len(raw_name)]=raw_name;domains.entry_count+=1
+    index=C.c_void_p()
+    assert lib.product_domains_build(C.byref(domains),C.byref(index)) == 0
+    DOMAIN_BACKEND=lambda name: lib.product_domains_match(index,name.encode('ascii'),len(name))
     count = 0
     lib.product_l4_policy_default_budget.restype = Budget
     lib.product_l4_policy_compile_with_budget.argtypes = [C.c_void_p, C.POINTER(Rule), C.c_size_t, C.POINTER(Budget)]
@@ -169,7 +216,7 @@ def run(lib):
             cache = C.create_string_buffer(64*1024)
             identity = CacheIdentity(1, count+1, 123, 1)
             for changed in (facts, facts | dict(ct=None, flowdir=None, network=None,
-                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts | dict(lpi={1016}), facts | dict(lpi={1016,1017}), facts | dict(lpi={1017,1018}), facts | dict(lpi={1019}), facts | dict(lpi={1020}), facts | dict(lpi={1016,1017,1018,1019,1020}), facts | dict(lpi={1003},sni=None), facts | dict(lpi={1003},sni="name"), facts | dict(lpi={1003},sni="absent"), facts | dict(lpi={1020},sni="absent"), facts | dict(lpi={1004},sni=None), facts | dict(lpi={1004},sni="name"), facts | dict(lpi={1004},sni="absent"), facts | dict(lpi={1004,1006},sni="absent"), facts | dict(lpi={1004,1011,1020},sni="name"), facts):
+                                               interface=None, direction=None, lpi=None), facts | dict(lpi={1002}), facts | dict(lpi={1002,1003}), facts | dict(lpi={1006}), facts | dict(lpi={1004,1006}), facts | dict(lpi={1008}), facts | dict(lpi={1003,1008,1010}), facts | dict(lpi={1007,1009}), facts | dict(lpi={1011}), facts | dict(lpi={1012,1014}), facts | dict(lpi={1013,1015}), facts | dict(lpi={1003,1008,1010,1014}), facts | dict(lpi={1016}), facts | dict(lpi={1016,1017}), facts | dict(lpi={1017,1018}), facts | dict(lpi={1019}), facts | dict(lpi={1020}), facts | dict(lpi={1016,1017,1018,1019,1020}), facts | dict(lpi={1003},sni=None), facts | dict(lpi={1003},sni="name"), facts | dict(lpi={1003},sni="absent"), facts | dict(lpi={1020},sni="absent"), facts | dict(lpi={1004},sni=None), facts | dict(lpi={1004},sni="name"), facts | dict(lpi={1004},sni="absent"), facts | dict(lpi={1004,1006},sni="absent"), facts | dict(lpi={1004,1011,1020},sni="name"), facts | dict(lpi={1003},sni="name",name="other.test"), facts | dict(lpi={1004},sni="name",name="foo.example.com"), facts | dict(lpi={1003},sni="name",name="badexample.com"), facts):
                 wanted = ordered_reference(rules, changed)
                 for repeat in range(2):
                     cached = Result()
@@ -300,6 +347,29 @@ def run(lib):
                    logical(('family',4),identity=30,priority=3,action=1)]
             compare(rules,BASE | dict(lpi={1003},sni=sni,sport=123,dport=443))
 
+    # T18: independent label-list semantics -> real rax -> complete rule result.
+    # A shorter parent can beat a longer name, and same-action losers still
+    # matter when a new name/list membership invalidates a previously hot cache.
+    for published in (None,set(),{1003},{1004},{1020},{1003,1008,1010},{1004,1011,1020}):
+        for state,name in ((None,'example.com'),('absent','example.com'),('name','EXAMPLE.COM'),
+                           ('name','foo.example.com'),('name','x.foo.example.com'),
+                           ('name','badexample.com'),('name','example.com.evil'),
+                           ('name','xn--bcher-kva.example'),('name','other.test')):
+            for expr in (('domain',0),('domain',1),('not',('domain',1)),
+                         ('or',('family',4),('domain',0)),
+                         ('and',('dport',1,65534),('domain',2)),
+                         ('not',('and',('family',6),('domain',0))),
+                         ('or',('domain',63),('domain',3))):
+                for mode in (0,1):
+                    rules=[logical(expr,identity=10,priority=1,mode=mode),
+                           logical(('and',('domain',4),('lpi',1003)),identity=20,priority=2),
+                           logical(('domain',2),identity=30,priority=3),
+                           logical(('family',4),identity=40,priority=4,action=1)]
+                    compare(rules,BASE | dict(lpi=published,sni=state,name=name,dport=443))
+    compare([logical(('domain',2),identity=10,priority=1),
+             logical(('domain',4),identity=20,priority=2)],
+            BASE | dict(lpi={1003},sni='name',name='foo.example.com'),10)
+
     # Known disjoint family/protocol/device direction/address/port permits early
     # whole rules, including same-action competition and observe DROP winners.
     pairs = [(('family',6),('family',4)), (('protocol',6),('protocol',17)),
@@ -405,13 +475,17 @@ def run(lib):
         if i%5==0: facts['src'],facts['dst']=facts['dst'],facts['src']
         if i%7==0: facts.update(sport=None,dport=None)
         compare(rules, facts)
-    print(f'T06–T12 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
+    lib.product_domains_destroy(index)
+    DOMAIN_BACKEND = None
+    print(f'T06–T18 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:
         library = Path(temporary)/'policy.so'
         subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-shared','-fPIC',
-                        str(ROOT/'src/product/vpp/product_l4_policy.c'),'-o',str(library)],check=True)
+                        str(ROOT/'src/product/vpp/product_l4_policy.c'),
+                        str(ROOT/'src/product/vpp/product_domains.c'),str(ROOT/'src/product/vpp/product_domains_memory.c'),
+                        str(ROOT/'src/product/vpp/product_domains_rax.c'),'-I'+str(ROOT/'src/product/include'),'-I'+str(ROOT/'src/product/vpp'),'-lm','-o',str(library)],check=True)
         lib = C.CDLL(str(library))
         lib.product_l4_policy_compile.argtypes = [C.c_void_p, C.POINTER(Rule), C.c_size_t]
         lib.product_l4_policy_match.argtypes = [C.c_void_p, C.POINTER(Packet), C.POINTER(Result)]

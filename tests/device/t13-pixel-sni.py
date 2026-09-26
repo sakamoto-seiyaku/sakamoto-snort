@@ -12,6 +12,9 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
+import sys
+sys.path.insert(0,str(ROOT/"tests/device/helpers"))
+from t18_domain_policy import adapt as domain_policy
 PKG = 'com.sakamoto.snort.androidruntime'
 SERIAL = None
 BASE = '/data/user/0/'+PKG+'/files/profiles/root/vpp'
@@ -24,6 +27,7 @@ p.add_argument('--output', type=Path, required=True)
 p.add_argument('--fixtures',type=Path,required=True)
 p.add_argument('--python',default='python3')
 
+p.add_argument("--domain-policy",action="store_true")
 args = p.parse_args()
 
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
@@ -39,6 +43,12 @@ result = dict(status='HOLD', profile='root', source='NFQ_CAPTURED+TUN_ORIGIN', s
               runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[])
 save('runner.py',Path(__file__).read_text())
 adb_prefix = [str(ROOT/'dev/adb'), '-s', SERIAL]
+if args.domain_policy:
+    result['domain_policy'] = True
+    helper_path=ROOT/'tests/device/helpers/t18_domain_policy.py'
+    result['domain_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    save('domain-policy.py',helper_path.read_text())
+
 def adb(*argv, check=True, timeout=35):
     # Only replay idempotent reads/captures after the observed WSL launch error.
     # Runtime/app starts, taps, rule applies and installation are never replayed.
@@ -160,7 +170,7 @@ def stop(label,profile):
     assert root('test ! -d /proc/'+str(life['pid'])+' && echo absent').strip()=='absent'
     life['process_absent']=True
     source_file(label+'-stopped')
-def configure(label,prior,protocol,target_id,mode=1):
+def configure(label,prior,protocol,target_id,mode=1,variant="full"):
     expression='1001'
     versions=[prior.get(f'rule.{i}.version','0') for i in range(3)]
     lines=[f'0 {versions[0]} 4294967295 4294967295 4294967295 10 0 {protocol} 0 2 * * 0 65535 0 65535 {expression}',
@@ -168,6 +178,7 @@ def configure(label,prior,protocol,target_id,mode=1):
            f'0 {versions[2]} {uid} 4294967295 4294967295 100 0 {protocol} 0 1 * * 0 65535 0 65535',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',
            f'bind 1 {uid} 2 10 {mode}',f'bind 2 {uid} 2 20 {mode}']
+    if args.domain_policy: lines=domain_policy(lines,variant)
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
     save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
     old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
@@ -177,7 +188,7 @@ def configure(label,prior,protocol,target_id,mode=1):
     source_file(label)
     result.setdefault('configurations',[]).append(dict(label=label,profile=result['lifetimes'][-1]['profile'],
         revision=int(status['activeRevision']),source=label+'-source.conf',query=label+'-apply.properties',
-        expression=expression,mode=mode,protocol=protocol,target=target_id))
+        expression=expression,domain_variant=variant if args.domain_policy else None,mode=mode,protocol=protocol,target=target_id))
     return status
 
 def launch(label,profile,mode,source):
@@ -186,7 +197,7 @@ def launch(label,profile,mode,source):
     nonce='t13-'+profile+'-'+mode+'-'+fixtures['nonce']
     application=mode;protocol='tcp'
     plan=dict(nonce=nonce,endpoint=args.endpoint,port=40640,source=source,mode=protocol,
-              bindDefault=profile=='root',t13Direct=True,t13Absent=mode=='absent',
+              bindDefault=profile=='root',domainChecks=args.domain_policy and mode in ('named','absent'),t13Direct=True,t13Absent=mode=='absent',
               certificateSha256=fixtures['certificateSha256'])
     if mode in ('malformed','truncated'):
         plan.update(port=40641,t13RawHex=fixtures[mode+'Hex'])
@@ -285,6 +296,10 @@ try:
             first='tls_ready' if mode in ('named','absent') else 'raw_ready'
             phase(case,first);evidence(case,status,'ready')
             if mode in ('named','absent'):
+                if args.domain_policy:
+                    status=configure(label+'-list-only',status,6,1003,1,'without-exact')
+                    release(case,first);phase(case,'domain_changed');evidence(case,status,'changed')
+                    first='domain_changed'
                 status=configure(label+'-enforce',status,6,1003,0)
                 release(case,first);phase(case,'blocked');evidence(case,status,'blocked')
                 status=configure(label+'-recover',status,6,1003)
@@ -303,7 +318,7 @@ except Exception as error:
     result['error']=repr(error);raise
 finally:
     if held:
-        for gate in ('connected_ready','realtime_ready','blocked','budget_done'):release(held,gate)
+        for gate in ('connected_ready','realtime_ready','tls_ready','raw_ready','domain_changed','blocked','budget_done'):release(held,gate)
     if started:
         save('failure-vpp.log',app('files/profiles/'+current_profile+'/vpp/logs/vpp-stdout.log',check=False))
         action('--ez','runtimeStop','true')

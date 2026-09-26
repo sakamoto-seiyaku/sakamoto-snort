@@ -17,6 +17,11 @@ EXPECTED={'named':(1,1,'example.test'),'absent':(2,1,''),'conflict':(0,2,''),
           'ranges':(0,5,''),'offset':(0,5,''),'timeout':(0,7,''),'packets':(0,6,''),
           'named_cutoff':(1,1,'example.test'),'absent_cutoff':(2,1,'')}
 
+DOMAIN_EXPECTED=dict(named=(1,1,'example.test'),named_child=(1,1,'a.example.test'),
+    named_boundary=(1,1,'badexample.test'),named_suffix=(1,1,'example.test.evil'),
+    named_alabel=(1,1,'xn--bcher-kva.example'),absent=(2,1,''),conflict=(0,2,''),named_cutoff=(1,1,'example.test'))
+ALL_EXPECTED=EXPECTED|DOMAIN_EXPECTED
+
 def decrypt(packet,expected=0):
     segments=[];pn=expected
     while packet:
@@ -34,12 +39,12 @@ def decrypt(packet,expected=0):
     return segments,pn
 
 def fixture_oracle(fixtures):
-    assert fixtures['aioquic']=='1.3.0' and set(fixtures['cases'])==set(EXPECTED)
+    assert fixtures['aioquic']=='1.3.0' and set(fixtures['cases']) in (set(EXPECTED),set(ALL_EXPECTED))
     assert len(bytes.fromhex(fixtures['preludeHex']))==20
     assert fixtures['preludeHex'].startswith('000100002112a442')
     assert fixtures['preludeReplyHex']=='0101'+fixtures['preludeHex'][4:]
     for mode,case in fixtures['cases'].items():
-        assert (case['result'],case['stop'],case['name'])==EXPECTED[mode]
+        assert (case['result'],case['stop'],case['name'])==ALL_EXPECTED[mode]
         assert len(case['sequence'])>1 or mode=='timeout'
         data={};pn=0
         for encoded in case['sequence']:
@@ -52,7 +57,7 @@ def fixture_oracle(fixtures):
             assert sorted(data)==list(range(len(data)))
             hello=bytes(data[i] for i in range(len(data)))
             decoded=peer.pull_client_hello(peer.Buffer(data=hello))
-            assert (decoded.server_name or '')==EXPECTED[mode][2]
+            assert (decoded.server_name or '')==ALL_EXPECTED[mode][2]
             assert hello.hex()==case['oracle']['cryptoHex']
         else:
             first,_=decrypt(bytes.fromhex(case['sequence'][0]))
@@ -131,6 +136,8 @@ def features(text,cases,fixtures):
         for key in ('attempts','bytes','work'):assert int(row[key])==state[key],(mode,key,row,state)
         session['sni']='name' if state['result']==1 else 'absent' if state['result']==2 else None
         facts['sni']=session['sni'];value['sni']=row;value['assembly']=assembly
+        if value['config'].get('domain_count'):
+            facts.update(name=state['name'],domain_source=t13.domains.source_lists(value['config']))
     return feature
 
 def query(directory,case,packets,pixel):
@@ -138,7 +145,7 @@ def query(directory,case,packets,pixel):
     get=lambda key:q[prefix+key]
     assert get('code')=='0' and int(get('generation'))==case['generation']
     assert [get('worker'),get('slot'),get('incarnation')]==case['identity']
-    result,stop,name=EXPECTED[case['mode']]
+    result,stop,name=ALL_EXPECTED[case['mode']]
     assert (int(get('result')),int(get('stop')),get('name'))==(result,stop,name)
     assert int(get('protocols'))==32776
     assert get('protocolsAvailable' if pixel else 'protocols_available')=='1'
@@ -172,6 +179,8 @@ def verify(directory):
     assert digest(directory/'fixtures.json')==run['fixtures_sha256']
     fixtures=json.loads((directory/'fixtures.json').read_text());fixture_oracle(fixtures)
     configs=t13.configurations(directory,run,pixel)
+    if run.get("domain_policy"):t13.domains.build_binding(directory,run,build,props)
+    expected_modes=DOMAIN_EXPECTED if run.get("domain_policy") else EXPECTED
     endpoint=[json.loads(line) for line in (directory/'endpoint.jsonl').read_text().splitlines()]
     assert endpoint[0]['kind']=='ready' and endpoint[0]['port']==40650 and endpoint[0]['aioquic']=='1.3.0'
     assert not any(e['kind']=='quic_error' for e in endpoint)
@@ -195,20 +204,24 @@ def verify(directory):
     for life in lives:
         profile=life['profile'];generation=life['generation'];uid=run['uid'] if pixel else 12001
         cases=[c for c in run['cases'] if c.get('profile','root')==profile]
-        assert {case['mode'] for case in cases}==set(EXPECTED)
-        ports=sorted({case['port'] for case in cases});assert len(ports)==9
+        assert {case['mode'] for case in cases}==set(expected_modes)
+        ports=sorted({case['port'] for case in cases});assert len(ports)==len(expected_modes)
         text=(directory/(profile+'-before-stop.log' if pixel else 'first-vpp.log')).read_text()
         packets,sessions,totals,_=t.verify_trace(text,profile,generation,ports,configs,uid,observe,
                                                features(text,cases,fixtures))
         for case in cases:query(directory,case,packets,pixel)
-        for mode in EXPECTED:
+        if run.get("domain_policy"):totals["list_only_winner_changes"]=t13.domains.transitions(cases,packets,configs,profile)
+        for mode in expected_modes:
             ready=next(case for case in cases if case['mode']==mode and case['phase']=='ready')
             recovered=next(case for case in cases if case['mode']==mode and case['phase']=='recovered')
             assert ready['identity']==recovered['identity'],'policy updates replaced Flow identity'
             nonce=ready['nonce'];fixture=fixtures['cases'][mode]
             echoes=[e for e in endpoint if e['kind']=='echo' and bytes.fromhex(e['hex']).startswith(('T15-'+nonce+':').encode())]
-            assert len(echoes)==25
-            assert {bytes.fromhex(e['hex']).decode() for e in echoes}=={'T15-'+nonce+':'+str(i) for i in range(25)}
+            changed=run.get('domain_policy') and not mode.endswith('_cutoff') and (mode.startswith('named') or mode=='absent')
+            wanted_echoes={'T15-'+nonce+':'+str(i) for i in range(25)}
+            if changed and pixel:wanted_echoes.add('T15-'+nonce+':domain-change')
+            assert len(echoes)==(26 if changed and pixel else 50 if changed else 25)
+            assert {bytes.fromhex(e['hex']).decode() for e in echoes}==wanted_echoes
             remote=echoes[0]['peer'];assert all(e['peer']==remote for e in echoes)
             if profile=='root':assert remote[1]==ready['port']
             arrivals=[e for e in endpoint if e['kind']=='received' and e['peer']==remote and e['hex'] in fixture['sequence']]
@@ -220,7 +233,7 @@ def verify(directory):
             observed=[p for p in packets if ready['port'] in (p['facts']['sport'],p['facts']['dport'])]
             initial=next(p for p in observed if p['facts']['sport']==ready['port'] and p['payload'].hex()==fixture['sequence'][-1])
             assert initial['expected']['actual_action']==(2 if mode.endswith('_cutoff') else 1)
-            if EXPECTED[mode][0]:
+            if expected_modes[mode][0]:
                 assert initial['expected']['action']==2 and initial['sni']['stop']=='1'
                 _,cached=one(records(text,'t11 event=cache '),token=initial['token'],generation=generation,position=2)
                 assert cached['hit']=='0'
@@ -232,14 +245,14 @@ def verify(directory):
                 session=next(s for s in run['sessions'] if s['label']==ready['client'])
                 assert report['nonce']==nonce and report['uid']==uid and report['plan']==session['plan']
                 assert report['echoes']==25 and not report.get('error')
-                if mode in ('named','absent'):assert report['blockedTimeout']
+                if not mode.endswith('_cutoff') and (mode.startswith('named') or mode=='absent'):assert report['blockedTimeout']
                 if mode=='timeout':assert report['timeoutWaitNs']>=5_100_000_000
                 if not fixture['raw']:
                     assert all(any(e['kind']=='quic_response' and e['peer']==remote and e['hex']==reply for e in endpoint) for reply in report['sequenceReplies'])
             else:
                 events=json.loads((directory/(ready['client']+'-client.json')).read_text())
                 assert events[0]['kind']=='quic_ready' and events[-1]['kind']=='closed'
-                if mode in ('named','absent'):assert any(e['kind']=='timeout' for e in events)
+                if not mode.endswith('_cutoff') and (mode.startswith('named') or mode=='absent'):assert any(e['kind']=='timeout' for e in events)
         terminal=records(text,'s216 stage=terminal ');delays=[]
         for packet in packets:
             _,done=one(terminal,token=packet['token'],generation=generation)
@@ -257,7 +270,7 @@ def verify(directory):
             assert row['capacity']=='1024' and row['entry_bytes']=='9024'
             assert row['allocated_bytes']=='9261384' and row['capacity_misses']=='0'
         for _,row in records(counters,'policy.cache '):
-            assert row['storage_bytes']=='23584' and row['capacity']=='128'
+            assert row['storage_bytes']==('24608' if run.get('domain_policy') else '23584') and row['capacity']=='128'
         totals['maximum_admit_to_terminal_us']=max(delays)/1000
         totals['peak_crypto_retained']=max(int(p['assembly']['retained']) for p in packets)
         totals['peak_crypto_ranges']=max(int(p['assembly']['ranges']) for p in packets)

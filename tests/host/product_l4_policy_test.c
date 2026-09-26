@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "product_l4_policy.h"
+#include "product_protocol_catalog.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 static int failures;
 
@@ -836,9 +838,44 @@ test_exact_range_plan (void)
       }
 }
 
+static void domain_opcode_contract(void)
+{
+  const uint8_t valid[] = {17, 63};
+  assert(product_static_expression_validate(valid, sizeof valid) == 0);
+  const uint8_t invalid[] = {17, 64};
+  assert(product_static_expression_validate(invalid, sizeof invalid) != 0);
+
+  product_l4_policy_rule_t rule = rule_template(1800, 21, 4, 0, 1, 1, 2);
+  rule.expression[0] = PRODUCT_EXPRESSION_DOMAIN_LIST;
+  rule.expression[1] = 0;
+  rule.expression_length = 2;
+  product_l4_policy_view_t view;
+  product_l4_policy_init(&view);
+  CHECK_STATUS(product_l4_policy_compile(&view, &rule, 1), 0,
+               "domain rule compiles");
+  product_l4_policy_packet_t packet = packet_template(21, 4, 17, 41000, 443);
+  packet.protocol_set_known = 1;
+  packet.sni_result = PRODUCT_SNI_NAME;
+  packet.domain_lists = 1;
+  product_l4_policy_match_result_t result;
+  const uint32_t supplemental_only[] = {1010, 1016, 1020}; /* FTPS, STUN, DTLS. */
+  for (unsigned i = 0; i < sizeof supplemental_only / sizeof supplemental_only[0]; ++i)
+    {
+      packet.protocol_set = product_protocol_bit(supplemental_only[i]);
+      result = match(&view, &packet);
+      check_no_match(&result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
+                     "supplemental label cannot authorize a domain rule");
+    }
+  packet.protocol_set = product_protocol_bit(1004) | product_protocol_bit(1016);
+  result = match(&view, &packet);
+  check_result_match(&result, 1800, 1, 2, PRODUCT_L4_POLICY_VERDICT_DROP,
+                     "QUIC plus supplemental STUN keeps the domain winner");
+}
+
 int
 main (void)
 {
+  domain_opcode_contract();
   test_exact_range_plan ();
   test_factor_budget ();
   CHECK (PRODUCT_L4_POLICY_DIRECTION_INPUT == 1

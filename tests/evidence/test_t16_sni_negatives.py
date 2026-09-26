@@ -41,7 +41,7 @@ def run(directory,profile=None):
                 return ('\n'.join(lines)+'\n').encode()
             raise AssertionError((prefix,key))
         named=next(case for case in cases if case['mode']=='named' and case['phase']=='ready')
-        for mode in verify.EXPECTED:
+        for mode in (verify.DOMAIN_EXPECTED if original.get("domain_policy") else verify.EXPECTED):
             case=next(case for case in cases if case['mode']==mode and case['phase']=='ready')
             trial('typed-result-'+mode,case['sni'],lambda b:b.replace(b'result=',b'result=9',1))
             if mode in ('conflict','ranges','offset','timeout','packets'):

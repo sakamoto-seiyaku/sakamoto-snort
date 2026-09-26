@@ -32,7 +32,7 @@ from cryptography.x509.oid import NameOID
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('wire', ROOT/'tests/host/quic_initial_vectors.py')
 wire = importlib.util.module_from_spec(spec);spec.loader.exec_module(wire)
-MODES = ('named','absent','conflict','ranges','offset','timeout','packets','named_cutoff','absent_cutoff')
+MODES = ('named','absent','conflict','ranges','offset','timeout','packets','named_cutoff','absent_cutoff','named_child','named_boundary','named_suffix','named_alabel')
 
 def emit(**fields): print(json.dumps(dict(time_ns=time.time_ns(),**fields)),flush=True)
 
@@ -52,7 +52,7 @@ def decode_initial(packet):
     hello = pull_client_hello(Buffer(data=bytes(data)))
     return dict(name=hello.server_name,pn=pn,cryptoHex=data.hex(),dcid=header.destination_cid.hex())
 
-def prepare(directory):
+def prepare(directory,domains=False):
     assert aioquic_version=='1.3.0'
     directory.mkdir(parents=True,exist_ok=False)
     key=ec.generate_private_key(ec.SECP256R1())
@@ -67,13 +67,15 @@ def prepare(directory):
     (directory/'key.pem').write_bytes(key.private_bytes(serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
     fixtures={}
-    for mode in ('named','absent','named_cutoff','absent_cutoff'):
+    names={'named':'example.test','absent':None,'named_cutoff':'example.test','absent_cutoff':None}
+    if domains:names.update(named_child='a.example.test',named_boundary='badexample.test',named_suffix='example.test.evil',named_alabel='xn--bcher-kva.example')
+    for mode,name in names.items():
         config=QuicConfiguration(is_client=True,alpn_protocols=['t15'],verify_mode=ssl.CERT_NONE,
-            supported_versions=[1],server_name='example.test' if mode.startswith('named') else '127.0.0.1')
+            supported_versions=[1],server_name=name or '127.0.0.1')
         connection=QuicConnection(configuration=config);connection.connect(('127.0.0.1',40650),now=0)
         initial=connection.datagrams_to_send(now=0)[0][0]
         oracle=decode_initial(initial)
-        assert oracle['name']==('example.test' if mode.startswith('named') else None)
+        assert oracle['name']==name
         fixtures[mode]=dict(hex=initial.hex(),result=1 if mode.startswith('named') else 2,
             stop=1,name=oracle['name'] or '',oracle=oracle,raw=False)
     for mode,fixture in fixtures.items():
@@ -177,7 +179,8 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('operation',choices=['prepare','server','client'])
     parser.add_argument('--directory',type=Path,required=True);parser.add_argument('--host',default='127.0.0.2')
     parser.add_argument('--source',type=int);parser.add_argument('--mode',choices=MODES);parser.add_argument('--nonce')
+    parser.add_argument('--domains',action='store_true')
     args=parser.parse_args()
-    if args.operation=='prepare':prepare(args.directory)
+    if args.operation=='prepare':prepare(args.directory,args.domains)
     elif args.operation=='server':server(args.host,args.directory)
     else:client(args.host,args.source,args.mode,args.nonce,args.directory)

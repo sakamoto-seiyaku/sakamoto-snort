@@ -32,6 +32,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #include <unistd.h>
@@ -216,6 +217,7 @@ typedef struct
   /* Published banks are immutable.  Reader counts prevent reuse while a
    * worker is still evaluating the previous active bank. */
   product_l4_policy_view_t view;
+  product_domains_t *domains;
   u64 generation;
   u64 revision;
   u64 snapshot_hash;
@@ -237,6 +239,7 @@ typedef struct
   u64 protocols;
   u8 protocols_available;
   u8 sni_result;
+  u64 domain_lists;
 } product_policy_snapshot_t;
 
 typedef struct
@@ -458,6 +461,7 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
       snapshot->protocols = 0;
       snapshot->protocols_available = 0;
       snapshot->sni_result = 0;
+      snapshot->domain_lists = 0;
       snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
@@ -480,6 +484,18 @@ product_policy_snapshot_release (product_packet_graph_main_t *graph,
     &graph->l4_policy_bank_readers[snapshot->bank_index], 1, __ATOMIC_SEQ_CST);
   ASSERT (previous != 0);
   (void) previous;
+}
+
+/* Main thread, after admission/debt has quiesced or before a fresh start. */
+static void
+product_policy_domains_clear (product_packet_graph_main_t *graph)
+{
+  for (u32 i = 0; i < 2; ++i)
+    {
+      ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[i], __ATOMIC_SEQ_CST) == 0);
+      product_domains_destroy (graph->l4_policy_banks[i].domains);
+      graph->l4_policy_banks[i].domains = 0;
+    }
 }
 
 static product_packet_result_t product_packet_graph_policy_on_owner (
@@ -2284,6 +2300,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
     return 0;
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[0], __ATOMIC_SEQ_CST) == 0);
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[1], __ATOMIC_SEQ_CST) == 0);
+  product_policy_domains_clear (graph);
   clib_memset (graph->l4_policy_banks, 0, sizeof (graph->l4_policy_banks));
   __atomic_store_n (&graph->l4_policy_active_bank, 0, __ATOMIC_SEQ_CST);
   __atomic_store_n (&graph->policy_publish_sequence, 0, __ATOMIC_SEQ_CST);
@@ -2309,6 +2326,7 @@ product_packet_graph_stop_external (vlib_main_t *vm)
   clib_atomic_store_rel_n (&graph->enabled, 0);
   product_packet_graph_policy_writer_lock (graph);
   product_packet_graph_flow_pools_flush (graph);
+  product_policy_domains_clear (graph);
   product_packet_graph_policy_writer_unlock (graph);
 }
 
@@ -2962,6 +2980,7 @@ product_packet_graph_l4_view_evaluate (
   packet.protocol_set = snapshot->protocols;
   packet.protocol_set_known = snapshot->protocols_available;
   packet.sni_result = snapshot->sni_result;
+  packet.domain_lists = snapshot->domain_lists;
   packet.ct_state = snapshot->ct.state;
   packet.ct_state_known = snapshot->ct.state != PRODUCT_CT_UNKNOWN;
   packet.flow_direction = snapshot->ct.direction;
@@ -3367,7 +3386,7 @@ product_packet_graph_publish_policy_bundle (
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_packet_graph_l4_policy_bank_t *bank;
-  product_l4_policy_view_t compiled_view;
+  product_l4_policy_view_t *compiled_view;
   product_l4_policy_status_t compile_status;
   u32 sequence;
   u32 active_bank;
@@ -3394,11 +3413,17 @@ product_packet_graph_publish_policy_bundle (
   for (u32 index = 0; index < bundle->l4_rule_count; ++index)
     if (bundle->l4_rules[index].network_context_id == 0)
       return PRODUCT_PACKET_INVALID_ARGUMENT;
-  product_l4_policy_init (&compiled_view);
-  compile_status = product_l4_policy_compile (
-    &compiled_view, bundle->l4_rules, bundle->l4_rule_count);
-  if (compile_status != PRODUCT_L4_POLICY_STATUS_OK)
+  compiled_view = malloc (sizeof (*compiled_view));
+  if (compiled_view == 0)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
+  product_l4_policy_init (compiled_view);
+  compile_status = product_l4_policy_compile (
+    compiled_view, bundle->l4_rules, bundle->l4_rule_count);
+  if (compile_status != PRODUCT_L4_POLICY_STATUS_OK)
+    {
+      free (compiled_view);
+      return PRODUCT_PACKET_INVALID_ARGUMENT;
+    }
 
   product_packet_graph_policy_writer_lock (graph);
   sequence = clib_atomic_load_acq_n (&graph->policy_publish_sequence);
@@ -3408,6 +3433,7 @@ product_packet_graph_publish_policy_bundle (
   if (bundle->revision < graph->l4_policy_banks[active_bank].revision)
     {
       product_packet_graph_policy_writer_unlock (graph);
+      free (compiled_view);
       return PRODUCT_PACKET_INVALID_ARGUMENT;
     }
   inactive_bank = active_bank ^ 1U;
@@ -3420,10 +3446,13 @@ product_packet_graph_publish_policy_bundle (
   reuse_begin_ns = product_packet_event_clock_ns ();
 #endif
   bank = &graph->l4_policy_banks[inactive_bank];
-  bank->view = compiled_view;
+  product_domains_destroy (bank->domains);
+  bank->domains = bundle->domains;
+  bank->view = *compiled_view;
   bank->generation = bundle->generation;
   bank->revision = bundle->revision;
   bank->snapshot_hash = bundle->snapshot_hash;
+  free (compiled_view);
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   publish_begin_ns = product_packet_event_clock_ns ();
@@ -3861,6 +3890,9 @@ product_packet_graph_policy_on_owner (
       snapshot.protocols = observation.entry ? observation.entry->lpi.protocols : 0;
       snapshot.protocols_available = observation.entry ? observation.entry->lpi.available : 0;
       snapshot.sni_result = observation.entry ? observation.entry->sni.result : 0;
+      if (snapshot.sni_result == PRODUCT_SNI_NAME)
+        snapshot.domain_lists = product_domains_match (snapshot.bank->domains,
+          (const uint8_t *) observation.entry->sni.name, observation.entry->sni.name_length);
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (

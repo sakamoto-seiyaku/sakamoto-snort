@@ -27,7 +27,7 @@ for field in ['policy_generation == policy->generation','policy_revision == poli
  assert field in entry,field
 publish=body('product_packet_graph_publish_policy_bundle')
 assert 'flow_pools[' not in publish and 'flow_pools_flush' not in publish and 'product_flow_entry_' not in publish
-assert publish.index('l4_policy_bank_readers[inactive_bank]')<publish.index('bank->view = compiled_view')<publish.index('sequence + 1U')<publish.index('l4_policy_active_bank, inactive_bank')
+assert publish.index('l4_policy_bank_readers[inactive_bank]')<publish.index('product_domains_destroy (bank->domains)')<publish.index('bank->view = *compiled_view')<publish.index('sequence + 1U')<publish.index('l4_policy_active_bank, inactive_bank')
 assert '__ATOMIC_SEQ_CST' in publish
 claim=body('product_policy_snapshot_acquire');release=body('product_policy_snapshot_release')
 assert 'snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL' in claim, 'public complete-view callers require an initialized selector'

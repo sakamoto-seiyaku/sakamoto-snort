@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_entry.h"
 #include "product_l4_policy.h"
+#include "product_domain_consumer.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +37,7 @@ static void named_split(void)
   }
   assert(o.entry->sni.result==PRODUCT_SNI_NAME);
   assert(!strcmp(o.entry->sni.name,"example.tests"));
+  domain_consumer(o.entry,PRODUCT_SNI_NAME,"example.tests",6);
   assert(!o.entry->tcp_bytes.length[0] && !o.entry->tcp_bytes.length[1]);
   product_flow_runtime_destroy(pool);
 }
@@ -100,6 +102,7 @@ static product_sni_state_t sample(const uint8_t *bytes,unsigned length,unsigned 
     if(at<length) f.tcp_sequence+=(uint32_t)sequence_gap;
   } while(at<length);
   product_sni_state_t result=o.entry->sni;
+  if (result.result==PRODUCT_SNI_ABSENT) domain_consumer(o.entry,PRODUCT_SNI_ABSENT,"",6);
   if(result.stop) assert(!o.entry->tcp_bytes.length[0] && !o.entry->tcp_bytes.length[1]);
   if(result.result) assert(o.entry->lpi.protocols&4);
   assert(o.entry->linked);
@@ -296,6 +299,7 @@ static void reorder_matrix(void)
       }
       assert(c.observation.entry->sni.result==PRODUCT_SNI_ABSENT);
       assert(c.observation.entry->sni.bytes==50);
+      domain_consumer(c.observation.entry,PRODUCT_SNI_ABSENT,"",6);
       product_flow_runtime_destroy(c.pool);++cases;
     }
   assert(cases==24);

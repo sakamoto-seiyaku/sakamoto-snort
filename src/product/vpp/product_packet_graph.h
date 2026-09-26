@@ -6,6 +6,7 @@
 #include "product_packet.h"
 #include "product_packet_completion.h"
 #include "product_l4_policy.h"
+#include "product_domains.h"
 
 #include <stdint.h>
 #include "sakamoto_product_sni.h"
@@ -247,6 +248,8 @@ typedef struct
   const product_packet_graph_gate_entry_t *gate_entries;
   uint32_t gate_entry_count;
   const product_l4_policy_rule_t *l4_rules;
+  /* Ownership transfers only on successful complete publication. */
+  product_domains_t *domains;
   uint32_t l4_rule_count;
 } product_packet_graph_policy_bundle_t;
 

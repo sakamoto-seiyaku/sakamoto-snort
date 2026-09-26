@@ -82,12 +82,12 @@ extern vlib_node_registration_t product_core_start_adapters_node;
 
 static uint32_t
 product_core_publish_source (void *opaque, uint64_t revision, uint64_t hash,
-                             const product_l4_policy_rule_t *rule, uint32_t count)
+                             const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains)
 {
   product_core_main_t *pcm = opaque;
   product_packet_graph_policy_bundle_t bundle = {
     .generation = pcm->generation, .revision = revision, .snapshot_hash = hash,
-    .l4_rules = rule, .l4_rule_count = count
+    .l4_rules = rule, .l4_rule_count = count, .domains = domains
   };
   if (product_packet_graph_apply_policy_bundle (&bundle) != PRODUCT_PACKET_OK)
     return SAKAMOTO_RULE_CONFIG_PUBLISH;
@@ -559,151 +559,186 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
 {
   product_core_main_t *pcm = &product_core_main;
   vl_api_product_core_rule_config_reply_t *rmp;
-  sakamoto_product_rule_config_request_t request = {
-    .schema = ntohl (mp->schema), .operation = ntohl (mp->operation),
-    .expected_saved_revision = clib_net_to_host_u64 (mp->expected_saved_revision)
-  };
-#define FROM_RULE(field) request.rule.field = ntohl (mp->rule.field)
+  int rv = 0;
+  if (!vl_api_client_index_to_registration (mp->client_index))
+    return;
+  /* The complete request and status together exceed the VPP API process
+   * stack. Keep this scratch state off-stack and release it after the reply. */
+  struct {
+    sakamoto_product_rule_config_request_t request;
+    sakamoto_product_rule_config_status_t status;
+  } *scratch = calloc (1, sizeof (*scratch));
+  if (!scratch)
+    {
+      REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
+        rmp->retval = 0;
+        rmp->generation = clib_host_to_net_u64 (pcm->generation);
+        rmp->result = htonl (SAKAMOTO_RULE_CONFIG_NOT_READY);
+        rmp->error_index = htonl (UINT32_MAX);
+      }));
+      return;
+    }
+  sakamoto_product_rule_config_request_t *request = &scratch->request;
+  sakamoto_product_rule_config_status_t *status = &scratch->status;
+  request->schema = ntohl (mp->schema);
+  request->operation = ntohl (mp->operation);
+  request->expected_saved_revision = clib_net_to_host_u64 (mp->expected_saved_revision);
+#define FROM_RULE(field) request->rule.field = ntohl (mp->rule.field)
   FROM_RULE (present); FROM_RULE (uid); FROM_RULE (protocol);
   FROM_RULE (direction); FROM_RULE (action); FROM_RULE (source_port);
   FROM_RULE (destination_port); FROM_RULE (reserved);
 #undef FROM_RULE
-  memcpy (request.rule.source_address, mp->rule.source_address, 4);
-  memcpy (request.rule.destination_address, mp->rule.destination_address, 4);
-  request.count = ntohl (mp->count); request.reserved = ntohl (mp->reserved);
-  for (unsigned i = 0; i < request.count && i < SAKAMOTO_RULE_CONFIG_MAX_RULES; ++i)
+  memcpy (request->rule.source_address, mp->rule.source_address, 4);
+  memcpy (request->rule.destination_address, mp->rule.destination_address, 4);
+  request->count = ntohl (mp->count); request->reserved = ntohl (mp->reserved);
+  for (unsigned i = 0; i < request->count && i < SAKAMOTO_RULE_CONFIG_MAX_RULES; ++i)
     {
-      request.rules[i].version = clib_net_to_host_u64 (mp->rules[i].version);
-      request.rules[i].base_version = clib_net_to_host_u64 (mp->rules[i].base_version);
-      request.rules[i].uid = ntohl (mp->rules[i].uid);
-      request.rules[i].network_context = ntohl (mp->rules[i].network_context);
-      request.rules[i].ifindex = ntohl (mp->rules[i].ifindex);
-      request.rules[i].priority = ntohl (mp->rules[i].priority);
-      request.rules[i].order = ntohl (mp->rules[i].order);
-      request.rules[i].family = ntohl (mp->rules[i].family);
-      request.rules[i].protocol = ntohl (mp->rules[i].protocol);
-      request.rules[i].direction = ntohl (mp->rules[i].direction);
-      request.rules[i].action = ntohl (mp->rules[i].action);
-      request.rules[i].source_prefix = ntohl (mp->rules[i].source_prefix);
-      request.rules[i].destination_prefix = ntohl (mp->rules[i].destination_prefix);
-      request.rules[i].source_port_first = ntohl (mp->rules[i].source_port_first);
-      request.rules[i].source_port_last = ntohl (mp->rules[i].source_port_last);
-      request.rules[i].destination_port_first = ntohl (mp->rules[i].destination_port_first);
-      request.rules[i].destination_port_last = ntohl (mp->rules[i].destination_port_last);
-      request.rules[i].reserved = ntohl (mp->rules[i].reserved);
-      request.rules[i].expression_length = ntohl(mp->rules[i].expression_length);
-      memcpy(request.rules[i].expression, mp->rules[i].expression, 64);
-      memcpy (request.rules[i].source_address, mp->rules[i].source_address, 16);
-      memcpy (request.rules[i].destination_address, mp->rules[i].destination_address, 16);
+      request->rules[i].version = clib_net_to_host_u64 (mp->rules[i].version);
+      request->rules[i].base_version = clib_net_to_host_u64 (mp->rules[i].base_version);
+      request->rules[i].uid = ntohl (mp->rules[i].uid);
+      request->rules[i].network_context = ntohl (mp->rules[i].network_context);
+      request->rules[i].ifindex = ntohl (mp->rules[i].ifindex);
+      request->rules[i].priority = ntohl (mp->rules[i].priority);
+      request->rules[i].order = ntohl (mp->rules[i].order);
+      request->rules[i].family = ntohl (mp->rules[i].family);
+      request->rules[i].protocol = ntohl (mp->rules[i].protocol);
+      request->rules[i].direction = ntohl (mp->rules[i].direction);
+      request->rules[i].action = ntohl (mp->rules[i].action);
+      request->rules[i].source_prefix = ntohl (mp->rules[i].source_prefix);
+      request->rules[i].destination_prefix = ntohl (mp->rules[i].destination_prefix);
+      request->rules[i].source_port_first = ntohl (mp->rules[i].source_port_first);
+      request->rules[i].source_port_last = ntohl (mp->rules[i].source_port_last);
+      request->rules[i].destination_port_first = ntohl (mp->rules[i].destination_port_first);
+      request->rules[i].destination_port_last = ntohl (mp->rules[i].destination_port_last);
+      request->rules[i].reserved = ntohl (mp->rules[i].reserved);
+      request->rules[i].expression_length = ntohl(mp->rules[i].expression_length);
+      memcpy(request->rules[i].expression, mp->rules[i].expression, 64);
+      memcpy (request->rules[i].source_address, mp->rules[i].source_address, 16);
+      memcpy (request->rules[i].destination_address, mp->rules[i].destination_address, 16);
     }
-  request.graph.group_count = ntohl (mp->graph.group_count);
-  request.graph.edge_count = ntohl (mp->graph.edge_count);
-  request.graph.binding_count = ntohl (mp->graph.binding_count);
-  for (unsigned i = 0; i < request.graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
-    request.graph.groups[i] = ntohl (mp->graph.groups[i]);
+  request->graph.group_count = ntohl (mp->graph.group_count);
+  request->graph.edge_count = ntohl (mp->graph.edge_count);
+  request->graph.binding_count = ntohl (mp->graph.binding_count);
+  for (unsigned i = 0; i < request->graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+    request->graph.groups[i] = ntohl (mp->graph.groups[i]);
   }
-  for (unsigned i = 0; i < request.graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
-    request.graph.edges[i].group = ntohl (mp->graph.edges[i].group);
-    request.graph.edges[i].kind = ntohl (mp->graph.edges[i].kind);
-    request.graph.edges[i].target = ntohl (mp->graph.edges[i].target);
+  for (unsigned i = 0; i < request->graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+    request->graph.edges[i].group = ntohl (mp->graph.edges[i].group);
+    request->graph.edges[i].kind = ntohl (mp->graph.edges[i].kind);
+    request->graph.edges[i].target = ntohl (mp->graph.edges[i].target);
   }
-  for (unsigned i = 0; i < request.graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
-    request.graph.bindings[i].id = ntohl (mp->graph.bindings[i].id);
-    request.graph.bindings[i].uid = ntohl (mp->graph.bindings[i].uid);
-    request.graph.bindings[i].kind = ntohl (mp->graph.bindings[i].kind);
-    request.graph.bindings[i].target = ntohl (mp->graph.bindings[i].target);
-    request.graph.bindings[i].mode = ntohl (mp->graph.bindings[i].mode);
+  for (unsigned i = 0; i < request->graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+    request->graph.bindings[i].id = ntohl (mp->graph.bindings[i].id);
+    request->graph.bindings[i].uid = ntohl (mp->graph.bindings[i].uid);
+    request->graph.bindings[i].kind = ntohl (mp->graph.bindings[i].kind);
+    request->graph.bindings[i].target = ntohl (mp->graph.bindings[i].target);
+    request->graph.bindings[i].mode = ntohl (mp->graph.bindings[i].mode);
   }
-  sakamoto_product_rule_config_status_t status = {0};
+  request->domains.list_count = ntohl (mp->domains.list_count);
+  request->domains.entry_count = ntohl (mp->domains.entry_count);
+  for (unsigned i = 0; i < request->domains.entry_count && i < SAKAMOTO_DOMAIN_MAX_ENTRIES; ++i) {
+    request->domains.entries[i].list = ntohl (mp->domains.entries[i].list);
+    request->domains.entries[i].mode = ntohl (mp->domains.entries[i].mode);
+    request->domains.entries[i].length = ntohl (mp->domains.entries[i].length);
+    memcpy (request->domains.entries[i].name, mp->domains.entries[i].name, SAKAMOTO_DOMAIN_NAME_BYTES);
+  }
   uint32_t result = SAKAMOTO_RULE_CONFIG_NOT_READY;
-  int rv = 0;
   if (clib_net_to_host_u64 (mp->generation) != pcm->generation) rv = -5;
-  else if (request.schema != SAKAMOTO_RULE_CONFIG_SCHEMA) result = SAKAMOTO_RULE_CONFIG_INVALID;
+  else if (request->schema != SAKAMOTO_RULE_CONFIG_SCHEMA) result = SAKAMOTO_RULE_CONFIG_INVALID;
   else if (product_source_config)
     {
-      if (request.operation == SAKAMOTO_RULE_CONFIG_QUERY) result = 0;
-      else if (request.operation == SAKAMOTO_RULE_CONFIG_REPLACE || request.operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL || request.operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE)
-        result = product_rule_config_replace (product_source_config, &request,
+      if (request->operation == SAKAMOTO_RULE_CONFIG_QUERY) result = 0;
+      else if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE || request->operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL || request->operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE)
+        result = product_rule_config_replace (product_source_config, request,
                                               product_core_publish_source, pcm);
       else result = SAKAMOTO_RULE_CONFIG_INVALID;
     }
-  if (product_source_config) product_rule_config_query (product_source_config, &status);
-  if (!rv && !result && request.operation != SAKAMOTO_RULE_CONFIG_QUERY
-      && status.active_revision && product_core_waiting_for_policy)
+  if (product_source_config) product_rule_config_query (product_source_config, status);
+  if (!rv && !result && request->operation != SAKAMOTO_RULE_CONFIG_QUERY
+      && status->active_revision && product_core_waiting_for_policy)
     vlib_process_signal_event (pcm->vlib_main,
                                product_core_start_adapters_node.index, 1, 0);
-  REPLY_MACRO2 (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
+  REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
     rmp->retval = htonl (rv);
     rmp->generation = clib_host_to_net_u64 (pcm->generation);
-    rmp->saved_revision = clib_host_to_net_u64 (status.saved_revision);
-    rmp->active_revision = clib_host_to_net_u64 (status.active_revision);
-    rmp->saved_rule_version = clib_host_to_net_u64 (status.saved_rule_version);
-    rmp->active_rule_version = clib_host_to_net_u64 (status.active_rule_version);
+    rmp->saved_revision = clib_host_to_net_u64 (status->saved_revision);
+    rmp->active_revision = clib_host_to_net_u64 (status->active_revision);
+    rmp->saved_rule_version = clib_host_to_net_u64 (status->saved_rule_version);
+    rmp->active_rule_version = clib_host_to_net_u64 (status->active_rule_version);
     rmp->result = htonl (result);
-    rmp->save_error = htonl (status.save_error);
-    rmp->compile_error = htonl (status.compile_error);
-    rmp->rule.present = htonl (status.rule.present);
-    rmp->rule.uid = htonl (status.rule.uid);
-    rmp->rule.protocol = htonl (status.rule.protocol);
-    rmp->rule.direction = htonl (status.rule.direction);
-    rmp->rule.action = htonl (status.rule.action);
-    rmp->rule.source_port = htonl (status.rule.source_port);
-    rmp->rule.destination_port = htonl (status.rule.destination_port);
-    rmp->rule.reserved = htonl (status.rule.reserved);
+    rmp->save_error = htonl (status->save_error);
+    rmp->compile_error = htonl (status->compile_error);
+    rmp->rule.present = htonl (status->rule.present);
+    rmp->rule.uid = htonl (status->rule.uid);
+    rmp->rule.protocol = htonl (status->rule.protocol);
+    rmp->rule.direction = htonl (status->rule.direction);
+    rmp->rule.action = htonl (status->rule.action);
+    rmp->rule.source_port = htonl (status->rule.source_port);
+    rmp->rule.destination_port = htonl (status->rule.destination_port);
+    rmp->rule.reserved = htonl (status->rule.reserved);
 
-    memcpy (rmp->rule.source_address, status.rule.source_address, 4);
-    memcpy (rmp->rule.destination_address, status.rule.destination_address, 4);
-    rmp->count = htonl (status.count);
-    rmp->active_count = htonl (status.active_count);
-    rmp->error_index = htonl (status.error_index);
-    rmp->compiler_status = htonl (status.compiler_status);
-    for (unsigned i = 0; i < status.count; ++i)
+    memcpy (rmp->rule.source_address, status->rule.source_address, 4);
+    memcpy (rmp->rule.destination_address, status->rule.destination_address, 4);
+    rmp->count = htonl (status->count);
+    rmp->active_count = htonl (status->active_count);
+    rmp->error_index = htonl (status->error_index);
+    rmp->compiler_status = htonl (status->compiler_status);
+    for (unsigned i = 0; i < status->count; ++i)
       {
-        rmp->rules[i].version = clib_host_to_net_u64 (status.rules[i].version);
-        rmp->rules[i].base_version = clib_host_to_net_u64 (status.rules[i].base_version);
-        rmp->rules[i].uid = htonl (status.rules[i].uid);
-        rmp->rules[i].network_context = htonl (status.rules[i].network_context);
-        rmp->rules[i].ifindex = htonl (status.rules[i].ifindex);
-        rmp->rules[i].priority = htonl (status.rules[i].priority);
-        rmp->rules[i].order = htonl (status.rules[i].order);
-        rmp->rules[i].family = htonl (status.rules[i].family);
-        rmp->rules[i].protocol = htonl (status.rules[i].protocol);
-        rmp->rules[i].direction = htonl (status.rules[i].direction);
-        rmp->rules[i].action = htonl (status.rules[i].action);
-        rmp->rules[i].source_prefix = htonl (status.rules[i].source_prefix);
-        rmp->rules[i].destination_prefix = htonl (status.rules[i].destination_prefix);
-        rmp->rules[i].source_port_first = htonl (status.rules[i].source_port_first);
-        rmp->rules[i].source_port_last = htonl (status.rules[i].source_port_last);
-        rmp->rules[i].destination_port_first = htonl (status.rules[i].destination_port_first);
-        rmp->rules[i].destination_port_last = htonl (status.rules[i].destination_port_last);
-        rmp->rules[i].reserved = htonl (status.rules[i].reserved);
-        rmp->rules[i].expression_length = htonl(status.rules[i].expression_length);
-        memcpy(rmp->rules[i].expression, status.rules[i].expression, 64);
-        memcpy (rmp->rules[i].source_address, status.rules[i].source_address, 16);
-        memcpy (rmp->rules[i].destination_address, status.rules[i].destination_address, 16);
+        rmp->rules[i].version = clib_host_to_net_u64 (status->rules[i].version);
+        rmp->rules[i].base_version = clib_host_to_net_u64 (status->rules[i].base_version);
+        rmp->rules[i].uid = htonl (status->rules[i].uid);
+        rmp->rules[i].network_context = htonl (status->rules[i].network_context);
+        rmp->rules[i].ifindex = htonl (status->rules[i].ifindex);
+        rmp->rules[i].priority = htonl (status->rules[i].priority);
+        rmp->rules[i].order = htonl (status->rules[i].order);
+        rmp->rules[i].family = htonl (status->rules[i].family);
+        rmp->rules[i].protocol = htonl (status->rules[i].protocol);
+        rmp->rules[i].direction = htonl (status->rules[i].direction);
+        rmp->rules[i].action = htonl (status->rules[i].action);
+        rmp->rules[i].source_prefix = htonl (status->rules[i].source_prefix);
+        rmp->rules[i].destination_prefix = htonl (status->rules[i].destination_prefix);
+        rmp->rules[i].source_port_first = htonl (status->rules[i].source_port_first);
+        rmp->rules[i].source_port_last = htonl (status->rules[i].source_port_last);
+        rmp->rules[i].destination_port_first = htonl (status->rules[i].destination_port_first);
+        rmp->rules[i].destination_port_last = htonl (status->rules[i].destination_port_last);
+        rmp->rules[i].reserved = htonl (status->rules[i].reserved);
+        rmp->rules[i].expression_length = htonl(status->rules[i].expression_length);
+        memcpy(rmp->rules[i].expression, status->rules[i].expression, 64);
+        memcpy (rmp->rules[i].source_address, status->rules[i].source_address, 16);
+        memcpy (rmp->rules[i].destination_address, status->rules[i].destination_address, 16);
       }
-    rmp->graph.group_count = htonl (status.graph.group_count);
-    rmp->graph.edge_count = htonl (status.graph.edge_count);
-    rmp->graph.binding_count = htonl (status.graph.binding_count);
-    for (unsigned i = 0; i < status.graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
-      rmp->graph.groups[i] = htonl (status.graph.groups[i]);
+    rmp->graph.group_count = htonl (status->graph.group_count);
+    rmp->graph.edge_count = htonl (status->graph.edge_count);
+    rmp->graph.binding_count = htonl (status->graph.binding_count);
+    for (unsigned i = 0; i < status->graph.group_count && i < SAKAMOTO_RULE_CONFIG_MAX_GROUPS; ++i) {
+      rmp->graph.groups[i] = htonl (status->graph.groups[i]);
     }
-    for (unsigned i = 0; i < status.graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
-      rmp->graph.edges[i].group = htonl (status.graph.edges[i].group);
-      rmp->graph.edges[i].kind = htonl (status.graph.edges[i].kind);
-      rmp->graph.edges[i].target = htonl (status.graph.edges[i].target);
+    for (unsigned i = 0; i < status->graph.edge_count && i < SAKAMOTO_RULE_CONFIG_MAX_EDGES; ++i) {
+      rmp->graph.edges[i].group = htonl (status->graph.edges[i].group);
+      rmp->graph.edges[i].kind = htonl (status->graph.edges[i].kind);
+      rmp->graph.edges[i].target = htonl (status->graph.edges[i].target);
     }
-    for (unsigned i = 0; i < status.graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
-      rmp->graph.bindings[i].id = htonl (status.graph.bindings[i].id);
-      rmp->graph.bindings[i].uid = htonl (status.graph.bindings[i].uid);
-      rmp->graph.bindings[i].kind = htonl (status.graph.bindings[i].kind);
-      rmp->graph.bindings[i].target = htonl (status.graph.bindings[i].target);
-      rmp->graph.bindings[i].mode = htonl (status.graph.bindings[i].mode);
+    for (unsigned i = 0; i < status->graph.binding_count && i < SAKAMOTO_RULE_CONFIG_MAX_BINDINGS; ++i) {
+      rmp->graph.bindings[i].id = htonl (status->graph.bindings[i].id);
+      rmp->graph.bindings[i].uid = htonl (status->graph.bindings[i].uid);
+      rmp->graph.bindings[i].kind = htonl (status->graph.bindings[i].kind);
+      rmp->graph.bindings[i].target = htonl (status->graph.bindings[i].target);
+      rmp->graph.bindings[i].mode = htonl (status->graph.bindings[i].mode);
     }
-    for (unsigned i = 0; i < status.active_count; ++i)
-      rmp->active_versions[i] = clib_host_to_net_u64 (status.active_versions[i]);
+    rmp->domains.list_count = htonl (status->domains.list_count);
+    rmp->domains.entry_count = htonl (status->domains.entry_count);
+    for (unsigned i = 0; i < status->domains.entry_count; ++i) {
+      rmp->domains.entries[i].list = htonl (status->domains.entries[i].list);
+      rmp->domains.entries[i].mode = htonl (status->domains.entries[i].mode);
+      rmp->domains.entries[i].length = htonl (status->domains.entries[i].length);
+      memcpy (rmp->domains.entries[i].name, status->domains.entries[i].name, SAKAMOTO_DOMAIN_NAME_BYTES);
+    }
+    for (unsigned i = 0; i < status->active_count; ++i)
+      rmp->active_versions[i] = clib_host_to_net_u64 (status->active_versions[i]);
 
   }));
+  free (scratch);
 }
 
 static void

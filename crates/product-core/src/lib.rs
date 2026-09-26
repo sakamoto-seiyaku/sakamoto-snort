@@ -6,7 +6,8 @@ pub use sni::SniStatus;
 mod ffi;
 mod rule_config;
 pub use rule_config::{
-    ConfigRule, DirectRule, RuleConfigRequest, RuleConfigStatus, MAX_CONFIG_RULES,
+    ConfigRule, DirectRule, DomainEntry, Domains, RuleConfigRequest, RuleConfigStatus,
+    MAX_CONFIG_RULES,
 };
 mod session;
 

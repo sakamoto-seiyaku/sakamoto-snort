@@ -26,7 +26,7 @@ typedef enum {
   PRODUCT_STATIC_DESTINATION_PORT = 12,
   PRODUCT_EXPRESSION_CT_STATE = 13, PRODUCT_EXPRESSION_FLOW_DIRECTION = 14,
   PRODUCT_EXPRESSION_APPLICATION_PROTOCOL = 15,
-  PRODUCT_EXPRESSION_SNI_ABSENT = 16
+  PRODUCT_EXPRESSION_SNI_ABSENT = 16, PRODUCT_EXPRESSION_DOMAIN_LIST = 17
 } product_static_opcode_t;
 
 #define PRODUCT_L4_POLICY_MAX_RULES UINT32_C (128)
@@ -146,6 +146,7 @@ typedef struct
   uint64_t protocol_set; /* Stable catalog bit projection, all published facts. */
   uint8_t protocol_set_known;
   uint8_t sni_result;
+  uint64_t domain_lists; /* All memberships from this packet's protected snapshot. */
 } product_l4_policy_packet_t;
 
 typedef struct
@@ -247,6 +248,8 @@ typedef struct
 } product_l4_policy_match_result_t;
 
 product_l4_policy_status_t product_static_expression_validate (const uint8_t *, uint32_t);
+/* Validated expressions only; list references are source consistency inputs. */
+uint64_t product_static_expression_domain_references (const uint8_t *, uint32_t);
 
 /* Position is snapshot-owned; a rule is evaluated wholly at exactly one side.
  * ALL remains the complete ordered semantic seam. PRE NoMatch is not final;

@@ -145,6 +145,13 @@ final class ProtocolFactsProbe {
                 tls.setEnabledProtocols(new String[] {"TLSv1.2"}); tls.setSoTimeout(15000); tls.startHandshake();
                 result.put("tlsProtocol", tls.getSession().getProtocol()).put("cipher", tls.getSession().getCipherSuite());
                 gate(app, nonce, result, "tls_ready");
+                if (plan.optBoolean("domainChecks")) {
+                    byte[] changed = (nonce + ":domain-change\n").getBytes(StandardCharsets.US_ASCII);
+                    tls.getOutputStream().write(changed);
+                    if (!Arrays.equals(changed, read(tls.getInputStream(), changed.length)))
+                        throw new IllegalStateException("domain update TLS receipt");
+                    gate(app, nonce, result, "domain_changed");
+                }
                 byte[] payload = (ftp ? "NOOP " + nonce + ":blocked\r\n" : nonce + ":blocked\n")
                         .getBytes(StandardCharsets.US_ASCII);
                 byte[] expectedReply = (ftp ? "200 " + nonce + ":blocked\r\n" : nonce + ":blocked\n")
@@ -453,6 +460,12 @@ final class ProtocolFactsProbe {
             }
             }
             gate(app, nonce, result, "quic_ready");
+            if (plan.optBoolean("domainChecks")) {
+                byte[] changed = ("T15-" + nonce + ":domain-change").getBytes(StandardCharsets.US_ASCII);
+                socket.setSoTimeout(5000); socket.send(new DatagramPacket(changed, changed.length));
+                receiveDatagram(socket, changed);
+                gate(app, nonce, result, "domain_changed");
+            }
             if (plan.optBoolean("policyBlocked") && !plan.optBoolean("initialBlocked")) {
                 byte[] blocked = ("T15-" + nonce + ":blocked").getBytes(StandardCharsets.US_ASCII);
                 socket.setSoTimeout(1200); socket.send(new DatagramPacket(blocked, blocked.length));

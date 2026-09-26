@@ -206,6 +206,19 @@ if printf '%s\n' "$bundle_fixture_body" |
   grep -Eq 'product_packet_graph_publish_(gate|l4)_policy'; then
   fail "host policy fixture still exercises only the legacy scalar publisher"
 fi
+publish_body="$(awk '
+  /^product_packet_graph_publish_policy_bundle \(/ { in_publish = 1 }
+  in_publish { print }
+  in_publish && /^}/ { exit }
+' "$graph_source")"
+if printf '%s\n' "$publish_body" |
+  grep -Eq 'product_l4_policy_view_t[[:space:]]+compiled_view'; then
+  fail "policy publication keeps the complete L4 view on the API handler stack"
+fi
+printf '%s\n' "$publish_body" | grep -Fq 'malloc (sizeof (*compiled_view))' ||
+  fail "policy publication must heap-allocate its temporary complete L4 view"
+printf '%s\n' "$publish_body" | grep -Fq 'free (compiled_view)' ||
+  fail "policy publication must free its temporary complete L4 view"
 
 # Completion belongs to the external submitter/adapter seam, never to policy
 # evaluation or the host fixture node.

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _POSIX_C_SOURCE 200809L
 #include "product_rule_config.h"
+#include "product_domains_memory.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,32 @@ ssize_t __wrap_getrandom(void *buffer, size_t length, unsigned flags) {
     return __real_getrandom(buffer, length, flags);
 }
 
+/* System allocator fault boundary. Arm after successful directory fsync so
+ * every tested failure is in the real saved-source -> compiler path. */
+static unsigned compile_fail_at, compile_allocations, arm_after_save;
+void *__real_malloc(size_t);
+void *__real_calloc(size_t, size_t);
+void *__wrap_malloc(size_t bytes) {
+    if (compile_fail_at && ++compile_allocations == compile_fail_at) return NULL;
+    return __real_malloc(bytes);
+}
+void *__wrap_calloc(size_t count, size_t bytes) {
+    if (compile_fail_at && ++compile_allocations == compile_fail_at) return NULL;
+    return __real_calloc(count, bytes);
+}
+static size_t domain_blocks, domain_bytes;
+void *__real_product_domains_memory_alloc(void *, size_t);
+void __real_product_domains_memory_free(void *, void *);
+void *__wrap_product_domains_memory_alloc(void *heap, size_t bytes) {
+    void *p = __real_product_domains_memory_alloc(heap, bytes);
+    if (p) { ++domain_blocks; domain_bytes += product_domains_memory_size(p); }
+    return p;
+}
+void __wrap_product_domains_memory_free(void *heap, void *p) {
+    if (p) { assert(domain_blocks); --domain_blocks; domain_bytes -= product_domains_memory_size(p); }
+    __real_product_domains_memory_free(heap, p);
+}
+
 static int fail_directory_sync;
 int __real_fsync(int);
 int __wrap_fsync(int fd) {
@@ -34,26 +61,126 @@ int __wrap_fsync(int fd) {
         errno = EIO;
         return -1;
     }
-    return __real_fsync(fd);
+    int result = __real_fsync(fd);
+    if (!result && arm_after_save && fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)) {
+        compile_fail_at = arm_after_save; compile_allocations = 0; arm_after_save = 0;
+    }
+    return result;
 }
 
 typedef struct {
     product_l4_policy_view_t view;
+    product_domains_t *domains;
     uint64_t revision;
     unsigned publications;
     int reject;
 } runtime_t;
 
 static uint32_t publish(void *opaque, uint64_t revision, uint64_t hash,
-                        const product_l4_policy_rule_t *rule, uint32_t count) {
+                        const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains) {
     runtime_t *runtime = opaque;
     assert(hash != 0);
     if (runtime->reject)
         return 1;
     assert(product_l4_policy_compile(&runtime->view, rule, count) == PRODUCT_L4_POLICY_STATUS_OK);
+    product_domains_destroy(runtime->domains);
+    runtime->domains = domains;
     runtime->revision = revision;
     runtime->publications++;
     return 0;
+}
+
+static uint64_t domain_winner(runtime_t *runtime, const char *name) {
+    product_l4_policy_packet_t packet = {.uid=12345,.uid_known=1,.family=4,.protocol=6,
+        .protocol_set_known=1,.protocol_set=UINT64_C(1)<<2,.sni_result=PRODUCT_SNI_NAME,
+        .network_context_known=1,.network_context_id=1,.ports_available=1,
+        .source_port=1234,.destination_port=443,.direction_known=1,.direction=3};
+    /* Catalog TLS=1003 projects to bit 2. */
+    packet.domain_lists = product_domains_match(runtime->domains, (const uint8_t *)name, strlen(name));
+    product_l4_policy_match_result_t match;
+    assert(product_l4_policy_match(&runtime->view, &packet, &match) == 0);
+    return match.rule_id;
+}
+
+static void domain_saved_active_failure_retry(void) {
+    char directory[] = "/tmp/sakamoto-domain-config-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path, sizeof path, "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    assert(config);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_status_t status;
+    product_rule_config_query(config, &status);
+    sakamoto_product_rule_config_request_t request = {.schema=1,.operation=2,
+        .expected_saved_revision=status.saved_revision,.count=1,
+        .rules={{.uid=12345,.network_context=1,.ifindex=UINT32_MAX,.action=2,
+                 .source_port_last=65535,.destination_port_last=65535,
+                 .expression_length=2,.expression={17,0}}},
+        .domains={.list_count=2,.entry_count=2,
+            .entries={{.list=0,.mode=1,.length=12,.name="Example.COM."},
+                      {.list=1,.mode=0,.length=11,.name="example.com"}}}};
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==0);
+    product_rule_config_query(config,&status);
+    uint64_t version=status.rules[0].version;
+    assert(!strcmp((const char *)status.domains.entries[0].name,"example.com"));
+    assert(domain_winner(&runtime,"x.example.com")==version);
+    assert(domain_winner(&runtime,"badexample.com")==0);
+    request.rules[0]=status.rules[0];
+    request.domains=status.domains;
+    request.expected_saved_revision=status.saved_revision;
+    request.domains.list_count=0;
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    request.domains=status.domains; request.domains.list_count=1; request.domains.entry_count=1;
+    request.rules[0].expression[1]=1;
+    request.rules[0].version=0; request.rules[0].base_version=version;
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_REFERENCE);
+    request.rules[0]=status.rules[0]; request.domains=status.domains;
+
+    unsigned failures=0;
+    for (unsigned fault=1; fault<100; ++fault) {
+        product_rule_config_query(config,&status);
+        request.expected_saved_revision=status.saved_revision;
+        request.rules[0]=status.rules[0];
+        /* Different complete source each time; list change does not revise the rule. */
+        snprintf((char *)request.domains.entries[0].name,256,"case%u.example.com",fault);
+        request.domains.entries[0].length=strlen((char *)request.domains.entries[0].name);
+        size_t old_blocks=domain_blocks, old_bytes=domain_bytes;
+        uint64_t old_revision=runtime.revision;
+        char old_name[256]; memcpy(old_name,status.domains.entries[0].name,sizeof old_name);
+        uint64_t old_winner=domain_winner(&runtime,old_name);
+        product_domains_t *old_domains=runtime.domains;
+        arm_after_save=fault;
+        uint32_t result=product_rule_config_replace(config,&request,publish,&runtime);
+        unsigned allocations=compile_allocations;
+        compile_fail_at=arm_after_save=0;
+        product_rule_config_query(config,&status);
+        assert(status.saved_revision==request.expected_saved_revision+1);
+        assert(status.rules[0].version==version);
+        if (!result) { assert(fault>allocations); break; }
+        assert(result==SAKAMOTO_RULE_CONFIG_COMPILE);
+        ++failures;
+        assert(status.active_revision==old_revision && status.compile_error==SAKAMOTO_RULE_CONFIG_COMPILE);
+        assert(runtime.domains==old_domains && runtime.revision==old_revision);
+        assert(domain_winner(&runtime,old_name)==old_winner && old_winner==version);
+        assert(domain_blocks==old_blocks && domain_bytes==old_bytes);
+        /* Saved source survives reopen while its unavailable active state is honest. */
+        product_rule_config_t *reopened=product_rule_config_open(path);
+        assert(reopened);
+        sakamoto_product_rule_config_status_t disk;
+        product_rule_config_query(reopened,&disk);
+        assert(disk.saved_revision==status.saved_revision && disk.active_revision==0);
+        assert(!memcmp(&disk.domains,&status.domains,sizeof disk.domains));
+        product_rule_config_close(reopened);
+        request.expected_saved_revision=status.saved_revision;
+        assert(product_rule_config_replace(config,&request,publish,&runtime)==0);
+        assert(domain_winner(&runtime,(char *)request.domains.entries[0].name)==version);
+    }
+    assert(failures>=7); /* source compiler arrays plus independently allocated rax tree */
+    product_domains_destroy(runtime.domains);
+    assert(domain_blocks==0 && domain_bytes==0);
+    product_rule_config_close(config); unlink(path); rmdir(directory);
+    printf("T18 saved/active allocator failures and retry: %u failures, peak budget %u bytes\n",
+           failures, product_rule_config_compile_peak_bytes());
 }
 
 static void ordinary_network_disable(void) {
@@ -1018,6 +1145,7 @@ static void large_plan_save_failure(void) {
 }
 
 int main(void) {
+    domain_saved_active_failure_retry();
     large_plan_save_failure();
     ct_publication_failure();
     static_expression_save_and_publish(0);

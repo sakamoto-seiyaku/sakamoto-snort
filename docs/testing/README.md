@@ -27,6 +27,7 @@ and [build commands](../tooling/README.md) for Host checks.
 
 | Scope | Record |
 | --- | --- |
+| TLS/QUIC exact and descendant domain lists, real packet winners and bounded matcher | [T18](2026-09-26_T18_DOMAIN_LISTS.md) |
 | Ordinary network-disable rules, scoped switches and shared observe behavior | [T05](2026-09-25_T05_NETWORK_DISABLE.md) |
 | Bounded static Boolean conditions and field availability | [T06](2026-09-25_T06_STATIC_EXPRESSIONS.md) |
 | Published protocol sets, NOT/availability, bounded LPI and complete-cache integration | [T12](2026-09-25_T12_PUBLISHED_PROTOCOL_FACTS.md) |

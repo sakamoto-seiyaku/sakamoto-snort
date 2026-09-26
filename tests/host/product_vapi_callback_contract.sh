@@ -312,11 +312,11 @@ vapi_error_e vapi_product_core_sni_query(vapi_ctx_t,vapi_msg_product_core_sni_qu
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
-    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; } payload;
+    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } payload;
 } vapi_msg_product_core_rule_config;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
   saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
-  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; } vapi_payload_product_core_rule_config_reply;
+  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } vapi_payload_product_core_rule_config_reply;
 typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
   vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
@@ -587,7 +587,11 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
       || message->payload.rules[1].version != UINT64_C(0xfedcba9876540002)
       || message->payload.rules[1].network_context != 3 || message->payload.rules[1].ifindex != 7
       || message->payload.rules[1].source_port_last != 65000
-      || message->payload.rules[1].source_address[15] != 1)) abort();
+      || message->payload.rules[1].source_address[15] != 1
+      || message->payload.domains.list_count != 64 || message->payload.domains.entry_count != 1
+      || message->payload.domains.entries[0].list != 63 || message->payload.domains.entries[0].mode != 1
+      || message->payload.domains.entries[0].length != 11
+      || memcmp(message->payload.domains.entries[0].name,"example.com",12))) abort();
   vapi_payload_product_core_rule_config_reply reply = {
     .generation = message->payload.generation + (mode == 5),
     .saved_revision = 9, .active_revision = mode == 4 ? 8 : 9,
@@ -597,11 +601,15 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
     .rule = message->payload.rule,
   };
   reply.graph = message->payload.graph;
+  reply.domains = message->payload.domains;
   reply.count = message->payload.count;
   reply.active_count = message->payload.count;
   memcpy (reply.rules, message->payload.rules, sizeof (reply.rules));
   reply.active_versions[1] = UINT64_C(0xfedcba9876540001);
   if (mode == 8) reply.count = 257;
+  if (mode == 9) reply.domains.list_count = 65;
+  if (mode == 10) reply.domains.entry_count = 257;
+  if (mode == 11) { reply.domains.entry_count = 1; reply.domains.entries[0].length = 254; }
   vapi_msg_free(context, message);
   pending_requests = mode == 1;
   if (mode == 1) return VAPI_OK;
@@ -1184,7 +1192,7 @@ main (void)
 
   sakamoto_product_policy_bundle_t bundle = valid_empty_policy_bundle ();
   current_session = &session;
-  const uint32_t config_codes[] = {0, 14, 14, 14, 0, 5, 14, 2, 14};
+  const uint32_t config_codes[] = {0, 14, 14, 14, 0, 5, 14, 2, 14, 14, 14, 14};
   for (unsigned operation = 1; operation <= 2; ++operation)
   for (unsigned mode = 0; mode < sizeof(config_codes)/sizeof(config_codes[0]); ++mode) {
     reset_faults();
@@ -1197,6 +1205,8 @@ main (void)
     };
     if (operation == 2) {
       request.graph = (sakamoto_product_rule_graph_t){.group_count=1,.groups={10},.edge_count=1,.edges={{10,1,1}},.binding_count=1,.bindings={{7,12345,2,10,1}}};
+      request.domains = (sakamoto_product_domains_t){.list_count=64,.entry_count=1,
+        .entries={{.list=63,.mode=1,.length=11,.name="example.com"}}};
       request.count = 2;
       request.rules[1] = (sakamoto_product_direct_rule_t) {
         .version = UINT64_C(0xfedcba9876540002), .uid = 12345, .network_context = 3, .ifindex = 7,
@@ -1221,8 +1231,9 @@ main (void)
         || config.active_versions[1] != UINT64_C(0xfedcba9876540001)
         || config.graph.group_count != 1 || config.graph.groups[0] != 10
         || config.graph.edge_count != 1 || config.graph.edges[0].target != 1
-        || config.graph.binding_count != 1 || config.graph.bindings[0].uid != 12345 || config.graph.bindings[0].mode != 1)) return 1;
-    if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode == 8)
+        || config.graph.binding_count != 1 || config.graph.bindings[0].uid != 12345 || config.graph.bindings[0].mode != 1
+        || memcmp(&config.domains,&request.domains,sizeof config.domains))) return 1;
+    if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode >= 8)
         && expect_retired(session)) return 1;
   }
   reset_faults();

@@ -3,6 +3,7 @@
 #define SAKAMOTO_PRODUCT_RULE_CONFIG_ABI_H
 
 #include <stdint.h>
+#include "sakamoto_product_domains.h"
 
 #define SAKAMOTO_RULE_CONFIG_SCHEMA UINT32_C(1)
 #define SAKAMOTO_RULE_CONFIG_QUERY UINT32_C(0)
@@ -91,6 +92,7 @@ typedef struct {
     uint32_t count, reserved;
     sakamoto_product_direct_rule_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     sakamoto_product_rule_graph_t graph;
+    sakamoto_product_domains_t domains;
 } sakamoto_product_rule_config_request_t;
 
 typedef struct {
@@ -108,6 +110,7 @@ typedef struct {
     sakamoto_product_direct_rule_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     uint64_t active_versions[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     sakamoto_product_rule_graph_t graph;
+    sakamoto_product_domains_t domains;
 } sakamoto_product_rule_config_status_t;
 
 #endif

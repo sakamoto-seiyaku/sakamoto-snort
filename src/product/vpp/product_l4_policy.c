@@ -99,7 +99,7 @@ expression_operand_bytes (unsigned op)
 {
   if ((op >= PRODUCT_STATIC_FAMILY && op <= PRODUCT_STATIC_DIRECTION)
       || op == PRODUCT_EXPRESSION_CT_STATE || op == PRODUCT_EXPRESSION_FLOW_DIRECTION
-      || op == PRODUCT_EXPRESSION_SNI_ABSENT)
+      || op == PRODUCT_EXPRESSION_SNI_ABSENT || op == PRODUCT_EXPRESSION_DOMAIN_LIST)
     return 1;
   if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL
       || op == PRODUCT_STATIC_NETWORK || op == PRODUCT_STATIC_INTERFACE
@@ -108,6 +108,20 @@ expression_operand_bytes (unsigned op)
   if (op == PRODUCT_STATIC_SOURCE_CIDR || op == PRODUCT_STATIC_DESTINATION_CIDR)
     return 18;
   return 0;
+}
+
+uint64_t
+product_static_expression_domain_references (const uint8_t *bytes, uint32_t length)
+{
+  if (product_static_expression_validate (bytes, length)) return 0;
+  uint64_t references = 0;
+  for (unsigned at = 0; at < length;)
+    {
+      unsigned op = bytes[at++];
+      if (op == PRODUCT_EXPRESSION_DOMAIN_LIST) references |= UINT64_C(1) << bytes[at];
+      if (op > PRODUCT_STATIC_NOT) at += expression_operand_bytes (op);
+    }
+  return references;
 }
 
 /* Validated source only; skip operands so data bytes cannot become dependencies. */
@@ -122,7 +136,7 @@ expression_dependencies (const product_l4_policy_rule_t *rule)
         dependencies |= PRODUCT_POLICY_DEP_CT;
       if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL)
         dependencies |= PRODUCT_POLICY_DEP_LPI;
-      if (op == PRODUCT_EXPRESSION_SNI_ABSENT)
+      if (op == PRODUCT_EXPRESSION_SNI_ABSENT || op == PRODUCT_EXPRESSION_DOMAIN_LIST)
         dependencies |= PRODUCT_POLICY_DEP_SNI | PRODUCT_POLICY_DEP_LPI;
       if (op <= PRODUCT_STATIC_NOT) continue;
       at += expression_operand_bytes (op);
@@ -689,7 +703,8 @@ product_static_expression_validate (const uint8_t *bytes, uint32_t length)
       if (!size || size > length - at)
         return PRODUCT_L4_POLICY_STATUS_INVALID_RULE;
       const uint8_t *arg = bytes + at;
-      if ((op == PRODUCT_EXPRESSION_SNI_ABSENT && arg[0] != 1)
+      if ((op == PRODUCT_EXPRESSION_DOMAIN_LIST && arg[0] >= 64)
+          || (op == PRODUCT_EXPRESSION_SNI_ABSENT && arg[0] != 1)
           || (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL && !product_protocol_bit (expression_number (arg, 4)))
           || (op == PRODUCT_EXPRESSION_CT_STATE && (arg[0] < 1 || arg[0] > 3))
           || (op == PRODUCT_EXPRESSION_FLOW_DIRECTION && (arg[0] < 1 || arg[0] > 2))
@@ -737,6 +752,13 @@ expression_matches (const product_l4_policy_rule_t *rule,
               value = op == PRODUCT_STATIC_AND ? (left == 0 || right == 0 ? 0 : left == 1 && right == 1 ? 1 : 2)
                               : (left == 1 || right == 1 ? 1 : left == 0 && right == 0 ? 0 : 2);
             }
+        }
+      else if (op == PRODUCT_EXPRESSION_DOMAIN_LIST)
+        {
+          if (packet->sni_result == PRODUCT_SNI_ABSENT) value = 0;
+          else if (packet->sni_result == PRODUCT_SNI_NAME)
+            value = !!(packet->domain_lists & (UINT64_C(1) << arg[0]));
+          ++at;
         }
       else if (op == PRODUCT_EXPRESSION_SNI_ABSENT)
         {
@@ -1043,7 +1065,7 @@ cache_guard (product_policy_cache_guard_t *guard,
     {
       COPY(protocol_set); COPY(protocol_set_known);
     }
-  if (dependencies & PRODUCT_POLICY_DEP_SNI) COPY(sni_result);
+  if (dependencies & PRODUCT_POLICY_DEP_SNI) { COPY(sni_result); COPY(domain_lists); }
 #undef COPY
 }
 

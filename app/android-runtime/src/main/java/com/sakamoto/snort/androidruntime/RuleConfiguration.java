@@ -58,6 +58,7 @@ public final class RuleConfiguration {
 
     public static final int COMPLETE_RULE_WORDS = 43;
     public static final int MAX_RULES = 256;
+    public static final int DOMAIN_ENTRY_WORDS = 67;
     public static final int MAX_ACTIVE_RULES = 128;
     private static final int COMPLETE_REPLY_HEADER_WORDS = 13;
     private static final int SOURCE_WORD = 18, DESTINATION_WORD = 22;
@@ -69,10 +70,34 @@ public final class RuleConfiguration {
         java.util.ArrayList<Long> groups = new java.util.ArrayList<>();
         java.util.ArrayList<Long> edges = new java.util.ArrayList<>();
         java.util.ArrayList<Long> bindings = new java.util.ArrayList<>();
+        java.util.ArrayList<long[]> domains = new java.util.ArrayList<>();
+        int listCount = 0;
+        boolean listsDeclared = false;
         for (String line : text.split("[\\r\\n]+")) {
             String[] f = line.trim().split("\\s+");
             java.util.ArrayList<Long> target;
             int fields, limit;
+            if (f[0].equals("lists")) {
+                if (f.length != 2 || listsDeclared) throw new IllegalArgumentException("invalid list declaration");
+                long n = unsigned32(f[1]);
+                if (n > 64) throw new IllegalArgumentException("too many domain lists");
+                listCount = (int)n; listsDeclared = true; continue;
+            }
+            if (f[0].equals("domain")) {
+                if (f.length != 4 || domains.size() >= 256) throw new IllegalArgumentException("invalid domain fields/count");
+                long list = unsigned32(f[1]);
+                int mode = f[2].equals("exact") ? 0 : f[2].equals("descendants") ? 1 : -1;
+                if (list >= listCount || mode < 0 || f[3].isEmpty() || f[3].length() > 254)
+                    throw new IllegalArgumentException("invalid domain list/mode/name");
+                long[] entry = new long[DOMAIN_ENTRY_WORDS];
+                entry[0] = list; entry[1] = mode; entry[2] = f[3].length();
+                for (int i = 0; i < f[3].length(); ++i) {
+                    char c = f[3].charAt(i);
+                    if (c > 127) throw new IllegalArgumentException("use ASCII A-labels");
+                    entry[3+i/4] |= (long)c << (24-(i%4)*8);
+                }
+                domains.add(entry); continue;
+            }
             if (f[0].equals("group")) { target = groups; fields = 1; limit = 64; }
             else if (f[0].equals("edge")) { target = edges; fields = 3; limit = 512; }
             else if (f[0].equals("bind")) { target = bindings; fields = 5; limit = 128; }
@@ -82,15 +107,18 @@ public final class RuleConfiguration {
             for (int i = 1; i < f.length; ++i) target.add(unsigned32(f[i]));
         }
         long[] direct = directWire(rules.toString());
-        if (groups.isEmpty() && edges.isEmpty() && bindings.isEmpty()) return direct;
-        long[] wire = new long[5 + direct.length + groups.size() + edges.size() + bindings.size()];
-        wire[0] = -1; wire[1] = direct.length / COMPLETE_RULE_WORDS;
+        if (groups.isEmpty() && edges.isEmpty() && bindings.isEmpty() && !listsDeclared) return direct;
+        int headerWords = listsDeclared ? 7 : 5;
+        long[] wire = new long[headerWords + direct.length + groups.size() + edges.size() + bindings.size() + DOMAIN_ENTRY_WORDS*domains.size()];
+        wire[0] = listsDeclared ? -2 : -1; wire[1] = direct.length / COMPLETE_RULE_WORDS;
         wire[2] = groups.size(); wire[3] = edges.size()/3; wire[4] = bindings.size()/5;
-        System.arraycopy(direct, 0, wire, 5, direct.length);
-        int at = 5 + direct.length;
+        if (listsDeclared) { wire[5] = listCount; wire[6] = domains.size(); }
+        System.arraycopy(direct, 0, wire, headerWords, direct.length);
+        int at = headerWords + direct.length;
         for (long n : groups) wire[at++] = n;
         for (long n : edges) wire[at++] = n;
         for (long n : bindings) wire[at++] = n;
+        for (long[] entry : domains) { System.arraycopy(entry, 0, wire, at, DOMAIN_ENTRY_WORDS); at += DOMAIN_ENTRY_WORDS; }
         return wire;
     }
     private static long[] directWire(String text) {
@@ -181,6 +209,7 @@ public final class RuleConfiguration {
         public final long transportCode, generation, savedRevision, activeRevision, result, saveError, compileError;
         public final int count, activeCount;
         public final int groupCount, edgeCount, bindingCount;
+        public final int domainListCount, domainEntryCount;
         private final long[] values;
         public CompleteStatus(long[] reply) {
             if (reply == null || reply.length < COMPLETE_REPLY_HEADER_WORDS) throw new IllegalArgumentException("invalid complete reply");
@@ -194,9 +223,26 @@ public final class RuleConfiguration {
             long groups = graph ? reply[graphAt] : 0, edges = graph ? reply[graphAt+1] : 0,
                     bindings = graph ? reply[graphAt+2] : 0;
             if (groups < 0 || groups > 64 || edges < 0 || edges > 512 || bindings < 0 || bindings > 128
-                    || (graph && reply.length != graphAt + 3 + groups + 3*edges + 5*bindings))
+                    || (graph && reply.length < graphAt + 3 + groups + 3*edges + 5*bindings))
                 throw new IllegalArgumentException("invalid graph reply size");
             groupCount = (int) groups; edgeCount = (int) edges; bindingCount = (int) bindings;
+            int domainAt = graph ? graphAt + 3 + (int)groups + 3*(int)edges + 5*(int)bindings : graphAt;
+            long lists = 0, entries = 0;
+            if (reply.length != domainAt) {
+                if (reply.length < domainAt + 2) throw new IllegalArgumentException("invalid domain reply");
+                lists = reply[domainAt]; entries = reply[domainAt+1];
+                if (lists < 0 || lists > 64 || entries < 0 || entries > 256 ||
+                    reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries)
+                    throw new IllegalArgumentException("invalid domain reply size");
+                for (int i = 0; i < entries; ++i) {
+                    int at = domainAt + 2 + i*DOMAIN_ENTRY_WORDS;
+                    if (reply[at] < 0 || reply[at] >= lists || reply[at+1] < 0 || reply[at+1] > 1 ||
+                        reply[at+2] <= 0 || reply[at+2] > 253) throw new IllegalArgumentException("invalid domain reply entry");
+                    for (int j = 3; j < DOMAIN_ENTRY_WORDS; ++j)
+                        if (reply[at+j] < 0 || reply[at+j] > 0xffffffffL) throw new IllegalArgumentException("invalid name word");
+                }
+            }
+            domainListCount = (int)lists; domainEntryCount = (int)entries;
             values = reply.clone(); transportCode = reply[0]; generation = reply[1];
             savedRevision = reply[2]; activeRevision = reply[3]; result = reply[6];
             saveError = reply[7]; compileError = reply[8];
@@ -236,6 +282,17 @@ public final class RuleConfiguration {
                 out.append("binding.").append(i).append('=');
                 for (int j = 0; j < 5; ++j) { if (j != 0) out.append(','); out.append(values[at++]); }
                 out.append('\n');
+            }
+            out.append("domainListCount=").append(domainListCount).append('\n');
+            out.append("domainEntryCount=").append(domainEntryCount).append('\n');
+            at += 2;
+            for (int i = 0; i < domainEntryCount; ++i) {
+                out.append("domain.").append(i).append(".list=").append(values[at]).append('\n');
+                out.append("domain.").append(i).append(".mode=").append(values[at+1]).append('\n');
+                out.append("domain.").append(i).append(".name=");
+                for (int j = 0; j < values[at+2]; ++j)
+                    out.append((char)((values[at+3+j/4] >> (24-(j%4)*8)) & 255));
+                out.append('\n'); at += DOMAIN_ENTRY_WORDS;
             }
             return out.toString();
         }

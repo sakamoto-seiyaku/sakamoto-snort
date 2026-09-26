@@ -12,6 +12,9 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
+import sys
+sys.path.insert(0,str(ROOT/"tests/device/helpers"))
+from t18_domain_policy import adapt as domain_policy
 PKG = 'com.sakamoto.snort.androidruntime'
 SERIAL = None
 BASE = '/data/user/0/'+PKG+'/files/profiles/root/vpp'
@@ -26,6 +29,7 @@ p.add_argument('--python',default='python3')
 p.add_argument('--helper',type=Path,required=True)
 p.add_argument('--profiles',choices=['root','vpn','both'],default='both')
 
+p.add_argument("--domain-policy",action="store_true")
 args = p.parse_args()
 
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
@@ -41,6 +45,12 @@ result = dict(status='HOLD', profile='root', source='NFQ_CAPTURED+TUN_ORIGIN', s
               runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[])
 save('runner.py',Path(__file__).read_text())
 adb_prefix = [str(ROOT/'dev/adb'), '-s', SERIAL]
+if args.domain_policy:
+    result['domain_policy'] = True
+    helper_path=ROOT/'tests/device/helpers/t18_domain_policy.py'
+    result['domain_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    save('domain-policy.py',helper_path.read_text())
+
 def adb(*argv, check=True, timeout=35):
     # Only replay idempotent reads/captures after the observed WSL launch error.
     # Runtime/app starts, taps, rule applies and installation are never replayed.
@@ -162,7 +172,7 @@ def stop(label,profile):
     assert root('test ! -d /proc/'+str(life['pid'])+' && echo absent').strip()=='absent'
     life['process_absent']=True
     source_file(label+'-stopped')
-def configure(label,prior,protocol,expected_protocol_id,mode=1):
+def configure(label,prior,protocol,expected_protocol_id,mode=1,variant="full"):
     expression='1001'
     versions=[prior.get(f'rule.{i}.version','0') for i in range(3)]
     lines=[f'0 {versions[0]} 4294967295 4294967295 4294967295 10 0 {protocol} 0 2 * * 0 65535 0 65535 {expression}',
@@ -170,6 +180,7 @@ def configure(label,prior,protocol,expected_protocol_id,mode=1):
            f'0 {versions[2]} {uid} 4294967295 4294967295 100 0 {protocol} 0 1 * * 0 65535 0 65535',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',
            f'bind 1 {uid} 2 10 {mode}',f'bind 2 {uid} 2 20 {mode}']
+    if args.domain_policy: lines=domain_policy(lines,variant)
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
     save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
     old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
@@ -179,7 +190,7 @@ def configure(label,prior,protocol,expected_protocol_id,mode=1):
     source_file(label)
     result.setdefault('configurations',[]).append(dict(label=label,profile=result['lifetimes'][-1]['profile'],
         revision=int(status['activeRevision']),source=label+'-source.conf',query=label+'-apply.properties',
-        expression=expression,mode=mode,protocol=protocol,target=expected_protocol_id))
+        expression=expression,domain_variant=variant if args.domain_policy else None,mode=mode,protocol=protocol,target=expected_protocol_id))
     return status
 
 def launch(label,profile,mode,source):
@@ -267,6 +278,7 @@ def configure_ack(label,prior,port):
            f'0 {versions[2]} {uid} 4294967295 4294967295 100 0 6 0 1 * * 0 65535 0 65535',
            f'0 0 {uid} 4294967295 4294967295 0 0 6 0 2 * * 40641 40641 {port} {port}',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',f'bind 1 {uid} 2 10 1',f'bind 2 {uid} 2 20 1']
+    if args.domain_policy: lines=domain_policy(lines)
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
     save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
     old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
@@ -287,6 +299,7 @@ def prepare_ack_recovery(label,prior):
            f'0 {versions[1]} 4294967295 4294967295 4294967295 20 0 6 0 2 * * 0 65535 0 65535 100103',
            f'0 {versions[2]} {uid} 4294967295 4294967295 100 0 6 0 1 * * 0 65535 0 65535',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',f'bind 1 {uid} 2 10 1',f'bind 2 {uid} 2 20 1']
+    if args.domain_policy: lines=domain_policy(lines)
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
     save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
     for attempt in range(8):

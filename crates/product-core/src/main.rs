@@ -171,6 +171,17 @@ fn main() {
                     s.rule.present, s.rule.uid, s.rule.action);
                 println!("config.count={}\nconfig.active_count={}\nconfig.error_index={}\nconfig.compiler_status={}",
                     s.count, s.active_count, s.error_index, s.compiler_status);
+                println!(
+                    "config.domain_list_count={}\nconfig.domain_entry_count={}",
+                    s.domains.list_count, s.domains.entry_count
+                );
+                for (i, entry) in s.domains.entries[..s.domains.entry_count as usize]
+                    .iter()
+                    .enumerate()
+                {
+                    println!("config.domain.{i}.list={}\nconfig.domain.{i}.mode={}\nconfig.domain.{i}.name={}",
+                        entry.list, entry.mode, String::from_utf8_lossy(&entry.name[..entry.length as usize]));
+                }
                 for (i, r) in s.rules[..s.count as usize].iter().enumerate() {
                     println!("config.rule.{i}.version={}\nconfig.rule.{i}.uid={}\nconfig.rule.{i}.family={}\nconfig.rule.{i}.protocol={}\nconfig.rule.{i}.action={}", r.version, r.uid, r.family, r.protocol, r.action);
                     println!("config.rule.{i}.expression_length={}", r.expression_length);

@@ -11,6 +11,9 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+import sys
+sys.path.insert(0,str(ROOT/"tests/device/helpers"))
+from t18_domain_policy import adapt as domain_policy
 parser = argparse.ArgumentParser()
 parser.add_argument('--artifact', type=Path, required=True)
 parser.add_argument('--stage', type=Path, required=True)
@@ -19,6 +22,7 @@ parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--fixtures',type=Path,required=True)
 
 
+parser.add_argument("--domain-policy",action="store_true")
 args = parser.parse_args()
 
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
@@ -75,6 +79,12 @@ def drain(name):
         if all(values[key] == '0' for key in ('pending','frames','buffers','obligations')): return
         time.sleep(.02)
     raise RuntimeError('completion drain timeout')
+
+if args.domain_policy:
+    result['domain_policy'] = True
+    helper_path=ROOT/'tests/device/helpers/t18_domain_policy.py'
+    result['domain_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    save('domain-policy.py',helper_path.read_text())
 
 save('environment.txt', command('uname','-a')+command('id')+'uid_map='+' '.join(uid_map)
      +'\nnetns='+os.readlink('/proc/self/ns/net')+'\n')
@@ -160,7 +170,7 @@ def submit(label, prior, lines):
     (output/(label+'-source.conf')).write_bytes((config_dir/'rules.conf').read_bytes())
     return status
 
-def configure(label, prior, protocol, target, mode=1):
+def configure(label, prior, protocol, target, mode=1, variant="full"):
     expression='1001'
     versions=[prior.get(f'config.rule.{i}.version','0') for i in range(3)]
     lines=[f'0 {versions[0]} 4294967295 4294967295 4294967295 10 0 {protocol} 0 2 * * 0 65535 0 65535 {expression}',
@@ -168,10 +178,11 @@ def configure(label, prior, protocol, target, mode=1):
            f'0 {versions[2]} 12001 4294967295 4294967295 100 0 {protocol} 0 1 * * 0 65535 0 65535',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',
            f'bind 1 12001 2 10 {mode}',f'bind 2 12001 2 20 {mode}']
+    if args.domain_policy: lines=domain_policy(lines,variant)
     status=submit(label,prior,lines)
     assert status['config.result']=='0' and status['config.saved_revision']==status['config.active_revision'],status
     result.setdefault('configurations',[]).append(dict(label=label,revision=int(status['config.active_revision']),
-        source=label+'-source.conf',query=label+'-apply.txt',expression=expression,mode=mode,protocol=protocol,target=target))
+        source=label+'-source.conf',query=label+'-apply.txt',expression=expression,domain_variant=variant if args.domain_policy else None,mode=mode,protocol=protocol,target=target))
     return status
 
 class Client:
@@ -221,6 +232,9 @@ try:
         client=Client(mode,mode,45320+index)
         client.capture(mode+'-ready',status,'ready')
         if mode in ('named','absent'):
+            if args.domain_policy:
+                status=configure(mode+'-list-only',status,6,1003,1,'without-exact')
+                client.execute('echo','received');client.capture(mode+'-changed',status,'changed')
             status=configure(mode+'-enforce',status,6,1003,0)
             client.execute('send','timeout');client.capture(mode+'-blocked',status,'blocked')
             status=configure(mode+'-recover',status,6,1003,1)

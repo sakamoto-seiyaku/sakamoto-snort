@@ -34,6 +34,8 @@ def expression(raw):
         elif op==3:stack.append(('not',stack.pop()))
         elif op in (4,5,6):
             stack.append(({4:'family',5:'protocol',6:'direction'}[op],raw[at]));at+=1
+        elif op == 17:
+            assert raw[at] < 64; stack.append(('domain',raw[at])); at += 1
         elif op == 16:
             assert raw[at] == 1; at += 1; stack.append(('no_sni',))
         elif op == 15:
@@ -54,7 +56,7 @@ def expression(raw):
     return stack[0]
 
 def source(path):
-    raw=Path(path).read_bytes();assert raw[:8]==b'SKRULE04','source schema'
+    raw=Path(path).read_bytes();assert raw[:8] in (b'SKRULE04',b'SKRULE05'),'source schema'
     revision,count,retained_count=struct.unpack_from('<QII',raw,8)
     assert count<=256 and retained_count<=4096 and revision
     retained=struct.unpack_from('<'+'Q'*retained_count,raw,24)
@@ -72,8 +74,21 @@ def source(path):
     group_ids=list(struct.unpack_from('<'+'I'*gc,raw,at));at+=4*gc
     edges=[struct.unpack_from('<III',raw,at+12*i) for i in range(ec)];at+=12*ec
     bindings=[struct.unpack_from('<IIIII',raw,at+20*i) for i in range(bc)];at+=20*bc
+    domain_count=0;domains=[]
+    if raw[:8]==b'SKRULE05':
+        domain_count,entry_count=struct.unpack_from('<II',raw,at);at+=8
+        assert domain_count<=64 and entry_count<=256
+        for _ in range(entry_count):
+            number,mode,length,name=struct.unpack_from('<III256s',raw,at);at+=268
+            assert number<domain_count and mode in (0,1) and 0<length<=253 and not any(name[length:])
+            text=name[:length].decode('ascii');assert text==text.lower() and not text.endswith('.')
+            labels=text.split('.')
+            assert all(0<len(label)<=63 and label[0]!='-' and label[-1]!='-' and
+                       all(c.isascii() and (c.isalnum() or c=='-') for c in label) for label in labels)
+            domains.append(dict(list=number,mode=mode,name=text))
     assert at==len(raw) and len(set(group_ids))==gc and all(group_ids)
-    return dict(revision=revision,rules=rules,groups=group_ids,edges=edges,bindings=bindings)
+    return dict(revision=revision,rules=rules,groups=group_ids,edges=edges,bindings=bindings,
+                domain_count=domain_count,domains=domains,source_schema=int(raw[7:8]))
 
 def logical_rules(config, uid):
     answer=[]
@@ -115,6 +130,12 @@ def query_source(config, query, pixel):
     assert query[key('result','result')]=='0' and int(query[key('count','count')])==len(config['rules'])
     for java,native,field in [('groupCount','group_count','groups'),('edgeCount','edge_count','edges'),('bindingCount','binding_count','bindings')]:
         assert int(query[key(java,native)])==len(config[field])
+    if config.get('source_schema')==5:
+        assert int(query[key('domainListCount','domain_list_count')])==config['domain_count']
+        assert int(query[key('domainEntryCount','domain_entry_count')])==len(config['domains'])
+        for i,entry in enumerate(config['domains']):
+            for field in ('list','mode'): assert int(query[f'{prefix}domain.{i}.{field}'])==entry[field]
+            assert query[f'{prefix}domain.{i}.name']==entry['name']
     for i,rule in enumerate(config['rules']):
         for field in ['version','uid','family','protocol','action']:
             assert int(query[f'{prefix}rule.{i}.{field}'])==rule[field]

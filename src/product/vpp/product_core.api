@@ -352,6 +352,15 @@ typedef product_rule_graph {
     vl_api_product_rule_binding_t bindings[128];
 };
 
+typedef product_domain_entry {
+    u32 list; u32 mode; u32 length;
+    u8 name[256];
+};
+typedef product_domains {
+    u32 list_count; u32 entry_count;
+    vl_api_product_domain_entry_t entries[256];
+};
+
 define product_core_rule_config {
     u32 client_index;
     u32 context;
@@ -364,6 +373,7 @@ define product_core_rule_config {
     u32 reserved;
     vl_api_product_direct_rule_t rules[256];
     vl_api_product_rule_graph_t graph;
+    vl_api_product_domains_t domains;
 };
 
 define product_core_rule_config_reply {
@@ -385,6 +395,7 @@ define product_core_rule_config_reply {
     vl_api_product_direct_rule_t rules[256];
     u64 active_versions[256];
     vl_api_product_rule_graph_t graph;
+    vl_api_product_domains_t domains;
 };
 
 /* Identity-fenced current SNI facts; no retained pointers or packet bytes. */

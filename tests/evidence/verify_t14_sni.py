@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('t14_base',ROOT/'tests/evidence/verify_t12_lpi.py')
 t=importlib.util.module_from_spec(spec);spec.loader.exec_module(t)
 records,one,props,digest=t.records,t.one,t.props,t.digest
+domains=t.module("t18_domains",ROOT/"tests/evidence/domain_evidence.py")
 
 def json_events(path):
     # Concurrent endpoint threads may write two complete JSON values before
@@ -101,7 +102,8 @@ def configurations(directory,run,pixel):
         path=directory/item['source'];source=t.source.source(path)
         t.source.query_source(source,props(directory/item['query']),pixel)
         assert source['revision']==item['revision']
-        assert [r['expression'] for r in source['rules'][:3]]==[b'',b'',b'']
+        if run.get('domain_policy'):domains.configuration(source,item)
+        else: assert [r['expression'] for r in source['rules'][:3]]==[b'',b'',b'']
         assert [r['priority'] for r in source['rules'][:3]]==[10,20,100]
         assert [r['action'] for r in source['rules'][:3]]==[2,2,1]
         assert len(source['rules'])==3+('ack_drop_port' in item)
@@ -211,6 +213,9 @@ def trace(text,life,sessions,fixtures,configs):
         else:
             facts.update(ct=None,flowdir=None,lpi=None,sni=None)
             totals['pre_flow_drops']+=1
+        if value['config'].get('domain_count'):
+            facts.update(name='example.test' if facts.get('sni')=='name' else '',
+                         domain_source=domains.source_lists(value['config']))
         rules=t.logical_rules(value['config'],facts['uid'])
         expected=t.reference.ordered_reference(rules,facts)
         for actual,wanted in [('rule','rule_id'),('rank','winner_rank'),('action','action'),('mode','mode'),('actual_action','actual_action')]:
@@ -225,9 +230,10 @@ def trace(text,life,sessions,fixtures,configs):
                 assert int(q[actual])==result[wanted],('complete cached winner',value['token'],actual)
             assert int(q['evaluation'])==bool(result['rule_id'])
             assert q['incarnation']==(flows[port]['incarnation'] if q['position']=='2' else '0')
-            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi','sni')}
+            guarded={k:v for k,v in facts.items() if k not in ('ct','flowdir','lpi','sni','name','domain_source')}
             guarded['protocols']=sorted(facts['lpi'] or []) if q['position']=='2' and rules else []
             guarded['sni']=facts['sni'] if q['position']=='2' and rules else None
+            if 'domain_source' in facts:guarded['domain_memberships']=t.reference.domain_memberships(facts) if q['position']=='2' and rules else 0
             guard=(e['acquire']['worker'],value['identity'],q['incarnation'],q['position'],json.dumps(guarded,sort_keys=True))
             if q['hit']=='1':assert guards.get(guard)==result,('cache hit without identical prior complete guard/result',value['token'],guard,result)
             guards[guard]=result;totals['cache_hits' if q['hit']=='1' else 'cache_misses']+=1
@@ -384,9 +390,9 @@ def verify(directory,profile_scope=None):
         counters=(directory/(profile+'-final.txt' if pixel else 'final-counters.txt')).read_text()
         runtime=records(counters,'flow.runtime ');assert len(runtime)==2
         for _,row in runtime:
-            assert row['capacity']=='1024' and row['entry_bytes']=='9016' and row['allocated_bytes']=='9253192'
+            assert row['capacity']=='1024' and row['entry_bytes']==('9024' if run.get('domain_policy') else '9016') and row['allocated_bytes']==('9261384' if run.get('domain_policy') else '9253192')
             assert row['capacity_misses']=='0'
-        for _,row in records(counters,'policy.cache '):assert row['storage_bytes']=='23584' and row['capacity']=='128'
+        for _,row in records(counters,'policy.cache '):assert row['storage_bytes']==('24608' if run.get('domain_policy') else '23584') and row['capacity']=='128'
         completions=records(counters,'completion.status ');assert len(completions)==1
         assert all(completions[0][1][key]=='0' for key in ('pending','frames','buffers','obligations')),'native buffer conservation'
         if pixel:

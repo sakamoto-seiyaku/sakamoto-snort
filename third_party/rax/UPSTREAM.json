@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/valkey-io/valkey",
+  "revision": "05a9c29c62538519d870d6512978f80ac58a758f",
+  "files": {
+    "rax.c": "0bd76eadedd27e3c7493b27849787efa8d4cecfdd42adce9c8d7a2407cab4d8c",
+    "rax.h": "58438934bbca9e58be579e201fdf47137da568768618bf242fc7cfce0ed08a32",
+    "rax_malloc.h": "371cb945631672bfefac53195ce0446e5be151d8f2193f63c8679a414c88e277",
+    "serverassert.h": "e33ae53d01b731126477632fcaa5f53d035fbeeaf057f2dbeca958fbca4fb191"
+  }
+}

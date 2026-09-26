@@ -62,6 +62,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleConfig (
  * checked by the Java and production VAPI boundary tests. */
 enum {
     COMPLETE_RULE_WORDS = 43,
+    DOMAIN_ENTRY_WORDS = 67,
     COMPLETE_REPLY_HEADER_WORDS = 13,
     COMPLETE_SOURCE_WORD = 18,
     COMPLETE_DESTINATION_WORD = 22,
@@ -86,20 +87,24 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         jlong marker;
         (*env)->GetLongArrayRegion(env, fields, 0, 1, &marker);
         if ((*env)->ExceptionCheck(env)) return NULL;
-        if (marker == -1) {
-            jlong header[5];
-            if (length < 5) return NULL;
-            (*env)->GetLongArrayRegion(env, fields, 0, 5, header);
+        if (marker == -1 || marker == -2) {
+            jlong header[7] = {0};
+            jsize header_words = marker == -2 ? 7 : 5;
+            if (length < header_words) return NULL;
+            (*env)->GetLongArrayRegion(env, fields, 0, header_words, header);
             if ((*env)->ExceptionCheck(env)) return NULL;
             if (header[1] < 0 || header[1] > SAKAMOTO_RULE_CONFIG_MAX_RULES || header[2] < 0 || header[2] > SAKAMOTO_RULE_CONFIG_MAX_GROUPS ||
-                header[3] < 0 || header[3] > SAKAMOTO_RULE_CONFIG_MAX_EDGES || header[4] < 0 || header[4] > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+                header[3] < 0 || header[3] > SAKAMOTO_RULE_CONFIG_MAX_EDGES || header[4] < 0 || header[4] > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
+                header[5] < 0 || header[5] > SAKAMOTO_DOMAIN_MAX_LISTS ||
+                header[6] < 0 || header[6] > SAKAMOTO_DOMAIN_MAX_ENTRIES)
                 return NULL;
-            rule_offset = 5; rule_count = header[1];
+            rule_offset = header_words; rule_count = header[1];
+            request.domains.list_count = header[5]; request.domains.entry_count = header[6];
             request.graph.group_count = header[2]; request.graph.edge_count = header[3];
             request.graph.binding_count = header[4];
-            valid = length == 5 + rule_count * COMPLETE_RULE_WORDS + header[2] + 3*header[3] + 5*header[4];
+            valid = length == header_words + rule_count * COMPLETE_RULE_WORDS + header[2] + 3*header[3] + 5*header[4] + DOMAIN_ENTRY_WORDS*header[6];
             if (!valid) return NULL;
-            jsize at = 5 + rule_count * COMPLETE_RULE_WORDS;
+            jsize at = header_words + rule_count * COMPLETE_RULE_WORDS;
             for (unsigned i = 0; i < request.graph.group_count; ++i) {
                 jlong value;
                 (*env)->GetLongArrayRegion(env, fields, at++, 1, &value);
@@ -119,6 +124,18 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
                 if ((*env)->ExceptionCheck(env)) return NULL;
                 for (unsigned j = 0; j < 5; ++j) if (values[j] < 0 || (uint64_t)values[j] > UINT32_MAX) return NULL;
                 request.graph.bindings[i] = (sakamoto_product_rule_binding_t){values[0], values[1], values[2], values[3], values[4]};
+            }
+            for (unsigned i = 0; i < request.domains.entry_count; ++i) {
+                jlong values[DOMAIN_ENTRY_WORDS];
+                (*env)->GetLongArrayRegion(env, fields, at, DOMAIN_ENTRY_WORDS, values); at += DOMAIN_ENTRY_WORDS;
+                if ((*env)->ExceptionCheck(env)) return NULL;
+                for (unsigned j = 0; j < DOMAIN_ENTRY_WORDS; ++j)
+                    if (values[j] < 0 || (uint64_t)values[j] > UINT32_MAX) return NULL;
+                request.domains.entries[i].list = values[0];
+                request.domains.entries[i].mode = values[1];
+                request.domains.entries[i].length = values[2];
+                for (unsigned j = 0; j < SAKAMOTO_DOMAIN_NAME_BYTES; ++j)
+                    request.domains.entries[i].name[j] = (uint64_t)values[3+j/4] >> (24-(j%4)*8);
             }
         }
     }
@@ -168,7 +185,8 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
     }
     if (status.count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
         status.active_count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
-        status.graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || status.graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || status.graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS)
+        status.graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || status.graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || status.graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
+        status.domains.list_count > SAKAMOTO_DOMAIN_MAX_LISTS || status.domains.entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES)
         return NULL;
     jlong header[] = {code,
                       (jlong)status.generation,
@@ -186,7 +204,8 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
     jlongArray result =
         (*env)->NewLongArray(env, COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count +
                                       status.active_count + 3 + status.graph.group_count +
-                                      3*status.graph.edge_count + 5*status.graph.binding_count);
+                                      3*status.graph.edge_count + 5*status.graph.binding_count +
+                                      2 + DOMAIN_ENTRY_WORDS*status.domains.entry_count);
     if (!result)
         return NULL;
     (*env)->SetLongArrayRegion(env, result, 0, COMPLETE_REPLY_HEADER_WORDS, header);
@@ -243,6 +262,15 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         const sakamoto_product_rule_binding_t *b = &status.graph.bindings[i];
         jlong values[] = {b->id, b->uid, b->kind, b->target, b->mode};
         (*env)->SetLongArrayRegion(env, result, at, 5, values); at += 5;
+    }
+    jlong domain_header[] = {status.domains.list_count, status.domains.entry_count};
+    (*env)->SetLongArrayRegion(env, result, at, 2, domain_header); at += 2;
+    for (unsigned i = 0; i < status.domains.entry_count; ++i) {
+        const sakamoto_product_domain_entry_t *entry = &status.domains.entries[i];
+        jlong values[DOMAIN_ENTRY_WORDS] = {entry->list, entry->mode, entry->length};
+        for (unsigned j = 0; j < SAKAMOTO_DOMAIN_NAME_BYTES; ++j)
+            values[3+j/4] |= (jlong)entry->name[j] << (24-(j%4)*8);
+        (*env)->SetLongArrayRegion(env, result, at, DOMAIN_ENTRY_WORDS, values); at += DOMAIN_ENTRY_WORDS;
     }
     return result;
 }
