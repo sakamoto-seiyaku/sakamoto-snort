@@ -50,6 +50,9 @@ def run(directory):
         trial('old-active-retention',prefix+'-compile-failure','reply',lambda v:v.update(active_revision=v['saved_revision']))
         trial('normalization-mode',first['label']+'-export','reply',
               lambda v:v['configuration']['lists'][0]['entries'].__setitem__(0,'descendants example.test'))
+        if 'serial' not in original:
+            trial('startup-error-envelope','t19-startup-save-failure','reply',lambda v:v.pop('save_error'))
+            trial('startup-invented-source','t19-startup-export','reply',lambda v:v.update(configuration={}))
         path=copied/first['source'];before=path.read_bytes();after=before.replace('规则 0'.encode(),'规则 9'.encode(),1)
         assert after!=before;path.write_bytes(after)
         try:

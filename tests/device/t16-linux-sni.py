@@ -136,6 +136,11 @@ def start(label):
     generation = 26701 if label == "first" else 25602
     runtime = ROOT/("build-output/product-vpp-runtime-"+runtime_tag+"-"+label)
     launch.update(PRODUCT_RUNTIME_DIR=str(runtime), PRODUCT_GENERATION=str(generation))
+    if args.import_policy and label == 'first':
+        config_dir.mkdir(parents=True,exist_ok=False)
+        invalid=b'T19 deliberately invalid source for online import repair\n'
+        (config_dir/'rules.conf').write_bytes(invalid)
+        (output/'startup-invalid-source.conf').write_bytes(invalid)
     log = (output/(label+'-vpp.log')).open('w')
     process = subprocess.Popen(['bash', str(ROOT/'tools/product/run-host-vpp.sh')], env=launch,
                                stdout=log, stderr=subprocess.STDOUT)
@@ -147,6 +152,9 @@ def start(label):
     while True:
         status = api(label+'-initial', 'rule-query')
         if status.get('query.adapter_available') == 'true': break
+        if args.import_policy and status.get('config.saved_revision') == '0' and status.get('config.save_error') == '1':
+            startup_import_repair()
+            continue
         assert time.monotonic() < deadline, status
         time.sleep(.05)
     save(label+'-process.txt', 'pid='+str(process.pid)+'\nexe='+os.readlink(f'/proc/{process.pid}/exe')
@@ -200,6 +208,24 @@ def import_save_failure(call):
     config_dir.rename(held)
     try:return call()
     finally:held.rename(config_dir)
+
+def startup_import_repair():
+    empty=dict(format='sakamoto-config-v1',rules=[],groups=[],edges=[],bindings=[],lists=[])
+    queried=import_call('t19-startup-export',None,0)
+    assert queried['stage']=='vpp' and queried['result']==0,queried
+    assert queried['configuration'] is None and queried['export_error']
+    bad=dict(empty,groups=[1],edges=[[1,1,0]])
+    rejected=import_call('t19-startup-reference',bad,0)
+    assert rejected['stage']=='vpp' and rejected['result']==10,rejected
+    assert rejected['configuration'] is None and rejected['save_error']==1 and rejected['compile_error']==0
+    failed=import_save_failure(lambda:import_call('t19-startup-save-failure',empty,0))
+    assert failed['stage']=='vpp' and failed['result']==failed['save_error']==3,failed
+    assert failed['compile_error']==0 and failed['saved_revision']==failed['active_revision']==0
+    repaired=import_call('t19-startup-repair',empty,0)
+    assert repaired['result']==repaired['save_error']==repaired['compile_error']==0
+    assert repaired['saved_revision']==repaired['active_revision']==1
+    assert repaired['configuration']==empty
+    result['startup_import_repair']=True
 
 def submit(label, prior, lines):
     request=output/(label+'-request.txt');request.write_text('\n'.join(lines)+'\n')

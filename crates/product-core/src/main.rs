@@ -101,7 +101,7 @@ fn main() {
         println!("import.response={response}");
         let value: serde_json::Value =
             serde_json::from_str(&response).expect("structured import reply");
-        if value["stage"] != "vpp" || value["result"] != 0 {
+        if value["stage"] != "vpp" || value["result"] != 0 || !value["export_error"].is_null() {
             std::process::exit(1);
         }
         return;

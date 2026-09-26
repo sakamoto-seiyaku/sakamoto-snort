@@ -9,15 +9,16 @@ The result below is representative evidence, not a public release claim.
 ## Source and artifacts
 
 Product source closure:
-`af459d5379df0d8f020887ec9275f291217d49ba5b94fb333da70473b28a48dd`.
+`7bc1ba55964329b4033a9ed0689c49b0d28d2740444da191eeeacbf946064bb1`.
 Generated API: `product_core.api/1.0.0@8342a672`.
 Debug APK SHA-256:
-`6700e7c2b18b4db19def0958e81b49649b8a7ed45ef2ebd3de74c83170ea865d`.
+`64be42d9dca14d13b21b30f8092b15b4bd6f1b0418b59e7284da0f0e5096b400`.
 
-The local evidence root is `build-output/t19-20260926/`. `linux-build/build.json`
-and `pixel-build/build.json` retain complete source snapshots, exact build inputs,
+The local evidence root is `build-output/t19-20260926/`. `linux-build-final/build.json`
+and `pixel-build-final/build.json` retain complete source snapshots, exact build inputs,
 stage identities and artifact hashes. Installed APK/native hashes are checked in
-`pixel-quic-a/`; device generations are 1581 Root and 1582 controlled VPN. Device
+`pixel-root-final/` and `pixel-vpn-capture-run/`; device generations are 1586 Root
+and 1585 controlled VPN. Device
 selection stays in local evidence. The app's KernelSU grant was checked after
 installation before starting Root acceptance.
 
@@ -25,7 +26,7 @@ installation before starting Root acceptance.
 
 | Boundary | Import/export operations | Rejected input cases | Actual packets | Result |
 | --- | ---: | ---: | ---: | --- |
-| Linux Product Root/NFQUEUE | 117 | 14 | 781 | PASS |
+| Linux Product Root/NFQUEUE | 121 | 14 | 781 | PASS |
 | Pixel Product Root/NFQUEUE | 117 | 14 | 493 | PASS |
 | Pixel Product controlled VPN | 117 | 14 | 493 | PASS |
 
@@ -53,20 +54,22 @@ winner/rank/mode/declared and actual action, counts, cache results, completion a
 endpoint evidence. QUIC packets come from the independent aioquic 1.3.0 fixture
 and real endpoint. This is Initial exchange evidence, not a completed handshake.
 No reference evaluator or import preparation output substitutes for packet
-evidence. See `linux-import-verified.json` and `pixel-import-verified.json`.
+evidence. See `linux-import-final-verified.json`, `pixel-root-final-verified.json` and
+`pixel-vpn-final-verified.json`.
 
 The rejection matrix covers equal full ID with changed conditions or name,
 duplicate identity, malformed name/A-label, invalid Unicode label, URL path,
 wildcard, filter option, an extra Clash condition, unknown JSON field, missing
 list reference, group cycle and effective-mode conflict. Readback proves source
-and active identity retention. Eleven deliberately altered import witnesses per
-platform are rejected even when their per-file checksums are updated; these
+and active identity retention. Thirteen deliberately altered Linux import witnesses and eleven per Pixel
+profile are rejected even when their per-file checksums are updated; these
 include lost port restrictions, wrong source syntax, changed Unicode input,
 metadata loss, wrong generation/error stage, premature active publication and a
-missing roundtrip. See the two `*-import-negatives.json` records.
+missing roundtrip. See the final import negative records. The packet verifier additionally rejects
+49 altered Linux witnesses and 50 per Pixel profile.
 
 Host Rust tests cover complete Unicode preparation, source syntax/rejection and
-IPv6/group/observe-mode export roundtrip; its suite passed 20 tests. The C source
+IPv6/group/observe-mode export roundtrip; its suite passed 21 tests. The C source
 boundary covers metadata persistence/reopen, full-version name/source conflicts,
 revision advancement, list-metadata-only publication, invalid/overlong UTF-8,
 controls, missing terminators and nonzero unused metadata. Existing source,
@@ -75,7 +78,34 @@ ASan/UBSan with leak detection passed the source/configuration and domain tests.
 The source representation budget is 1,961,396 bytes within the existing 2 MiB
 admission ceiling; it is not a measured full-process RSS peak.
 
+Host CTest passed all 50 tests. With no valid saved source, the final Linux run
+additionally checks query, rejected recovery import, initial save failure and
+successful repair. All retain the full VPP result/error envelope; unavailable
+export returns null configuration and an explicit export error. The two added
+Linux negative witnesses reject missing errors and invented configuration.
+Independent standards/spec reviews and their corrections are recorded in
+[the review](../reviews/2026-09-26_T19_CODE_REVIEW.md).
+
 ## Retained failures and limits
+
+`pixel-quic-final/` retains a HOLD: Root completed, but VPN `named_suffix`
+recovery echo `:8` timed out. The endpoint received and echoed it; Product logged
+outbound ALLOW/ADMITTED but no corresponding FLOW_STACK_RETURN. No underlay
+capture exists for that run, so external packet loss versus protected-socket
+receive behavior remains unresolved. Teardown had no owned completion debt.
+No Product change or retry relaxation was made to turn that run into a PASS.
+
+A separate same-source VPN run (`pixel-vpn-capture-run/`) passes independently.
+Its bounded existing tcpdump capture (`vpn-capture/`) accounts for all 200 echoes
+at TUN-out, underlay-out, underlay-in and TUN-in, with zero kernel capture drops.
+Maximum captured RTT was 66.484 ms and underlay-in to TUN-in 9.435 ms. The
+original timeout did not recur; these observations do not establish its cause
+or a fix. A separate fresh Root run (`pixel-root-final/`) also passes. T29 must
+retain this unresolved event for repeated protected-socket/underlay stress.
+
+`linux-startup-red-b/` retains the reproduced missing-source error-envelope bug;
+`linux-startup-red/` retains an earlier harness readiness mistake. The final
+Linux run demonstrates the corrected behavior without relabeling either run.
 
 `linux-quic-a/` is a retained HOLD before Product startup: its low-privilege
 endpoint UID could not traverse the host Python tool installation. The successful

@@ -139,7 +139,10 @@ strings, and `configuration` suitable for re-import. `prepare` errors never
 submit to VPP; `transport` errors require query before retry. A VPP rejection
 returns its current saved source. A post-save compile error returns the new saved
 source and the prior active revision/versions. Export refuses to invent an empty
-source when no valid saved revision exists.
+source when no valid saved revision exists: the complete VPP status envelope is
+retained, `configuration` is null and `export_error` explains its unavailability.
+This keeps initial save and rejected recovery-import errors actionable even
+before the first valid source has been saved.
 
 Android uses `RuntimeControlNative.Session.ruleImport`, through a bounded UTF-8
 byte-array JNI/Rust call. The existing debug Activity accepts `ruleImportNonce`,

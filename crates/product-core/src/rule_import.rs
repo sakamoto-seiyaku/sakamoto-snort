@@ -25,12 +25,24 @@ struct Rule {
     definition: String,
 }
 
+#[derive(Clone, Copy, Deserialize, Serialize)]
+enum ListSyntax {
+    #[serde(rename = "native-v1")]
+    Native,
+    #[serde(rename = "plain-exact-v1")]
+    PlainExact,
+    #[serde(rename = "adblock-domain-v1")]
+    AdblockDomain,
+    #[serde(rename = "clash-domain-v1")]
+    ClashDomain,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct List {
     name: String,
     source: String,
-    syntax: String,
+    syntax: ListSyntax,
     entries: Vec<String>,
 }
 
@@ -62,25 +74,24 @@ fn normalize_name(input: &str) -> Result<String, String> {
     Ok(ascii)
 }
 
-fn parse_entry<'a>(syntax: &str, entry: &'a str) -> Result<(u32, &'a str), &'static str> {
+fn parse_entry(syntax: ListSyntax, entry: &str) -> Result<(u32, &str), &'static str> {
     match syntax {
-        "native-v1" => match entry.split_once(' ') {
+        ListSyntax::Native => match entry.split_once(' ') {
             Some(("exact", name)) => Ok((0, name)),
             Some(("descendants", name)) => Ok((1, name)),
             _ => Err("expected exact or descendants followed by one name"),
         },
-        "plain-exact-v1" => Ok((0, entry)),
-        "adblock-domain-v1" => entry
+        ListSyntax::PlainExact => Ok((0, entry)),
+        ListSyntax::AdblockDomain => entry
             .strip_prefix("||")
             .and_then(|s| s.strip_suffix('^'))
             .map(|name| (1, name))
             .ok_or("only a domain-anchored ||name^ entry is supported"),
-        "clash-domain-v1" => match entry.split_once(',') {
+        ListSyntax::ClashDomain => match entry.split_once(',') {
             Some(("DOMAIN", name)) => Ok((0, name)),
             Some(("DOMAIN-SUFFIX", name)) => Ok((1, name)),
             _ => Err("only DOMAIN,name or DOMAIN-SUFFIX,name is supported"),
         },
-        _ => Err("unsupported list syntax"),
     }
 }
 
@@ -141,14 +152,8 @@ pub fn prepare_rule_import(
     for (list_index, list) in document.lists.iter().enumerate() {
         request.metadata.lists[list_index] =
             metadata(&list.name, &list.source).map_err(|e| format!("list[{list_index}]: {e}"))?;
-        if !matches!(
-            list.syntax.as_str(),
-            "native-v1" | "plain-exact-v1" | "adblock-domain-v1" | "clash-domain-v1"
-        ) {
-            return Err(format!("list[{list_index}]: unsupported syntax"));
-        }
         for (entry_index, entry) in list.entries.iter().enumerate() {
-            let (mode, name) = parse_entry(&list.syntax, entry)
+            let (mode, name) = parse_entry(list.syntax, entry)
                 .map_err(|e| format!("list[{list_index}].entry[{entry_index}]: {e}"))?;
             let name = normalize_name(name)
                 .map_err(|e| format!("list[{list_index}].entry[{entry_index}]: {e}"))?;
@@ -280,7 +285,7 @@ pub fn export_rule_config(status: &RuleConfigStatus) -> Result<String, String> {
         document.lists.push(List {
             name: text_field(&status.metadata.lists[i].name)?.into(),
             source: text_field(&status.metadata.lists[i].source)?.into(),
-            syntax: "native-v1".into(),
+            syntax: ListSyntax::Native,
             entries: Vec::new(),
         });
     }
@@ -323,22 +328,18 @@ impl ProductCore {
                 .to_string()
             }
         };
-        let configuration = match export_rule_config(&status).and_then(|text| {
+        let (configuration, export_error) = match export_rule_config(&status).and_then(|text| {
             serde_json::from_str::<serde_json::Value>(&text).map_err(|e| e.to_string())
         }) {
-            Ok(configuration) => configuration,
-            Err(error) => {
-                return serde_json::json!({"stage":"reply", "error":error,
-                "saved_revision":status.saved_revision,"active_revision":status.active_revision})
-                .to_string()
-            }
+            Ok(configuration) => (configuration, None),
+            Err(error) => (serde_json::Value::Null, Some(error)),
         };
         serde_json::json!({"stage":"vpp", "generation":status.generation,
             "saved_revision":status.saved_revision,"active_revision":status.active_revision,
             "result":status.result,"save_error":status.save_error,"compile_error":status.compile_error,
             "error_index":status.error_index,"compiler_status":status.compiler_status,
-            "active_versions":status.active_versions[..status.active_count as usize].iter().map(u64::to_string).collect::<Vec<_>>(),
-            "configuration":configuration}).to_string()
+            "active_versions":status.active_versions.iter().take(status.active_count as usize).map(u64::to_string).collect::<Vec<_>>(),
+            "configuration":configuration,"export_error":export_error}).to_string()
     }
 }
 
@@ -355,6 +356,9 @@ mod tests {
 
     #[test]
     fn declared_source_syntax_and_duplicates_never_broaden_a_filter() {
+        for syntax in ["native-v2", "adblock", ""] {
+            assert!(prepare_rule_import(&list_input(syntax, &[]), 0).is_err());
+        }
         let request = prepare_rule_import(
             &list_input("adblock-domain-v1", &["||Example.COM^", "||example.com.^"]),
             0,
@@ -390,6 +394,64 @@ mod tests {
                 "{syntax}: {entry}"
             );
         }
+    }
+
+    #[test]
+    fn idna_and_utf8_metadata_boundaries_are_explicit() {
+        for (input, expected) in [
+            ("faß.de", "xn--fa-hia.de"),
+            ("mañana.example", "xn--maana-pta.example"),
+            ("例え.テスト", "xn--r8jz45g.xn--zckzah"),
+        ] {
+            let prepared = prepare_rule_import(&list_input("plain-exact-v1", &[input]), 0).unwrap();
+            let entry = prepared.domains.entries[0];
+            assert_eq!(&entry.name[..entry.length as usize], expected.as_bytes());
+        }
+        for input in [
+            "example..",
+            "-bad.example",
+            "ab--cd.example",
+            "a\u{200d}.example",
+            "\u{301}a.example",
+            " a.example",
+        ] {
+            assert!(
+                prepare_rule_import(&list_input("plain-exact-v1", &[input]), 0).is_err(),
+                "{input}"
+            );
+        }
+        let maximum = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        assert!(
+            prepare_rule_import(&list_input("plain-exact-v1", &[&format!("{maximum}.")]), 0)
+                .is_ok()
+        );
+        assert!(
+            prepare_rule_import(&list_input("plain-exact-v1", &[&format!("{maximum}x")]), 0)
+                .is_err()
+        );
+        let mut value: serde_json::Value =
+            serde_json::from_str(&list_input("native-v1", &[])).unwrap();
+        value["lists"][0]["name"] = serde_json::Value::String("名".repeat(21));
+        value["lists"][0]["source"] = serde_json::Value::String("s".repeat(127));
+        assert!(prepare_rule_import(&value.to_string(), 0).is_ok());
+        value["lists"][0]["name"] = serde_json::Value::String("名".repeat(22));
+        assert!(prepare_rule_import(&value.to_string(), 0).is_err());
+        value["lists"][0]["name"] = serde_json::Value::String("name".into());
+        for source in [
+            "s".repeat(128),
+            "source\nfile".into(),
+            "source\0file".into(),
+        ] {
+            value["lists"][0]["source"] = serde_json::Value::String(source);
+            assert!(prepare_rule_import(&value.to_string(), 0).is_err());
+        }
+        assert!(prepare_rule_import(&" ".repeat(MAX_IMPORT_BYTES + 1), 0).is_err());
     }
 
     #[test]

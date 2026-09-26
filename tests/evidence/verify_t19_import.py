@@ -82,6 +82,27 @@ def verify(directory, packet_check=True):
             inputs[record['label']]=json.loads(path.read_text())
         else:
             assert record['expected_revision'] == 0
+    if not pixel:
+        assert run['startup_import_repair']
+        assert (directory/'startup-invalid-source.conf').read_bytes()==b'T19 deliberately invalid source for online import repair\n'
+        before=source.props(directory/'t19-startup-export-import-transport.txt')
+        after=source.props(directory/'first-initial.txt')
+        assert before['connect.core_ready']=='true' and before['connect.adapter_available']=='false'
+        assert before['connect.protection_running']=='false' and before['connect.policy_active_revision']=='0'
+        assert after['query.core_ready']==after['query.adapter_available']==after['query.protection_running']=='true'
+        assert after['query.policy_active_revision']=='1'
+        for label,result,save_error in (
+            ('t19-startup-export',0,1),('t19-startup-reference',10,1),('t19-startup-save-failure',3,3)):
+            reply=replies[label]
+            assert reply['stage']=='vpp' and reply['result']==result
+            assert reply['save_error']==save_error and reply['compile_error']==0
+            assert reply['error_index']==4294967295 and reply['compiler_status']==0
+            assert reply['saved_revision']==reply['active_revision']==0 and reply['active_versions']==[]
+            assert reply['configuration'] is None and reply['export_error']
+        repaired=replies['t19-startup-repair']
+        assert repaired['result']==repaired['save_error']==repaired['compile_error']==0
+        assert repaired['saved_revision']==repaired['active_revision']==1 and repaired['export_error'] is None
+        assert repaired['configuration']==inputs['t19-startup-repair']
     for item in run['configurations']:
         label=item['label']; original=inputs[label]; accepted=replies[label]
         assert accepted['stage'] == 'vpp' and accepted['result'] == 0
@@ -163,6 +184,9 @@ def verify(directory, packet_check=True):
         assert int(fixed[0])==int(original[0])+2 and fixed[2:]==original[2:]
     result=dict(status='PASS',source_sha256=run['source_sha256'],profiles=sorted(generations),
         import_operations=len(records),rejected_inputs=rejected,
+        startup_repair=not pixel,verifier_sha256=digest(__file__),
+        packet_verifier_sha256=digest(HERE/'verify_t16_sni.py'),
+        source_decoder_sha256=digest(HERE/'verify_t06_expressions.py'),
         scope='online import/export, full identity/provenance, save/compile separation and real QUIC decisions')
     if packet_check:
         result['packet_verification']=packets.verify(directory)
