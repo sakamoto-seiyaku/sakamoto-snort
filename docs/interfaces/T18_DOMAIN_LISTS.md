@@ -16,11 +16,13 @@ made the real nonempty API and packet tests pass. The original results are under
 `build-output/t18-20260926/`.
 
 The calculated full-process overlap budget is still an admission bound, not a
-measured RSS peak. A domain-bearing packet deliberately held across retired-bank
-reuse has not been separately exercised; S209's protected-bank mechanism and
-the T18 source-order contract were checked, while real T18 traffic exercised
-repeated publication and cache changes. QUIC evidence covers supported v1
-Initial assembly, not a completed handshake or broader version promise.
+measured RSS peak. A deliberately held domain-bearing Linux packet completed
+under its old protected snapshot before the real configuration API published
+the changed list; its next packet used the changed winner, and a subsequent
+publication reused the retired bank. This Product API path serializes through
+VPP's worker barrier, so it did not publish while the reader was still held.
+QUIC evidence covers supported v1 Initial assembly, not a completed handshake
+or broader version promise.
 
 ## Interface and required behavior
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import select
 import subprocess
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,7 +25,10 @@ parser.add_argument('--python',default='python3')
 
 
 parser.add_argument("--domain-policy",action="store_true")
+parser.add_argument("--domain-overlap",action="store_true",
+                    help="hold a domain-bearing packet while two complete snapshots publish")
 args = parser.parse_args()
+assert not args.domain_overlap or args.domain_policy
 
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -230,7 +234,12 @@ try:
     result['fixtures_sha256']=hashlib.sha256(args.fixtures.read_bytes()).hexdigest()
     save('fixtures.json',args.fixtures.read_text())
     status=start('first')
-    modes=('named','named_child','named_boundary','named_suffix','named_alabel','absent','conflict','named_cutoff') if args.domain_policy else ('named','absent','conflict','ranges','offset','timeout','packets','named_cutoff','absent_cutoff')
+    if args.domain_overlap:
+        modes=()
+    elif args.domain_policy:
+        modes=('named','named_child','named_boundary','named_suffix','named_alabel','absent','conflict','named_cutoff')
+    else:
+        modes=('named','absent','conflict','ranges','offset','timeout','packets','named_cutoff','absent_cutoff')
     for index,mode in enumerate(modes):
         cutoff=mode.endswith('_cutoff')
         status=configure(mode+'-initial-policy',status,17,1004,0 if cutoff else 1)
@@ -246,6 +255,50 @@ try:
         elif cutoff:status=configure(mode+'-recover',status,17,1004,1)
         client.execute('echo','received');client.capture(mode+'-recovered',status,'recovered')
         client.close()
+    if args.domain_overlap:
+        status=configure('overlap-initial',status,17,1004,1)
+        old_revision=int(status['config.active_revision'])
+        old_winner=int(status['config.rule.0.version'])
+        client=Client('overlap','named',45620)
+        client.capture('overlap-ready',status,'ready')
+        owner=int(result['cases'][-1]['identity'][0])
+        log_path=output/'first-vpp.log'
+        before=len(log_path.read_bytes())
+        assert 'policy.hold=armed' in cli('overlap-arm',f'product policy hold-next {owner} 500000')
+        errors=[]
+        def held_packet():
+            try: client.execute('echo','received')
+            except Exception as error: errors.append(repr(error))
+        held=threading.Thread(target=held_packet)
+        held.start()
+        deadline=time.monotonic()+4
+        while 's209 event=hold_begin' not in log_path.read_bytes()[before:].decode(errors='replace'):
+            assert time.monotonic()<deadline, 'domain packet did not reach the held reader'
+            time.sleep(.001)
+        answer={}
+        def publish_changed_list():
+            try: answer['status']=configure('overlap-without-exact',status,17,1004,1,'without-exact')
+            except Exception as error: errors.append(repr(error))
+        writer=threading.Thread(target=publish_changed_list)
+        writer.start()
+        time.sleep(.03)
+        assert writer.is_alive(), 'Product API published while the domain packet was held'
+        held.join(timeout=5);writer.join(timeout=5)
+        assert not held.is_alive() and not writer.is_alive() and not errors,errors
+        status=answer['status']
+        middle_revision=int(status['config.active_revision'])
+        assert middle_revision==old_revision+1
+        client.execute('echo','received')
+        client.capture('overlap-changed',status,'changed')
+        status=configure('overlap-restore',status,17,1004,1)
+        assert int(status['config.active_revision'])==middle_revision+1
+        client.execute('echo','received')
+        client.capture('overlap-restored',status,'recovered')
+        client.close()
+        result['overlap']=dict(owner=owner,old_revision=old_revision,
+                               middle_revision=middle_revision,
+                               final_revision=int(status['config.active_revision']),
+                               old_winner=old_winner)
     cache=cli('final-counters','show product flows','show product completion')
     result['status']='RAW_COMPLETE'
 except Exception as error:
