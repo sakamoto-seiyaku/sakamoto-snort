@@ -1,4 +1,5 @@
 #include "minimal_ring.h"
+#include "ipc.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,8 @@ static void borrowed_reclamation(void)
   assert(minimal_ring_read(&queue,1,held,&calls,&n)==0 && n==1 && calls==1);
   fill(data,sizeof(data),2);
   assert(minimal_ring_write(&queue,data,sizeof(data))==0);expect(2,128);
+  assert(atomic_load(&queue.tail)-atomic_load(&queue.head)==T20_RING_CAPACITY);
+  assert(minimal_ring_write(&queue,data,1)==1);
   assert(drain(4096)==1927);
 }
 static void wraps(void)
@@ -135,9 +138,18 @@ static void fifo_model(void)
   assert(atomic_load(&queue.head)==atomic_load(&queue.tail));
   assert(atomic_load(&queue.head)>100*T20_RING_CAPACITY);
 }
+static void wait_epoch_regression(void)
+{
+  assert(ipc_same_prewait_epoch(1,1));
+  assert(ipc_same_prewait_epoch(101,101));
+  assert(!ipc_same_prewait_epoch(0,0)); /* Not in a wait window. */
+  assert(!ipc_same_prewait_epoch(0,1)); /* Old bug: publish before a new window. */
+  assert(!ipc_same_prewait_epoch(1,2)); /* Window ended during publication. */
+  assert(!ipc_same_prewait_epoch(1,3)); /* A later odd window is not the same one. */
+}
 int main(void)
 {
-  boundaries();full_immutable();borrowed_reclamation();wraps();corrupt_headers();fifo_model();
-  puts("{\"status\":\"PASS\",\"cases\":[\"boundaries\",\"invalid_lengths\",\"full_immutable\",\"borrowed_reclamation\",\"physical_wrap\",\"counter_wrap\",\"corrupt_headers\",\"fifo_model\"],\"model_operations\":200000}");
+  boundaries();full_immutable();borrowed_reclamation();wraps();corrupt_headers();fifo_model();wait_epoch_regression();
+  puts("{\"status\":\"PASS\",\"cases\":[\"boundaries\",\"invalid_lengths\",\"full_immutable\",\"borrowed_reclamation\",\"physical_wrap\",\"counter_wrap\",\"corrupt_headers\",\"fifo_model\",\"wait_epoch_regression\"],\"model_operations\":200000}");
   return 0;
 }

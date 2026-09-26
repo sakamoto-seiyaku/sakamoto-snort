@@ -41,7 +41,9 @@ The three-way matrix includes Aeron, VPP and the minimal ring. If a registered
 paced zero-loss condition is missed, strict verification fails. Re-running the
 verifier with `--report-unmet-gates` checks all remaining integrity requirements
 and reports `VERIFIED_WITH_UNMET_GATES`; it does not convert the miss into PASS.
-The retained Pixel matrix has one such VPP boundary miss (21 admission drops).
+The initial three-way Pixel matrix B has one such VPP boundary miss (21 admission
+drops). Corrected-witness matrix C passes strict checks; the earlier miss remains
+retained and is not a claimed capacity fix.
 
 ## Tested seam
 
@@ -87,12 +89,16 @@ mapping. No in-place repair, ACK or replay is attempted.
 ## Evidence
 
 Three-way native artifacts:
-`build-output/t20-three-way-20260926/{host-b,android-b}/build.json`.
-Measured runs: `host-matrix-b/` and `pixel-matrix-b/`, each 135 runs with three
-repetitions. Host passes all checks; Pixel retains one unmet VPP paced zero-loss
-condition while all admitted-data ledgers verify. Summaries retain status,
-unmet conditions, min/median/max and every repetition in `host-summary.json` and
-`pixel-summary.json`. Ten altered witnesses are rejected per platform.
+`build-output/t20-three-way-20260926/{host-c,android-c}/build.json`.
+Final runs: `host-matrix-c/` and `pixel-matrix-c/`, each 135 runs with three
+repetitions; both pass strict checks. Summaries retain status, min/median/max and
+every repetition in `host-summary-c.json` and `pixel-summary-c.json`. Eleven
+altered witnesses are rejected per platform. The corrected witness brackets
+admission with the same odd monotonic wait epoch, rejecting publications counted
+in a later wait. All three candidates were remeasured after that shared change.
+Primitive evidence has nine groups, including the wait-epoch regression and a
+direct exact byte-capacity assertion. Initial matrix B remains retained with its
+VPP capacity miss; its old phase counter does not prove the corrected wait window.
 
 The original two-way artifacts remain in `build-output/t20-20260926/`; its entire
 indexed delivery also has a preserved copy in the new root's

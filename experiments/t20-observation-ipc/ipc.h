@@ -9,6 +9,7 @@ int ipc_write(ipc *, unsigned, const void *, size_t);
 size_t ipc_read(ipc *, unsigned, size_t, record_fn, void *);
 int ipc_wait(ipc *);
 int ipc_wait_race(ipc *);
+int ipc_same_prewait_epoch(uint64_t, uint64_t);
 void ipc_notify(ipc *);
 int ipc_done(ipc *);
 void ipc_finish(ipc *);

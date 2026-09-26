@@ -31,7 +31,7 @@ typedef struct {
   _Atomic uint64_t attempted[2], accepted[2], dropped[2], invalid[2];
   _Atomic uint64_t accepted_sum[2], accepted_xor[2], accepted_bytes[2];
   _Atomic uint64_t prewait_publications[2];
-  _Atomic unsigned wait_phase;
+  _Atomic uint64_t wait_epoch;
   _Atomic unsigned done;
 } shared;
 struct ipc {
@@ -84,9 +84,9 @@ ipc *ipc_open(const char *path, int event, uint64_t generation, int create)
   h->s=h->base;
   if (create) {
     memset(h->base,0,total);
-    h->s->magic=0x5432304950430001ULL; h->s->generation=generation;
+    h->s->magic=0x5432304950430002ULL; h->s->generation=generation;
     h->s->channel_bytes=bytes; h->s->mapped_bytes=total;
-  } else if (h->s->magic!=0x5432304950430001ULL || h->s->generation!=generation ||
+  } else if (h->s->magic!=0x5432304950430002ULL || h->s->generation!=generation ||
              h->s->channel_bytes!=bytes || h->s->mapped_bytes!=total) goto fail;
   for (unsigned c=0;c<2;c++) {
     void *base=(uint8_t*)h->base+HEADER_BYTES+c*bytes;
@@ -116,6 +116,8 @@ int ipc_write(ipc *h, unsigned c, const void *record, size_t n)
   if (n<128 || n>2048) {
     atomic_fetch_add_explicit(&h->s->invalid[c],1,memory_order_relaxed); return -3;
   }
+  /* The same odd epoch must bracket publication; a later wait cannot count it. */
+  uint64_t wait_before=atomic_load_explicit(&h->s->wait_epoch,memory_order_seq_cst);
   int rc;
 #ifdef T20_VPP
   unsigned ring=n<=128?0:n<=512?1:2;
@@ -130,6 +132,7 @@ int ipc_write(ipc *h, unsigned c, const void *record, size_t n)
 #else
   rc=aeron_spsc_rb_write(&h->q[c],1,record,n)==AERON_RB_SUCCESS?0:-2;
 #endif
+  uint64_t wait_after=atomic_load_explicit(&h->s->wait_epoch,memory_order_seq_cst);
   if (rc) atomic_fetch_add_explicit(&h->s->dropped[c],1,memory_order_relaxed);
   else {
     uint64_t seq; memcpy(&seq,(const uint8_t*)record+16,8);
@@ -137,7 +140,7 @@ int ipc_write(ipc *h, unsigned c, const void *record, size_t n)
     atomic_fetch_add_explicit(&h->s->accepted_sum[c],seq,memory_order_relaxed);
     atomic_fetch_xor_explicit(&h->s->accepted_xor[c],seq,memory_order_relaxed);
     atomic_fetch_add_explicit(&h->s->accepted_bytes[c],n,memory_order_relaxed);
-    if (atomic_load_explicit(&h->s->wait_phase,memory_order_seq_cst)==1)
+    if (ipc_same_prewait_epoch(wait_before,wait_after))
       atomic_fetch_add_explicit(&h->s->prewait_publications[c],1,memory_order_relaxed);
   }
   return rc;
@@ -193,14 +196,15 @@ int ipc_wait(ipc *h)
 }
 int ipc_wait_race(ipc *h)
 {
-  atomic_store_explicit(&h->s->wait_phase,1,memory_order_seq_cst);
+  /* Odd = after empty check/before poll. Never reset: reject a later window. */
+  atomic_fetch_add_explicit(&h->s->wait_epoch,1,memory_order_seq_cst);
   struct timespec delay={0,200000};
   while(nanosleep(&delay,&delay)<0 && errno==EINTR) {}
-  atomic_store_explicit(&h->s->wait_phase,2,memory_order_seq_cst);
-  int rc=ipc_wait(h);
-  atomic_store_explicit(&h->s->wait_phase,0,memory_order_seq_cst);
-  return rc;
+  atomic_fetch_add_explicit(&h->s->wait_epoch,1,memory_order_seq_cst);
+  return ipc_wait(h);
 }
+int ipc_same_prewait_epoch(uint64_t before,uint64_t after)
+{ return (before&1) && before==after; }
 int ipc_done(ipc *h) {return atomic_load_explicit(&h->s->done,memory_order_acquire);}
 void ipc_finish(ipc *h)
 {atomic_store_explicit(&h->s->done,1,memory_order_release); ipc_notify(h);}

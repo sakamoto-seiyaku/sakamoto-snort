@@ -140,3 +140,14 @@ platform. Retain raw failures and the original two-candidate results, independen
 verify the complete matrix and artifacts, repeat the two-axis review, and return
 a three-way recommendation with maintenance costs and contrary measurements.
 User result review/selection remains mandatory before Done or T21.
+
+Review correction before final remeasurement: the initial three-way pre-poll
+witness sampled a phase only after admission and could count a publication from
+before a later wait. Replace that phase with a monotonic 64-bit epoch (odd before
+poll, even afterward), and count only admission bracketed by the same odd epoch.
+The producer does not wait for the epoch. Add deterministic rejection of a later
+window/ABA transition and rerun all three arms because the shared instrumentation
+changed. The prior matrix and any unmet zero-loss conditions remain retained;
+the registration's workload/criteria are not relaxed. Add a direct assertion of
+exact byte-capacity occupancy after wrap/reclamation, alongside the existing test
+for insufficient space for another 128-byte record.

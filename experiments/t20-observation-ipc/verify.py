@@ -17,7 +17,7 @@ def rows(text):
 def verify_primitive(primitive):
     assert primitive['exit']==0 and not primitive['stderr'],'primitive test failure'
     primitive_result=json.loads(primitive['stdout'])
-    assert primitive_result=={'status':'PASS','cases':['boundaries','invalid_lengths','full_immutable','borrowed_reclamation','physical_wrap','counter_wrap','corrupt_headers','fifo_model'],'model_operations':200000},'primitive coverage'
+    assert primitive_result=={'status':'PASS','cases':['boundaries','invalid_lengths','full_immutable','borrowed_reclamation','physical_wrap','counter_wrap','corrupt_headers','fifo_model','wait_epoch_regression'],'model_operations':200000},'primitive coverage'
 
 def verify(r,check_paced_gate=True):
     data=rows(r['stdout']);p=data['producer'];t=data['producer_timing']
@@ -150,6 +150,11 @@ def main():
     try:verify_primitive(altered)
     except AssertionError:mutations.append('missing-counter-wrap-evidence')
     else:raise AssertionError('accepted incomplete primitive evidence')
+    altered=copy.deepcopy(primitive);payload=json.loads(altered['stdout'])
+    payload['cases'].remove('wait_epoch_regression');altered['stdout']=json.dumps(payload)
+    try:verify_primitive(altered)
+    except AssertionError:mutations.append('missing-wait-epoch-regression')
+    else:raise AssertionError('accepted missing wait-epoch regression')
     result={'status':'VERIFIED_WITH_UNMET_GATES' if unmet else 'PASS','runs':len(reports),'unmet_gates':unmet,'mutations_rejected':mutations,'verifier_sha256':digest(Path(__file__)),'reports':reports}
     (a.runs/'verification.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps({k:v for k,v in result.items() if k!='reports'}))

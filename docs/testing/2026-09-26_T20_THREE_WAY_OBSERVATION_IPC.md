@@ -9,8 +9,9 @@ not retrospectively described as part of its original preregistration.
 **Recommendation for user review remains Aeron C SPSC.** The minimal ring works
 within this tested envelope, but has no clear overall cost/latency advantage
 that establishes a reason to own another queue implementation. It saves only
-1280 bytes across two shared queues versus Aeron. VPP's original mixture passes,
-but one widened-length run misses the registered zero-admission-loss condition.
+1280 bytes across two shared queues versus Aeron. All three pass the final
+corrected-witness matrix. An earlier VPP widened-length miss and an Aeron burst
+tail outlier remain important counter-evidence; neither is relabelled as fixed.
 T20 remains In Progress; **no direction is selected and T21 remains blocked**.
 
 ## Contract and source identities
@@ -33,7 +34,7 @@ and deterministic sentinel payload are unchanged. VPP's classes remain
 512 × 128, 128 × 512 and 64 × 2048 bytes; it does not borrow another class when
 the smallest fitting class is full. Both byte rings use actual aligned lengths.
 
-The common harness now includes a pre-poll publication witness, boundary lengths
+The common harness includes a pre-poll publication witness, boundary lengths
 and EINTR handling in its eventfd helpers. Therefore **none of the old measurements
 is used as a current comparator**. Three repetitions rotate order A/V/M, V/M/A,
 M/A/V. The original 13 workloads plus boundary and notification-window cases give
@@ -43,17 +44,17 @@ M/A/V. The original 13 workloads plus boundary and notification-window cases giv
 Evidence root: `build-output/t20-three-way-20260926/`.
 
 - Same native source closure on Host and ARM64:
-  `f497a0205e7dfbdf0b953be1eef7cb4ec8491eeb28693819269bf24462f37006`.
+  `11f82153497bc90af1bc2d21bb1b6dbea9ce62225787ac11cb8a6b69c11075cb`.
   This hashes sorted compact JSON of the eight native source/header/test file
   hashes: `ipc.c/.h`, `producer.c`, `consumer.rs`, `query.c`,
   `minimal_ring.c/.h`, `minimal_ring_test.c`.
-- Host `host-b/build.json` SHA-256:
-  `162f4b90ddb9760fc7493b5f138192927d147088159d571f4435a17a8e50fae4`.
-- ARM64 `android-b/build.json` SHA-256:
-  `40e2dbce7fb900d07bc5f6d73792cef77c718ec858266c14d654eacf795d47dd`.
+- Host `host-c/build.json` SHA-256:
+  `3b4eff768a4d6175abd21085166512acacb89858ba5c7814c9cae1fc272b0eaa`.
+- ARM64 `android-c/build.json` SHA-256:
+  `43439ec23c6fdcecfbf422ce49212e6071519b59d0ac5b794a2d896a338e9db1`.
 - Builds compile from retained source snapshots, retain compiler/target commands,
   exact dependency hashes and stage/profile metadata, and refuse to overwrite a
-  completed build. Final runs: `host-matrix-b/`, `pixel-matrix-b/`.
+  completed build. Final runs: `host-matrix-c/`, `pixel-matrix-c/`.
 - Pixel reads back all 12 deployed executable/library/test SHA-256 values before
   execution. The runner records environment and confirms removal of its fresh
   directory and owned processes. Only `dev/adb` is used, serially.
@@ -81,11 +82,13 @@ This is the ordering argument for the implementation, supported by target tests;
 it is not a formal proof for every compiler/platform. The consumer still calls
 the C implementation, rather than reproducing its atomics as Rust structs.
 
-Primitive tests pass on Host and actual ARM64. Eight groups cover lengths and
-invalid lengths, exact full capacity with 100 repeated non-mutating rejections,
-borrowed-record reclamation, physical wrap, near-UINT64_MAX counter wrap,
-malformed published headers and 200000 operations checked against an independent
-FIFO model over more than 100 physical wraps. Host ASan/UBSan with leak detection
+Primitive tests pass on Host and actual ARM64. Nine groups cover lengths and
+invalid lengths, insufficient space for another 128-byte record with 100 repeated
+non-mutating rejections, exact byte-capacity occupancy after wrapped reclamation,
+borrowed-record protection, physical wrap, near-UINT64_MAX counter wrap,
+malformed published headers, the wait-epoch regression, and 200000 operations
+checked against an independent FIFO model over more than 100 physical wraps.
+Host ASan/UBSan with leak detection
 also passes. The first model schedule accidentally drained only one item whenever
 its low-bit predicate matched and did not reach the registered wrap coverage;
 that failure is retained. The test was corrected to select drain size from
@@ -102,9 +105,18 @@ The boundary case cycles eleven lengths between 128 and 2048 bytes, including
 unaligned lengths, for 20000 records. The notification-window case inserts a
 test-only 200 µs delay after the reader's empty check, with 10000 single-record
 offers paced at a requested 100 µs. A producer never waits for the reader's phase.
-Each ARM64 run records 9481–9931 admitted publications while the reader is still
-in the pre-poll phase; all are consumed without a timeout. This instruments the
-wait race; it is not a proposed Product delay or an ACK protocol.
+Each corrected ARM64 run records 9156–9583 admissions bracketed by the same odd
+wait epoch. An odd epoch begins after the empty check and advances to an even
+value immediately before poll. Producer samples it before and after the queue
+call; a later wait cannot count an earlier publication. All records are consumed
+without a timeout. This instruments the wait race; it is not a Product delay or ACK.
+
+Independent review found that the first three-way witness sampled a phase only
+after publication and could count an earlier publication in a later wait. That
+P2 coverage defect is corrected by the monotonic epoch bracket, with regression
+cases for entry, exit and later-window/ABA transitions. The common header is v2.
+All three candidates were rebuilt and remeasured; old `*-matrix-b` results are
+not evidence for the corrected witness. No queue-algorithm defect was demonstrated.
 
 ## Results and the retained unmet condition
 
@@ -113,25 +125,28 @@ wait race; it is not a proposed Product delay or an ACK protocol.
 | Host, all three | All 135 run ledgers verified | All pass |
 | ARM64 Aeron | All 45 run ledgers verified | All pass |
 | ARM64 Minimal | All 45 run ledgers verified | All pass |
-| ARM64 VPP | All 45 run ledgers verified | One boundary repetition fails: 21 admission drops |
+| ARM64 VPP | All 45 final run ledgers verified | All final runs pass; earlier B miss retained below |
 
-`2-boundary-vpp.json` offers 20000 valid records, admits/consumes 19979 and counts
+Earlier `pixel-matrix-b/2-boundary-vpp.json` offers 20000 valid records, admits/consumes 19979 and counts
 21 admission failures. Byte/sequence/count/sum/xor ledgers agree for every admitted
 record. Other VPP boundary repetitions admit all 20000. There is no observed
-corruption or unexplained accepted-record loss, but this is **not a zero-loss
-qualification for VPP's current classes under that widened mixture**.
+corruption or unexplained accepted-record loss. All three final C repetitions
+admit 20000, but the queue/classes were not changed to fix this miss. **The prior
+observation still prevents an unconditional zero-loss claim for that mixture.**
 
 The strict verifier's failure is retained in `pixel-strict-verifier-failure.log`.
 Its new reporting mode continues checking all integrity/artifact/coverage rules
 and emits `VERIFIED_WITH_UNMET_GATES`, explicitly retaining this failed condition;
 it does not emit PASS or change the condition. This reporting change happened
-after the observation and is disclosed here. No repeat is used to replace it.
+after the observation and is disclosed here. The later C rerun was required by
+the witness correction, not used to replace the B failure; C passes strict checks.
 The precise saturated class/scheduling trigger was not instrumented, so a causal
 attribution beyond counted admission loss is not claimed. A VPP choice must carry
 this capacity limitation into actual-record sizing or further qualification.
 
-Ten altered witnesses are rejected per platform: the original eight plus missing
-pre-poll coverage and missing counter-wrap evidence. Device artifact membership,
+Eleven altered witnesses are rejected per platform: the original eight plus
+missing pre-poll coverage, counter-wrap evidence and wait-epoch regression.
+Device artifact membership,
 hashes, complete matrix, exact workload, distinct generations and cleanup are
 also mandatory. Expected corrupt-payload exit 6 and borrowed-callback death exit
 42 are successful negative tests, not unexplained process failures.
@@ -148,30 +163,35 @@ are not locked; these are exploratory comparisons without confidence intervals.
 
 | Workload | Candidate | Combined CPU ms | Export p99 µs | Delivery p99 µs | Wait calls |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 32000, batch32 | Aeron | 498.0 | 57.6 | 849.0 | 1001 |
-| same | VPP | 601.1 | 59.9 | 1060.8 | 1260 |
-| same | Minimal | 482.2 | 56.4 | 1141.1 | 996 |
-| 128000, batch128 | Aeron | 1074.3 | 17.3 | 1693.3 | 998 |
-| same | VPP | 1612.4 | 43.4 | 1046.8 | 4256 |
-| same | Minimal | 1253.3 | 16.0 | 1458.4 | 1000 |
-| 200000 unpaced offers | Aeron | 282.4 | 1.180 | 1249.0 | 188 |
-| same | VPP | 248.1 | 0.936 | 1730.7 | 1479 |
-| same | Minimal | 263.6 | 1.017 | 1345.1 | 102 |
-| 20000 boundary records | Aeron | 388.9 | 58.5 | 1048.3 | 626 |
-| same | VPP | 525.0 | 60.5 | 1057.1 | 632 |
-| same | Minimal | 391.9 | 58.1 | 1087.8 | 626 |
+| 32000, batch32 | Aeron | 538.7 | 62.9 | 995.5 | 1000 |
+| same | VPP | 575.9 | 58.9 | 610.3 | 1104 |
+| same | Minimal | 508.5 | 57.8 | 844.2 | 1000 |
+| 128000, batch128 | Aeron | 1307.6 | 19.7 | 1624.0 | 998 |
+| same | VPP | 993.5 | 44.1 | 937.4 | 2807 |
+| same | Minimal | 1444.5 | 14.4 | 1572.2 | 998 |
+| 200000 unpaced offers | Aeron | 269.5 | 1.180 | 1781.4 | 163 |
+| same | VPP | 242.2 | 0.977 | 2765.5 | 499 |
+| same | Minimal | 244.9 | 0.773 | 1386.8 | 3 |
+| 20000 boundary records | Aeron | 326.3 | 60.2 | 1187.3 | 626 |
+| same | VPP | 545.9 | 60.8 | 645.5 | 702 |
+| same | Minimal | 369.0 | 58.8 | 1072.5 | 625 |
 
-VPP's boundary median hides its one failed repetition; the explicit failure above
-takes precedence over a zero median drop count. Burst CPU totals do not process
-equal admitted work: Aeron admits median 173870 (170941–180061), Minimal 151098
-(133620–175684), VPP 126177 (58839–160425). The rest are counted admission drops.
+The table contains only the corrected C matrix; it does not erase VPP's earlier
+B boundary failure. Burst CPU totals do not process equal admitted work: Aeron
+admits median 159910 (52895–182659), Minimal 144879 (103966–160288), VPP 113385
+(104778–131889). The rest are counted admission drops.
 Do not infer a per-record CPU winner from those unequal totals.
 
 Minimal's batch32 combined CPU is slightly lower than Aeron's median, but Aeron's
-range is 439–515 ms and Minimal's 481–484 ms. At batch128 Aeron is lower by median,
-with broad overlapping ranges. At sparse single records Minimal's export p99 is
-967.7 µs versus Aeron 341.1 and VPP 440.4 µs; its full raw ranges are retained.
-There is no consistent minimal-ring win. VPP can notify earlier inside a batch,
+range is 504–545 ms and Minimal's 488–531 ms. At batch128 Aeron is lower by median,
+with broad overlapping ranges. At sparse single records export p99 is 335.6 µs
+Aeron, 287.3 VPP and 342.6 Minimal. There is no consistent minimal-ring win.
+One final Aeron burst repetition admits only 52895 records and has delivery p99
+70.243 ms; its other repetitions have p99 1.344 and 1.781 ms. This outlier has no
+corruption or wait timeout, but its cause was not isolated and it is not dismissed
+as merely scheduling. It prevents a claim of consistently superior Aeron burst
+latency or admission. The recommendation is a reuse/maintenance preference, not
+a declaration that Aeron won every measured dimension. VPP can notify earlier inside a batch,
 while both byte rings notify at the batch boundary; policy differences remain
 part of the measured tradeoff. Old two-way numbers are not pooled with this run.
 
@@ -180,12 +200,13 @@ part of the measured tradeoff. Old two-way numbers are not pooled with this run.
 | Requested shared bytes, two channels plus common header | 529920 | 540032 | 528640 |
 | Absent consumer: admitted records out of 100000 | 656 | 704 | 656 |
 | Absent consumer: admitted payload bytes | 256768 | 262144 | 256768 |
-| Batch32 consumer current RSS, KiB | 4336 | 4920 | 4288 |
-| Producer CPU during 3-second idle, ms | 0.031 | 0.050 | 0.043 |
-| Consumer CPU over idle plus one delivery, ms | 0.581 | 0.604 | 0.495 |
+| Batch32 consumer current RSS, KiB | 4328 | 4924 | 4280 |
+| Producer CPU during 3-second idle, ms | 0.501 | 0.049 | 0.040 |
+| Consumer CPU over idle plus one delivery, ms | 0.531 | 0.716 | 0.721 |
 | Consumer blocking waits in that idle case | 1 | 1 | 1 |
 
-All idle waits complete without timeout; no permanent polling or wakelock is
+All idle waits complete without timeout; all observed producer idle CPU values
+are below 1 ms. This small sample is not an energy ranking. No permanent polling or wakelock is
 introduced. Absent consumers do not stop producer progress, and the minimal ring
 does not overwrite unread slots. The fixed-class saturated record mixture differs
 from a byte ring's final mixture, so VPP's larger count is not a universal capacity
@@ -202,8 +223,8 @@ address size, context switches and all latency quantiles remain in raw evidence.
 
 | Candidate | What is reused / owned | Decision implication |
 | --- | --- | --- |
-| Aeron | Pinned Apache-2.0 queue algorithm, small subset packaging/error seam; project owns mapping, notification, generation and record contract | Recommended: variable capacity and upstream queue maintenance, without a full messaging runtime |
-| VPP | Already-shipped Apache-2.0 dependency and native notifier; project owns matching ABI/profile, classes and facade | Viable for the original mixture; current widened-length zero-loss condition is unmet and must remain explicit |
+| Aeron | Pinned Apache-2.0 queue algorithm, small subset packaging/error seam; project owns mapping, notification, generation and record contract | Recommended for reuse and variable capacity, not as a universal performance winner; burst outlier remains explicit |
+| VPP | Already-shipped Apache-2.0 dependency and native notifier; project owns matching ABI/profile, classes and facade | Final checks pass, but the earlier widened-length admission loss remains a capacity qualification limit |
 | Minimal | No new queue dependency; project owns all queue layout, ordering, wrap/corruption behavior, regressions and future changes | Technically viable in this envelope; 1.25 KiB shared saving and mixed timing results do not establish a compelling advantage over reuse |
 
 Choosing Minimal would not mean restarting all supporting work from nothing:

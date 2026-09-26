@@ -49,7 +49,7 @@ for candidate in ['aeron','vpp','minimal']:
     if candidate=='minimal':
         run([cc,*flags,'-c',source/'minimal_ring.c','-o',dest/'minimal_ring.o'])
         objects.append(dest/'minimal_ring.o')
-        run([cc,*flags,source/'minimal_ring_test.c',dest/'minimal_ring.o','-o',dest/'minimal-test'])
+        run([cc,*flags,source/'minimal_ring_test.c',dest/'minimal_ring.o',dest/'ipc.o','-o',dest/'minimal-test'])
     run([ar,'rcs',dest/'libt20.a',*objects])
     link=['-L'+str(dest),'-lt20']
     if candidate=='vpp':
