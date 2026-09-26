@@ -196,7 +196,8 @@ the separate mandatory user review gate for the actual observation pipeline.
 ## Validation and retained limits
 
 Both final matrices pass the independent verifier, including deliberate failure
-cases. C/Rust builds use warnings as errors for experiment code. Python syntax
+cases. C builds use warnings as errors for experiment code; both Rust target
+builds succeed with their retained compiler commands. Python syntax
 checks and the experiment catalog's five tests pass. The unchanged Product Debug
 suite covers all 50 CTest cases: 49 initially pass, while its Unix-socket lifecycle
 test is sandbox-denied; that exact test passes with socket permission (including
