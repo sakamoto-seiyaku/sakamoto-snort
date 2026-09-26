@@ -10,7 +10,9 @@
                 socket.connect(endpoint, port); socket.setSoTimeout(1000); sockets.add(socket);
             }
             String[] phases = {"idle", "low", "burst", "sustained", "active", "short", "pause"};
-            int[] counts = {0, 20, 256, 1000, 512, 128, 1024};
+            int pauseFlows = plan.optInt("e01PauseFlows", 1024);
+            if (pauseFlows < 1 || pauseFlows > 1024) throw new IllegalArgumentException("E01 pause bound");
+            int[] counts = {0, 20, 256, 1000, 512, 128, pauseFlows};
             gate(app, nonce, result, "e01_ready");
             for (int phase = 0; phase < phases.length; ++phase) {
                 long started = System.nanoTime();

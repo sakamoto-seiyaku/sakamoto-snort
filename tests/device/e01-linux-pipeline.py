@@ -59,16 +59,29 @@ def settle(label):
     until=time.monotonic()+8
     while True:
         v=query();h=v['health'];normal=[h['channels'][i] for i in (0,2)]
-        if all(c['occupancy']==0 for c in normal):
+        consumer=v['consumer']
+        work_done=(not consumer['persistent'] or consumer['e01']['records']>=consumer['overview']['accepted'])
+        if config['export'] and not any(c['full'] for c in normal):
+            target=sum(c['basic_packets'][0] for c in normal)
+            work_done=work_done and sum(consumer['overview']['packets'])==target
+            if consumer['persistent'] and not consumer['store_error']:
+                work_done=work_done and sum(consumer['persistent']['packets'])==target
+        if all(c['occupancy']==0 for c in normal) and work_done:
             time.sleep(.05);v=query();break
         if time.monotonic()>until:break
         time.sleep(.02)
     return save(label+'.json',v)
-process=observer=client=server=capture=None;current=out;hooks=[]
+process=observer=client=server=capture=None;current=out;hooks=[];dummy_created=False;loopback_was_up=None
 try:
     assert os.getuid()==0
+    current_netns=os.readlink('/proc/self/ns/net')
+    assert os.environ.get('E01_HOST_NETNS') and current_netns!=os.environ['E01_HOST_NETNS'],'explicit isolated network namespace required'
+    links=json.loads(cmd('ip','-j','link','show'))
+    assert [link['ifname'] for link in links]==['lo'],'isolated namespace must initially contain only loopback'
+    loopback_was_up='UP' in links[0]['flags']
+    result['network_namespace']={'host':os.environ['E01_HOST_NETNS'],'experiment':current_netns,'initial_links':links}
     save('environment.txt',cmd('uname','-a')+cmd('id')+'netns='+os.readlink('/proc/self/ns/net')+'\n')
-    cmd('ip','link','set','lo','up');cmd('ip','link','add','e01dummy','type','dummy')
+    cmd('ip','link','set','lo','up');cmd('ip','link','add','e01dummy','type','dummy');dummy_created=True
     for addr in ('10.224.0.1/24','10.224.0.2/24'):cmd('ip','addr','add',addr,'dev','e01dummy')
     cmd('ip','link','set','e01dummy','up')
     server=subprocess.Popen(['python3','-u',str(peer),'server','--host','10.224.0.2'],stdout=(out/'endpoint.jsonl').open('w'),stderr=(out/'endpoint.log').open('w'),user=12002,group=12002,extra_groups=[])
@@ -81,19 +94,22 @@ try:
         life={'generation':generation,'config':config,'phases':[],'storage_fault':a.fault};result['arms'].append(life)
         runtime=ROOT/('build-output/product-vpp-runtime-e01-'+tag+'-'+str(index))
         store=current/'observation/overall.json';store.parent.mkdir();store.with_suffix('.e01').write_text(json.dumps(config))
+        native_config=store.with_suffix('.e01-native');native_config.write_text(f"{int(config['export'])} {config['growth']} {config['flush']}\n")
         if a.seed_baselines:
             spec=importlib.util.spec_from_file_location('seed',ROOT/'tests/evidence/e01_store_seed.py');seed=importlib.util.module_from_spec(spec);spec.loader.exec_module(seed)
             seed_file=store.with_name('e01-'+config['name']+'.json')
             life['synthetic_seed_baselines']=a.seed_baselines;life['seed_bytes']=seed.write(seed_file,a.seed_baselines)
-            life['seed_sha256']=digest(seed_file)
+            life['seed_sha256']=digest(seed_file);life['expected_snapshot_guard']=life['seed_bytes']>32*1024*1024
             (current/'synthetic-seed.json').write_bytes(seed_file.read_bytes())
-        launch=dict(env,PRODUCT_ARTIFACT_DIR=str(artifact),PRODUCT_RUNTIME_DIR=str(runtime),PRODUCT_RULE_CONFIG_DIR=str(current/'configuration'),PRODUCT_GENERATION=str(generation),PRODUCT_WORKER_COUNT='2',SAKAMOTO_RUNTIME_PROFILE='root',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_UID='0',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES='4',SAKAMOTO_LINUX_NETWORK_SOURCE='external')
+        launch=dict(env,SAKAMOTO_E01_CONFIG=str(native_config),PRODUCT_ARTIFACT_DIR=str(artifact),PRODUCT_RUNTIME_DIR=str(runtime),PRODUCT_RULE_CONFIG_DIR=str(current/'configuration'),PRODUCT_GENERATION=str(generation),PRODUCT_WORKER_COUNT='2',SAKAMOTO_RUNTIME_PROFILE='root',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_UID='0',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES='4',SAKAMOTO_LINUX_NETWORK_SOURCE='external')
         process=subprocess.Popen(['bash',str(ROOT/'tools/product/run-host-vpp.sh')],env=launch,stdout=(current/'vpp.log').open('w'),stderr=subprocess.STDOUT)
         until=time.monotonic()+30
         while not (runtime/'api.sock.obs').exists():
             assert process.poll() is None and time.monotonic()<until,'VPP startup';time.sleep(.05)
-        cli('configure',f"product e01 observation export {int(config['export'])} growth {config['growth']} flush {config['flush']}")
+        configured=cli('configure','product e01 observation show')
+        assert f"e01.export={int(config['export'])} growth={config['growth']} flush_us={config['flush']}" in configured,'applied E01 producer config'
         cli('trace','product packet-trace limit 0')
+        save('configuration.txt',cmd(artifact/'bin/sakamoto-product-core-host','rule-export',runtime/'api.sock',generation))
         observer=subprocess.Popen([str(artifact/'bin/sakamoto-product-core-host'),'observation-serve',str(runtime/'api.sock'),str(generation),str(store)],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(current/'rust.log').open('w'),bufsize=0)
         open_started=time.monotonic_ns()
         while not line(observer).startswith('observation.ready='):pass
@@ -114,6 +130,7 @@ try:
             measured=query(name+'-immediate');save(name+'-resources.json',{'before':metrics_before,'after':metrics_after})
             if name=='pause':save('resume-control.txt',control('resume'))
             time.sleep(1.2);after=settle(name+'-settled')
+            save(name+'-resources-settled.json',sample())
             if a.fault and name=='burst':fault_path.rmdir()
             life['phases'].append({'name':name,'started_ns':start,'completed_ns':end,'sent':traffic['sent'],'received':traffic['received']})
         # The ordinary API supplies visibility; polling overhead is retained.
@@ -142,13 +159,32 @@ try:
     result['status']='RAW_COMPLETE'
 except Exception as e:result['error']=repr(e);raise
 finally:
-    for hook in hooks:hook[3]='-D';cmd(*hook,check=False)
-    stop(client);stop(observer)
-    if process and process.poll() is None:
-        try:cli('cleanup-stop','product root stop')
-        except Exception as cleanup_error:result['cleanup_error']=repr(cleanup_error)
-        finally:stop(process)
-    stop(server)
-    if capture and capture.poll() is None:capture.send_signal(2);capture.wait(timeout=10)
-    result['completed_ns']=time.time_ns();result['files']={str(f.relative_to(out)):digest(f) for f in out.rglob('*') if f.is_file()}
-    (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+    cleanup_errors=[]
+    def cleanup(label, operation):
+        try:return operation()
+        except Exception as error:
+            cleanup_errors.append({'step':label,'error':repr(error)})
+            return None
+    try:
+        for hook in hooks:
+            hook[3]='-D';cleanup('remove-owned-hook',lambda hook=hook:cmd(*hook))
+        cleanup('stop-client',lambda:stop(client));cleanup('stop-observer',lambda:stop(observer))
+        if process and process.poll() is None:
+            cleanup('stop-adapter',lambda:cli('cleanup-stop','product root stop'))
+            cleanup('stop-vpp',lambda:stop(process))
+        cleanup('stop-endpoint',lambda:stop(server))
+        if capture and capture.poll() is None:
+            cleanup('stop-capture',lambda:capture.send_signal(2))
+            cleanup('await-capture',lambda:capture.wait(timeout=10))
+        if dummy_created:cleanup('remove-owned-interface',lambda:cmd('ip','link','del','e01dummy'))
+        if loopback_was_up is False:cleanup('restore-loopback',lambda:cmd('ip','link','set','lo','down'))
+    finally:
+        result['cleanup_errors']=cleanup_errors
+        if cleanup_errors:result['status']='HOLD'
+        result['completed_ns']=time.time_ns();result['files']={}
+        for file in out.rglob('*'):
+            if file.is_file():
+                value=cleanup('seal-'+str(file.relative_to(out)),lambda file=file:digest(file))
+                if value is not None:result['files'][str(file.relative_to(out))]=value
+        if cleanup_errors:result['status']='HOLD'
+        (out/'result.json').write_text(json.dumps(result,indent=2)+'\n')

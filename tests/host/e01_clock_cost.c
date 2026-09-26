@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 static volatile uint64_t sink;
@@ -12,8 +13,17 @@ static uint64_t cpu_ns(void)
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) return 0;
     return (uint64_t)t.tv_sec * UINT64_C(1000000000) + (uint64_t)t.tv_nsec;
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "now")) {
+        struct timespec mono, wall;
+        if (clock_gettime(CLOCK_MONOTONIC, &mono) || clock_gettime(CLOCK_REALTIME, &wall)) return 1;
+        printf("{\"monotonic_ns\":%" PRIu64 ",\"realtime_ns\":%" PRIu64 "}\n",
+            (uint64_t)mono.tv_sec * UINT64_C(1000000000) + (uint64_t)mono.tv_nsec,
+            (uint64_t)wall.tv_sec * UINT64_C(1000000000) + (uint64_t)wall.tv_nsec);
+        return 0;
+    }
+    if (argc != 1) return 2;
     const unsigned count = 1000000;
     puts("{\"kind\":\"auxiliary_clock_api_only\",\"iterations\":1000000,\"rounds\":[");
     for (unsigned round = 0; round < 7; ++round) {

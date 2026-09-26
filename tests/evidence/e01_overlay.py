@@ -7,13 +7,40 @@ restoration refuse concurrent source changes instead of overwriting them.
 import argparse
 import hashlib
 import json
+import os
+import stat
+import tempfile
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 def digest(data): return hashlib.sha256(data).hexdigest()
 def once(text, old, new):
     assert text.count(old) == 1, (old[:100], text.count(old))
     return text.replace(old, new)
-def overlay():
+def replace_bytes(path, data, mode):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.e01-overlay-', delete=False) as file:
+            temporary = Path(file.name)
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+def restore(state, manifest):
+    for path, row in manifest.items():
+        assert digest((ROOT/path).read_bytes()) in (row['before'], row['after']), 'concurrent change: '+path
+        assert digest((state/path).read_bytes()) == row['before']
+    for path, row in manifest.items():
+        current = digest((ROOT/path).read_bytes())
+        assert current in (row['before'], row['after']), 'concurrent change: '+path
+        if current == row['after']:
+            replace_bytes(ROOT/path, (state/path).read_bytes(), row.get('mode', 0o644))
+
+def overlay(probe_source=None, startup_config=True):
     files = {}
     path = 'src/product/vpp/product_observation.c'
     s = (ROOT/path).read_text()
@@ -51,6 +78,43 @@ VLIB_CLI_COMMAND (e01_observation_config, static) = {
  .path = "product e01 observation", .function = e01_configure,
 };
 '''
+    if startup_config:
+        s = once(s, '#include <time.h>', '#include <time.h>\n#include <stdio.h>')
+        s = once(s, 'int product_observation_bind (uint64_t generation, product_flow_runtime_t **runtimes) {', r'''/* E01 test controls are read before adapters can admit their first packet. */
+static int e01_startup_config (const char *api, uint64_t generation) {
+  char path[4096];
+  const char *configured = getenv ("SAKAMOTO_E01_CONFIG");
+  if (configured) {
+    if (snprintf (path, sizeof (path), "%s", configured) >= (int) sizeof (path)) return 0;
+  } else {
+    const char *marker = strstr (api, "/files/profiles/");
+    if (!marker) return 0;
+    size_t prefix = (size_t) (marker - api) + strlen ("/files");
+    if (prefix + sizeof ("/observation/overall.e01-native") > sizeof (path)) return 0;
+    memcpy (path, api, prefix);
+    strcpy (path + prefix, "/observation/overall.e01-native");
+  }
+  FILE *file = fopen (path, "r");
+  if (!file) return 0;
+  unsigned enabled, growth, flush; char extra;
+  int fields = fscanf (file, "%u %u %u %c", &enabled, &growth, &flush, &extra);
+  fclose (file);
+  if (fields != 3 || enabled > 1 || (growth != 32 && growth != 128)
+      || (flush != 250000 && flush != 1000000)) return 0;
+  e01_export = enabled; e01_growth = growth; e01_flush_us = flush;
+  fprintf (stderr, "e01.startup generation=%llu export=%u growth=%u flush_us=%u\n",
+      (unsigned long long) generation, enabled, growth, flush);
+  return 1;
+}
+int product_observation_bind (uint64_t generation, product_flow_runtime_t **runtimes) {''')
+        s = once(s, '  if (!api || strlen (api) + 4 >= sizeof (socket_path)) goto fail;',
+                 '  if (!api || strlen (api) + 4 >= sizeof (socket_path) || !e01_startup_config (api, generation)) goto fail;')
+        s = once(s, '  u32 enabled, growth, flush;\n  if (!unformat', '''  u32 enabled, growth, flush;
+  if (unformat (input, "show")) {
+    vlib_cli_output (vm, "e01.export=%u growth=%u flush_us=%u", e01_export, e01_growth, (u32) e01_flush_us);
+    return NULL;
+  }
+  if (!unformat''')
     files[path] = s.encode()
     path = 'crates/product-core/src/observation_service.rs'
     s = (ROOT/path).read_text()
@@ -100,7 +164,7 @@ VLIB_CLI_COMMAND (e01_observation_config, static) = {
     path = 'app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProtocolFactsProbe.java'
     s = (ROOT/path).read_text()
     s = once(s, '    private static void observation(Context app',
-             (ROOT/'tests/device/helpers/e01_probe.java').read_text()+'\n    private static void observation(Context app')
+             (probe_source if probe_source is not None else (ROOT/'tests/device/helpers/e01_probe.java').read_text())+'\n    private static void observation(Context app')
     s = once(s, 'if (plan.has("observationFlood")) observation(',
              'if (plan.has("e01")) e01(app, plan, result, nonce, endpoint, local, source, port);\n                else if (plan.has("observationFlood")) observation(')
     files[path] = s.encode()
@@ -113,14 +177,15 @@ def main():
         changes=overlay(); state.mkdir(parents=True,exist_ok=False); manifest={}
         for path,new in changes.items():
             old=(ROOT/path).read_bytes(); backup=state/path; backup.parent.mkdir(parents=True,exist_ok=True); backup.write_bytes(old)
-            manifest[path]={'before':digest(old),'after':digest(new)}
+            manifest[path]={'before':digest(old),'after':digest(new),'mode':stat.S_IMODE((ROOT/path).stat().st_mode)}
         (state/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-        for path,new in changes.items(): (ROOT/path).write_bytes(new)
+        try:
+            for path,new in changes.items(): replace_bytes(ROOT/path,new,manifest[path]['mode'])
+        except BaseException:
+            restore(state,manifest)
+            raise
     else:
         manifest=json.loads((state/'manifest.json').read_text())
-        for path,row in manifest.items():
-            assert digest((ROOT/path).read_bytes())==row['after'], 'concurrent change: '+path
-            assert digest((state/path).read_bytes())==row['before']
-        for path in manifest: (ROOT/path).write_bytes((state/path).read_bytes())
+        restore(state,manifest)
     print(json.dumps({'operation':a.operation,'files':list(manifest)}))
 if __name__=='__main__': main()

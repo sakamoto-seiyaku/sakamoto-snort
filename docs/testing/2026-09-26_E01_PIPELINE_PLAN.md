@@ -90,3 +90,53 @@ The initial Linux collector read JSON one byte per select/read call. Its retaine
 A/B/C pilot exposes excessive collector duration and timer/expiry opportunities.
 Formal collectors use buffered reads; pilot timings are not pooled with final
 comparisons. All raw pilot outcomes and gaps remain evidence.
+
+## Independent-review corrections
+
+The initial resource snapshots bracketed traffic only, while store counters were
+read after settlement. Those CPU values are explicitly traffic-only lower scopes.
+For earlier full matrices, the retained next-phase pre-send resource sample closes
+each interval before the next traffic gate; recomputed costs include all intervening
+refresh/write work, fixed diagnostic queries and phase control. New runs also retain
+direct resource samples after settlement. These measurement methods are identified
+and are not silently pooled. Byte and direction oracles and their negative mutations
+are required in addition to count conservation.
+
+The first attempted foreground control still left the launcher resumed: observation
+query intents finish their Activity. The collector now explicitly opens the existing
+Activity and asserts the resumed-Activity witness for sustained/active/short/pause;
+idle/low/burst retain their asserted HOME state. Earlier attempts are HOLD evidence.
+
+A supplemental C/F Android low-phase experiment brackets each normal API query with
+a standalone device CLOCK_MONOTONIC helper and compares false/true visibility with
+the Java sender's last monotonic send timestamp. This yields a visibility interval,
+not a fabricated exact latency. Failure to reach the cumulative target is a timeout.
+Cleanup actions are independent and always seal their errors; the Linux launcher
+passes a host-network-namespace witness and the runner verifies isolation.
+
+## Capture-scope and platform-capacity addendum
+
+Root INPUT hooks intentionally lack an application-UID match, unlike its OUTPUT
+hooks. A 20-pair Root probe was accompanied by other-UID TCP and IPv6 DNS records;
+its overall totals could not honestly be asserted as 40. Root attempts retain their
+actual mixed traffic and limits. The strict Android A/B/C comparison therefore uses
+the already implemented controlled VPN graph-validation profile, which permits only
+the test application. This does not narrow Root hooks or alter Product semantics.
+
+The current VPN flow stack permits 256 sessions/sockets per owner. Keep the 128
+active sockets and 128 short socket lifetimes, but bound the paused-consumer arm to
+192 additional socket lifetimes (448 total, with distribution margin). Linux keeps
+1024 new pause flows and supplies the saturation evidence. This Android pause arm is
+not claimed to saturate the queue. An explicit experimental Java workload parameter
+implements that bound; its rebuilt APK reuses byte-identical native pipeline files.
+The native closure and each workload revision remain separately bound to evidence.
+
+Platform TUN startup also produced basic IP packets before the first test Flow.
+The final experiment overlay reads its native parameters before Adapter admission
+from an experiment-only file, and exposes a read-only applied-parameter witness.
+The original late CLI configuration remains a guarded historical control; it is
+not used for new comparisons. Normal Product source is restored after each build.
+New Android runs retain the startup counter baseline and an independent capture on
+the actual TUN interface selected by its configured address. Test-packet accounting
+uses baseline deltas, without treating platform packets as absent or narrowing the
+Product packet path. Default diagnostic packet tracing is retained on Android.
