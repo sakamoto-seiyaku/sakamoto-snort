@@ -182,6 +182,46 @@ remain correctly paired across real runtime initialization and teardown.
 There is no justification here for a generic multi-backend layer, library fork,
 private trie walker or separate service.
 
-Independent review results are recorded with the final evidence index. The
-user's review and chosen direction remain the only authority to finish the
+The user's review and chosen direction remain the only authority to finish the
 T17/T17.5 decision gates or begin T18.
+
+## Standards
+
+Independent review found no hard breaches or blocking correctness findings in
+the 12 committed files since `1249cb6`. The experiment respects AGENTS.md and
+ADR-0008: isolated C evidence, unchanged pinned rax, no Product integration or
+removed-C++ reuse. Android operations use `dev/adb`. Documentation preserves
+failed attempts, source identities, scope and limits; Plane remains the decision
+authority. Read-only verification confirmed acceptance artifact hashes, all
+three source closures, retained source/binary hashes, independent workload
+expectations and raw records: Host 16/16, ARM64 16/16, sanitizer 5/5, with
+403 small/edge plus 33 targeted attempts per native platform. Evidence mutations
+were rejected: 10 Host, 12 ARM64, 10 sanitizer.
+
+One optional **Primitive Obsession** heuristic concerns `recovery.c`'s schedule:
+`{1,2,3,4,5,50,500,total/2,total,total+1,total+2}` also encodes continuous failure
+and pre-publication modes. Named modes could make future extension clearer.
+This is nonblocking for the fixed verified experiment; no generic framework is
+warranted. Sanitizer and single-thread publication limits are accurately stated.
+
+## Spec
+
+Independent review found no missing experiment deliverable, scope creep or
+wrong implementation within the component envelope. Ticket §9's required user
+selection remains pending. Actual file saving, management availability and
+concurrent publication are explicitly untested Product integration, consistent
+with §4's model/component distinction. The second route is acceptable under
+§2's permission to reject by read-only analysis: its ownership, fallible workspace,
+allocation-free search, algorithmic costs and maintenance burden are documented;
+KISS rejection is a recommendation, not measured inferiority.
+
+No hash/vec rewrite, reserve-based recovery, IPC, Product implementation or
+premature selection appears. Native checks exercise creation/insertion failure,
+continuous failure, pre-publication rejection, real exhaustion, unchanged old
+identity/results, baseline allocation recovery and changed-snapshot retry.
+Saved version advances before construction. Independent read-only verification
+accepted Host 16/16, ARM64 16/16 and sanitizer 5/5 and matched all artifact hashes.
+The evidence does not claim full Product recovery.
+
+Review totals: Standards 0 hard findings and 1 optional readability heuristic;
+Spec 0 findings. There is no outstanding experimental correctness blocker.
