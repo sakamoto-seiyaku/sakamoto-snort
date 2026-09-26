@@ -3,7 +3,7 @@
 Disposable C producer / Rust consumer experiment for
 [SAKAMOTO-271](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/7d77e5d6-cf66-49f2-ae7b-bec9a12b85ff).
 Read the [pre-registration](PLAN.md) and
-[measured comparison](../../docs/testing/2026-09-26_T20_OBSERVATION_IPC.md).
+[three-way measured comparison](../../docs/testing/2026-09-26_T20_THREE_WAY_OBSERVATION_IPC.md).
 The user selection gate lives in Plane. This directory is not Product source,
 an ABI to import, a runtime fallback, or the E01 complete observation pipeline.
 
@@ -37,6 +37,11 @@ directory, hashes the installed executables/libraries and verifies cleanup.
 It does not install/start an APK, start VPP, change Root/VPN state or restart adb.
 Every matrix run has an external timeout. New output directories are required.
 The exploratory `--smoke` mode is not accepted by the final full-matrix verifier.
+The three-way matrix includes Aeron, VPP and the minimal ring. If a registered
+paced zero-loss condition is missed, strict verification fails. Re-running the
+verifier with `--report-unmet-gates` checks all remaining integrity requirements
+and reports `VERIFIED_WITH_UNMET_GATES`; it does not convert the miss into PASS.
+The retained Pixel matrix has one such VPP boundary miss (21 admission drops).
 
 ## Tested seam
 
@@ -66,6 +71,11 @@ path identified by earlier research is not used. Aeron uses only `spsc_rb_write`
 and `spsc_rb_read`, plus a batch notification if at least one record was admitted.
 Its unused correlation-id path is removed by function-section garbage collection;
 there is no Media Driver, JVM, broker or custom ring algorithm.
+That statement describes the Aeron arm. The third arm is the new, independent
+`minimal_ring.c/.h`: a byte ring with separate release/acquire head/tail positions,
+an 8-byte header, wrap padding and callback-bounded reclamation. It uses the same
+batch notifier as Aeron, and has no upstream queue dependency. Its standalone
+primitive test covers boundary/full/borrow/wrap/corruption behavior and a FIFO model.
 
 Both consumers drain bounded batches and recheck authoritative work before
 blocking in `poll`. Eventfd retention covers publication before the wait; a
@@ -76,12 +86,20 @@ mapping. No in-place repair, ACK or replay is attempted.
 
 ## Evidence
 
-Final native artifacts: `build-output/t20-20260926/{host-c,android-c}/build.json`.
-Final measured runs: `host-matrix-c/` and `pixel-matrix-d/`, each 78 runs with
-three repetitions. Summaries retain min/median/max and every repetition in
-`host-summary.json` and `pixel-summary.json`. Raw failures, earlier instrumentation,
-smoke and intermediate matrices remain alongside them with their own identities.
-The final verifier deliberately rejects incomplete or pre-final matrices.
+Three-way native artifacts:
+`build-output/t20-three-way-20260926/{host-b,android-b}/build.json`.
+Measured runs: `host-matrix-b/` and `pixel-matrix-b/`, each 135 runs with three
+repetitions. Host passes all checks; Pixel retains one unmet VPP paced zero-loss
+condition while all admitted-data ledgers verify. Summaries retain status,
+unmet conditions, min/median/max and every repetition in `host-summary.json` and
+`pixel-summary.json`. Ten altered witnesses are rejected per platform.
+
+The original two-way artifacts remain in `build-output/t20-20260926/`; its entire
+indexed delivery also has a preserved copy in the new root's
+`prior-two-way-snapshot/`. Paths in that snapshot's `acceptance-index.json` are
+resolved relative to the snapshot root to check the original bytes. The older
+[two-way report](../../docs/testing/2026-09-26_T20_OBSERVATION_IPC.md) remains a
+historical result. New code and measurements do not rewrite it.
 
 The final comparison includes queue-call timing and export timing including
 notification. Producer CPU also includes synthetic record construction; consumer

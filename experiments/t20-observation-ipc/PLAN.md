@@ -91,3 +91,52 @@ Consumer latency ends after independent Rust content validation; CPU/RSS include
 the common generator, validator and timing arrays. They are not pure library
 cost or a model of the future storage pipeline. Source-specific final runs replace
 earlier runs only as the comparison reference, never as retained evidence.
+
+## User-authorized third-candidate extension — 2026-09-26
+
+After reviewing the two-candidate result, the user explicitly requested:
+“20这里要求继续实行 3种 比较补充上”. This supersedes the earlier condition
+that a hand-written ring would be evaluated only if both reuse candidates failed.
+This section is registered now, before implementing/running the third candidate;
+it was not part of the initial two-candidate registration. No direction is selected.
+
+Add one independent C SPSC variable-byte ring, with 262144 data bytes, an 8-byte
+record header, 8-byte alignment, a padding marker at the end, and separate
+cache-line-aligned 64-bit head/tail positions. Producer copy precedes a release
+tail publication; consumer acquire-loads tail, borrows records, and release-stores
+head only after callbacks finish. Producer acquire-loads head before reusing
+space. No overwrite, allocation, lock, retry loop or consumer wait in admission.
+This code is written for the current contract, not imported from an old daemon,
+the retained packet POCs, or an upstream queue implementation.
+
+The existing record shapes, distribution, channel capacities, process setup,
+CPU/latency accounting, failure cases and lifecycle contract remain unchanged.
+Minimal and Aeron use the same successful-batch eventfd policy; VPP retains its
+native transition policy. All three use the same changed harness and are rerun
+on Host and Android ARM64, with three repetitions rotating candidate order so
+each candidate goes first once. No prior measurements are substituted into the
+new primary comparison; the complete prior evidence is snapshotted separately.
+
+Additional correctness cases, outside the primary performance comparison:
+
+- Primitive tests: exact full capacity and no mutation on rejected writes;
+  1/7/8/9/127/128/129/511/512/513/2047/2048-byte boundaries; invalid 0/2049-byte
+  lengths; padding wrap and UINT64 counter wrap; held callback preventing reuse;
+  malformed published header rejection; deterministic FIFO/model stress over
+  repeated physical wraps. Run the same primitive binary on Host and ARM64 and
+  a Host ASan/UBSan build.
+- Cross-process boundary workload: 20000 records, batch32, 1ms requested pacing,
+  cyclic lengths 128/129/255/256/511/512/513/1023/1024/2047/2048 bytes. Each candidate
+  must deliver all records and pass the independent Rust byte/field checks.
+- Notification-window workload: 10000 records, batch1, 100us requested pacing.
+  The consumer marks a test-only phase after its empty check, delays 200us, then
+  enters poll. Producer never waits for that phase. A separate counter records
+  successful publications observed before the consumer leaves that pre-poll
+  phase; require positive coverage and no timeout/loss for every candidate.
+  This delay is test instrumentation, not a proposed Product sleep policy.
+
+The final matrix is 15 workloads × 3 candidates × 3 repetitions = 135 runs per
+platform. Retain raw failures and the original two-candidate results, independently
+verify the complete matrix and artifacts, repeat the two-axis review, and return
+a three-way recommendation with maintenance costs and contrary measurements.
+User result review/selection remains mandatory before Done or T21.

@@ -49,6 +49,10 @@ int main(int argc,char **argv)
     if(!strcmp(scenario,"isolation") && seq%100==0) c=0;
     uint32_t shape=(seq%10<7)?0:(seq%10<9)?1:2;
     uint32_t n=shape==0?128:shape==1?512:2048;
+    if(!strcmp(scenario,"boundary")) {
+      const uint32_t lengths[]={128,129,255,256,511,512,513,1023,1024,2047,2048};
+      n=lengths[(seq-1)%11];
+    }
     uint8_t record[2048];
     for(unsigned i=0;i<n;i++)record[i]=(uint8_t)(seq*17+i*13+gen);
     put32(record,1);put32(record+4,n);put64(record+8,gen);put64(record+16,seq);

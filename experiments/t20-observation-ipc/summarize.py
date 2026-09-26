@@ -7,7 +7,7 @@ from pathlib import Path
 import statistics
 
 p=argparse.ArgumentParser();p.add_argument('verification',type=Path);p.add_argument('--output',type=Path,required=True)
-a=p.parse_args();v=json.loads(a.verification.read_text());assert v['status']=='PASS'
+a=p.parse_args();v=json.loads(a.verification.read_text());assert v['status'] in ['PASS','VERIFIED_WITH_UNMET_GATES']
 def distribution(values):
     return {'min':min(values),'median':statistics.median(values),'max':max(values),'values':values}
 fields={
@@ -33,17 +33,19 @@ fields={
 summary={}
 for name in dict.fromkeys(r['name'] for r in v['reports']):
     summary[name]={}
-    for candidate in ['aeron','vpp']:
+    for candidate in ['aeron','vpp','minimal']:
         records=[r for r in v['reports'] if r['name']==name and r['candidate']==candidate]
         assert len(records)==3
         values={key:distribution([r[role][field]/scale for r in records]) for key,(role,field,scale) in fields.items() if all(role in r for r in records)}
+        if all('consumer_result' in r for r in records):
+            values['combined_cpu_ms']=distribution([(r['producer_timing']['cpu_ns']+r['consumer_result']['cpu_ns'])/1e6 for r in records])
         for c in range(2):
-            for field in ['accepted','dropped','bytes']:
+            for field in ['accepted','dropped','bytes','prewait']:
                 values[f'channel{c}_{field}']=distribution([r['producer']['channels'][c][field] for r in records])
         values['shared_bytes']=distribution([r['producer']['shared_bytes'] for r in records])
         values['offered_records_per_second']=distribution([r['producer_timing']['count']*1e9/r['producer_timing']['wall_ns'] for r in records])
         summary[name][candidate]=values
-result={'verification_sha256':hashlib.sha256(a.verification.read_bytes()).hexdigest(),'repetitions':3,'summary':summary}
+result={'status':v['status'],'unmet_gates':v.get('unmet_gates',[]),'verification_sha256':hashlib.sha256(a.verification.read_bytes()).hexdigest(),'repetitions':3,'summary':summary}
 a.output.write_text(json.dumps(result,indent=2)+'\n')
 for name,candidates in summary.items():
     for candidate,d in candidates.items():

@@ -4,6 +4,7 @@ extern "C" {
     fn ipc_open(p:*const c_char,fd:i32,g:u64,create:i32)->*mut c_void;
     fn ipc_read(h:*mut c_void,c:u32,limit:usize,f:extern "C" fn(*const u8,usize,*mut c_void),arg:*mut c_void)->usize;
     fn ipc_wait(h:*mut c_void)->i32;
+    fn ipc_wait_race(h:*mut c_void)->i32;
     fn ipc_done(h:*mut c_void)->i32;
     fn ipc_report(h:*mut c_void,role:*const c_char);
     fn ipc_close(h:*mut c_void);
@@ -12,12 +13,12 @@ extern "C" {
 }
 #[derive(Default)]
 struct Channel {count:u64,sum:u64,xor:u64,bytes:u64,last:u64}
-struct State {generation:u64,channel:usize,channels:[Channel;2],bad:u64,latency:Vec<u64>,crash:bool}
+struct State {generation:u64,channel:usize,channels:[Channel;2],bad:u64,latency:Vec<u64>,crash:bool,boundary:bool}
 fn u32_at(b:&[u8],n:usize)->u32 {u32::from_le_bytes(b[n..n+4].try_into().unwrap())}
 fn u64_at(b:&[u8],n:usize)->u64 {u64::from_le_bytes(b[n..n+8].try_into().unwrap())}
 extern "C" fn receive(p:*const u8,n:usize,arg:*mut c_void) {
     let s=unsafe{&mut *(arg as *mut State)};
-    if ![128,512,2048].contains(&n) {s.bad+=1;return;}
+    if !(128..=2048).contains(&n) {s.bad+=1;return;}
     let b=unsafe{std::slice::from_raw_parts(p,n)};
     let seq=u64_at(b,16);let shape=if seq%10<7{0}else if seq%10<9{1}else{2};
     if s.crash {
@@ -25,7 +26,7 @@ extern "C" fn receive(p:*const u8,n:usize,arg:*mut c_void) {
         println!("{{\"role\":\"consumer_crash\",\"generation\":{},\"seen_sequence\":{}}}",s.generation,seq);
         std::process::exit(42);
     }
-    let expected=[128,512,2048][shape];
+    let expected=if s.boundary {[128,129,255,256,511,512,513,1023,1024,2047,2048][(seq as usize-1)%11]}else{[128,512,2048][shape]};
     let c=&mut s.channels[s.channel];
     if u32_at(b,0)!=1 || u32_at(b,4) as usize!=n || expected!=n ||
        u64_at(b,8)!=s.generation || seq<=c.last || u64_at(b,32)!=seq/10+1 ||
@@ -47,7 +48,7 @@ fn main() {
     if !stale.is_null(){std::process::exit(7);}
     let h=unsafe{ipc_open(path.as_ptr(),fd,generation,0)};
     if h.is_null(){std::process::exit(3);}
-    let mut s=State{generation,channel:0,channels:Default::default(),bad:0,latency:Vec::new(),crash:a[5]=="crash"};
+    let mut s=State{generation,channel:0,channels:Default::default(),bad:0,latency:Vec::new(),crash:a[5]=="crash",boundary:a[5]=="boundary"};
     let wall=unsafe{ipc_now()};let cpu=unsafe{ipc_cpu()};let mut wait_error=0;
     if a[5]=="pause" {std::thread::sleep(Duration::from_millis(700));}
     if a[5]=="stopped" {std::process::exit(0);}
@@ -62,7 +63,8 @@ fn main() {
         if n>0 {continue;}
         if finished {break;}
         if unsafe{ipc_done(h)}!=0 {finished=true;continue;}
-        if unsafe{ipc_wait(h)}!=0 {wait_error+=1;break;}
+        let rc=unsafe{if a[5]=="wake_race"{ipc_wait_race(h)}else{ipc_wait(h)}};
+        if rc!=0 {wait_error+=1;break;}
     }
     let used=unsafe{ipc_cpu()}-cpu;let elapsed=unsafe{ipc_now()}-wall;
     s.latency.sort_unstable();
