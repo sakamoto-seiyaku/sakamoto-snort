@@ -1110,6 +1110,7 @@ build_apk_only() {
   python3 "$repo_root/tools/product/hev-notices.py" --output "$payload_assets/hev-notices.txt"
   install -m 0644 "$repo_root/src/product/NOTICE.tcp" "$payload_assets/product-tcp-notices.txt"
   cat "$repo_root/third_party/rax/README.md" "$repo_root/third_party/rax/LICENSE" > "$payload_assets/product-domain-notices.txt"
+  install -m 0644 "$repo_root/third_party/rust-import/NOTICE.txt" "$payload_assets/product-import-notices.txt"
   cat "$repo_root/third_party/libprotoident/README.md" \
       "$repo_root/third_party/libprotoident/COPYING.LESSER" \
       "$repo_root/third_party/libprotoident/COPYING" > "$payload_assets/product-lpi-notices.txt"

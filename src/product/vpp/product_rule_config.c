@@ -13,7 +13,8 @@
 #define SOURCE_BYTES                                                                               \
     (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
      4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
-     20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS + 8 + 268 * SAKAMOTO_DOMAIN_MAX_ENTRIES)
+     20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS + 8 + 268 * SAKAMOTO_DOMAIN_MAX_ENTRIES + \
+     sizeof(sakamoto_product_config_metadata_t))
 struct product_rule_config {
     char *path;
     sakamoto_product_rule_config_status_t state;
@@ -58,7 +59,7 @@ static uint64_t get(const uint8_t **at, unsigned width) {
             F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE05", 8);
+    memcpy(at, "SKRULE06", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -106,6 +107,15 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
         const sakamoto_product_domain_entry_t *e = &domains->entries[i];
         put(&at, e->list, 4); put(&at, e->mode, 4); put(&at, e->length, 4);
         memcpy(at, e->name, sizeof e->name); at += sizeof e->name;
+    }
+    for (unsigned kind = 0; kind < 2; ++kind) {
+        unsigned count = kind ? domains->list_count : config->state.count;
+        const sakamoto_product_source_metadata_t *entries = kind ?
+            config->state.metadata.lists : config->state.metadata.rules;
+        for (unsigned i = 0; i < count; ++i) {
+            memcpy(at, entries[i].name, 64); at += 64;
+            memcpy(at, entries[i].source, 128); at += 128;
+        }
     }
     return (size_t)(at - bytes);
 }
@@ -162,6 +172,54 @@ static int same_content(const sakamoto_product_direct_rule_t *a,
         memcmp(a->expression, b->expression, 64)) return 0;
     return memcmp(a->source_address, b->source_address, 16) == 0 &&
            memcmp(a->destination_address, b->destination_address, 16) == 0;
+}
+static int same_version_content(const product_rule_config_t *old,
+                                const product_rule_config_t *next,
+                                const sakamoto_product_direct_rule_t *rule,
+                                const sakamoto_product_direct_rule_t *prior) {
+    return same_content(rule, prior) &&
+        !memcmp(&next->state.metadata.rules[rule-next->state.rules],
+                &old->state.metadata.rules[prior-old->state.rules],
+                sizeof(sakamoto_product_source_metadata_t));
+}
+
+/* Bounded UTF-8 source text; prohibit controls, overlong forms, surrogates,
+ * unterminated strings and noncanonical bytes after the terminator. */
+static int valid_text(const uint8_t *text, size_t capacity) {
+    size_t length = 0;
+    while (length < capacity && text[length]) ++length;
+    if (length == capacity) return 0;
+    for (size_t i = length; i < capacity; ++i) if (text[i]) return 0;
+    for (size_t i = 0; i < length;) {
+        uint32_t value = text[i++], minimum = 0;
+        unsigned continuation = 0;
+        if (value >= 0xc2 && value <= 0xdf) { value &= 31; minimum=0x80; continuation=1; }
+        else if (value >= 0xe0 && value <= 0xef) { value &= 15; minimum=0x800; continuation=2; }
+        else if (value >= 0xf0 && value <= 0xf4) { value &= 7; minimum=0x10000; continuation=3; }
+        else if (value >= 0x80) return 0;
+        if (i + continuation > length) return 0;
+        for (unsigned j = 0; j < continuation; ++j) {
+            if ((text[i] & 0xc0) != 0x80) return 0;
+            value=(value<<6)|(text[i++]&63);
+        }
+        if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) ||
+            value < 0x20 || (value >= 0x7f && value <= 0x9f)) return 0;
+    }
+    return 1;
+}
+static int valid_metadata(const sakamoto_product_rule_config_status_t *state) {
+    const sakamoto_product_source_metadata_t empty = {0};
+    for (unsigned kind = 0; kind < 2; ++kind) {
+        unsigned count = kind ? state->domains.list_count : state->count;
+        unsigned capacity = kind ? SAKAMOTO_DOMAIN_MAX_LISTS : SAKAMOTO_RULE_CONFIG_MAX_RULES;
+        if (count > capacity) return 0;
+        const sakamoto_product_source_metadata_t *entries = kind ?
+            state->metadata.lists : state->metadata.rules;
+        for (unsigned i = 0; i < capacity; ++i)
+            if (i < count ? (!valid_text(entries[i].name, 64) || !valid_text(entries[i].source, 128)) :
+                memcmp(&entries[i], &empty, sizeof empty) != 0) return 0;
+    }
+    return 1;
 }
 static int retained_index(const product_rule_config_t *c, uint64_t version) {
     for (unsigned i = 0; i < c->retained_count; ++i)
@@ -337,12 +395,15 @@ static uint32_t validate_domains(sakamoto_product_rule_config_status_t *state) {
         (UINT64_C(1) << state->domains.list_count) - 1;
     for (unsigned i = 0; i < state->count; ++i)
         if (product_static_expression_domain_references(state->rules[i].expression,
-                state->rules[i].expression_length) & ~declared)
+                state->rules[i].expression_length) & ~declared) {
+            state->error_index = i;
             return SAKAMOTO_RULE_CONFIG_REFERENCE;
+        }
     return 0;
 }
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    int v5 = length >= 8 && !memcmp(bytes, "SKRULE05", 8);
+    int v6 = length >= 8 && !memcmp(bytes, "SKRULE06", 8);
+    int v5 = v6 || (length >= 8 && !memcmp(bytes, "SKRULE05", 8));
     int v4 = v5 || (length >= 8 && !memcmp(bytes, "SKRULE04", 8));
     int v3 = v4 || (length >= 8 && !memcmp(bytes, "SKRULE03", 8));
     if (length < 8 || (!v3 && memcmp(bytes, "SKRULE02", 8)))
@@ -423,7 +484,7 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         sakamoto_product_domains_t *domains = &c->state.domains;
         domains->list_count = get(&at, 4); domains->entry_count = get(&at, 4);
         if (domains->entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES ||
-            (size_t)(bytes + length - at) != 268U * domains->entry_count)
+            (size_t)(bytes + length - at) < 268U * domains->entry_count)
             return SAKAMOTO_RULE_CONFIG_INVALID;
         for (unsigned i = 0; i < domains->entry_count; ++i) {
             sakamoto_product_domain_entry_t *e = &domains->entries[i];
@@ -433,6 +494,20 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
     }
     uint32_t domain_error = validate_domains(&c->state);
     if (domain_error) return domain_error;
+    if (v6) {
+        size_t metadata_bytes = 192U * (c->state.count + c->state.domains.list_count);
+        if ((size_t)(bytes + length - at) != metadata_bytes) return SAKAMOTO_RULE_CONFIG_INVALID;
+        for (unsigned kind = 0; kind < 2; ++kind) {
+            unsigned count = kind ? c->state.domains.list_count : c->state.count;
+            sakamoto_product_source_metadata_t *entries = kind ?
+                c->state.metadata.lists : c->state.metadata.rules;
+            for (unsigned i = 0; i < count; ++i) {
+                memcpy(entries[i].name, at, 64); at += 64;
+                memcpy(entries[i].source, at, 128); at += 128;
+            }
+        }
+        if (!valid_metadata(&c->state)) return SAKAMOTO_RULE_CONFIG_INVALID;
+    }
     if (at != bytes + length)
         return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.saved_revision = revision;
@@ -447,7 +522,7 @@ static uint32_t load_source(product_rule_config_t *c) {
     uint8_t *bytes = malloc(SOURCE_BYTES);
     size_t length = 0;
     int valid = bytes && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0 &&
-                st.st_size <= SOURCE_BYTES;
+                (uint64_t)st.st_size <= SOURCE_BYTES;
     while (valid && length < (size_t)st.st_size) {
         ssize_t n = read(fd, bytes + length, (size_t)st.st_size - length);
         if (n < 0 && errno == EINTR)
@@ -707,7 +782,7 @@ static uint32_t assign_version(const product_rule_config_t *old, product_rule_co
         if (r->version || !prior || prior->version != r->base_version)
             return SAKAMOTO_RULE_CONFIG_CONFLICT;
         r->version = prior->version;
-        if (!same_content(r, prior)) {
+        if (!same_version_content(old, next, r, prior)) {
             if ((r->version & 65535) == 65535)
                 return SAKAMOTO_RULE_CONFIG_EXHAUSTED;
             ++r->version;
@@ -720,7 +795,7 @@ static uint32_t assign_version(const product_rule_config_t *old, product_rule_co
         const sakamoto_product_direct_rule_t *prior = current_rule(old, r->version);
         if (index >= 0 &&
             (r->version < old->retained[index] ||
-             (r->version == old->retained[index] && (!prior || !same_content(r, prior)))))
+             (r->version == old->retained[index] && (!prior || !same_version_content(old, next, r, prior)))))
             return SAKAMOTO_RULE_CONFIG_CONFLICT;
     } else {
         for (unsigned attempt = 0; attempt < 32; ++attempt) {
@@ -758,6 +833,10 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
          request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL &&
          request->operation != SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE))
         return SAKAMOTO_RULE_CONFIG_INVALID;
+    static const sakamoto_product_config_metadata_t empty_metadata = {0};
+    if (request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL &&
+        memcmp(&request->metadata, &empty_metadata, sizeof empty_metadata))
+        return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.error_index = UINT32_MAX;
     if (request->expected_saved_revision != c->state.saved_revision)
         return SAKAMOTO_RULE_CONFIG_CONFLICT;
@@ -768,6 +847,7 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     memset(next->state.rules, 0, sizeof(next->state.rules));
     memset(&next->state.graph, 0, sizeof(next->state.graph));
     memset(&next->state.domains, 0, sizeof(next->state.domains));
+    memset(&next->state.metadata, 0, sizeof(next->state.metadata));
     uint32_t result = SAKAMOTO_RULE_CONFIG_INVALID;
     if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
         const sakamoto_product_config_rule_t *r = &request->rule;
@@ -781,8 +861,10 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
         next->state.count = r->present;
         if (r->present) {
             legacy_rule(&next->state.rules[0], r);
-            if (c->state.count)
+            if (c->state.count) {
                 next->state.rules[0].base_version = c->state.rules[0].version;
+                next->state.metadata.rules[0] = c->state.metadata.rules[0];
+            }
         } else {
             sakamoto_product_config_rule_t empty = {0};
             if (memcmp(r, &empty, sizeof(*r)))
@@ -809,6 +891,8 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
             if (next->state.count == SAKAMOTO_RULE_CONFIG_MAX_RULES) {
                 result = SAKAMOTO_RULE_CONFIG_LIMIT; goto done;
             }
+            memset(&next->state.metadata.rules[next->state.count], 0,
+                   sizeof next->state.metadata.rules[0]);
             next->state.rules[next->state.count++] = target;
         } else if (request->rules[0].action == 1 && found < next->state.count) {
             for (unsigned i = 0; i < next->state.graph.edge_count; ++i) {
@@ -825,13 +909,19 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
             }
             memmove(&next->state.rules[found], &next->state.rules[found+1],
                     (--next->state.count - found) * sizeof(target));
+            memmove(&next->state.metadata.rules[found], &next->state.metadata.rules[found+1],
+                    (next->state.count - found) * sizeof next->state.metadata.rules[0]);
+            memset(&next->state.metadata.rules[next->state.count], 0,
+                   sizeof next->state.metadata.rules[0]);
         }
     } else {
         next->state.graph = request->graph;
         next->state.domains = request->domains;
+        next->state.metadata = request->metadata;
         next->state.count = request->count;
         memcpy(next->state.rules, request->rules, request->count * sizeof(request->rules[0]));
     }
+    if (!valid_metadata(&next->state)) goto done;
     for (unsigned i = 0; i < next->state.count; ++i) {
         sakamoto_product_direct_rule_t *r = &next->state.rules[i];
         c->state.error_index = i;
@@ -851,12 +941,15 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     c->state.error_index = UINT32_MAX;
     result = validate_domains(&next->state);
     if (!result) result = validate_graph(&next->state);
-    if (result)
+    if (result) {
+        c->state.error_index = next->state.error_index;
         goto done;
+    }
     c->state.error_index = UINT32_MAX;
     next->state.error_index = UINT32_MAX;
     int unchanged =
         next->state.count == c->state.count &&
+        !memcmp(&next->state.metadata, &c->state.metadata, sizeof(next->state.metadata)) &&
         !memcmp(&next->state.domains, &c->state.domains, sizeof(next->state.domains)) &&
         next->state.graph.group_count == c->state.graph.group_count &&
         next->state.graph.edge_count == c->state.graph.edge_count &&

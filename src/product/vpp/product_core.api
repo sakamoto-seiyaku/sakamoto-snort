@@ -360,6 +360,14 @@ typedef product_domains {
     u32 list_count; u32 entry_count;
     vl_api_product_domain_entry_t entries[256];
 };
+typedef product_source_metadata {
+    u8 name[64];
+    u8 source[128];
+};
+typedef product_config_metadata {
+    vl_api_product_source_metadata_t rules[256];
+    vl_api_product_source_metadata_t lists[64];
+};
 
 define product_core_rule_config {
     u32 client_index;
@@ -374,6 +382,7 @@ define product_core_rule_config {
     vl_api_product_direct_rule_t rules[256];
     vl_api_product_rule_graph_t graph;
     vl_api_product_domains_t domains;
+    vl_api_product_config_metadata_t metadata;
 };
 
 define product_core_rule_config_reply {
@@ -396,6 +405,7 @@ define product_core_rule_config_reply {
     u64 active_versions[256];
     vl_api_product_rule_graph_t graph;
     vl_api_product_domains_t domains;
+    vl_api_product_config_metadata_t metadata;
 };
 
 /* Identity-fenced current SNI facts; no retained pointers or packet bytes. */

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 import sys
 sys.path.insert(0,str(ROOT/"tests/device/helpers"))
 from t18_domain_policy import adapt as domain_policy
+from t19_import_policy import document as import_document, roundtrip as import_roundtrip, failure_cases as import_failures
 parser = argparse.ArgumentParser()
 parser.add_argument('--artifact', type=Path, required=True)
 parser.add_argument('--stage', type=Path, required=True)
@@ -25,6 +26,7 @@ parser.add_argument('--python',default='python3')
 
 
 parser.add_argument("--domain-policy",action="store_true")
+parser.add_argument("--import-policy",action="store_true")
 parser.add_argument("--domain-overlap",action="store_true",
                     help="hold a domain-bearing packet while two complete snapshots publish")
 parser.add_argument("--persistent-helper",type=Path)
@@ -32,6 +34,7 @@ parser.add_argument("--persistent-build",type=Path)
 args = parser.parse_args()
 assert not args.domain_overlap or args.domain_policy
 assert not args.domain_overlap or (args.persistent_helper and args.persistent_build)
+assert not args.import_policy or (args.domain_policy and not args.domain_overlap)
 
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -93,6 +96,11 @@ if args.domain_policy:
     helper_path=ROOT/'tests/device/helpers/t18_domain_policy.py'
     result['domain_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
     save('domain-policy.py',helper_path.read_text())
+if args.import_policy:
+    result['import_policy'] = True
+    helper_path=ROOT/'tests/device/helpers/t19_import_policy.py'
+    result['import_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    save('import-policy.py',helper_path.read_text())
 
 save('environment.txt', command('uname','-a')+command('id')+'uid_map='+' '.join(uid_map)
      +'\nnetns='+os.readlink('/proc/self/ns/net')+'\n')
@@ -172,9 +180,40 @@ def stop(label):
             process=None
     if errors:raise RuntimeError('runtime cleanup: '+repr(errors))
 
+def import_call(label, document, expected):
+    input_name = label+'-import-input.json' if document is not None else None
+    if document is not None:
+        save(input_name,json.dumps(document,ensure_ascii=False,indent=2)+'\n')
+        response=api(label+'-import-transport','rule-import',expected,output/input_name)
+    else:
+        response=api(label+'-import-transport','rule-export')
+    raw=response['import.response']; parsed=json.loads(raw)
+    reply_name=label+'-import-reply.json';save(reply_name,raw+'\n')
+    result.setdefault('imports',[]).append(dict(label=label,profile='root',generation=generation,
+        expected_revision=expected,input=input_name,reply=reply_name,
+        input_sha256=hashlib.sha256((output/input_name).read_bytes()).hexdigest() if input_name else None,
+        reply_sha256=hashlib.sha256((output/reply_name).read_bytes()).hexdigest()))
+    return parsed
+
+def import_save_failure(call):
+    held=config_dir.with_name(config_dir.name+'-t19-held')
+    config_dir.rename(held)
+    try:return call()
+    finally:held.rename(config_dir)
+
 def submit(label, prior, lines):
     request=output/(label+'-request.txt');request.write_text('\n'.join(lines)+'\n')
-    status=api(label+'-apply','rule-replace-all',prior['config.saved_revision'],request)
+    if args.import_policy:
+        imported=import_call(label,import_document(lines),int(prior['config.saved_revision']))
+        assert imported['stage']=='vpp' and imported['result']==0,imported
+        imported=import_roundtrip(import_call,label,imported)
+        if not result.get('import_failures_checked'):
+            imported=import_failures(import_call,'t19-root-failures',imported,import_save_failure)
+            result['import_failures_checked']=True
+        status=api(label+'-apply','rule-query')
+        assert int(status['config.saved_revision'])==imported['saved_revision']
+    else:
+        status=api(label+'-apply','rule-replace-all',prior['config.saved_revision'],request)
     (output/(label+'-source.conf')).write_bytes((config_dir/'rules.conf').read_bytes())
     return status
 

@@ -125,6 +125,35 @@ impl Default for Domains {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceMetadata {
+    pub name: [u8; 64],
+    pub source: [u8; 128],
+}
+impl Default for SourceMetadata {
+    fn default() -> Self {
+        Self {
+            name: [0; 64],
+            source: [0; 128],
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfigMetadata {
+    pub rules: [SourceMetadata; 256],
+    pub lists: [SourceMetadata; 64],
+}
+impl Default for ConfigMetadata {
+    fn default() -> Self {
+        Self {
+            rules: [SourceMetadata::default(); 256],
+            lists: [SourceMetadata::default(); 64],
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RuleConfigRequest {
     pub schema: u32,
@@ -136,6 +165,7 @@ pub struct RuleConfigRequest {
     pub rules: [DirectRule; MAX_CONFIG_RULES],
     pub graph: RuleGraph,
     pub domains: Domains,
+    pub metadata: ConfigMetadata,
 }
 
 #[repr(C)]
@@ -159,6 +189,7 @@ pub struct RuleConfigStatus {
     pub active_versions: [u64; MAX_CONFIG_RULES],
     pub graph: RuleGraph,
     pub domains: Domains,
+    pub metadata: ConfigMetadata,
 }
 
 impl DirectRule {
@@ -241,6 +272,18 @@ impl DirectRule {
 }
 
 impl RuleConfigRequest {
+    /// Allocate the bounded complete source on the heap without a large
+    /// temporary on a JNI or caller thread's stack.
+    pub fn boxed() -> Box<Self> {
+        let mut storage = Box::<Self>::new_uninit();
+        // Every field is an integer or a fixed array of integer-only structs.
+        let mut request = unsafe {
+            storage.as_mut_ptr().write_bytes(0, 1);
+            storage.assume_init()
+        };
+        request.schema = 1;
+        request
+    }
     /// Append one transient diagnostic input line; VPP validates graph semantics.
     pub fn push_line(&mut self, line: &str) -> Result<(), &'static str> {
         let f: Vec<_> = line.split_whitespace().collect();
@@ -333,6 +376,19 @@ impl RuleConfigRequest {
     }
 }
 
+impl RuleConfigStatus {
+    pub fn boxed() -> Box<Self> {
+        let mut storage = Box::<Self>::new_uninit();
+        // Every field is an integer or a fixed array of integer-only structs.
+        let mut status = unsafe {
+            storage.as_mut_ptr().write_bytes(0, 1);
+            storage.assume_init()
+        };
+        status.error_index = u32::MAX;
+        status
+    }
+}
+
 impl Default for RuleConfigRequest {
     fn default() -> Self {
         Self {
@@ -345,6 +401,7 @@ impl Default for RuleConfigRequest {
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
             graph: RuleGraph::default(),
             domains: Domains::default(),
+            metadata: ConfigMetadata::default(),
         }
     }
 }
@@ -368,6 +425,7 @@ impl Default for RuleConfigStatus {
             rules: [DirectRule::default(); MAX_CONFIG_RULES],
             graph: RuleGraph::default(),
             domains: Domains::default(),
+            metadata: ConfigMetadata::default(),
             active_versions: [0; MAX_CONFIG_RULES],
         }
     }
@@ -378,17 +436,24 @@ impl ProductCore {
         &mut self,
         request: &RuleConfigRequest,
     ) -> Result<RuleConfigStatus, ProductError> {
+        self.rule_config_boxed(request).map(|status| *status)
+    }
+
+    pub fn rule_config_boxed(
+        &mut self,
+        request: &RuleConfigRequest,
+    ) -> Result<Box<RuleConfigStatus>, ProductError> {
         let session = self.session.ok_or(ProductError::Native {
             code: ErrorCode::Disconnected,
             status: Status::empty(self.generation),
         })?;
-        let mut status = RuleConfigStatus::default();
+        let mut status = RuleConfigStatus::boxed();
         let code = unsafe {
             ffi::sakamoto_product_session_rule_config(
                 session.as_ptr(),
                 self.generation,
                 request,
-                &mut status,
+                &mut *status,
             )
         };
         if code != 0 {
@@ -458,11 +523,11 @@ mod tests {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
         assert_eq!(
             std::mem::size_of::<RuleConfigRequest>(),
-            64 + 184 * MAX_CONFIG_RULES + 8976 + 68616
+            64 + 184 * MAX_CONFIG_RULES + 8976 + 68616 + 61440
         );
         assert_eq!(
             std::mem::size_of::<RuleConfigStatus>(),
-            112 + 192 * MAX_CONFIG_RULES + 8976 + 68616
+            112 + 192 * MAX_CONFIG_RULES + 8976 + 68616 + 61440
         );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,

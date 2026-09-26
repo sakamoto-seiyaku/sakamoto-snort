@@ -84,6 +84,17 @@ typedef struct {
     sakamoto_product_rule_binding_t bindings[SAKAMOTO_RULE_CONFIG_MAX_BINDINGS];
 } sakamoto_product_rule_graph_t;
 
+/* UTF-8 descriptive source metadata. NUL terminated with zero-filled tails;
+ * these are persisted source fields, never packet-path strings. */
+typedef struct {
+    uint8_t name[64];
+    uint8_t source[128];
+} sakamoto_product_source_metadata_t;
+typedef struct {
+    sakamoto_product_source_metadata_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
+    sakamoto_product_source_metadata_t lists[SAKAMOTO_DOMAIN_MAX_LISTS];
+} sakamoto_product_config_metadata_t;
+
 typedef struct {
     uint32_t schema;
     uint32_t operation;
@@ -93,6 +104,7 @@ typedef struct {
     sakamoto_product_direct_rule_t rules[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     sakamoto_product_rule_graph_t graph;
     sakamoto_product_domains_t domains;
+    sakamoto_product_config_metadata_t metadata;
 } sakamoto_product_rule_config_request_t;
 
 typedef struct {
@@ -111,6 +123,7 @@ typedef struct {
     uint64_t active_versions[SAKAMOTO_RULE_CONFIG_MAX_RULES];
     sakamoto_product_rule_graph_t graph;
     sakamoto_product_domains_t domains;
+    sakamoto_product_config_metadata_t metadata;
 } sakamoto_product_rule_config_status_t;
 
 #endif

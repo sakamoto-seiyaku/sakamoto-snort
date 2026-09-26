@@ -8,7 +8,36 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+JNIEXPORT jbyteArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleImport(
+    JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation,
+    jlong expected_saved, jbyteArray document) {
+    (void)type;
+    jsize length = document ? (*env)->GetArrayLength(env, document) : 0;
+    if (!handle || generation <= 0 || operation < 0 || operation > 1 ||
+        (uint32_t)length > SAKAMOTO_RULE_IMPORT_MAX_BYTES || (operation == 0 && length)) return NULL;
+    uint8_t *input = length ? malloc((size_t)length) : NULL;
+    uint8_t *reply = malloc(SAKAMOTO_RULE_IMPORT_REPLY_BYTES);
+    if ((length && !input) || !reply) { free(input); free(reply); return NULL; }
+    if (length) (*env)->GetByteArrayRegion(env, document, 0, length, (jbyte *)input);
+    if ((*env)->ExceptionCheck(env)) { free(input); free(reply); return NULL; }
+    uint32_t reply_length = 0;
+    uint32_t code = sakamoto_product_core_rule_import(
+        (sakamoto_product_core_handle_t *)(uintptr_t)handle, (uint64_t)generation,
+        (uint32_t)operation, (uint64_t)expected_saved,
+        (sakamoto_product_bytes_t){.data=input,.length=(uint32_t)length},
+        reply, SAKAMOTO_RULE_IMPORT_REPLY_BYTES, &reply_length);
+    free(input);
+    if (code) reply_length = (uint32_t)snprintf((char *)reply, SAKAMOTO_RULE_IMPORT_REPLY_BYTES,
+        "{\"stage\":\"transport\",\"code\":%" PRIu32 ",\"error\":\"query saved state before retrying\"}", code);
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)reply_length);
+    if (result) (*env)->SetByteArrayRegion(env, result, 0, (jsize)reply_length, (jbyte *)reply);
+    free(reply);
+    return result;
+}
 
 JNIEXPORT jlongArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleConfig (

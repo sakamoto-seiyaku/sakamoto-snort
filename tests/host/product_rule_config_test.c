@@ -1144,7 +1144,92 @@ static void large_plan_save_failure(void) {
     product_rule_config_close(config); unlink(path); rmdir(directory);
 }
 
+static void imported_metadata_roundtrip_and_identity(void) {
+    char directory[] = "/tmp/sakamoto-import-config-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path, sizeof path, "%s/rules", directory);
+    product_rule_config_t *config = product_rule_config_open(path);
+    assert(config);
+    runtime_t runtime = {0};
+    sakamoto_product_rule_config_status_t *status = calloc(1, sizeof *status);
+    sakamoto_product_rule_config_request_t *request = calloc(1, sizeof *request);
+    assert(status && request);
+    product_rule_config_query(config, status);
+    request->schema=1; request->operation=2;
+    request->expected_saved_revision=status->saved_revision; request->count=1;
+    request->rules[0]=(sakamoto_product_direct_rule_t){
+        .version=UINT64_C(0xfedcba9876540001), .uid=12345,
+        .network_context=UINT32_MAX,.ifindex=UINT32_MAX,.action=2,
+        .source_port_last=65535,.destination_port_last=65535,
+        .expression_length=2,.expression={17,0}};
+    request->domains.list_count=1; request->domains.entry_count=1;
+    request->domains.entries[0]=(sakamoto_product_domain_entry_t){
+        .mode=1,.length=21,.name="xn--bcher-kva.example"};
+    strcpy((char *)request->metadata.rules[0].name,"Imported TLS rule");
+    strcpy((char *)request->metadata.rules[0].source,"local sample.json");
+    strcpy((char *)request->metadata.lists[0].name,"B\xc3\xbc" "cher list");
+    strcpy((char *)request->metadata.lists[0].source,"domain sample.txt");
+    assert(product_rule_config_replace(config,request,publish,&runtime)==0);
+    product_rule_config_query(config,status);
+    assert(!memcmp(&status->metadata,&request->metadata,sizeof status->metadata));
+    uint64_t revision=status->saved_revision;
+    assert(domain_winner(&runtime,"x.xn--bcher-kva.example")==UINT64_C(0xfedcba9876540001));
+    product_rule_config_close(config);
+    config=product_rule_config_open(path); assert(config);
+    product_rule_config_query(config,status);
+    assert(status->saved_revision==revision && !status->save_error);
+    assert(!memcmp(&status->metadata,&request->metadata,sizeof status->metadata));
+    request->expected_saved_revision=revision;
+    assert(product_rule_config_replace(config,request,publish,&runtime)==0);
+    product_rule_config_query(config,status);
+    assert(status->saved_revision==revision);
+    memset(request->metadata.rules[0].name,0,sizeof request->metadata.rules[0].name);
+    strcpy((char *)request->metadata.rules[0].name,"Changed name");
+    unsigned publications=runtime.publications;
+    assert(product_rule_config_replace(config,request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_CONFLICT);
+    product_rule_config_query(config,status);
+    assert(status->saved_revision==revision && runtime.publications==publications);
+    assert(!strcmp((char *)status->metadata.rules[0].name,"Imported TLS rule"));
+    request->rules[0].base_version=request->rules[0].version; request->rules[0].version=0;
+    assert(product_rule_config_replace(config,request,publish,&runtime)==0);
+    product_rule_config_query(config,status);
+    assert(status->rules[0].version==UINT64_C(0xfedcba9876540002));
+    assert(!strcmp((char *)status->metadata.rules[0].name,"Changed name"));
+    request->rules[0]=status->rules[0]; request->expected_saved_revision=status->saved_revision;
+    request->metadata=status->metadata; revision=status->saved_revision;
+    publications=runtime.publications;
+    static const uint8_t invalid[][8] = {
+        {0xc0,0xaf}, {0xed,0xa0,0x80}, {0xf4,0x90,0x80,0x80}, {0xe2,0x82},
+        {'a','\n'}, {0xc2,0x85}, {'a',0,'b'}
+    };
+    for (unsigned i=0; i<sizeof invalid/sizeof invalid[0]; ++i) {
+        request->metadata=status->metadata;
+        memset(request->metadata.rules[0].name,0,64);
+        memcpy(request->metadata.rules[0].name,invalid[i],sizeof invalid[i]);
+        assert(product_rule_config_replace(config,request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+        product_rule_config_query(config,status);
+        assert(status->saved_revision==revision && status->active_revision==revision);
+        assert(runtime.publications==publications);
+    }
+    request->metadata=status->metadata; memset(request->metadata.rules[0].name,'x',64);
+    assert(product_rule_config_replace(config,request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    request->metadata=status->metadata; request->metadata.lists[1].name[0]='x';
+    assert(product_rule_config_replace(config,request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    request->metadata=status->metadata; request->metadata.rules[0].source[0]='X';
+    assert(product_rule_config_replace(config,request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_CONFLICT);
+    request->metadata=status->metadata; request->metadata.lists[0].name[0]='X';
+    assert(product_rule_config_replace(config,request,publish,&runtime)==0);
+    product_rule_config_query(config,status);
+    assert(status->saved_revision==revision+1 && status->active_revision==revision+1);
+    assert(status->rules[0].version==UINT64_C(0xfedcba9876540002));
+    assert(domain_winner(&runtime,"x.xn--bcher-kva.example")==UINT64_C(0xfedcba9876540002));
+    assert(!memcmp(&status->metadata,&request->metadata,sizeof status->metadata));
+    product_rule_config_close(config); product_domains_destroy(runtime.domains);
+    free(status); free(request); unlink(path); rmdir(directory);
+}
+
 int main(void) {
+    imported_metadata_roundtrip_and_identity();
     domain_saved_active_failure_retry();
     large_plan_save_failure();
     ct_publication_failure();

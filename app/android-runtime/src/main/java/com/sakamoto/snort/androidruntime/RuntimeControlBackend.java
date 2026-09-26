@@ -233,6 +233,15 @@ public final class RuntimeControlBackend {
                 .putExtra("completeRules", rules));
     }
 
+    public void ruleImport(Context context, String nonce, int operation, long expectedSaved) {
+        context.startService(new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_RULE_IMPORT)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_RULE_IMPORT)
+                .putExtra("ruleImportNonce", nonce).putExtra("ruleOperation", operation)
+                .putExtra("expectedSavedRevision", expectedSaved));
+    }
+
     public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {
         context.startService(new Intent(context, RuntimeService.class)
                 .setAction(RuntimeControlProtocol.ACTION_RULE_CONFIG)

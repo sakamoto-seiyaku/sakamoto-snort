@@ -312,11 +312,11 @@ vapi_error_e vapi_product_core_sni_query(vapi_ctx_t,vapi_msg_product_core_sni_qu
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
-    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } payload;
+    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; } payload;
 } vapi_msg_product_core_rule_config;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
   saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
-  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; } vapi_payload_product_core_rule_config_reply;
+  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; } vapi_payload_product_core_rule_config_reply;
 typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
   vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
@@ -591,7 +591,11 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
       || message->payload.domains.list_count != 64 || message->payload.domains.entry_count != 1
       || message->payload.domains.entries[0].list != 63 || message->payload.domains.entries[0].mode != 1
       || message->payload.domains.entries[0].length != 11
-      || memcmp(message->payload.domains.entries[0].name,"example.com",12))) abort();
+      || memcmp(message->payload.domains.entries[0].name,"example.com",12)
+      || strcmp((char *)message->payload.metadata.rules[1].name,"Imported rule")
+      || strcmp((char *)message->payload.metadata.rules[1].source,"policy.json")
+      || strcmp((char *)message->payload.metadata.lists[63].name,"Imported list")
+      || strcmp((char *)message->payload.metadata.lists[63].source,"domains.txt"))) abort();
   vapi_payload_product_core_rule_config_reply reply = {
     .generation = message->payload.generation + (mode == 5),
     .saved_revision = 9, .active_revision = mode == 4 ? 8 : 9,
@@ -602,6 +606,7 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
   };
   reply.graph = message->payload.graph;
   reply.domains = message->payload.domains;
+  reply.metadata = message->payload.metadata;
   reply.count = message->payload.count;
   reply.active_count = message->payload.count;
   memcpy (reply.rules, message->payload.rules, sizeof (reply.rules));
@@ -1207,6 +1212,10 @@ main (void)
       request.graph = (sakamoto_product_rule_graph_t){.group_count=1,.groups={10},.edge_count=1,.edges={{10,1,1}},.binding_count=1,.bindings={{7,12345,2,10,1}}};
       request.domains = (sakamoto_product_domains_t){.list_count=64,.entry_count=1,
         .entries={{.list=63,.mode=1,.length=11,.name="example.com"}}};
+      strcpy((char *)request.metadata.rules[1].name,"Imported rule");
+      strcpy((char *)request.metadata.rules[1].source,"policy.json");
+      strcpy((char *)request.metadata.lists[63].name,"Imported list");
+      strcpy((char *)request.metadata.lists[63].source,"domains.txt");
       request.count = 2;
       request.rules[1] = (sakamoto_product_direct_rule_t) {
         .version = UINT64_C(0xfedcba9876540002), .uid = 12345, .network_context = 3, .ifindex = 7,
@@ -1232,7 +1241,8 @@ main (void)
         || config.graph.group_count != 1 || config.graph.groups[0] != 10
         || config.graph.edge_count != 1 || config.graph.edges[0].target != 1
         || config.graph.binding_count != 1 || config.graph.bindings[0].uid != 12345 || config.graph.bindings[0].mode != 1
-        || memcmp(&config.domains,&request.domains,sizeof config.domains))) return 1;
+        || memcmp(&config.domains,&request.domains,sizeof config.domains)
+        || memcmp(&config.metadata,&request.metadata,sizeof config.metadata))) return 1;
     if ((mode == 1 || mode == 2 || mode == 3 || mode == 5 || mode == 6 || mode >= 8)
         && expect_retired(session)) return 1;
   }

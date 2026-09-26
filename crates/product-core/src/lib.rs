@@ -5,10 +5,12 @@ mod sni;
 pub use sni::SniStatus;
 mod ffi;
 mod rule_config;
+mod rule_import;
 pub use rule_config::{
     ConfigRule, DirectRule, DomainEntry, Domains, RuleConfigRequest, RuleConfigStatus,
     MAX_CONFIG_RULES,
 };
+pub use rule_import::{export_rule_config, prepare_rule_import};
 mod session;
 
 pub use ffi::{

@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 import sys
 sys.path.insert(0,str(ROOT/"tests/device/helpers"))
 from t18_domain_policy import adapt as domain_policy
+from t19_import_policy import document as import_document, roundtrip as import_roundtrip, failure_cases as import_failures
 PKG = 'com.sakamoto.snort.androidruntime'
 SERIAL = None
 BASE = '/data/user/0/'+PKG+'/files/profiles/root/vpp'
@@ -29,7 +30,9 @@ p.add_argument('--python',default='python3')
 p.add_argument('--profile-scope',choices=['both','root','vpn'],default='both')
 
 p.add_argument("--domain-policy",action="store_true")
+p.add_argument("--import-policy",action="store_true")
 args = p.parse_args()
+assert not args.import_policy or args.domain_policy
 
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
 assert SERIAL and SERIAL != 'unknown'
@@ -50,6 +53,11 @@ if args.domain_policy:
     helper_path=ROOT/'tests/device/helpers/t18_domain_policy.py'
     result['domain_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
     save('domain-policy.py',helper_path.read_text())
+if args.import_policy:
+    result['import_policy'] = True
+    helper_path=ROOT/'tests/device/helpers/t19_import_policy.py'
+    result['import_policy_sha256']=hashlib.sha256(helper_path.read_bytes()).hexdigest()
+    save('import-policy.py',helper_path.read_text())
 
 def adb(*argv, check=True, timeout=35):
     # Only replay idempotent reads/captures after the observed WSL launch error.
@@ -172,6 +180,44 @@ def stop(label,profile):
     assert root('test ! -d /proc/'+str(life['pid'])+' && echo absent').strip()=='absent'
     life['process_absent']=True
     source_file(label+'-stopped')
+def import_call(label,document,expected):
+    nonce='t19-'+str(time.time_ns())
+    input_name=label+'-import-input.json' if document is not None else None
+    remote='/data/local/tmp/'+nonce+'.json'
+    app_input='files/product-import/'+nonce+'.json'
+    app_reply='files/product-state/rule-import-'+nonce+'.json'
+    try:
+        if document is not None:
+            save(input_name,json.dumps(document,ensure_ascii=False,indent=2)+'\n')
+            adb('push',output/input_name,remote)
+            adb('shell','run-as',PKG,'mkdir','-p','files/product-import')
+            adb('shell','run-as',PKG,'cp',remote,app_input)
+        save(label+'-import-action.txt',action('--es','ruleImportNonce',nonce,
+            '--ei','ruleOperation',1 if document is not None else 0,'--el','expectedSavedRevision',expected))
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            raw=app(app_reply,check=False)
+            try:parsed=json.loads(raw)
+            except json.JSONDecodeError:parsed=None
+            if parsed is not None:break
+            time.sleep(.1)
+        else:raise RuntimeError('import reply deadline '+label)
+        reply_name=label+'-import-reply.json';save(reply_name,raw)
+        result.setdefault('imports',[]).append(dict(label=label,profile=current_profile,
+            generation=result['lifetimes'][-1]['generation'],expected_revision=expected,
+            nonce=nonce,input=input_name,reply=reply_name,
+            input_sha256=digest(output/input_name) if input_name else None,reply_sha256=digest(output/reply_name)))
+        return parsed
+    finally:
+        adb('shell','rm','-f',remote,check=False)
+        adb('shell','run-as',PKG,'rm','-f',app_input,app_reply,check=False)
+
+def import_save_failure(call):
+    original='files/rule-configuration';held=original+'-t19-'+str(time.time_ns())
+    adb('shell','run-as',PKG,'mv',original,held)
+    try:return call()
+    finally:adb('shell','run-as',PKG,'mv',held,original)
+
 def configure(label,prior,protocol,target_id,mode=1,variant="full"):
     expression='1001'
     versions=[prior.get(f'rule.{i}.version','0') for i in range(3)]
@@ -182,9 +228,21 @@ def configure(label,prior,protocol,target_id,mode=1,variant="full"):
            f'bind 1 {uid} 2 10 {mode}',f'bind 2 {uid} 2 20 {mode}']
     if args.domain_policy: lines=domain_policy(lines,variant)
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
-    save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
-    old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
-    status=wait_config(label+'-apply',lambda c:c.get('queryElapsedMillis') not in (None,old))
+    if args.import_policy:
+        imported=import_call(label,import_document(lines),int(prior['savedRevision']))
+        assert imported['stage']=='vpp' and imported['result']==0,imported
+        imported=import_roundtrip(import_call,label,imported)
+        checked=result.setdefault('import_failures_checked',[])
+        if current_profile not in checked:
+            imported=import_failures(import_call,'t19-'+current_profile+'-failures',imported,import_save_failure)
+            checked.append(current_profile)
+        status=query(label+'-apply')
+        save(label+'-apply.properties',app('files/product-state/complete-rule-config.properties'))
+        assert int(status['savedRevision'])==imported['saved_revision']
+    else:
+        save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
+        old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
+        status=wait_config(label+'-apply',lambda c:c.get('queryElapsedMillis') not in (None,old))
     assert status['result']=='0' and status['savedRevision']==status['activeRevision'],status
     assert status['effectiveRules']=='3' and status['activeCount']=='3',status
     source_file(label)
@@ -272,6 +330,9 @@ try:
     before=state();assert before.get('state')=='stopped' and before.get('mayBeActive')=='false',before
     assert digest(build['apk'])==build['apk_sha256']
     save('install.txt',adb('install','-r',build['apk'],timeout=60))
+    if args.import_policy:
+        grant=save('root-grant-after-install.txt',adb('shell','run-as',PKG,'su','-c','id',check=False))
+        assert 'uid=0' in grant, 'restore the app Superuser grant in KernelSU Manager before Root acceptance'
     package=save('package.txt',adb('shell','dumpsys','package',PKG));native=re.search(r'codePath=(\S+)',package)[1]+'/lib/arm64'
     installed=save('installed-native.txt',adb('shell','sha256sum',*[native+'/'+n for n in sorted(build['native_sha256'])]))
     assert {Path(line.split()[1]).name:line.split()[0] for line in installed.splitlines()}==build['native_sha256']

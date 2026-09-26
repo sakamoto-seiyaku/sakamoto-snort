@@ -635,6 +635,9 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
     request->graph.bindings[i].mode = ntohl (mp->graph.bindings[i].mode);
   }
   request->domains.list_count = ntohl (mp->domains.list_count);
+  /* Metadata consists only of byte arrays, with no endian conversion/padding. */
+  _Static_assert(sizeof request->metadata == sizeof mp->metadata, "metadata wire layout");
+  memcpy (&request->metadata, &mp->metadata, sizeof request->metadata);
   request->domains.entry_count = ntohl (mp->domains.entry_count);
   for (unsigned i = 0; i < request->domains.entry_count && i < SAKAMOTO_DOMAIN_MAX_ENTRIES; ++i) {
     request->domains.entries[i].list = ntohl (mp->domains.entries[i].list);
@@ -727,6 +730,7 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
       rmp->graph.bindings[i].mode = htonl (status->graph.bindings[i].mode);
     }
     rmp->domains.list_count = htonl (status->domains.list_count);
+    memcpy (&rmp->metadata, &status->metadata, sizeof status->metadata);
     rmp->domains.entry_count = htonl (status->domains.entry_count);
     for (unsigned i = 0; i < status->domains.entry_count; ++i) {
       rmp->domains.entries[i].list = htonl (status->domains.entries[i].list);

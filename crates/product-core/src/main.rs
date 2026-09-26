@@ -59,7 +59,7 @@ fn print_status(label: &str, status: &Status) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sakamoto-product-core-host <query|rule-query|rule-clear> <api-socket> <generation> [expected-saved]\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
+    eprintln!("usage: sakamoto-product-core-host <query|rule-query|rule-clear|rule-export> <api-socket> <generation> [expected-saved]\n       sakamoto-product-core-host rule-import <api-socket> <generation> <expected-saved> <json-file>\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
     std::process::exit(2);
 }
 
@@ -82,6 +82,30 @@ fn main() {
         }
     };
     print_status("connect", &connected);
+    if command == "rule-import" || command == "rule-export" {
+        use std::io::Read;
+        let (expected_revision, text) = if command == "rule-import" && remaining.len() == 2 {
+            let revision = remaining[0].parse::<u64>().unwrap_or_else(|_| usage());
+            let file = std::fs::File::open(&remaining[1]).unwrap_or_else(|_| usage());
+            let mut text = String::new();
+            file.take(1024 * 1024 + 1)
+                .read_to_string(&mut text)
+                .unwrap_or_else(|_| usage());
+            (revision, Some(text))
+        } else if command == "rule-export" && remaining.is_empty() {
+            (0, None)
+        } else {
+            usage()
+        };
+        let response = core.rule_import_json(text.as_deref(), expected_revision);
+        println!("import.response={response}");
+        let value: serde_json::Value =
+            serde_json::from_str(&response).expect("structured import reply");
+        if value["stage"] != "vpp" || value["result"] != 0 {
+            std::process::exit(1);
+        }
+        return;
+    }
     if command == "sni-query" {
         if remaining.len() != 3 {
             usage();

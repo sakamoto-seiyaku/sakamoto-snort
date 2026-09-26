@@ -398,6 +398,13 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(() -> manageCompleteRuleConfiguration(operation, expectedSaved, rules));
             return START_STICKY;
         }
+        if (RuntimeControlProtocol.ACTION_RULE_IMPORT.equals(action)) {
+            final String nonce = intent.getStringExtra("ruleImportNonce");
+            final int operation = intent.getIntExtra("ruleOperation", 0);
+            final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
+            enqueueLifecycle(() -> manageRuleImport(nonce, operation, expectedSaved));
+            return START_STICKY;
+        }
         if (RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)) {
             final int operation = intent.getIntExtra("ruleOperation", 0);
             final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
@@ -686,6 +693,7 @@ public final class RuntimeService extends VpnService {
                 || ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action)
                 || RuntimeControlProtocol.ACTION_SNI_QUERY.equals(action)
                 || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)
+                || RuntimeControlProtocol.ACTION_RULE_IMPORT.equals(action)
                 || RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action);
     }
 
@@ -4940,6 +4948,42 @@ public final class RuntimeService extends VpnService {
         String text = RuntimeEvidenceFormatter.policyMutationFault(
                 mode, armed, status, generation, error);
         writeBestEffortEvidenceFile(S194_POLICY_MUTATION_FAULT_STATUS, text);
+    }
+
+    private void manageRuleImport(String nonce, int operation, long expectedSaved) {
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0
+                || nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}")) return;
+        final String path = "product-state/rule-import-" + nonce + ".json";
+        RuntimeControlNative.Session session = productCoreSession;
+        if (session == null || !session.isConnected()) {
+            writeBestEffortEvidenceFile(path, "{\"stage\":\"transport\",\"error\":\"management_unavailable\"}");
+            return;
+        }
+        try {
+            if (operation != 0 && operation != 1) throw new IllegalArgumentException("invalid operation");
+            byte[] document = null;
+            if (operation == 1) {
+                File input = new File(getFilesDir(), "product-import/" + nonce + ".json");
+                try (FileInputStream stream = new FileInputStream(input)) {
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                    byte[] buffer = new byte[8192];
+                    int count;
+                    while ((count = stream.read(buffer)) >= 0) {
+                        if (bytes.size() + count > 1024 * 1024) {
+                            writeBestEffortEvidenceFile(path, "{\"stage\":\"prepare\",\"error\":\"input exceeds 1 MiB\"}");
+                            return;
+                        }
+                        bytes.write(buffer, 0, count);
+                    }
+                    document = bytes.toByteArray();
+                }
+            }
+            writeBestEffortEvidenceFile(path, session.ruleImport(operation, expectedSaved, document));
+        } catch (IOException | IllegalArgumentException error) {
+            writeBestEffortEvidenceFile(path, "{\"stage\":\"prepare\",\"error\":\"invalid or unreadable import input\"}");
+        } catch (RuntimeException error) {
+            writeBestEffortEvidenceFile(path, "{\"stage\":\"transport\",\"error\":\"query saved state before retrying\"}");
+        }
     }
 
     private void manageCompleteRuleConfiguration(int operation, long expectedSaved, long[] rules) {

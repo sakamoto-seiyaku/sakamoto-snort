@@ -56,7 +56,7 @@ def expression(raw):
     return stack[0]
 
 def source(path):
-    raw=Path(path).read_bytes();assert raw[:8] in (b'SKRULE04',b'SKRULE05'),'source schema'
+    raw=Path(path).read_bytes();assert raw[:8] in (b'SKRULE04',b'SKRULE05',b'SKRULE06'),'source schema'
     revision,count,retained_count=struct.unpack_from('<QII',raw,8)
     assert count<=256 and retained_count<=4096 and revision
     retained=struct.unpack_from('<'+'Q'*retained_count,raw,24)
@@ -75,7 +75,7 @@ def source(path):
     edges=[struct.unpack_from('<III',raw,at+12*i) for i in range(ec)];at+=12*ec
     bindings=[struct.unpack_from('<IIIII',raw,at+20*i) for i in range(bc)];at+=20*bc
     domain_count=0;domains=[]
-    if raw[:8]==b'SKRULE05':
+    if raw[:8] in (b'SKRULE05',b'SKRULE06'):
         domain_count,entry_count=struct.unpack_from('<II',raw,at);at+=8
         assert domain_count<=64 and entry_count<=256
         for _ in range(entry_count):
@@ -86,9 +86,21 @@ def source(path):
             assert all(0<len(label)<=63 and label[0]!='-' and label[-1]!='-' and
                        all(c.isascii() and (c.isalnum() or c=='-') for c in label) for label in labels)
             domains.append(dict(list=number,mode=mode,name=text))
+    rule_metadata=[dict(name='',source='') for _ in range(count)]
+    list_metadata=[dict(name='',source='') for _ in range(domain_count)]
+    if raw[:8]==b'SKRULE06':
+        for entries in (rule_metadata,list_metadata):
+            for entry in entries:
+                name,origin=struct.unpack_from('<64s128s',raw,at);at+=192
+                for key,value in (('name',name),('source',origin)):
+                    tail=value.index(0);assert not any(value[tail:])
+                    text=value[:tail].decode('utf-8')
+                    assert all(ord(c)>=32 and not 127<=ord(c)<=159 for c in text)
+                    entry[key]=text
     assert at==len(raw) and len(set(group_ids))==gc and all(group_ids)
     return dict(revision=revision,rules=rules,groups=group_ids,edges=edges,bindings=bindings,
-                domain_count=domain_count,domains=domains,source_schema=int(raw[7:8]))
+                domain_count=domain_count,domains=domains,source_schema=int(raw[7:8]),
+                rule_metadata=rule_metadata,list_metadata=list_metadata)
 
 def logical_rules(config, uid):
     answer=[]

@@ -215,6 +215,8 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
       s->graph.bindings[i].mode = reply->graph.bindings[i].mode;
       }
       s->domains.list_count = reply->domains.list_count;
+      _Static_assert(sizeof s->metadata == sizeof reply->metadata, "metadata wire layout");
+      memcpy (&s->metadata, &reply->metadata, sizeof s->metadata);
       s->domains.entry_count = reply->domains.entry_count;
       for (unsigned i = 0; i < s->domains.entry_count; ++i) {
         if (reply->domains.entries[i].list >= s->domains.list_count ||
@@ -308,6 +310,8 @@ sakamoto_product_session_rule_config (
     message->payload.graph.bindings[i].mode = request->graph.bindings[i].mode;
   }
   message->payload.domains.list_count = request->domains.list_count;
+  _Static_assert(sizeof request->metadata == sizeof message->payload.metadata, "metadata wire layout");
+  memcpy (&message->payload.metadata, &request->metadata, sizeof request->metadata);
   message->payload.domains.entry_count = request->domains.entry_count;
   for (unsigned i = 0; i < request->domains.entry_count; ++i) {
     message->payload.domains.entries[i].list = request->domains.entries[i].list;

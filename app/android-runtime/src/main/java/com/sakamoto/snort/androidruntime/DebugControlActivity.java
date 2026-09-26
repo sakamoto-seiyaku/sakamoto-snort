@@ -284,6 +284,12 @@ public class DebugControlActivity extends Activity {
                     intent.getLongExtra("sniIncarnation", 0L));
             handled = true;
         }
+        if (debuggable && intent.hasExtra("ruleImportNonce")) {
+            backend.ruleImport(this, intent.getStringExtra("ruleImportNonce"),
+                    intent.getIntExtra("ruleOperation", 0),
+                    intent.getLongExtra("expectedSavedRevision", 0L));
+            handled = true;
+        }
         if (debuggable && intent.hasExtra("t12ProbePlan")) {
             ProtocolFactsProbe.start(this, intent.getStringExtra("t12ProbePlan"));
             handled = true;

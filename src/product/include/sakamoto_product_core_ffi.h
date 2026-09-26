@@ -19,6 +19,17 @@ uint32_t sakamoto_product_core_rule_config(
     const sakamoto_product_rule_config_request_t *,
     sakamoto_product_rule_config_status_t *);
 
+#define SAKAMOTO_RULE_IMPORT_MAX_BYTES (1024U * 1024U)
+#define SAKAMOTO_RULE_IMPORT_REPLY_BYTES (1024U * 1024U)
+/* operation=0 queries/exports, operation=1 imports one complete UTF-8 JSON
+ * source. All byte buffers are borrowed only for this call. A reply buffer of
+ * REPLY_BYTES is required before any mutation. out_length excludes a NUL.
+ * JSON distinguishes preparation, transport and VPP saved/applied outcomes. */
+uint32_t sakamoto_product_core_rule_import(
+    sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,
+    uint64_t expected_saved_revision, sakamoto_product_bytes_t input,
+    uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
+
 uint32_t sakamoto_product_core_connect(
     sakamoto_product_bytes_t api_socket, uint64_t generation,
     sakamoto_product_core_handle_t **out_handle,

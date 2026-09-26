@@ -265,6 +265,8 @@ public final class RuntimeControlNative {
             int worker, int slot, long incarnation);
     private static native long[] nativeCompleteRuleConfig(long handle, long generation,
             int operation, long expectedSaved, long[] rules);
+    private static native byte[] nativeRuleImport(long handle, long generation,
+            int operation, long expectedSaved, byte[] document);
     private static native long[] nativeRuleConfig(long handle, long generation,
             int operation, long expectedSaved, int[] rule);
     private static native String[] nativeApplyEmptyPolicy(long handle, long generation,
@@ -364,6 +366,17 @@ public final class RuntimeControlNative {
             if (!LOADED || nativeHandle == 0L) throw new IllegalStateException("VPP management is unavailable");
             return new RuleConfiguration.CompleteStatus(nativeCompleteRuleConfig(nativeHandle, generation,
                     operation, expectedSaved, rules));
+        }
+
+        public synchronized String ruleImport(int operation, long expectedSaved, byte[] document) {
+            if (!LOADED || nativeHandle == 0L) throw new IllegalStateException("VPP management is unavailable");
+            if (operation < 0 || operation > 1 || (operation == 0 && document != null && document.length != 0))
+                throw new IllegalArgumentException("invalid import operation");
+            if (document != null && document.length > 1024 * 1024)
+                return "{\"stage\":\"prepare\",\"error\":\"input exceeds 1 MiB\"}";
+            byte[] response = nativeRuleImport(nativeHandle, generation, operation, expectedSaved, document);
+            if (response == null) throw new IllegalStateException("import transport failed; query before retrying");
+            return new String(response, java.nio.charset.StandardCharsets.UTF_8);
         }
 
         public synchronized RuleConfiguration.Status ruleConfig(int operation,

@@ -61,6 +61,70 @@ unsafe extern "C" {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_rule_import(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    operation: u32,
+    expected_revision: u64,
+    input: ProductBytes,
+    reply: *mut u8,
+    reply_capacity: u32,
+    out_length: *mut u32,
+) -> c_uint {
+    if handle.is_null()
+        || generation == 0
+        || operation > 1
+        || reply.is_null()
+        || out_length.is_null()
+        || reply_capacity < crate::rule_import::MAX_IMPORT_REPLY_BYTES as u32
+        || (input.length != 0 && input.data.is_null())
+        || (operation == 0 && input.length != 0)
+    {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe {
+        *out_length = 0;
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        let bytes = if input.length == 0 {
+            &[][..]
+        } else if input.length as usize > crate::rule_import::MAX_IMPORT_BYTES {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(input.data, input.length as usize) }
+        };
+        let response = if input.length as usize > crate::rule_import::MAX_IMPORT_BYTES {
+            serde_json::json!({"stage":"prepare","error":"input exceeds 1 MiB"}).to_string()
+        } else {
+            match std::str::from_utf8(bytes) {
+                Ok(text) => core.rule_import_json(
+                    if operation == 1 { Some(text) } else { None },
+                    expected_revision,
+                ),
+                Err(_) => {
+                    serde_json::json!({"stage":"prepare","error":"input is not UTF-8"}).to_string()
+                }
+            }
+        };
+        if response.len() > reply_capacity as usize {
+            return ErrorCode::InternalError.raw();
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(response.as_ptr(), reply, response.len());
+            *out_length = response.len() as u32;
+        }
+        0
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sakamoto_product_core_rule_config(
     handle: *mut ProductCoreHandle,
     generation: u64,
@@ -70,15 +134,18 @@ pub unsafe extern "C" fn sakamoto_product_core_rule_config(
     if handle.is_null() || request.is_null() || out_status.is_null() || generation == 0 {
         return ErrorCode::InvalidArgument.raw();
     }
-    unsafe { *out_status = crate::RuleConfigStatus::default() };
+    unsafe {
+        out_status.write_bytes(0, 1);
+        (*out_status).error_index = u32::MAX;
+    }
     match catch_unwind(AssertUnwindSafe(|| {
         let core = unsafe { &mut (*handle).core };
         if core.generation != generation {
             return ErrorCode::StaleHandle.raw();
         }
-        match core.rule_config(unsafe { &*request }) {
+        match core.rule_config_boxed(unsafe { &*request }) {
             Ok(status) => {
-                unsafe { *out_status = status };
+                unsafe { out_status.copy_from_nonoverlapping(&*status, 1) };
                 0
             }
             Err(ProductError::Native { code, .. }) => code.raw(),
