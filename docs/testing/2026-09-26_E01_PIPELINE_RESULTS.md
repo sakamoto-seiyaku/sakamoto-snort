@@ -1,6 +1,6 @@
 # E01 actual observation pipeline results — 2026-09-26
 
-SAKAMOTO-274 remains **In Progress / USER_REVIEW_REQUIRED**. These are evidence-validity results and recommendations, not a performance PASS or approval to start T23. The selected VPP transport remains the T20 decision. No Product source or storage implementation is changed by this experiment.
+At experiment delivery, SAKAMOTO-274 remained **In Progress / USER_REVIEW_REQUIRED**. These are evidence-validity results and recommendations, not a performance PASS or approval to start T23. The selected VPP transport remains the T20 decision. No Product source or storage implementation is changed by this experiment.
 
 ## Decision supported by the evidence
 
@@ -124,4 +124,13 @@ The original accepted T22 APK `4b635774337dac2b8b921f3fcf36a4bb1e211de55422d3b3c
 
 Initial review found CPU settlement-window omissions, weak byte/direction/freshness oracles, cleanup error short-circuiting and missing Linux isolation checks. These are fixed with closed resource windows, independent negative mutations, guarded cleanup and network-namespace witnesses. Follow-up findings on retained peak-memory samples, freshness poll validity and partial overlay rollback are fixed. Final Standards and Spec review outcomes are recorded in the separate review report. All 34 pre-existing dirty files are preserved exactly.
 
-No user result decision has yet been recorded. E01 remains In Progress and T23 remains blocked.
+At experiment delivery, no user result decision had yet been recorded; E01 remained In Progress and T23 remained blocked. The accepted selection below resolves that decision gate without changing the measured findings.
+
+
+## Accepted user selection and follow-up — 2026-09-26
+
+After reviewing these findings, the user selected SQLite with bounded Rust-side in-memory merging and batch persistence. The user accepted one-time migration of valid JSON history, loss of the current uncommitted observation batch on abnormal exit, and normal queries including pending in-memory increments. Committed consistency, deduplication, explicit incomplete coverage and no VPP waiting remain required. Keep one live aggregate and bounded dirty state; successful persistence clears dirty state without adding the contribution again.
+
+The accepted design is recorded in [ADR-0010](../adr/0010-sqlite-observation-storage.md) and the [SQLite discussion](../reviews/2026-09-26_SQLITE_OBSERVATION_DISCUSSION.md). This is a selected implementation direction, not measured SQLite acceptance or a revision of the E01 raw findings.
+
+[SAKAMOTO-288 / E02](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/9f590981-cdd8-4e9e-9e47-b6c3ba660a61) tracks implementation and matched remeasurement under parent SAKAMOTO-251. E02 depends on E01 and blocks T23; existing dependencies are retained. E01's experiment-plus-user-direction gate is satisfied. E02's normal implementation/verification acceptance is the next prerequisite; no additional fixed engine-selection gate is added. A material unresolved result or change of accepted semantics still requires evidence-backed discussion. No E02 Product work is performed by this task update.
