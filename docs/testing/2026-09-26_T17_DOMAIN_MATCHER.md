@@ -1,9 +1,31 @@
 # T17 ARM64 domain matcher comparison
 
 Date: 2026-09-26. Decision task: [SAKAMOTO-268](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/063537dd-410c-44e9-9ec1-dcfdbf5b26eb).
-This report supplies the experiment and recommendation for the ticket's required
-user review. It does not record a user selection or authorize T18 integration.
-The ticket remains the authority for that gate.
+This report supplies the experiment and the user's recorded selection below.
+T17's selection gate is satisfied; Plane records task closure. T18 still follows
+its complete dependency set, including T17.5's separate closure record.
+
+## User selection — 2026-09-26
+
+After reviewing T17 and the additional
+[T17.5 recovery experiment](2026-09-26_T17_5_RECOVERABLE_DOMAIN_BUILD.md), the user
+explicitly chose: **“采用 rax 吧”**.
+
+The selected direction is unmodified Valkey rax at
+`05a9c29c62538519d870d6512978f80ac58a758f`, with a small explicit binding to VPP's
+fallible allocation APIs. T17.5's evidence at commit
+`453ed2dad5a3a230ff55b27b240d0c0aaccb951e` validates checked allocate/copy/free
+growth, paired size/free operations, old-snapshot preservation, cleanup and retry
+on Host and physical ARM64, including actual heap exhaustion. It resolves the
+standalone allocator integration question left by this original experiment.
+
+This choice does not adopt the existing VPP hash backend, modify hash/vec,
+reserve capacity as a recovery guarantee, or introduce a new allocator, process,
+IPC or backend selector. It preserves VPP configuration ownership and the fixed
+domain/rule semantics. T18 must implement its own narrow Product binding and
+validate real saved/active state, complete snapshots, readers/retirement and
+TLS/QUIC consumer integration. Experimental code is not Product source; the
+component results do not prove recovery for unrelated compiler allocations.
 
 **Recommend maintained Valkey rax for the measured first-version envelope.**
 It built 100k dictionaries in 43–50 ms on this Pixel and returned recoverable
@@ -225,6 +247,7 @@ original device cost runs exited normally; none depended on the deficient
 timeout path. The original runner is retained with its matching recorded hash.
 Final reviewer dispositions are recorded in the evidence index and Plane.
 
-The user must review these tradeoffs and record the chosen direction in T17
-before its completion and T18's unblocking. This report does not turn a normal
-benchmark PASS into that approval.
+The explicit user selection above completes T17's decision requirement, rather
+than treating a normal benchmark PASS as approval. T17.5's execution owner
+records its own closure; T18 may start only when its complete dependencies are
+satisfied. No Product implementation was performed as part of this decision record.
