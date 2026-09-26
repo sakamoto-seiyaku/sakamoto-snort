@@ -20,8 +20,8 @@ Both witnesses retain source snapshots and installed artifact hashes.
 | Host CTest | 50/50 PASS | Domain normalization/membership, expression and complete-winner/cache comparisons, saved/active failure handling, Rust/Java/C API contracts. A later targeted Host regression confirms FTPS, STUN and DTLS labels alone cannot satisfy the whole-rule TLS/QUIC prerequisite. |
 | Linux Root TLS | [PASS](../../build-output/t18-sol-fresh/linux-tls-verification-final.json), 67 packets, 8 drops | Real ClientHello, no-SNI/error availability, list-only winner change, API/source/endpoint joins. |
 | Linux Root reordered TCP | [PASS](../../build-output/t18-sol-fresh/linux-tcp-verification-final.json), 137 packets | Gaps and duplicates through bounded TCP reconstruction and domain-policy compilation. |
-| Linux Root QUIC | [PASS](../../build-output/t18-sol-fresh/linux-quic-verification-final.json), 781 packets, 7 drops | v1 multi-Initial assembly, exact/descendant/label-boundary names, overlapping lists, STUN coexistence, 16 publications and two list-only winner changes. |
-| Linux protected snapshot | [PASS](../../build-output/t18-sol-fresh/linux-overlap-verification-final.json), 500 ms held reader | A valid named QUIC packet kept the old revision and winner; Product API publication waited for its release, then changed-list traffic chose the competing winner and the next publication reused the old bank. |
+| Linux Root QUIC | [PASS](../../build-output/t18-sol-fresh/linux-quic-runner-regression-verification.json), 781 packets, 7 drops | v1 multi-Initial assembly, exact/descendant/label-boundary names, overlapping lists, STUN coexistence, 16 publications and two list-only winner changes. |
+| Linux protected snapshot | [PASS](../../build-output/t18-sol-fresh/linux-overlap-verification-final-verified.json), 500 ms held reader | A preconnected Product VAPI client published the changed list while a named QUIC packet read the old bank; the packet kept its old winner and a second publication waited until release before reusing that bank. |
 | Pixel TLS Root / controlled VPN | [PASS](../../build-output/t18-sol-fresh/pixel-tls-verification-a.json), 168 / 173 packets, 14 / 12 drops | Real app TLS, names/absence, malformed/truncated unavailability, cache/query/endpoint joins and list-only winner change in each profile. |
 | Pixel QUIC Root / controlled VPN | [PASS](../../build-output/t18-sol-fresh/pixel-quic-verification-a.json), 492 / 493 packets, 7 drops each | Real app QUIC v1 multi-Initial, exact/child/lookalike/A-label names, 16 publications and two list-only winner changes in each profile. |
 | VPP heap Host / Pixel ARM64 | PASS | Full 256-entry domain binding, 100 build/destroy rounds, 200,000 queries, allocation failure/retry, old result and cross-heap free. Pixel test binary and library SHA-256 matched the build witness. |
@@ -45,11 +45,9 @@ runs above passed. The failed probes are retained and not counted as acceptance.
 
 Limits: the calculated 2 MiB admission ceiling includes old/new/candidate
 representations but has not been compared with full-process peak RSS. The
-held-reader case exercises the actual Product API, which serializes through
-VPP's worker barrier: the first publication occurred after the held packet's
-release, and the following publication reused its former bank. Concurrent
-publication while that reader was still held was not reached through this
-Product API. QUIC coverage is v1 Initial SNI,
+held-reader case uses a Product VAPI session opened before packet admission;
+the changed-list publication occurred during the hold, and reuse of the old
+bank completed only after its reader released it. QUIC coverage is v1 Initial SNI,
 not a completed handshake. The prior T14 Pixel segmented-TLS matrix was not
 rerun with domain lists; Linux reordered TCP and Pixel direct TLS cover the
 representative T18 boundary. Broader cross-feature stress belongs to
@@ -57,7 +55,10 @@ representative T18 boundary. Broader cross-feature stress belongs to
 and any future release gate, without changing this result into a device-wide
 performance claim.
 
-The earlier `linux-overlap-a` probe is retained as HOLD: it expected the first
-publication to complete before the held worker returned. Raw VPP timestamps
-showed the API waited instead. The corrected bounded case and independent
-verifier assert that production ordering, old/new winners and bank reuse.
+The earlier `linux-overlap-a` probe is retained as HOLD: it opened a new VAPI
+connection for the changed-list request and the publication arrived after the
+500 ms hold. That timing did not test concurrent publication and does not imply
+a worker barrier on the rule-config handler, which is marked safe without one.
+The final test preconnected the same Product transport before arming the hold;
+its helper [build witness](../../build-output/t18-sol-fresh/persistent-control-build-b/build.json)
+retains the helper source, native VAPI archive and exact executable hashes.

@@ -27,8 +27,11 @@ parser.add_argument('--python',default='python3')
 parser.add_argument("--domain-policy",action="store_true")
 parser.add_argument("--domain-overlap",action="store_true",
                     help="hold a domain-bearing packet while two complete snapshots publish")
+parser.add_argument("--persistent-helper",type=Path)
+parser.add_argument("--persistent-build",type=Path)
 args = parser.parse_args()
 assert not args.domain_overlap or args.domain_policy
+assert not args.domain_overlap or (args.persistent_helper and args.persistent_build)
 
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -119,7 +122,7 @@ hooks = [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--u
           flag,str(port),'-j','NFQUEUE','--queue-num','176']
          for protocol,port in [('udp',40650),('udp',40651)] for flag in ['--sport','--dport']]
 clients=[]
-process = None; log = None; hooked = []
+process = None; log = None; hooked = []; persistent = None
 def start(label):
     global process, log, runtime, generation
     generation = 26701 if label == "first" else 25602
@@ -262,6 +265,41 @@ try:
         client=Client('overlap','named',45620)
         client.capture('overlap-ready',status,'ready')
         owner=int(result['cases'][-1]['identity'][0])
+        helper=args.persistent_helper.resolve()
+        persistent_build=args.persistent_build.resolve()
+        persistent_witness=json.loads(persistent_build.read_text())
+        assert Path(persistent_witness['binary'])==helper
+        assert Path(persistent_witness['artifact'])==artifact
+        assert persistent_witness['binary_sha256']==hashlib.sha256(helper.read_bytes()).hexdigest()
+        assert persistent_witness['artifact_manifest_sha256']==result['manifest_sha256']
+        result['persistent_build']=str(persistent_build)
+        result['persistent_build_sha256']=hashlib.sha256(persistent_build.read_bytes()).hexdigest()
+        result['persistent_helper_sha256']=hashlib.sha256(helper.read_bytes()).hexdigest()
+        result['persistent_helper_source_sha256']=hashlib.sha256(
+            (ROOT/'tests/device/helpers/t18_persistent_config.c').read_bytes()).hexdigest()
+        (output/'persistent-helper').write_bytes(helper.read_bytes())
+        save('persistent-helper.c',(ROOT/'tests/device/helpers/t18_persistent_config.c').read_text())
+        persistent=subprocess.Popen([str(helper),str(runtime/'api.sock'),str(generation)],
+                                    env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT,text=True,bufsize=1)
+        def reply():
+            assert select.select([persistent.stdout],[],[],5)[0], 'persistent reply deadline'
+            line=persistent.stdout.readline();assert line,line
+            return line
+        assert reply().startswith('ready revision='+str(old_revision)+' ')
+        def persistent_apply(command,label,variant):
+            persistent.stdin.write(command+'\n');persistent.stdin.flush()
+            line=reply()
+            assert line.startswith('applied '),line
+            values=dict(word.split('=',1) for word in line.split()[1:])
+            assert values['result']=='0' and values['saved']==values['revision'],values
+            save(label+'-apply.txt',line)
+            (output/(label+'-source.conf')).write_bytes((config_dir/'rules.conf').read_bytes())
+            revision=int(values['revision'])
+            result['configurations'].append(dict(label=label,revision=revision,
+                source=label+'-source.conf',query=label+'-apply.txt',expression='1001',
+                domain_variant=variant,mode=1,protocol=17,target=1004,persistent=True))
+            return revision
         log_path=output/'first-vpp.log'
         before=len(log_path.read_bytes())
         assert 'policy.hold=armed' in cli('overlap-arm',f'product policy hold-next {owner} 500000')
@@ -277,21 +315,27 @@ try:
             time.sleep(.001)
         answer={}
         def publish_changed_list():
-            try: answer['status']=configure('overlap-without-exact',status,17,1004,1,'without-exact')
+            try: answer['middle']=persistent_apply('without-exact','overlap-without-exact','without-exact')
             except Exception as error: errors.append(repr(error))
         writer=threading.Thread(target=publish_changed_list)
         writer.start()
-        time.sleep(.03)
-        assert writer.is_alive(), 'Product API published while the domain packet was held'
-        held.join(timeout=5);writer.join(timeout=5)
-        assert not held.is_alive() and not writer.is_alive() and not errors,errors
-        status=answer['status']
-        middle_revision=int(status['config.active_revision'])
+        writer.join(timeout=.35)
+        assert not writer.is_alive() and not errors, 'changed list did not publish during held read'
+        assert 's209 event=hold_end' not in log_path.read_bytes()[before:].decode(errors='replace')
+        middle_revision=answer['middle']
         assert middle_revision==old_revision+1
-        client.execute('echo','received')
-        client.capture('overlap-changed',status,'changed')
-        status=configure('overlap-restore',status,17,1004,1)
-        assert int(status['config.active_revision'])==middle_revision+1
+        def reuse_bank():
+            try: answer['final']=persistent_apply('full','overlap-restore','full')
+            except Exception as error: errors.append(repr(error))
+        reuse=threading.Thread(target=reuse_bank)
+        reuse.start()
+        time.sleep(.03)
+        assert reuse.is_alive() and not errors, 'retired bank reused during held read'
+        held.join(timeout=5);reuse.join(timeout=5)
+        assert not held.is_alive() and not reuse.is_alive() and not errors,errors
+        assert answer['final']==middle_revision+1
+        status=api('overlap-final-query','rule-query')
+        assert int(status['config.active_revision'])==answer['final']
         client.execute('echo','received')
         client.capture('overlap-restored',status,'recovered')
         client.close()
@@ -305,6 +349,13 @@ except Exception as error:
     result['error']=repr(error);raise
 finally:
     cleanup_errors=[]
+    if persistent is not None:
+        try:
+            persistent.stdin.close()
+            persistent.wait(timeout=3)
+            if persistent.returncode:cleanup_errors.append('persistent client exit '+str(persistent.returncode))
+        except Exception as error:
+            persistent.kill();persistent.wait(timeout=3);cleanup_errors.append(repr(error))
     for client in clients:
         try:
             if client.process.poll() is None:

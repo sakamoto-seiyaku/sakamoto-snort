@@ -39,9 +39,20 @@ def verify(directory):
     assert digest(directory/'domain-policy.py') == run['domain_policy_sha256']
     assert digest(directory/'fixtures.json') == run['fixtures_sha256']
     assert digest(directory/'socket-peer.py') == run['peer_sha256']
+    assert digest(directory/'persistent-helper') == run['persistent_helper_sha256']
+    assert digest(directory/'persistent-helper.c') == run['persistent_helper_source_sha256']
+    assert digest(ROOT/'tests/device/helpers/t18_persistent_config.c') == run['persistent_helper_source_sha256']
+    helper_build = json.loads(Path(run['persistent_build']).read_text())
+    assert digest(run['persistent_build']) == run['persistent_build_sha256']
+    assert helper_build['binary_sha256'] == run['persistent_helper_sha256']
+    assert helper_build['source_sha256'] == run['persistent_helper_source_sha256']
+    assert digest(helper_build['archive']) == helper_build['archive_sha256']
+    assert digest(helper_build['binary']) == helper_build['binary_sha256']
     build = json.loads(Path(run['build']).read_text())
     assert digest(run['build']) == run['build_sha256']
     assert build['source_sha256'] == run['source_sha256']
+    assert helper_build['artifact'] == run['artifact']
+    assert helper_build['artifact_manifest_sha256'] == run['manifest_sha256']
     for name, expected in build['artifact_hashes'].items():
         assert digest(Path(run['artifact'])/name) == expected, name
     assert 'NFQUEUE' not in (directory/'hooks-after.txt').read_text()
@@ -53,9 +64,17 @@ def verify(directory):
         config = source(directory/item['source'])
         assert config['revision'] == item['revision']
         domains.configuration(config, item)
-        status = props(directory/item['query'])
-        assert status['config.result'] == '0'
-        assert int(status['config.active_revision']) == config['revision']
+        if item.get('persistent'):
+            text = (directory/item['query']).read_text().strip().split()
+            assert text[0] == 'applied'
+            reply = dict(word.split('=', 1) for word in text[1:])
+            assert reply['result'] == '0' and int(reply['saved']) == config['revision']
+            assert int(reply['revision']) == config['revision']
+            assert int(reply['entries']) == len(config['domains'])
+        else:
+            status = props(directory/item['query'])
+            assert status['config.result'] == '0'
+            assert int(status['config.active_revision']) == config['revision']
         configs[item['label']] = config
     old, changed, restored = (configs[name] for name in
         ('overlap-initial', 'overlap-without-exact', 'overlap-restore'))
@@ -64,9 +83,9 @@ def verify(directory):
         assert old[field] == changed[field] == restored[field], field
     assert domains.source_lists(old)[0] and not domains.source_lists(changed)[0]
     assert domains.source_lists(restored) == domains.source_lists(old)
-    assert [c['phase'] for c in run['cases']] == ['ready', 'changed', 'recovered']
+    assert [c['phase'] for c in run['cases']] == ['ready', 'recovered']
     assert len({tuple(c['identity']) for c in run['cases']}) == 1
-    assert [c['revision'] for c in run['cases']] == [old['revision'], changed['revision'], restored['revision']]
+    assert [c['revision'] for c in run['cases']] == [old['revision'], restored['revision']]
 
     records = events(directory/'first-vpp.log')
     begin_i, begin = one(records, 'hold_begin')
@@ -80,9 +99,10 @@ def verify(directory):
     old_i, old_pub = publishes[old['revision']]
     change_i, change_pub = publishes[changed['revision']]
     restore_i, restore_pub = publishes[restored['revision']]
-    assert old_i < acquire_i < sni_i < begin_i < end_i < match_i < release_i < change_i < restore_i
+    assert old_i < acquire_i < sni_i < begin_i < change_i < end_i < match_i < release_i < restore_i
     assert int(end['mono_ns']) - int(begin['mono_ns']) >= 450_000_000
-    assert int(change_pub['mono_ns']) > int(end['mono_ns'])
+    assert int(begin['mono_ns']) < int(change_pub['mono_ns']) < int(end['mono_ns'])
+    assert int(restore_pub['mono_ns']) > int(release['mono_ns'])
     assert acquire['bank'] == release['bank'] == old_pub['bank'] == restore_pub['bank']
     assert change_pub['bank'] != old_pub['bank']
     assert acquire['revision'] == held['revision'] == release['revision'] == str(old['revision'])
@@ -94,18 +114,17 @@ def verify(directory):
     assert run['overlap'] == dict(owner=int(acquire['worker']), old_revision=old['revision'],
                                   middle_revision=changed['revision'], final_revision=restored['revision'],
                                   old_winner=old['rules'][0]['version'])
-    for config, winner in ((changed, changed['rules'][1]['version']),
-                           (restored, restored['rules'][0]['version'])):
-        matching = [(index, row) for index, row in records if row.get('event') == 'l4' and
-                    row.get('revision') == str(config['revision']) and row.get('flow_dir') == '1']
-        assert matching and all(row['rule'] == str(winner) and row['mode'] == '1' and
-                                row['actual_action'] == '1' for _, row in matching)
+    matching = [(index, row) for index, row in records if row.get('event') == 'l4' and
+                row.get('revision') == str(restored['revision']) and row.get('flow_dir') == '1']
+    assert matching and all(row['rule'] == str(restored['rules'][0]['version']) and
+                            row['mode'] == '1' and row['actual_action'] == '1' for _, row in matching)
     client = json.loads((directory/'overlap-client.json').read_text())
-    assert sum(e['kind'] == 'received' for e in client) >= 3
+    assert sum(e['kind'] == 'received' for e in client) >= 2
     return dict(status='PASS', source_sha256=run['source_sha256'], held_token=int(token),
                 old_revision=old['revision'], changed_revision=changed['revision'],
                 reused_revision=restored['revision'], held_ms=(int(end['mono_ns'])-int(begin['mono_ns']))/1e6,
-                old_winner=old['rules'][0]['version'], changed_winner=changed['rules'][1]['version'])
+                old_winner=old['rules'][0]['version'],
+                changed_snapshot_published_during_hold=True, retired_bank_reused_after_release=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
