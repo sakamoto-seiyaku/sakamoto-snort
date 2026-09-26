@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Real NFQUEUE/VPP pipeline cost experiment; no synthetic queue producer."""
-import argparse,hashlib,importlib.util,json,os,select,subprocess,threading,time
+import argparse,hashlib,importlib.util,json,os,select,sqlite3,subprocess,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--stage',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--arms',default='A,B,C,C,B,A,G,F,D');p.add_argument('--seed-baselines',type=int,default=0);p.add_argument('--phases',default='idle,low,burst,sustained,active,short,pause,recovery');p.add_argument('--fault',action='store_true');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--build',type=Path,required=True);p.add_argument('--stage',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--arms',default='A,B,C,C,B,A,G,F,D');p.add_argument('--seed-baselines',type=int,default=0);p.add_argument('--phases',default='idle,low,burst,sustained,active,short,pause,recovery');p.add_argument('--fault',action='store_true');p.add_argument('--sqlite',action='store_true');a=p.parse_args()
 out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 b=json.loads(a.build.read_text());artifact=Path(b['artifact']);digest=lambda x:hashlib.sha256(Path(x).read_bytes()).hexdigest()
 for n,h in b['artifact_hashes'].items():assert digest(artifact/n)==h,n
 env=dict(os.environ,LD_LIBRARY_PATH=str(artifact/'lib'));tag=hashlib.sha256(str(out).encode()).hexdigest()[:7]
 vppctl=a.stage.resolve()/'source/build-root/install-vpp-native/vpp/bin/vppctl';peer=ROOT/'tests/device/helpers/e01_udp_peer.py'
-result={'status':'HOLD','kind':'linux','build':str(a.build.resolve()),'build_sha256':digest(a.build),'source_sha256':b['source_sha256'],'started_ns':time.time_ns(),'arms':[]}
-for f in [Path(__file__),peer,ROOT/'tests/evidence/e01_store_seed.py']: (out/f.name).write_bytes(f.read_bytes())
+result={'status':'HOLD','storage_format':'sqlite' if a.sqlite else 'atomic_json_snapshot','kind':'linux','build':str(a.build.resolve()),'build_sha256':digest(a.build),'source_sha256':b['source_sha256'],'started_ns':time.time_ns(),'arms':[]}
+for f in [Path(__file__),peer,ROOT/'tests/evidence/e01_store_seed.py',ROOT/'tests/evidence/e02_sqlite.py']: (out/f.name).write_bytes(f.read_bytes())
 def save(name,value):
     target=current/name;target.write_text(value if isinstance(value,str) else json.dumps(value,indent=2)+'\n');return value
 def cmd(*args,check=True):
@@ -31,10 +31,15 @@ def line(child,timeout=90):
     raise RuntimeError('child deadline')
 def cli(label,text):return save(label+'.txt',cmd(vppctl,'-s',runtime/'cli.sock',text))
 def query(label=None):
+    global query_clock
+    started=time.monotonic_ns()
     observer.stdin.write(b'query\n');observer.stdin.flush();s=line(observer)
     assert s.startswith('observation.response='),s
     v=json.loads(s.split('=',1)[1]);assert 'error' not in v and v['health']['generation']==generation,v
-    if label:save(label+'.json',v)
+    query_clock={'started_mono_ns':started,'completed_mono_ns':time.monotonic_ns()}
+    if label:
+        save(label+'.json',v)
+        if a.sqlite:save(label+'-query-clock.json',query_clock)
     return v
 def control(text):
     observer.stdin.write((text+'\n').encode());observer.stdin.flush();return line(observer)
@@ -66,12 +71,18 @@ def settle(label):
             work_done=work_done and sum(consumer['overview']['packets'])==target
             if consumer['persistent'] and not consumer['store_error']:
                 work_done=work_done and sum(consumer['persistent']['packets'])==target
+        persistent=consumer['persistent']
+        if a.sqlite and persistent and persistent['save_error'] is None:
+            progress=persistent['persistence']
+            work_done=work_done and not progress['pending'] and not progress['maintenance_pending'] and progress['packets']==persistent['packets']
         if all(c['occupancy']==0 for c in normal) and work_done:
-            time.sleep(.05);v=query();break
+            if not a.sqlite:time.sleep(.05);v=query()
+            break
         if time.monotonic()>until:break
         time.sleep(.02)
+    if a.sqlite:save(label+'-query-clock.json',query_clock)
     return save(label+'.json',v)
-process=observer=client=server=capture=None;current=out;hooks=[];dummy_created=False;loopback_was_up=None
+process=observer=client=server=capture=None;blocker=None;current=out;hooks=[];dummy_created=False;loopback_was_up=None
 try:
     assert os.getuid()==0
     current_netns=os.readlink('/proc/self/ns/net')
@@ -99,7 +110,7 @@ try:
             spec=importlib.util.spec_from_file_location('seed',ROOT/'tests/evidence/e01_store_seed.py');seed=importlib.util.module_from_spec(spec);spec.loader.exec_module(seed)
             seed_file=store.with_name('e01-'+config['name']+'.json')
             life['synthetic_seed_baselines']=a.seed_baselines;life['seed_bytes']=seed.write(seed_file,a.seed_baselines)
-            life['seed_sha256']=digest(seed_file);life['expected_snapshot_guard']=life['seed_bytes']>32*1024*1024
+            life['seed_sha256']=digest(seed_file);life['expected_snapshot_guard']=not a.sqlite and life['seed_bytes']>32*1024*1024
             (current/'synthetic-seed.json').write_bytes(seed_file.read_bytes())
         launch=dict(env,SAKAMOTO_E01_CONFIG=str(native_config),PRODUCT_ARTIFACT_DIR=str(artifact),PRODUCT_RUNTIME_DIR=str(runtime),PRODUCT_RULE_CONFIG_DIR=str(current/'configuration'),PRODUCT_GENERATION=str(generation),PRODUCT_WORKER_COUNT='2',SAKAMOTO_RUNTIME_PROFILE='root',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_UID='0',SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES='4',SAKAMOTO_LINUX_NETWORK_SOURCE='external')
         process=subprocess.Popen(['bash',str(ROOT/'tools/product/run-host-vpp.sh')],env=launch,stdout=(current/'vpp.log').open('w'),stderr=subprocess.STDOUT)
@@ -116,6 +127,11 @@ try:
         life['consumer_ready_wait_ns']=time.monotonic_ns()-open_started
         life.update(vpp_pid=process.pid,rust_pid=observer.pid)
         baseline=query('baseline');assert sum(c['basic_packets'][0] for c in baseline['health']['channels'])==0
+        if a.sqlite:
+            spec=importlib.util.spec_from_file_location('sqlite_evidence',ROOT/'tests/evidence/e02_sqlite.py');sqlite_evidence=importlib.util.module_from_spec(spec);spec.loader.exec_module(sqlite_evidence)
+            database=store.with_name('e01-'+config['name']+'.sqlite3')
+            save('startup-resources.json',sample());save('startup-space.json',sqlite_evidence.footprint(database,store.with_name('e01-'+config['name']+'.json')))
+
         for flag in ('--dport','--sport'):
             hook=['iptables','-t','mangle','-A','OUTPUT','-p','udp',flag,'42141','-j','NFQUEUE','--queue-num','176'];cmd(*hook);hooks.append(hook)
         client=subprocess.Popen(['python3','-u',str(peer),'client','--host','10.224.0.1','--peer','10.224.0.2','--nonce',f'e01-{tag}-{index}'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(current/'client.log').open('w'),bufsize=0,user=12001,group=12001,extra_groups=[])
@@ -123,7 +139,11 @@ try:
         for name in a.phases.split(','):
             if name=='pause':save('pause-control.txt',control('pause'))
             fault_path=store.with_name('e01-'+config['name']+'.pending')
-            if a.fault and name=='burst':fault_path.mkdir()
+            if a.fault and name=='burst':
+                if a.sqlite:
+                    blocker=sqlite3.connect(database);blocker.execute('BEGIN IMMEDIATE')
+                    save('lock-injected.json',{'collector_pid':os.getpid(),'at_mono_ns':time.monotonic_ns()})
+                else:fault_path.mkdir()
             before=query(name+'-before');metrics_before=sample();start=time.monotonic_ns()
             client.stdin.write((name+'\n').encode());client.stdin.flush();traffic=json.loads(line(client,120));end=time.monotonic_ns()
             metrics_after=sample();save(name+'-traffic.json',traffic)
@@ -131,7 +151,12 @@ try:
             if name=='pause':save('resume-control.txt',control('resume'))
             time.sleep(1.2);after=settle(name+'-settled')
             save(name+'-resources-settled.json',sample())
-            if a.fault and name=='burst':fault_path.rmdir()
+            if a.sqlite:save(name+'-space.json',sqlite_evidence.footprint(database,store.with_name('e01-'+config['name']+'.json')))
+            if a.fault and name=='burst':
+                if a.sqlite:
+                    blocker.rollback();blocker.close();blocker=None
+                    save('lock-released.json',{'at_mono_ns':time.monotonic_ns()})
+                else:fault_path.rmdir()
             life['phases'].append({'name':name,'started_ns':start,'completed_ns':end,'sent':traffic['sent'],'received':traffic['received']})
         # The ordinary API supplies visibility; polling overhead is retained.
         before=query('freshness-before');want=snapshot_total(before)+2
@@ -139,11 +164,12 @@ try:
         polls=[];until=time.monotonic()+5
         if config['export']:
             while time.monotonic()<until:
-                v=query();now=time.monotonic_ns();visible=snapshot_total(v)
+                poll_label='freshness-poll-'+str(len(polls))
+                v=query(poll_label if a.sqlite else None);now=time.monotonic_ns();visible=snapshot_total(v)
                 persistent=v['consumer']['persistent']
-                durable=sum(persistent['packets']) if persistent else None
-                polls.append({'query_completed_mono_ns':now,'overview_packets':visible,'persistent_packets':durable})
-                if visible>=want and (not config['store'] or (durable is not None and durable>=want)):break
+                durable=sum(persistent['persistence']['packets'] if a.sqlite else persistent['packets']) if persistent else None
+                polls.append({'query_completed_mono_ns':now,'overview_packets':visible,'persistent_packets':durable,**({'label':poll_label,'live_packets':sum(persistent['packets']),'pending':persistent['persistence']['pending'],'maintenance_pending':persistent['persistence']['maintenance_pending']} if a.sqlite and persistent else {})})
+                if visible>=want and (not config['store'] or (durable is not None and durable>=want and (not a.sqlite or (not persistent['persistence']['pending'] and not persistent['persistence']['maintenance_pending'])))):break
                 time.sleep(.02)
         save('freshness-polls.json',{'target':want,'poll_interval_seconds':.02,'polls':polls})
         cli('runtime','show runtime');cli('completion','show product completion');cli('observation','show product observation')
@@ -153,7 +179,10 @@ try:
         hooks=[];stop(client);client=None
         cli('stop','product root stop');stop(process);life['process_absent']=not Path('/proc',str(process.pid)).exists();process=None
         final=store.with_name('e01-'+config['name']+'.json')
-        if final.exists():save('final-store.json',json.loads(final.read_text()))
+        if a.sqlite:
+            save('final-store.json',sqlite_evidence.closed_state(database))
+            save('final-space.json',sqlite_evidence.footprint(database,final))
+        elif final.exists():save('final-store.json',json.loads(final.read_text()))
         life['status']='RAW_COMPLETE'
         print(json.dumps({'arm':arm,'index':index,'status':'RAW_COMPLETE'}),flush=True)
     result['status']='RAW_COMPLETE'
@@ -166,6 +195,8 @@ finally:
             cleanup_errors.append({'step':label,'error':repr(error)})
             return None
     try:
+        if blocker:
+            cleanup('release-store-lock',blocker.rollback);cleanup('close-store-lock',blocker.close)
         for hook in hooks:
             hook[3]='-D';cleanup('remove-owned-hook',lambda hook=hook:cmd(*hook))
         cleanup('stop-client',lambda:stop(client));cleanup('stop-observer',lambda:stop(observer))

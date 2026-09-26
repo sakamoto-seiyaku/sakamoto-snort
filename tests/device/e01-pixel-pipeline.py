@@ -3,13 +3,17 @@
 import argparse,hashlib,importlib.util,json,re,shlex,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];PKG='com.sakamoto.snort.androidruntime'
-p=argparse.ArgumentParser();p.add_argument('--serial-from',type=Path,required=True);p.add_argument('--build',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--endpoint',default='192.168.4.5');p.add_argument('--arms',default='A,B,C,C,B,A,G,F,D');p.add_argument('--profile',choices=['root','vpn'],default='root');p.add_argument('--seed-baselines',type=int,default=0);p.add_argument('--skip-install',action='store_true');p.add_argument('--freshness-only',action='store_true');p.add_argument('--guard-only',action='store_true');p.add_argument('--clock-binary',type=Path);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--serial-from',type=Path,required=True);p.add_argument('--build',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--endpoint',default='192.168.4.5');p.add_argument('--arms',default='A,B,C,C,B,A,G,F,D');p.add_argument('--profile',choices=['root','vpn'],default='root');p.add_argument('--seed-baselines',type=int,default=0);p.add_argument('--skip-install',action='store_true');p.add_argument('--freshness-only',action='store_true');p.add_argument('--guard-only',action='store_true');p.add_argument('--clock-binary',type=Path);p.add_argument('--sqlite',action='store_true');p.add_argument('--root-functional',action='store_true');a=p.parse_args()
 assert not (a.guard_only and a.freshness_only)
+assert not a.root_functional or (a.sqlite and a.profile=='root' and not a.guard_only and not a.freshness_only and a.seed_baselines==0)
 serial=json.loads(a.serial_from.read_text())['serial'];b=json.loads(a.build.read_text());out=a.output.resolve();out.mkdir(parents=True,exist_ok=False);current=out
 digest=lambda x:hashlib.sha256(Path(x).read_bytes()).hexdigest();tag=hashlib.sha256(str(out).encode()).hexdigest()[:7]
-result={'status':'HOLD','kind':'android','serial':serial,'profile':a.profile,'build':str(a.build.resolve()),'build_sha256':digest(a.build),'source_sha256':b['source_sha256'],'started_ns':time.time_ns(),'arms':[]}
+result={'status':'HOLD','scope':'root_functional' if a.root_functional else 'pipeline','storage_format':'sqlite' if a.sqlite else 'atomic_json_snapshot','kind':'android','serial':serial,'profile':a.profile,'build':str(a.build.resolve()),'build_sha256':digest(a.build),'source_sha256':b['source_sha256'],'started_ns':time.time_ns(),'arms':[]}
 (out/'runner.py').write_bytes(Path(__file__).read_bytes())
 (out/'e01_store_seed.py').write_bytes((ROOT/'tests/evidence/e01_store_seed.py').read_bytes())
+if a.sqlite:
+    spec=importlib.util.spec_from_file_location('sqlite_evidence',ROOT/'tests/evidence/e02_sqlite.py');sqlite_evidence=importlib.util.module_from_spec(spec);spec.loader.exec_module(sqlite_evidence)
+    (out/'e02_sqlite.py').write_bytes((ROOT/'tests/evidence/e02_sqlite.py').read_bytes())
 def save(name,value):
     (current/name).write_text(value if isinstance(value,str) else json.dumps(value,indent=2)+'\n');return value
 def adb(*args,check=True,timeout=45):
@@ -40,12 +44,34 @@ def wait_json(path,label,predicate=lambda x:True,timeout=160):
     raise RuntimeError('JSON deadline '+label)
 def device_clock():return json.loads(root(clock_remote+' now'))
 def observation(label,operation=0,timed=False):
+    collector_started=time.time_ns()
     clock_before=device_clock() if timed else None
     q='e01q-'+str(time.time_ns());action('--es','observationNonce',q,'--ei','observationOperation',operation)
     v=wait_json('files/product-state/observation-'+q+'.json',label)
     assert 'error' not in v and v['health']['generation']==generation,v
     if timed:save(label+'-clock.json',{'before':clock_before,'after':device_clock()})
+    if a.sqlite:save(label+'-query-clock.json',{'started_host_ns':collector_started,'completed_host_ns':time.time_ns()})
     return v
+def sqlite_space(label):
+    paths=[experimental+suffix for suffix in ('.json','.pending','.lock','.sqlite3','.sqlite3-wal','.sqlite3-shm','.sqlite3-journal')]
+    text=adb('shell','run-as',PKG,'sh','-c',shlex.quote('for p in '+ ' '.join(shlex.quote(path) for path in paths) + '; do if [ -f "$p" ]; then stat -c "%n %s" "$p"; fi; done'))
+    save(label+'-space.txt',text)
+    sizes={Path(line.rsplit(' ',1)[0]).name:int(line.rsplit(' ',1)[1]) for line in text.splitlines()}
+    return save(label+'-space.json',{'files':sizes,'total_bytes':sum(sizes.values())})
+def pull_sqlite():
+    # Called only after RuntimeService has stopped its single writer. Require
+    # its checkpoint to be complete rather than copying a moving WAL snapshot.
+    sizes=sqlite_space('final')['files']
+    assert sizes.get(Path(experimental+'.sqlite3-wal').name,0)==0,'unsettled final WAL'
+    for suffix in ('.json','.sqlite3','.sqlite3-wal','.sqlite3-shm','.sqlite3-journal'):
+        remote=experimental+suffix
+        if Path(remote).name not in sizes:continue
+        args=['exec-out','run-as',PKG,'cat',remote];start=time.time_ns()
+        process=subprocess.run([str(ROOT/'dev/adb'),'-s',serial,*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=45)
+        with (out/'operations.jsonl').open('a') as file:file.write(json.dumps({'start_ns':start,'end_ns':time.time_ns(),'argv':args,'code':process.returncode})+'\n')
+        assert process.returncode==0,process.stderr.decode()
+        (current/('legacy-source.json' if suffix=='.json' else 'final'+suffix)).write_bytes(process.stdout)
+    save('final-store.json',sqlite_evidence.closed_state(current/'final.sqlite3'))
 def phase(name):
     v=wait_json('files/product-state/t12-'+nonce+'.json',name,lambda x:x.get('phase')==name or bool(x.get('error')))
     assert not v.get('error'),v
@@ -117,13 +143,14 @@ try:
             seed.write(current/'synthetic-seed.json',a.seed_baselines)
             write_app(current/'synthetic-seed.json',experimental+'.json')
         started=True
+        startup_started=time.monotonic_ns()
         action(*(['--ez','debugVpnHevValidation','true'] if a.profile=='vpn' else ['--ez','runtimeStart','true','--es','runtimeProfile','root']))
-        running=state('running');generation=int(running['generation']);assert running['profile']==a.profile
+        running=state('running');runtime_running_ns=time.monotonic_ns();generation=int(running['generation']);assert running['profile']==a.profile
         assert running['protectionRunning']==('true' if a.profile=='root' else 'false'),'controlled profile claim'
         text=save('processes.txt',root('ps -A -o PID,UID,ARGS'))
         pids=[int(parts[0]) for l in text.splitlines() if len(parts:=l.split(None,2))==3 and parts[0].isdigit() and Path(parts[2].split()[0]).name=='libvpp_runtime.so'];assert len(pids)==1
         vpp_pid=pids[0];app_pid=int(adb('shell','pidof',PKG+':runtime').strip())
-        life={'capture_start_device_ns':int(adb('shell','date','+%s%N').strip()),'synthetic_seed_baselines':a.seed_baselines,'generation':generation,'config':config,'vpp_pid':vpp_pid,'app_pid':app_pid,'phases':[]};result['arms'].append(life)
+        life={'runtime_ready_wait_ns':runtime_running_ns-startup_started,'startup_scope':'runtime start request to running-state polling','capture_start_device_ns':int(adb('shell','date','+%s%N').strip()),'synthetic_seed_baselines':a.seed_baselines,'generation':generation,'config':config,'vpp_pid':vpp_pid,'app_pid':app_pid,'phases':[]};result['arms'].append(life)
         configuration_nonce='e01-config-'+str(time.time_ns())
         action('--es','ruleImportNonce',configuration_nonce,'--ei','ruleOperation',0,'--el','expectedSavedRevision',0)
         configuration=wait_json('files/product-state/rule-import-'+configuration_nonce+'.json','configuration')
@@ -149,10 +176,12 @@ try:
             life['expected_snapshot_guard']=True
         else:assert baseline['consumer']['store_error'] is None
         if a.profile=='vpn':assert baseline['consumer']['overview']['packets']==[0,0],'unexpected pre-workload Flow traffic'
+        if a.sqlite:
+            save('startup-resources.json',resources('startup'));sqlite_space('startup')
         nonce='e01-'+tag+'-'+str(index)+'-'+str(time.time_ns());plan={'nonce':nonce,'endpoint':a.endpoint,'port':42141,'source':43000,'mode':'udp','bindDefault':a.profile=='root','e01':True,'e01PauseFlows':192 if a.profile=='vpn' else 1024};save('plan.json',plan)
         action('--es','t12ProbePlan',shlex.quote(json.dumps(plan)));phase('e01_ready')
         previous='e01_ready'
-        for name in (('idle','low') if (a.freshness_only or a.guard_only) else ('idle','low','burst','sustained','active','short','pause')):
+        for name in (('idle','low') if (a.freshness_only or a.guard_only or a.root_functional) else ('idle','low','burst','sustained','active','short','pause')):
             if name=='pause':observation('pause-control',1)
             observation(name+'-before')
             background=name in ('idle','low','burst')
@@ -168,23 +197,39 @@ try:
                 polls=[];deadline=time.monotonic()+8
                 while time.monotonic()<deadline:
                     label='freshness-poll-'+str(len(polls));value=observation(label,timed=True)
-                    visible=sum(value['consumer']['persistent']['packets'])==40
-                    polls.append({'label':label,'visible':visible})
-                    if visible:break
+                    persistent=value['consumer']['persistent'];visible=sum(persistent['packets'])==40
+                    durable=visible if not a.sqlite else persistent['persistence']['packets']==[20,20] and not persistent['persistence']['pending'] and not persistent['persistence']['maintenance_pending']
+                    polls.append({'label':label,'visible':visible,**({'durable':durable} if a.sqlite else {})})
+                    if durable:break
                     time.sleep(.02)
-                life['freshness']={'target_packets':40,'last_send_mono_ns':row['e01']['exchanges'][-1]['sentMonoNs'],'polls':polls,'target_reached':bool(polls and polls[-1]['visible'])}
+                life['freshness']={'target_packets':40,'last_send_mono_ns':row['e01']['exchanges'][-1]['sentMonoNs'],'polls':polls,'target_reached':bool(polls and polls[-1]['visible']),**({'durable_reached':bool(polls and polls[-1]['durable'])} if a.sqlite else {})}
                 assert life['freshness']['target_reached'],'normal API freshness target deadline'
             after_resources=resources(name+'-after')
             save(name+'-resources.json',{'before':before_resources,'after':after_resources})
             save(name+'-activity-after.txt',adb('shell','dumpsys','activity','activities'))
-            if config['store'] and not a.guard_only:save(name+'-background-store.json',app(experimental+'.json'))
+            if config['store'] and not a.guard_only:
+                if a.sqlite:sqlite_space(name+'-immediate')
+                else:save(name+'-background-store.json',app(experimental+'.json'))
             immediate=observation(name+'-immediate')
             if name=='pause':observation('resume-control',2)
             time.sleep(1.3);settled=observation(name+'-settled')
+            if a.sqlite:
+                expected=sum(item['sent']+item['received'] for item in life['phases'])+row['e01']['sent']+row['e01']['received']
+                deadline=time.monotonic()+8
+                while True:
+                    persistent=settled['consumer']['persistent'];progress=persistent['persistence']
+                    if a.root_functional:
+                        known=[record for record in settled['consumer']['overview']['records'] if record and record['family']==4 and record['protocol']==17 and record['ports'][1]==42141 and 43000<=record['ports'][0]<45000]
+                        if sum(sum(record['packets']) for record in known)>=expected:break
+                    elif sum(settled['consumer']['overview']['packets'])>=expected and progress['packets']==persistent['packets'] and not progress['pending'] and not progress['maintenance_pending']:break
+                    assert time.monotonic()<deadline,'SQLite deferred settlement deadline'
+                    time.sleep(.1);settled=observation(name+'-settled')
+                sqlite_space(name)
             save(name+'-resources-settled.json',resources(name+'-settled'))
             life['phases'].append({'name':name,'sent':row['e01']['sent'],'received':row['e01']['received'],'startedMonoNs':row['e01']['startedMonoNs'],'completedMonoNs':row['e01']['completedMonoNs']});previous='e01_'+name
-        if not (a.freshness_only or a.guard_only):release(previous);phase('finished')
+        if not (a.freshness_only or a.guard_only or a.root_functional):release(previous);phase('finished')
         else:life['probe_cancelled_at_low_gate']=True
+        if a.root_functional:observation('root-freeze-control',1)
         observation('final')
         life['capture_end_device_ns']=int(adb('shell','date','+%s%N').strip())
         cli('runtime','show runtime','show product completion','show product observation')
@@ -196,7 +241,9 @@ try:
             root('rm -f '+tun_file+'.pcap '+tun_file+'.log');tun_capture=None
         action('--ez','runtimeStop','true');stopped=state('stopped');assert stopped['mayBeActive']=='false';started=False
         assert root('test ! -d /proc/'+str(vpp_pid)+' && echo absent').strip()=='absent';life['process_absent']=True
-        if config['store']:save('final-store.json',app(experimental+'.json'))
+        if config['store']:
+            if a.sqlite:pull_sqlite()
+            else:save('final-store.json',app(experimental+'.json'))
         adb('shell','am','force-stop',PKG);time.sleep(.3)
         life['status']='RAW_COMPLETE';print(json.dumps({'arm':arm,'index':index,'status':'RAW_COMPLETE','generation':generation}),flush=True)
     result['status']='RAW_COMPLETE'
@@ -243,7 +290,7 @@ finally:
             cleanup('restore-power-setting',lambda:adb('shell','settings','put','global','stay_on_while_plugged_in',previous_power))
         for path in created_stores:
             cleanup('retain-store-'+Path(path).name,lambda path=path:save(Path(path).name+'-cleanup-store.txt',app(path+'.json',check=False)))
-            cleanup('remove-experiment-store-'+Path(path).name,lambda path=path:adb('shell','run-as',PKG,'rm','-f',path+'.json',path+'.pending',path+'.lock'))
+            cleanup('remove-experiment-store-'+Path(path).name,lambda path=path:adb('shell','run-as',PKG,'rm','-f',path+'.json',path+'.pending',path+'.lock',*([path+'.sqlite3',path+'.sqlite3-wal',path+'.sqlite3-shm',path+'.sqlite3-journal'] if a.sqlite else [])))
         if clock_remote:cleanup('remove-clock-helper',lambda:adb('shell','rm','-f',clock_remote))
         cleanup('remove-experiment-config',lambda:adb('shell','run-as',PKG,'rm','-f',config_path,'files/observation/overall.e01-native'))
         final_history=cleanup('read-accepted-history',lambda:save('final-history.json',app('files/observation/overall.json')))

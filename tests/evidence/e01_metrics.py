@@ -32,12 +32,16 @@ def resource_delta(before,after,android,hz):
 
 def counters(before,after):
     c0,c1=before['consumer'],after['consumer'];e0,e1=c0['e01'],c1['e01']
-    return dict(store_batches=e1['batches']-e0['batches'],store_records=e1['records']-e0['records'],
+    row=dict(store_batches=e1['batches']-e0['batches'],store_records=e1['records']-e0['records'],
         store_elapsed_ms=(e1['consume_ns']-e0['consume_ns'])/1e6,store_query_ms=(e1['query_ns']-e0['query_ns'])/1e6,
         waits=c1['waits']-c0['waits'],notifications=sum(x['notifications'] for x in after['health']['channels'])-sum(x['notifications'] for x in before['health']['channels']))
+    if c1['persistent'] and c1['persistent']['storage']=='sqlite':
+        p0,p1=c0['persistent']['persistence'],c1['persistent']['persistence']
+        row.update(sqlite_commits=p1['commits']-p0['commits'],sqlite_checkpoints=p1['checkpoints']-p0['checkpoints'])
+    return row
 
 def metrics(directory):
-    directory=Path(directory);result=json.loads((directory/'result.json').read_text());android=result['kind']=='android';rows=[]
+    directory=Path(directory);result=json.loads((directory/'result.json').read_text());android=result['kind']=='android';sqlite=result.get('storage_format')=='sqlite';rows=[]
     for index,arm in enumerate(result['arms']):
         prefix=directory/f"{index:02d}-{arm['config']['arm']}"
         def data(name):return json.loads((prefix/name).read_text())
@@ -77,23 +81,51 @@ def metrics(directory):
         normal=[x for x in phases if x['name'] not in ('pause','recovery')]
         assert all(x['closed_window'] is not None for x in normal),'missing closed cost interval'
         keys=['vpp_cpu_ms','rust_cpu_ms','consumer_thread_cpu_ms','rust_write_bytes','store_batches','store_records','store_elapsed_ms','store_query_ms','waits','notifications']
+        if sqlite:keys+=['sqlite_commits','sqlite_checkpoints']
         summary={k:sum(x['closed_window'][k] for x in normal) for k in keys}
         summary.update(sent=sum(x['sent'] for x in normal),echoed=sum(x['echoed'] for x in normal))
         summary['closed_window_methods']=sorted(set(x['closed_window']['method'] for x in normal))
+        first_name,last_name=normal[0]['name'],normal[-1]['name']
+        continuous_before=data(first_name+'-resources.json')['before']
+        if (prefix/(last_name+'-resources-settled.json')).exists():
+            continuous_after=data(last_name+'-resources-settled.json');continuous_state=data(last_name+'-settled.json')
+        else:
+            next_index=next(i for i,p in enumerate(arm['phases']) if p['name']==last_name)+1
+            next_name=arm['phases'][next_index]['name']
+            continuous_after=data(next_name+'-resources.json')['before'];continuous_state=data(next_name+'-before.json')
+        summary['continuous_normal_window']={**resource_delta(continuous_before,continuous_after,android,hz),
+            **counters(data(first_name+'-before.json'),continuous_state),
+            'meaning':'first normal phase pre-send through last normal phase settled; includes all intervening controls'}
+        time_key='at_host_ns' if android else 'at_mono_ns'
+        summary['continuous_normal_window']['elapsed_ms']=(continuous_after['rust'][time_key]-continuous_before['rust'][time_key])/1e6
         summary['all_run_store_batch_ms']={'p50':percentile([s[1]/1e6 for s in samples],.5),'p99':percentile([s[1]/1e6 for s in samples],.99),'max':e['max_consume_ns']/1e6}
         summary['all_run_batch_max_activity_age_ms']={'p50':percentile([s[2]/1000 for s in samples],.5),'p99':percentile([s[2]/1000 for s in samples],.99)}
         summary['peak_sampled_rust_rss_kib']=max(integer(s['rust']['fields' if android else 'status']['VmRSS']) for s in resource_samples)
         summary['peak_rust_hwm_kib']=max(integer(s['rust']['fields' if android else 'status']['VmHWM']) for s in resource_samples)
         store=(prefix/'observation'/('e01-'+arm['config']['name']+'.json')) if not android else prefix/'final-store.json'
         summary['final_snapshot_bytes']=store.stat().st_size if store.exists() else 0
+        if sqlite:
+            spaces=[data(path.name) for path in prefix.glob('*-space.json')]
+            summary['peak_sampled_workspace_bytes']=max(row['total_bytes'] for row in spaces)
+            summary['final_space']=data('final-space.json')
+            summary['final_database_bytes']=sum(size for name,size in summary['final_space']['files'].items() if name.endswith('.sqlite3'))
+            summary['final_json_projection_bytes']=(prefix/'final-store.json').stat().st_size
+            summary['startup_resources']=data('startup-resources.json')
+            summary['all_run_consume_call_ms']=summary.pop('all_run_store_batch_ms')
         fresh=prefix/'freshness-polls.json'
         if fresh.exists():
             f=data('freshness-polls.json');t=data('freshness-traffic.json');polls=f['polls']
             reached=bool(polls) and polls[-1]['overview_packets']>=f['target'] and (not arm['config']['store'] or (polls[-1]['persistent_packets'] is not None and polls[-1]['persistent_packets']>=f['target']))
             summary['freshness']={'target_reached':reached,'last_poll_ms':(polls[-1]['query_completed_mono_ns']-t['exchanges'][0]['sentMonoNs'])/1e6 if polls else None}
-        rows.append({'arm':arm['config']['arm'],'generation':arm['generation'],'synthetic_seed_baselines':arm.get('synthetic_seed_baselines',0),'consumer_ready_wait_ms':arm.get('consumer_ready_wait_ns',0)/1e6,'summary':summary,'phases':phases})
-    return {'kind':result['kind'],'profile':result.get('profile','root'),'source_sha256':result['source_sha256'],
-        'notes':['Descriptive observations only; no performance gate.','Closed windows include deferred refresh/persistence and explicitly identified diagnostic/control work.','Traffic-only CPU snapshots are separate and cannot be paired with settled store counters.','Android Rust process means RuntimeService; consumer thread is also reported separately.','Kernel I/O accounting is not NAND energy or wear.','Activity ages include delayed state-only END records and are not delivery-latency percentiles.','Context-switch deltas use only threads present at both boundaries; turnover is reported and counts are not wakeup totals.','At most 4096 store batch samples are retained.'], 'arms':rows}
+            if sqlite:
+                started=t['exchanges'][0]['sentMonoNs']
+                live=next((p for p in polls if p['live_packets']>=f['target']),None)
+                durable=next((p for p in polls if p['persistent_packets']>=f['target']),None)
+                summary['freshness'].update(live_upper_ms=(live['query_completed_mono_ns']-started)/1e6 if live else None,
+                    durable_upper_ms=(durable['query_completed_mono_ns']-started)/1e6 if durable else None)
+        rows.append({'arm':arm['config']['arm'],'generation':arm['generation'],'synthetic_seed_baselines':arm.get('synthetic_seed_baselines',0),'consumer_ready_wait_ms':arm.get('consumer_ready_wait_ns',0)/1e6,'runtime_ready_wait_ms':arm.get('runtime_ready_wait_ns',0)/1e6,'summary':summary,'phases':phases})
+    return {'kind':result['kind'],'storage_format':result.get('storage_format','atomic_json_snapshot'),'profile':result.get('profile','root'),'source_sha256':result['source_sha256'],
+        'notes':['Descriptive observations only; no performance gate.','Closed windows include deferred refresh/persistence and explicitly identified diagnostic/control work.','Traffic-only CPU snapshots are separate and cannot be paired with settled store counters.','Android Rust process means RuntimeService; consumer thread is also reported separately.','Kernel I/O accounting is not NAND energy or wear.','Activity ages include delayed state-only END records and are not delivery-latency percentiles.','Context-switch deltas use only threads present at both boundaries; turnover is reported and counts are not wakeup totals.','At most 4096 store consume-call samples are retained; SQLite commits/checkpoints are separate counters.','SQLite workspace figures are sampled, not a claim that between-sample WAL peaks were zero.'], 'arms':rows}
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('directory',type=Path);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
     value=metrics(a.directory);a.output.write_text(json.dumps(value,indent=2)+'\n');print(json.dumps({'kind':value['kind'],'arms':len(value['arms'])}))

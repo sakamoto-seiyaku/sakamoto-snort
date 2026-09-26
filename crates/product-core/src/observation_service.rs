@@ -191,7 +191,7 @@ mod live {
                                 store.mark_gap();
                                 coverage_reported = true;
                             }
-                            if !records.is_empty() || newly_incomplete {
+                            if !records.is_empty() || newly_incomplete || store.has_pending() {
                                 let now = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_micros() as u64)
@@ -206,7 +206,9 @@ mod live {
                         }
                         if !work {
                             worker_state.lock().unwrap().waits += 1;
-                            if unsafe { product_observation_wait(handle, -1) } < 0 {
+                            let timeout =
+                                store.as_ref().map_or(-1, ObservationStore::wait_timeout_ms);
+                            if unsafe { product_observation_wait(handle, timeout) } < 0 {
                                 break;
                             }
                         }
@@ -400,7 +402,12 @@ mod live {
                 640
             );
             assert_eq!(durable["persistent"]["coverage"]["incomplete"], true);
-            // No periodic timeout rescues notifications or creates idle spins.
+            // The one-shot pending-tail deadline commits without another
+            // producer notification, then the consumer returns to an idle wait.
+            wait(&|s| {
+                s["persistent"]["persistence"]["packets"][0] == 640
+                    && s["persistent"]["persistence"]["pending"] == false
+            });
             wait(&|s| s["waits"].as_u64().unwrap() > 0);
             thread::sleep(Duration::from_millis(30));
             let waits = service.snapshot()["waits"].clone();

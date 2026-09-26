@@ -18,6 +18,11 @@ cat >"$cc_wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
+# Dependencies such as bundled SQLite have their own compiler contract. Keep
+# this fixture's fake-header checks scoped to the Product-owned C boundary.
+if [[ "$args" != *"/src/product/native/"* ]]; then
+  exec "$SAKAMOTO_TEST_REAL_CC" "$@"
+fi
 required_flags=(-Werror)
 # The observation transport deliberately uses GNU C11; generated VAPI is
 # strict C11 and needs the explicit glibc endian feature switch.
@@ -53,12 +58,17 @@ ar_wrapper="$fixture_root/ar"
 cat >"$ar_wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ " $* " != *"libsakamoto_product_"* ]]; then
+  exec "$SAKAMOTO_TEST_REAL_AR" "$@"
+fi
 [[ "$#" -ge 2 ]] || exit 1
 : >"$2"
 EOF
 chmod +x "$ar_wrapper"
 
 CARGO_TARGET_DIR="$fixture_root/target" \
+SAKAMOTO_TEST_REAL_CC="$(command -v cc)" \
+SAKAMOTO_TEST_REAL_AR="$(command -v ar)" \
 CC="$cc_wrapper" \
 AR="$ar_wrapper" \
 SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR="$fixture_root/include" \

@@ -1,5 +1,10 @@
 # T22 persistent overall minutes
 
+Storage implementation update: [E02 SQLite observation](E02_SQLITE_OBSERVATION.md)
+supersedes the JSON persistence and committed-only query behavior described
+below. This document retains T22's original delivery contract and wire/time
+semantics; use E02 for the current live/pending and persistence boundary.
+
 The agreed test seams are the existing Product observation ingestion/query API,
 the real C transport → Rust consumer boundary, and filesystem interruption.
 These implement SAKAMOTO-273's Host, Linux and Android verification requirements.

@@ -4,7 +4,7 @@
 No performance threshold is invented here. Evidence validity is distinct from a
 performance or release decision. Rehashed semantic mutations exercise this oracle.
 """
-import argparse,copy,hashlib,importlib.util,ipaddress,json,re,subprocess,zipfile
+import argparse,copy,hashlib,importlib.util,ipaddress,json,re,sqlite3,subprocess,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -28,12 +28,87 @@ def capture_names(result):
     names=['host.pcap','device.pcap'] if result['kind']=='android' else ['wire.pcap']
     return names+sorted(name for name in result['files'] if name.endswith('/tun.pcap'))
 
+def verify_root_functional(directory,result,read,data,pcaps,endpoints):
+    """Root's known UDP flow only; ambient mixed-UID totals are not a pure A/B/C oracle."""
+    assert result['kind']=='android' and result['profile']=='root' and result['storage_format']=='sqlite'
+    assert len(result['arms'])==1
+    arm=result['arms'][0];cfg=arm['config'];prefix='00-C/';generation=arm['generation']
+    assert arm['status']=='RAW_COMPLETE' and arm['process_absent']
+    assert cfg==dict(arm='C',store=True,drain=128,name=cfg['name'],growth=32,flush=1000000,export=True)
+    assert [p['name'] for p in arm['phases']]==['idle','low'] and arm['probe_cancelled_at_low_gate']
+    props=lambda name:dict(line.split('=',1) for line in read(prefix+name).splitlines() if '=' in line and not line.startswith('#'))
+    running=props('running.properties');stopped=props('stopped.properties')
+    assert running['profile']=='root' and int(running['generation'])==generation and running['protectionRunning']=='true'
+    assert stopped['state']=='stopped' and stopped['mayBeActive']=='false'
+    assert 'e01.export=1 growth=32 flush_us=1000000' in read(prefix+'configure.txt')
+    traffic=data(prefix+'e01_low.json')['e01'];packets=traffic['exchanges']
+    assert traffic['sent']==len(packets)==20 and sum(p['echoed'] for p in packets)==traffic['received']
+    payloads={p['payload'] for p in packets};assert len(payloads)==20 and set(endpoints)<=payloads
+    actual=[p for p in pcaps['device.pcap'] if p['udp.payload'] in payloads]
+    assert all(p['family']==4 and p['ip.proto']=='17' and int(p['ip.len'])==92 for p in actual)
+    requests=[p for p in actual if p['udp.dstport']=='42141'];replies=[p for p in actual if p['udp.srcport']=='42141']
+    for packet in packets:
+        assert len(bytes.fromhex(packet['payload']))==64 and packet['sentMonoNs']<=packet['endMonoNs']
+        assert sum(p['udp.payload']==packet['payload'] for p in requests)==1,'actual Root request identity'
+        if packet['echoed']:assert packet['payload'] in endpoints and sum(p['udp.payload']==packet['payload'] for p in replies)==1,'actual Root reply identity'
+    expected=[len(requests),len(replies)];expected_bytes=[n*92 for n in expected]
+    addresses={ipaddress.ip_address(p['ip.src']).packed+ipaddress.ip_address(p['ip.dst']).packed for p in requests}
+    assert len(addresses)==1
+    def known(value):
+        return [r for r in value['consumer']['overview']['records'] if r and r['family']==4 and r['protocol']==17 and r['ports']==[43000,42141]]
+    for name in ('low-settled','root-freeze-control','final'):
+        value=data(prefix+name+'.json');health=value['health'];consumer=value['consumer'];persistent=consumer['persistent']
+        assert health['generation']==generation and health['version']==2 and health['mapping_bytes']==332544 and health['connected']==1,'Root runtime/wire identity'
+        assert consumer['live'] and consumer['error'] is None and consumer['malformed']==0 and consumer['store_error'] is None
+        selected=known(value);assert len(selected)==1,'one identified Root workload Flow'
+        record=selected[0]
+        assert record['generation']==generation and bytes(record['addresses']) in addresses,'Root Flow tuple/generation'
+        assert record['packets']==expected and record['bytes']==expected_bytes,'Root known-flow directional byte/count oracle'
+        assert persistent['storage']=='sqlite' and persistent['visibility']=='live_including_pending' and persistent['save_error'] is None
+        for field in ('packets','bytes'):
+            assert persistent[field]==[sum(m[field][d] for m in persistent['minutes'].values()) for d in (0,1)],'Root maintained minute conservation'
+            assert all(0<=n<=persistent[field][d] for d,n in enumerate(persistent['persistence'][field])),'Root live/durable bounds'
+        assert persistent['persistence']['pending_rows']<=4096
+        assert sum(consumer['overview']['packets'])>=sum(expected) and basic(value)>=sum(expected),'Root known packets not hidden'
+        for channel in health['channels']:
+            assert channel['capacity']==512 and channel['occupancy']<=512
+            assert channel['attempted']==channel['published']+channel['full'] and channel['published']==channel['consumed']+channel['occupancy'],'Root queue conservation'
+    final=data(prefix+'final.json');frozen=data(prefix+'root-freeze-control.json')
+    assert final['consumer']['overview']['accepted']==frozen['consumer']['overview']['accepted'],'Root accounting frozen before final snapshot'
+    stored=data(prefix+'final-store.json');persistent=final['consumer']['persistent']
+    assert stored['totals']['packets']==persistent['packets'] and stored['totals']['bytes']==persistent['bytes'],'Root API/disk identity'
+    assert stored['minutes']==persistent['minutes'] and not stored['open_session'] and stored['gaps']>0,'Root close persisted state/gap'
+    record=known(final)[0];key=f"{generation}:{record['owner']}:{record['slot']}"
+    assert stored['baselines'][key]['record']==record,'Root committed known-flow baseline'
+    database=Path(directory)/prefix/'final.sqlite3'
+    assert prefix+'final.sqlite3' in result['files']
+    with sqlite3.connect(database.resolve().as_uri()+'?mode=ro&immutable=1',uri=True) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone()==('ok',)
+        disk={'baselines':{},'recent':{},'minutes':{}}
+        for kind,key,raw in db.execute('SELECT kind,key,value FROM observation'):
+            value=json.loads(raw)
+            if kind==0:assert key=='';disk.update(value)
+            else:disk[{1:'baselines',2:'recent',3:'minutes'}[kind]][key]=value
+    assert disk==stored,'Root raw SQLite identity'
+    space=data(prefix+'final-space.json');assert sum(space['files'].values())==space['total_bytes']<=256*1024*1024
+    for phase in ('idle','low'):
+        closed=data(prefix+phase+'-resources-settled.json');clock=data(prefix+phase+'-settled-query-clock.json')
+        assert closed['rust']['pid']==arm['app_pid'] and closed['vpp']['pid']==arm['vpp_pid']
+        assert closed['rust']['at_host_ns']>=clock['completed_host_ns'],'Root resource/query chronology'
+    return {'status':'VALID_EVIDENCE','performance_decision':'ROOT_FUNCTIONAL_ONLY_NO_AB_COMPARISON',
+        'scope':'known 20-pair UDP workload and SQLite/API consistency; ambient Root traffic is outside a strict all-packet cost oracle',
+        'arms':[{'generation':generation,'known_packets':expected,'known_bytes':expected_bytes,
+            'observed_packets':final['consumer']['overview']['packets'],'stored_packets':stored['totals']['packets'],
+            'ambient_observed_packets':sum(final['consumer']['overview']['packets'])-sum(expected),
+            'sent':20,'echoed':traffic['received']}],'errors':[]}
+
 def verify(directory,overrides=None,pcaps=None):
     directory=Path(directory);overrides=overrides or {}
     def read(name):return overrides[name] if name in overrides else (directory/name).read_text()
     def data(name):return json.loads(read(name))
     try:
         result=data('result.json');assert result['status']=='RAW_COMPLETE','collector incomplete'
+        sqlite=result.get('storage_format','atomic_json_snapshot')=='sqlite'
         assert result['started_ns']<result['completed_ns']
         for name,wanted in result['files'].items():
             actual=hashlib.sha256(overrides[name].encode()).hexdigest() if name in overrides else digest(directory/name)
@@ -76,6 +151,7 @@ def verify(directory,overrides=None,pcaps=None):
         endpoint=[json.loads(l) for l in read('endpoint.jsonl').splitlines() if 'payload' in l]
         endpoints={}
         for row in endpoint:endpoints.setdefault(row['payload'],[]).append(row)
+        if result.get('scope')=='root_functional':return verify_root_functional(directory,result,read,data,pcaps,endpoints)
         payload_owner={};summaries=[];address_oracles={}
         for index,arm in enumerate(result['arms']):
             assert arm['status']=='RAW_COMPLETE' and arm['process_absent'],'runtime cleanup'
@@ -135,13 +211,26 @@ def verify(directory,overrides=None,pcaps=None):
                         for field in ('packets','bytes'):
                             assert persistent[field]==[sum(m[field][d] for m in persistent['minutes'].values()) for d in (0,1)],'minute conservation'
                         assert all(int(minute)%60==0 for minute in persistent['minutes']),'UTC minute alignment'
-                        assert persistent['storage']=='atomic_json_snapshot'
+                        assert persistent['storage']==('sqlite' if sqlite else 'atomic_json_snapshot')
+                        if sqlite:
+                            assert persistent['visibility']=='live_including_pending','live query semantics'
+                            progress=persistent['persistence']
+                            assert progress['error']==persistent['save_error'],'persistence error projection'
+                            assert 0<=progress['pending_rows']<=4096,'bounded dirty keys'
+                            assert not progress['pending_rows'] or progress['pending'],'dirty rows cannot be called committed'
+                            for field in ('packets','bytes'):
+                                assert len(progress[field])==2 and all(0<=n<=persistent[field][d] for d,n in enumerate(progress[field])),'committed cannot exceed live'
+                                if not progress['pending']:assert progress[field]==persistent[field],'clean live/committed identity'
+                            assert persistent['limits']['budget_bytes']==256*1024*1024,'formal total budget'
+                            if value is after and persistent['save_error'] is None:
+                                assert not progress['pending'] and not progress['maintenance_pending'],'settled includes commit and checkpoint'
+                                assert progress['packets']==persistent['packets'],'settled durability'
                         assert persistent['bytes']==[p*92 for p in persistent['packets']],'independent durable byte oracle'
                     if not cfg['export']:
                         assert all(c['attempted']==0 for c in h['channels']) and consumer['overview']['packets']==[0,0],'no-export arm'
                 assert basic(after)>=basic(before),'basic monotonicity'
                 if (cfg['export'] and name not in ('pause','recovery')
-                    and not arm.get('synthetic_seed_baselines',0)
+                    and (sqlite or not arm.get('synthetic_seed_baselines',0))
                     and not any(c['full'] for c in after['health']['channels'])
                     and after['consumer']['store_error'] is None):
                     seen={r['payload'] for r in packets}
@@ -164,6 +253,15 @@ def verify(directory,overrides=None,pcaps=None):
                     assert x['pid']==y['pid']==arm['vpp_pid' if actor=='vpp' else ('app_pid' if android else 'rust_pid')],'measured process identity'
                     if android:assert y['stats'][0]['cpu_ticks']>=x['stats'][0]['cpu_ticks'],'CPU monotonicity'
                     else:assert y['cpu_ticks']>=x['cpu_ticks'],'CPU monotonicity'
+                if sqlite:
+                    closed=data(prefix+name+'-resources-settled.json');clock=data(prefix+name+'-settled-query-clock.json')
+                    at='at_host_ns' if android else 'at_mono_ns'
+                    query_end=clock['completed_host_ns' if android else 'completed_mono_ns']
+                    for actor in ('vpp','rust'):
+                        assert closed[actor]['pid']==resources['before'][actor]['pid'],'closed window process identity'
+                        assert closed[actor][at]>=query_end,'resource window includes deferred work/query'
+                    space=data(prefix+name+'-space.json')
+                    assert sum(space['files'].values())==space['total_bytes']<=256*1024*1024,'database/index/journal workspace bound'
             freshness_interval=None
             if not android and prefix+'freshness-traffic.json' in result['files']:
                 traffic=data(prefix+'freshness-traffic.json')
@@ -177,12 +275,32 @@ def verify(directory,overrides=None,pcaps=None):
                     successful=lambda p:p['overview_packets']>=freshness['target'] and (not cfg['store'] or (p['persistent_packets'] is not None and p['persistent_packets']>=freshness['target']))
                     store_available=not cfg['store'] or (baseline_fresh['consumer']['persistent'] and not baseline_fresh['consumer']['persistent']['save_error'])
                     if store_available:assert successful(polls[-1]),'freshness target not reached'
+                    if sqlite:
+                        for poll in polls:
+                            value=data(prefix+poll['label']+'.json');progress=value['consumer']['persistent']['persistence']
+                            assert value['health']['generation']==generation and value['consumer']['live'],'freshness runtime identity'
+                            assert sum(value['consumer']['persistent']['packets'])==poll['live_packets'],'freshness live API identity'
+                            assert sum(progress['packets'])==poll['persistent_packets'],'freshness durable API identity'
+                            assert progress['pending']==poll['pending'] and progress['maintenance_pending']==poll['maintenance_pending'],'freshness pending identity'
+                            clock=data(prefix+poll['label']+'-query-clock.json')
+                            assert traffic['exchanges'][0]['sentMonoNs']<=clock['started_mono_ns']<=clock['completed_mono_ns']<=poll['query_completed_mono_ns'],'freshness query clock order'
+                            assert progress['bytes']==[n*92 for n in progress['packets']],'freshness committed bytes'
+                            assert 0<=poll['persistent_packets']<=poll['live_packets']<=poll['overview_packets'],'freshness ordering'
+
                     freshness_interval={'target_reached':bool(successful(polls[-1])),'upper_ms':(polls[-1]['query_completed_mono_ns']-traffic['exchanges'][0]['sentMonoNs'])/1e6}
+                    if sqlite:
+                        start=traffic['exchanges'][0]['sentMonoNs']
+                        for key,field in [('live','live_packets'),('durable','persistent_packets')]:
+                            first=next(i for i,p in enumerate(polls) if p[field]>=freshness['target'])
+                            upper=data(prefix+polls[first]['label']+'-query-clock.json')['completed_mono_ns']
+                            lower=data(prefix+polls[first-1]['label']+'-query-clock.json')['started_mono_ns'] if first else start
+                            freshness_interval[key]={'lower_ms':max(0,(lower-start)/1e6),'upper_ms':(upper-start)/1e6}
+                        freshness_interval['meaning']='normal live visibility and committed-count visibility are separate polling bounds'
             if android and arm.get('freshness'):
-                f=arm['freshness'];assert f['target_packets']==40 and f['target_reached'] and f['polls'] and f['polls'][-1]['visible'] and not any(p['visible'] for p in f['polls'][:-1]),'Android freshness target'
+                f=arm['freshness'];assert f['target_packets']==40 and f['target_reached'] and f['polls'] and f['polls'][-1]['visible'] and (sqlite or not any(p['visible'] for p in f['polls'][:-1])),'Android freshness target'
                 assert digest(directory/'clock-arm64')==result['clock_binary_sha256']==read('installed-clock.txt').split()[0],'device clock helper identity'
                 low=data(prefix+'e01_low.json')['e01'];assert f['last_send_mono_ns']==low['exchanges'][-1]['sentMonoNs']
-                lower=0;upper=None
+                lower=0;upper=None;durable_lower=0;durable_upper=None
                 for poll in f['polls']:
                     value=data(prefix+poll['label']+'.json');bounds=data(prefix+poll['label']+'-clock.json')
                     assert f['last_send_mono_ns']<=bounds['before']['monotonic_ns']<=bounds['after']['monotonic_ns'],'Android monotonic API bounds'
@@ -196,16 +314,33 @@ def verify(directory,overrides=None,pcaps=None):
                     assert poll_persistent['packets']==[sum(m['packets'][d] for m in poll_persistent['minutes'].values()) for d in (0,1)],'freshness minute conservation'
                     visible=poll_persistent['packets']==[20,20] and poll_overview['packets']==[20,20]
                     assert poll['visible']==visible,'actual API target visibility'
-                    if visible:
-                        upper=(bounds['after']['monotonic_ns']-f['last_send_mono_ns'])/1e6;break
-                    lower=(bounds['before']['monotonic_ns']-f['last_send_mono_ns'])/1e6
+                    if visible and upper is None:
+                        upper=(bounds['after']['monotonic_ns']-f['last_send_mono_ns'])/1e6
+                    elif not visible and upper is None:lower=(bounds['before']['monotonic_ns']-f['last_send_mono_ns'])/1e6
+                    if not sqlite and visible:break
+                    if sqlite:
+                        progress=poll_persistent['persistence']
+                        durable=progress['packets']==[20,20] and not progress['pending'] and not progress['maintenance_pending']
+                        assert poll['durable']==durable,'actual committed target visibility'
+                        assert all(0<=n<=poll_persistent['packets'][d] for d,n in enumerate(progress['packets'])),'freshness committed/live bounds'
+                        assert progress['bytes']==[n*92 for n in progress['packets']],'committed freshness bytes'
+                        if durable and durable_upper is None:durable_upper=(bounds['after']['monotonic_ns']-f['last_send_mono_ns'])/1e6
+                        elif not durable and durable_upper is None:durable_lower=(bounds['before']['monotonic_ns']-f['last_send_mono_ns'])/1e6
                 assert upper is not None and lower<=upper,'bounded target reached'
-                freshness_interval={'target_reached':True,'lower_ms':lower,'upper_ms':upper,'meaning':'packet-send to normal API visibility bound; RPC and sampling overhead retained'}
+                freshness_interval={'target_reached':True,'lower_ms':lower,'upper_ms':upper,'meaning':'packet-send to normal live API visibility bound; RPC and sampling overhead retained'}
+                if sqlite:
+                    assert f['durable_reached'] and durable_upper is not None and durable_lower<=durable_upper,'committed freshness target reached'
+                    freshness_interval['durable']={'lower_ms':durable_lower,'upper_ms':durable_upper}
             if arm.get('storage_fault'):
                 before_fault=data(prefix+'burst-before.json')['consumer']['persistent']
                 failed=data(prefix+'burst-settled.json')['consumer']
                 assert failed['store_error'] and failed['persistent']['save_error'] and failed['persistent']['coverage']['incomplete'],'real write failure exposed'
-                assert failed['persistent']['packets']==before_fault['packets'] and failed['persistent']['bytes']==before_fault['bytes'],'failed writes preserve committed baseline'
+                failed_committed=failed['persistent']['persistence'] if sqlite else failed['persistent']
+                before_committed=before_fault['persistence'] if sqlite else before_fault
+                assert failed_committed['packets']==before_committed['packets'] and failed_committed['bytes']==before_committed['bytes'],'failed writes preserve committed baseline'
+                if sqlite:
+                    assert all(failed['persistent']['packets'][d]>=failed_committed['packets'][d] for d in (0,1)),'live remains distinct under write failure'
+                    assert data(prefix+'lock-injected.json')['at_mono_ns']<data(prefix+'lock-released.json')['at_mono_ns'],'actual finite lock failure'
             final=data(prefix+'final.json');h=final['health'];consumer=final['consumer'];observed=sum(consumer['overview']['packets'])
             for c in h['channels']:
                 assert c['attempted']==c['published']+c['full'],'producer conservation'
@@ -253,6 +388,26 @@ def verify(directory,overrides=None,pcaps=None):
                 stored=data(prefix+'final-store.json')
                 assert stored['totals']['packets']==persistent['packets'] and stored['totals']['bytes']==persistent['bytes'],'API/store contribution identity'
                 assert not stored['open_session'],'closed durable session'
+                if sqlite:
+                    assert persistent['persistence']['packets']==persistent['packets'] and persistent['persistence']['bytes']==persistent['bytes'],'final live/durable identity'
+                    database=directory/prefix/('final.sqlite3' if android else 'observation/e01-'+cfg['name']+'.sqlite3')
+                    assert str(database.relative_to(directory)) in result['files'],'raw database sealed'
+                    wal=Path(str(database)+'-wal');assert not wal.exists() or wal.stat().st_size==0,'closed database checkpoint'
+                    # Independent decode of the raw engine artifact; do not trust
+                    # the collector's JSON projection as the sole disk oracle.
+                    with sqlite3.connect(database.resolve().as_uri()+'?mode=ro&immutable=1',uri=True) as db:
+                        assert db.execute('PRAGMA integrity_check').fetchone()==('ok',),'SQLite integrity'
+                        disk={'baselines':{},'recent':{},'minutes':{}}
+                        for kind,key,raw in db.execute('SELECT kind,key,value FROM observation'):
+                            value=json.loads(raw)
+                            if kind==0:assert key=='';disk.update(value)
+                            else:disk[{1:'baselines',2:'recent',3:'minutes'}[kind]][key]=value
+                    assert disk==stored,'raw SQLite/export identity'
+                    space=data(prefix+'final-space.json')
+                    assert sum(space['files'].values())==space['total_bytes']<=256*1024*1024,'final workspace bound'
+                    if seed_count:
+                        legacy=directory/prefix/('legacy-source.json' if android else 'observation/e01-'+cfg['name']+'.json')
+                        assert legacy.read_bytes()==(directory/prefix/'synthetic-seed.json').read_bytes(),'migration original unchanged'
                 if seed_count:
                     assert all(stored['baselines'].get(k)==v for k,v in seed['baselines'].items()),'pressure preserves prior baselines'
                 assert stored['gaps']>=persistent['coverage']['gaps'],'shutdown cannot erase coverage boundary'
@@ -280,7 +435,7 @@ def verify(directory,overrides=None,pcaps=None):
                         'meaning':'descriptive bucket comparison; coalesced last-activity placement is approximate'}
             summaries.append({'arm':cfg['arm'],'generation':generation,'packets':basic(final)-base_basic,'baseline_packets':base_basic,'flow_packets':flow_packets,'non_flow_ip_packets':basic(final)-base_basic-flow_packets,'observed':observed,'persistent':sum(persistent['packets']) if persistent else None,'full':losses,'sent':len(packets),'echoed':sum(r['echoed'] for r in packets),'store_error':consumer['store_error'],'pre_fault_time_placement':placement,'freshness':freshness_interval})
         assert set(endpoints)<=set(payload_owner),'endpoint witness from another workload'
-        return {'status':'VALID_EVIDENCE','performance_decision':'USER_REVIEW_REQUIRED','arms':summaries,'errors':[]}
+        return {'status':'VALID_EVIDENCE','performance_decision':'NO_NUMERIC_THRESHOLD' if sqlite else 'USER_REVIEW_REQUIRED','arms':summaries,'errors':[]}
     except (AssertionError,KeyError,ValueError,OSError,TypeError) as e:
         return {'status':'INVALID_EVIDENCE','errors':[str(e)]}
 
@@ -291,9 +446,20 @@ def mutations(directory):
     cases=[]
     def check(label,name,edit):
         value=json.loads((directory/name).read_text());edit(value);raw=json.dumps(value);rr=copy.deepcopy(r);rr['files'][name]=hashlib.sha256(raw.encode()).hexdigest()
-        response=verify(directory,{name:raw,'result.json':json.dumps(rr)},pcaps)
+        response=verify(directory,({'result.json':raw} if name=='result.json' else {name:raw,'result.json':json.dumps(rr)}),pcaps)
         assert response['status']=='INVALID_EVIDENCE','mutation escaped: '+label
         cases.append({'mutation':label,'rejected':True,'reason':response['errors']})
+    if r.get('scope')=='root_functional':
+        def record(value):return next(item for item in value['consumer']['overview']['records'] if item and item['family']==4 and item['protocol']==17 and item['ports']==[43000,42141])
+        check('Root wrong generation',prefix+'final.json',lambda v:v['health'].__setitem__('generation',0))
+        check('Root wrong known tuple',prefix+'low-settled.json',lambda v:record(v).__setitem__('addresses',[0]*8))
+        check('Root invented known bytes',prefix+'low-settled.json',lambda v:record(v).__setitem__('bytes',[999999,999999]))
+        check('Root swapped directional contribution',prefix+'low-settled.json',lambda v:record(v).__setitem__('packets',[19,21]))
+        check('Root store/API mismatch',prefix+'final-store.json',lambda v:v['totals']['packets'].__setitem__(0,v['totals']['packets'][0]+1))
+        check('Root false durable total',prefix+'low-settled.json',lambda v:v['consumer']['persistent']['persistence']['packets'].__setitem__(0,v['consumer']['persistent']['packets'][0]+1))
+        check('Root resource/query chronology',prefix+'low-resources-settled.json',lambda v:v['rust'].__setitem__('at_host_ns',0))
+        check('Root wrong source closure','result.json',lambda v:v.__setitem__('source_sha256','0'*64))
+        return cases
     check('hidden basic packet',prefix+'final.json',lambda v:v['health']['channels'][0]['basic_packets'].__setitem__(0,v['health']['channels'][0]['basic_packets'][0]+1))
     check('hidden queue overflow',prefix+'final.json',lambda v:v['health']['channels'][0].__setitem__('full',v['health']['channels'][0]['full']+1))
     check('wrong wire generation',prefix+'low-settled.json',lambda v:v['health'].__setitem__('generation',0))
@@ -313,6 +479,11 @@ def mutations(directory):
         check('freshness reversed clock bracket',prefix+label+'-clock.json',lambda v:v['after'].__setitem__('monotonic_ns',v['before']['monotonic_ns']-1))
     elif not android:
         check('freshness target not reached',prefix+'freshness-polls.json',lambda v:v['polls'][-1].__setitem__('persistent_packets',v['target']-1))
+    if r.get('storage_format')=='sqlite':
+        check('unfinished checkpoint called settled',prefix+'low-settled.json',lambda v:v['consumer']['persistent']['persistence'].__setitem__('maintenance_pending',True))
+        check('committed exceeds live',prefix+'low-settled.json',lambda v:v['consumer']['persistent']['persistence']['packets'].__setitem__(0,v['consumer']['persistent']['packets'][0]+1))
+        check('deferred work omitted from resource window',prefix+'low-resources-settled.json',lambda v:v['rust'].__setitem__('at_host_ns' if android else 'at_mono_ns',0))
+        check('wrong source closure','result.json',lambda v:v.__setitem__('source_sha256','0'*64))
     return cases
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('directory',type=Path);p.add_argument('--mutations',action='store_true');p.add_argument('--output',type=Path);a=p.parse_args()
