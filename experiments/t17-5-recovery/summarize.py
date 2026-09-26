@@ -21,7 +21,7 @@ def main():
                 rows.append({'platform': platform, 'workload': record['workload'],
                              'repeat': record['repeat'], **record['measurement']})
     with args.out.open('w', newline='') as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]), lineterminator='\n')
         writer.writeheader()
         writer.writerows(rows)
 
