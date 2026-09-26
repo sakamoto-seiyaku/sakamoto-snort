@@ -2,11 +2,13 @@
 
 Date: 2026-09-26. Decision task:
 [SAKAMOTO-287](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/4d89d5d5-e976-45a1-a792-3b2a8f8f9aaf).
-This is evidence and a recommendation for user review, not a selection or T18
-authorization. T17 and T17.5 retain their user-selection gates.
+User decision, 2026-09-26: **“采用 rax 吧”**. The user accepted the recommendation
+after reviewing T17/T17.5 results. T17.5's experiment → user-selection gate is
+satisfied; T17's corresponding record is maintained by its own task owner.
+Product integration remains T18, subject to its remaining task dependencies.
 
 **Reject the existing VPP hash domain backend under the user's KISS constraint.
-Recommend unmodified pinned Valkey rax with a small explicit recoverable VPP
+Select unmodified pinned Valkey rax with a small explicit recoverable VPP
 allocator binding.** The VPP-native C architecture remains unchanged. This
 route needs no new allocator, process, IPC, reserved capacity, hash/vec patch,
 or Product backend selector. It does not establish recovery for unrelated
@@ -16,7 +18,7 @@ allocations elsewhere in the Product compiler.
 
 | Route | Failure mechanism and cost | Finding |
 | --- | --- | --- |
-| Unmodified rax + explicit VPP allocation | `_or_null` allocation; checked allocate/copy/free growth; matching size/free. Retains library implementation and adds a small local allocator contract. Extra copying and temporary node coexistence are measured. | Recommended: Host and physical ARM64 recover after injected failures and real heap exhaustion. |
+| Unmodified rax + explicit VPP allocation | `_or_null` allocation; checked allocate/copy/free growth; matching size/free. Retains library implementation and adds a small local allocator contract. Extra copying and temporary node coexistence are measured. | Selected by the user: Host and physical ARM64 recover after injected failures and real heap exhaustion. |
 | Build a sorted immutable key array | Checked owned storage and sort workspace, then allocation-free binary search at each label suffix. A custom allocation-free sort is another option. | Plausibly compliant, materially different representation, but rejected as the first choice: owns new sorting/search/membership validation code and has no measured ARM64 advantage. It was not implemented or benchmarked here. |
 | Existing VPP string hash | Hash creation, collision vectors, growth and resize use unchecked/fatal hash/vec allocation paths. | Rejected: changing a single allocation call cannot supply complete failure propagation and cleanup. T17 already reproduced process termination. |
 
@@ -172,7 +174,7 @@ failure was relabeled PASS. Only the explicitly named final series feeds this
 report. The native source is identical between Android `d` and `e`; `e` adds
 pre-run remote workload identity verification.
 
-If selected, T18 should add the pinned rax source/notices and a newly designed
+For the selected direction, T18 should add the pinned rax source/notices and a newly designed
 local C binding, never import the experimental adapter. Integrate owned
 name/payload lifetime with the existing VPP compiler/snapshot, retain exact and
 descendant memberships and complete Rank, and test actual saved/active status,
@@ -182,8 +184,9 @@ remain correctly paired across real runtime initialization and teardown.
 There is no justification here for a generic multi-backend layer, library fork,
 private trie walker or separate service.
 
-The user's review and chosen direction remain the only authority to finish the
-T17/T17.5 decision gates or begin T18.
+The recorded user choice completes T17.5's decision requirement. It does not
+convert this component evidence into Product acceptance or waive T18's real
+integration and remaining dependencies.
 
 ## Standards
 
@@ -207,8 +210,8 @@ warranted. Sanitizer and single-thread publication limits are accurately stated.
 ## Spec
 
 Independent review found no missing experiment deliverable, scope creep or
-wrong implementation within the component envelope. Ticket §9's required user
-selection remains pending. Actual file saving, management availability and
+wrong implementation within the component envelope. At review time, ticket §9's
+required user selection was still pending; it is now recorded above. Actual file saving, management availability and
 concurrent publication are explicitly untested Product integration, consistent
 with §4's model/component distinction. The second route is acceptable under
 §2's permission to reject by read-only analysis: its ownership, fallible workspace,
