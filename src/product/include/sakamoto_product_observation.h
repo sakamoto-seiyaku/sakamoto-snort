@@ -4,12 +4,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PRODUCT_OBSERVATION_VERSION 1
+#define PRODUCT_OBSERVATION_VERSION 2
 #define PRODUCT_OBSERVATION_OWNERS 2
 #define PRODUCT_OBSERVATION_CHANNELS 4
 #define PRODUCT_OBSERVATION_END 1
 #define PRODUCT_OBSERVATION_CREATE 2
-#define PRODUCT_OBSERVATION_MAX_RECORD 152
+#define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
+#define PRODUCT_OBSERVATION_MAX_RECORD 160
 
 /* Local little-endian x86-64/ARM64 wire ABI; no pointer or packet payload.
  * IPv4 omits the final 24 bytes and places its two addresses in address[0..8]. */
@@ -26,10 +27,11 @@ typedef struct {
   uint16_t ports[2];
   uint8_t family, protocol, origin_direction, last_direction, flow_direction,
     end_reason, padding[2];
+  uint64_t activity_utc_us;
   uint8_t address[32];
 } product_observation_record_t;
-_Static_assert (sizeof (product_observation_record_t) == 152, "observation record ABI");
-_Static_assert (offsetof (product_observation_record_t, address) == 120, "record addresses");
+_Static_assert (sizeof (product_observation_record_t) == 160, "observation record ABI");
+_Static_assert (offsetof (product_observation_record_t, address) == 128, "record addresses");
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;

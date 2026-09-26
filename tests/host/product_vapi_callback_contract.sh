@@ -814,7 +814,7 @@ vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_que
 vapi_error_e vapi_product_core_observation_query(vapi_ctx_t context,vapi_msg_product_core_observation_query *message,
   vapi_product_core_observation_query_callback_t callback,void *opaque)
 {
-  vapi_payload_product_core_observation_query_reply reply={.generation=message->payload.generation,.owners=2,.version=1};
+  vapi_payload_product_core_observation_query_reply reply={.generation=message->payload.generation,.owners=2,.version=PRODUCT_OBSERVATION_VERSION};
   vapi_msg_free(context,message);
   return callback(context,opaque,VAPI_OK,true,&reply);
 }

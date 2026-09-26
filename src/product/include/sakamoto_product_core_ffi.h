@@ -14,6 +14,9 @@ typedef struct sakamoto_product_core_handle sakamoto_product_core_handle_t;
 #define SAKAMOTO_OBSERVATION_REPLY_BYTES (4U * 1024U * 1024U)
 uint32_t sakamoto_product_core_observation_start(
     sakamoto_product_core_handle_t *, uint64_t generation);
+/* Explicit persistent path, separate from generation-owned runtime files. */
+uint32_t sakamoto_product_core_observation_start_at(
+    sakamoto_product_core_handle_t *, uint64_t generation, sakamoto_product_bytes_t store_path);
 /* operation 0=current query, 1/2=controlled pause/resume validation. */
 uint32_t sakamoto_product_core_observation_query(
     sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,

@@ -97,7 +97,8 @@ static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_er
   if (rv != VAPI_OK || !reply) { call->invalid = true; return VAPI_OK; }
   if (reply->retval) { call->code = SAKAMOTO_PRODUCT_STALE_HANDLE; return VAPI_OK; }
   if (reply->generation != call->generation || reply->owners > 2
-      || reply->version > 1 || reply->flow_capacity > 65536 || reply->connected > 1) {
+      || (reply->version != 0 && reply->version != PRODUCT_OBSERVATION_VERSION)
+      || reply->flow_capacity > 65536 || reply->connected > 1) {
     call->invalid = true; return VAPI_OK;
   }
 #define COPY(field) call->out->field = reply->field

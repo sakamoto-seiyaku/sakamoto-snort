@@ -28,7 +28,7 @@
 #pragma GCC diagnostic pop
 
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ || __SIZEOF_POINTER__ != 8
-#error "observation V1 supports the product little-endian 64-bit targets"
+#error "observation supports the product little-endian 64-bit targets"
 #endif
 #define OBS_MAGIC UINT64_C (0x3153424f50504b53)
 #define OBS_HEADER 4096
@@ -59,7 +59,7 @@ struct product_observation_transport {
 };
 
 static svm_msg_q_ring_cfg_t rings[] = {
-  { .nitems = OBS_SLOTS, .elsize = 128 },
+  { .nitems = OBS_SLOTS, .elsize = 144 },
   { .nitems = OBS_SLOTS, .elsize = 160 },
 };
 static svm_msg_q_cfg_t config = {

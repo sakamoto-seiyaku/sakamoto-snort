@@ -1042,12 +1042,18 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeConnect (
 
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationStart (
-    JNIEnv *env, jclass clazz, jlong handle, jlong generation)
+    JNIEnv *env, jclass clazz, jlong handle, jlong generation, jstring path)
 {
-  (void) env; (void) clazz;
-  return (jint) sakamoto_product_core_observation_start (
+  (void) clazz;
+  if (!path) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  const char *text = (*env)->GetStringUTFChars (env, path, NULL);
+  if (!text) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  sakamoto_product_bytes_t bytes = { (const uint8_t *) text, (uint32_t) strlen (text) };
+  jint result = (jint) sakamoto_product_core_observation_start_at (
       (sakamoto_product_core_handle_t *) (intptr_t) handle,
-      generation > 0 ? (uint64_t) generation : 0U);
+      generation > 0 ? (uint64_t) generation : 0U, bytes);
+  (*env)->ReleaseStringUTFChars (env, path, text);
+  return result;
 }
 
 JNIEXPORT jobjectArray JNICALL

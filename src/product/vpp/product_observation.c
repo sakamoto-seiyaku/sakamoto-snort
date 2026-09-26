@@ -13,12 +13,15 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define NO_SLOT UINT32_MAX
 #define FLUSH_US UINT64_C (1000000)
 #define FLUSH_BUDGET 64
 typedef struct {
   uint64_t incarnation, sequence, exported_packets, exported_bytes, due;
+  uint64_t activity_utc_us, activity_mono_us;
+  uint8_t clock_changed;
   uint32_t previous, next;
 } observation_slot_t;
 typedef struct {
@@ -56,8 +59,9 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
   }
   if (s->sequence == UINT64_MAX) return; /* explicit lifetime cannot wrap */
   product_observation_record_t r = {
-    .length = entry->key.ip_family == 4 ? 128 : 152,
-    .version = PRODUCT_OBSERVATION_VERSION, .flags = flags,
+    .length = entry->key.ip_family == 4 ? 136 : 160,
+    .version = PRODUCT_OBSERVATION_VERSION,
+    .flags = flags | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
     .owner = owner, .slot = slot, .uid = entry->uid,
     .generation = o->generation, .incarnation = entry->incarnation,
     .sequence = ++s->sequence, .first_seen = entry->first_seen, .last_seen = entry->last_seen,
@@ -66,6 +70,7 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
     .protocol = entry->key.protocol, .origin_direction = entry->flow_origin_device_direction,
     .last_direction = entry->last_device_direction, .flow_direction = entry->last_flow_direction,
     .end_reason = entry->end_reason,
+    .activity_utc_us = s->activity_utc_us,
   };
   memcpy (r.packets, entry->side_packets, sizeof (r.packets));
   memcpy (r.bytes, entry->side_bytes, sizeof (r.bytes));
@@ -94,9 +99,26 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
   observation_owner_t *o = &owners[owner];
   if (slot >= o->capacity) return;
   observation_slot_t *s = &o->slots[slot];
-  if (s->incarnation != entry->incarnation || entry->packets - s->exported_packets >= 32
+  int created = s->incarnation != entry->incarnation;
+  if (created) {
+    remove_pending (o, slot);
+    *s = (observation_slot_t) { .incarnation = entry->incarnation };
+  }
+  /* Only real packet activity samples wall time. Pending flush and END retain
+   * the sample even across a wall-clock step or a long idle timeout. */
+  struct timespec wall;
+  uint64_t utc = 0;
+  if (!clock_gettime (CLOCK_REALTIME, &wall) && wall.tv_sec >= 0)
+    utc = (uint64_t) wall.tv_sec * UINT64_C (1000000) + wall.tv_nsec / 1000;
+  if (s->activity_utc_us && entry->last_seen >= s->activity_mono_us) {
+    uint64_t expected = s->activity_utc_us + entry->last_seen - s->activity_mono_us;
+    uint64_t difference = utc > expected ? utc - expected : expected - utc;
+    if (difference > UINT64_C (1000000)) s->clock_changed = 1;
+  }
+  s->activity_utc_us = utc; s->activity_mono_us = entry->last_seen;
+  if (created || entry->packets - s->exported_packets >= 32
       || entry->bytes - s->exported_bytes >= 65536) {
-    export_record (owner, entry, slot, 0);
+    export_record (owner, entry, slot, created ? PRODUCT_OBSERVATION_CREATE : 0);
   } else if (!s->due) {
     s->due = (uint64_t) (vlib_time_now (vm) * 1000000.0) + FLUSH_US;
     s->previous = o->tail; s->next = NO_SLOT;

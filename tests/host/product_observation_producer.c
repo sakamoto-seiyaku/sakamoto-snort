@@ -38,12 +38,12 @@ int main (int argc, char **argv) {
       unsigned admitted = 0;
       for (unsigned i = 0; i < count; i++) {
         product_observation_record_t record = {
-          .length = length, .version = 1, .flags = end ? PRODUCT_OBSERVATION_END : 0,
+          .length = length, .version = PRODUCT_OBSERVATION_VERSION, .flags = end ? PRODUCT_OBSERVATION_END : 0,
           .owner = channel / 2, .slot = 3, .uid = 12345, .generation = 77,
           .incarnation = incarnation, .sequence = base + i,
-          .first_seen = 100, .last_seen = 100 + base + i,
+          .activity_utc_us = 1700000000000000ULL + base + i, .first_seen = 100, .last_seen = 100 + base + i,
           .packets = { base + i, 0 }, .bytes = { (base + i) * 60, 0 },
-          .family = length == 128 ? 4 : 6, .protocol = 17,
+          .family = length == 136 ? 4 : 6, .protocol = 17,
           .address = { 10, 1, 2, 3, 10, 4, 5, 6 },
         };
         admitted += product_observation_publish (t, channel, &record, length) == 1;

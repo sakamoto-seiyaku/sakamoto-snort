@@ -89,6 +89,34 @@ pub unsafe extern "C" fn sakamoto_product_core_observation_start(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_observation_start_at(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    store_path: ProductBytes,
+) -> c_uint {
+    if handle.is_null() || generation == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation {
+            return ErrorCode::StaleHandle.raw();
+        }
+        let path = match socket_path(store_path) {
+            Ok(path) => path,
+            Err(_) => return ErrorCode::InvalidArgument.raw(),
+        };
+        match core.start_observation_at(std::path::Path::new(&path)) {
+            Ok(()) => 0,
+            Err(_) => ErrorCode::ApiUnavailable.raw(),
+        }
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sakamoto_product_core_observation_query(
     handle: *mut ProductCoreHandle,
     generation: u64,

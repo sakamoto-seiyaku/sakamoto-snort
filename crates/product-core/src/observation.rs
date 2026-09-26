@@ -1,6 +1,6 @@
 //! Bounded current overview. This is not a persistent history store.
 use crate::{ffi, ErrorCode, ProductCore, ProductError, Status};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -30,7 +30,7 @@ pub struct ObservationHealth {
     pub channels: [ChannelHealth; 4],
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FlowRecord {
     pub generation: u64,
     pub owner: u16,
@@ -39,6 +39,8 @@ pub struct FlowRecord {
     pub sequence: u64,
     pub first_seen: u64,
     pub last_seen: u64,
+    pub activity_utc_us: u64,
+    pub clock_changed: bool,
     pub packets: [u64; 2],
     pub bytes: [u64; 2],
     pub ended: bool,
@@ -58,7 +60,7 @@ pub struct FlowRecord {
 
 impl FlowRecord {
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 128 {
+        if data.len() < 136 {
             return None;
         }
         let u16_at = |n| u16::from_le_bytes([data[n], data[n + 1]]);
@@ -70,10 +72,10 @@ impl FlowRecord {
             6 => 32,
             _ => return None,
         };
-        if length != 120 + address_bytes
+        if length != 128 + address_bytes
             || data.len() < length
-            || data[2] != 1
-            || data[3] & !3 != 0
+            || data[2] != 2
+            || data[3] & !7 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
         {
@@ -87,6 +89,8 @@ impl FlowRecord {
             sequence: u64_at(32),
             first_seen: u64_at(40),
             last_seen: u64_at(48),
+            activity_utc_us: u64_at(120),
+            clock_changed: data[3] & 4 != 0,
             packets: [u64_at(56), u64_at(64)],
             bytes: [u64_at(72), u64_at(80)],
             ended: data[3] & 1 != 0,
@@ -99,7 +103,7 @@ impl FlowRecord {
             last_flow_direction: data[116],
             end_reason: data[117],
             ports: [u16_at(108), u16_at(110)],
-            addresses: data[120..length].to_vec(),
+            addresses: data[128..length].to_vec(),
             policy_revision: u64_at(88),
             winner: u64_at(96),
         })
@@ -225,10 +229,16 @@ impl ProductCore {
     }
 
     pub fn start_observation(&mut self) -> Result<(), String> {
+        let path = self.api_path.with_file_name("observation.json");
+        self.start_observation_at(&path)
+    }
+
+    pub fn start_observation_at(&mut self, path: &std::path::Path) -> Result<(), String> {
         if self.observation.is_none() {
             self.observation = Some(crate::observation_service::ObservationService::start(
                 &self.api_path,
                 self.generation,
+                path,
             )?);
         }
         Ok(())
@@ -239,10 +249,10 @@ impl ProductCore {
         let overview = self.observation.as_ref().map(|s| s.snapshot());
         match health {
             Ok(health) => serde_json::json!({ "schema": 1, "health": health,
-                "consumer": overview, "persistent_history": false })
+                "consumer": overview, "persistent_history": true })
             .to_string(),
             Err(error) => serde_json::json!({ "schema": 1, "error": format!("{error:?}"),
-                "consumer": overview, "persistent_history": false })
+                "consumer": overview, "persistent_history": true })
             .to_string(),
         }
     }

@@ -88,7 +88,12 @@ fn main() {
     }
     if command == "observation-serve" {
         use std::io::{BufRead, Write};
-        if let Err(error) = core.start_observation() {
+        let store = remaining
+            .first()
+            .map(Path::new)
+            .map(|p| p.to_owned())
+            .unwrap_or_else(|| Path::new(&socket).with_file_name("observation.json"));
+        if let Err(error) = core.start_observation_at(&store) {
             eprintln!("observation.start={error}");
             std::process::exit(1);
         }

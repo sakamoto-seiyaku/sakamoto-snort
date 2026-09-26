@@ -261,7 +261,7 @@ public final class RuntimeControlNative {
     private static native byte[] nativeObservationQuery(long handle, long generation, int operation);
 
     private static native String[] nativeQuery(long handle, long generation);
-    private static native int nativeObservationStart(long handle, long generation);
+    private static native int nativeObservationStart(long handle, long generation, String storePath);
 
     private static native String nativeSniQuery(long handle, long generation,
             int worker, int slot, long incarnation);
@@ -371,9 +371,9 @@ public final class RuntimeControlNative {
         }
 
         /** Called by RuntimeService after the generation's policy graph is ready. */
-        public synchronized int startObservation() {
+        public synchronized int startObservation(String storePath) {
             return !LOADED || nativeHandle == 0L ? -1
-                    : nativeObservationStart(nativeHandle, generation);
+                    : nativeObservationStart(nativeHandle, generation, storePath);
         }
 
         public synchronized String observationQuery(int operation) {

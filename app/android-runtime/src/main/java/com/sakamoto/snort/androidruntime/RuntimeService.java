@@ -1219,7 +1219,8 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             status = reconciled;
-            if (session.startObservation() != 0) {
+            if (session.startObservation(new File(getFilesDir(),
+                    "observation/overall.json").getAbsolutePath()) != 0) {
                 failProductCoreGeneration("product_observation_start_failed",
                         "Flow observation ingestion could not start");
                 return;

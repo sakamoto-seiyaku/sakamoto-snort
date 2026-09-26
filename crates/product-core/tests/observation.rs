@@ -72,8 +72,8 @@ fn rollback_and_retired_incarnation_cannot_change_overview() {
 
 #[test]
 fn wire_record_is_length_and_version_checked() {
-    let mut bytes = [0u8; 152];
-    bytes[0..4].copy_from_slice(&[128, 0, 1, 2]);
+    let mut bytes = [0u8; 160];
+    bytes[0..4].copy_from_slice(&[136, 0, 2, 2]);
     bytes[16] = 7; // generation
     bytes[24] = 11; // incarnation
     bytes[32] = 1; // update
@@ -81,7 +81,7 @@ fn wire_record_is_length_and_version_checked() {
     bytes[80] = 80; // REPLY bytes
     bytes[112] = 4;
     bytes[113] = 17;
-    bytes[120..128].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
+    bytes[128..136].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
     let r = FlowRecord::decode(&bytes).unwrap();
     assert_eq!(r.generation, 7);
     assert_eq!(r.incarnation, 11);
@@ -90,7 +90,7 @@ fn wire_record_is_length_and_version_checked() {
     assert_eq!(r.addresses, [10, 1, 2, 3, 10, 4, 5, 6]);
     bytes[0] = 127;
     assert!(FlowRecord::decode(&bytes).is_none());
-    bytes[0] = 128;
-    bytes[2] = 2;
+    bytes[0] = 136;
+    bytes[2] = 1;
     assert!(FlowRecord::decode(&bytes).is_none());
 }
