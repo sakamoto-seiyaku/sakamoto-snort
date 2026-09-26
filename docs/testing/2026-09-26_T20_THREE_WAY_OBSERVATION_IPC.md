@@ -6,13 +6,20 @@ written minimal C SPSC ring plus eventfd and reruns **all three candidates**.
 The extension was registered after the [two-way result](2026-09-26_T20_OBSERVATION_IPC.md),
 not retrospectively described as part of its original preregistration.
 
-**Recommendation for user review remains Aeron C SPSC.** The minimal ring works
+**Final user decision (2026-09-26): use VPP `svm_msg_q`.** The user reviewed
+the comparison and selected “使用vpp吧 更加方便维护”: reuse the existing
+VPP dependency and notifier to simplify maintenance. Minimal SPSC + eventfd is
+a comparison baseline only; Aeron is not selected for Product. This is not a
+claim that VPP wins every performance dimension.
+
+**Historical experiment recommendation: Aeron C SPSC.** The minimal ring works
 within this tested envelope, but has no clear overall cost/latency advantage
 that establishes a reason to own another queue implementation. It saves only
 1280 bytes across two shared queues versus Aeron. All three pass the final
 corrected-witness matrix. An earlier VPP widened-length miss and an Aeron burst
 tail outlier remain important counter-evidence; neither is relabelled as fixed.
-T20 remains In Progress; **no direction is selected and T21 remains blocked**.
+The explicit user decision satisfies T20’s result-review gate; the selected
+Product direction handed to T21 is VPP `svm_msg_q`.
 
 ## Contract and source identities
 
@@ -190,7 +197,7 @@ One final Aeron burst repetition admits only 52895 records and has delivery p99
 70.243 ms; its other repetitions have p99 1.344 and 1.781 ms. This outlier has no
 corruption or wait timeout, but its cause was not isolated and it is not dismissed
 as merely scheduling. It prevents a claim of consistently superior Aeron burst
-latency or admission. The recommendation is a reuse/maintenance preference, not
+latency or admission. The historical Aeron recommendation was a reuse/maintenance preference, not
 a declaration that Aeron won every measured dimension. VPP can notify earlier inside a batch,
 while both byte rings notify at the batch boundary; policy differences remain
 part of the measured tradeoff. Old two-way numbers are not pooled with this run.
@@ -223,9 +230,9 @@ address size, context switches and all latency quantiles remain in raw evidence.
 
 | Candidate | What is reused / owned | Decision implication |
 | --- | --- | --- |
-| Aeron | Pinned Apache-2.0 queue algorithm, small subset packaging/error seam; project owns mapping, notification, generation and record contract | Recommended for reuse and variable capacity, not as a universal performance winner; burst outlier remains explicit |
-| VPP | Already-shipped Apache-2.0 dependency and native notifier; project owns matching ABI/profile, classes and facade | Final checks pass, but the earlier widened-length admission loss remains a capacity qualification limit |
-| Minimal | No new queue dependency; project owns all queue layout, ordering, wrap/corruption behavior, regressions and future changes | Technically viable in this envelope; 1.25 KiB shared saving and mixed timing results do not establish a compelling advantage over reuse |
+| Aeron | Pinned Apache-2.0 queue algorithm, small subset packaging/error seam; project owns mapping, notification, generation and record contract | Historical recommendation for reuse and variable capacity; not selected by the user; burst outlier remains explicit |
+| VPP | Already-shipped Apache-2.0 dependency and native notifier; project owns matching ABI/profile, classes and facade | Selected by the user for existing-dependency reuse and simpler maintenance; earlier widened-length admission loss remains a capacity qualification limit |
+| Minimal | No new queue dependency; project owns all queue layout, ordering, wrap/corruption behavior, regressions and future changes | Comparison baseline only, not a Product backend; technically viable within this envelope |
 
 Choosing Minimal would not mean restarting all supporting work from nothing:
 the C/Rust test infrastructure, notification experience and contract evidence now
@@ -233,11 +240,15 @@ exist. It would mean accepting ownership of the queue itself. Its short source
 does not remove that maintenance responsibility, and this campaign is not the
 same history of independent use and fixes as an upstream library.
 
-The user must review these three outcomes and explicitly choose. No third backend
-is integrated into Product. T21 must independently implement the chosen Product
-seam without importing POC source, then compare actual record sizes/rhythm and
-owner topology against this envelope. FD negotiation/memfd, APK identity, lifecycle
-quiescence, partial-batch scheduling and actual storage remain Product work.
+The user explicitly chose VPP after reviewing the results and clarified that
+the minimal ring was only a baseline. The earlier 21 VPP admission rejections are
+not a selection veto; their cause remains unisolated and they are not claimed
+fixed. VPP accepts variable payload lengths within fixed-size slot classes.
+T21 must independently implement the VPP Product seam without importing POC
+source, select classes from actual record sizes and distributions, and validate
+capacity, normal/debug isolation, notification behavior, FD negotiation/memfd,
+APK identity and lifecycle quiescence. Actual rhythm, owner topology, partial-batch
+scheduling and storage must be evaluated against this transport envelope.
 E01/274 retains the separate mandatory user review of the **complete** observation
 pipeline and its costs/gaps. Nothing here satisfies that pipeline gate.
 
@@ -256,5 +267,7 @@ new files. Prior two-way files and hashes remain available from their snapshot;
 the old dated result is historical rather than silently rewritten.
 Independent review is recorded in
 [the three-way review](../reviews/2026-09-26_T20_THREE_WAY_CODE_REVIEW.md).
-Final index and pending-decision handoff retain the unmet condition and no selected
-direction. Task state and the decision remain in Plane.
+The final evidence index and handoff retain both historical anomalies and the
+explicit VPP selection. Task state and the recorded user decision remain in Plane.
+The decision-only closure changes no experiment source or measurements; the
+previously verified matrix and independent reviews remain applicable.
