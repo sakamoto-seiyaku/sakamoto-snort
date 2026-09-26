@@ -12,6 +12,7 @@ or default acceptance target. Task state belongs to Plane.
 | [S247 resource experiment](vpp-nfq-poc/s247/README.md) | Frozen pbuf/buffer/credit characterization; controlled cells remain labelled separately |
 | [Handcrafted Direct bridge](handcrafted-direct-bridge/README.md) | Already isolated by S200; no HEV/lwIP Product readiness and no enabled Product entry |
 | [Protocol identification tools](../tools/protocol_identification/README.md) | External inventories/third-party probes versus retired C++-dependent entrypoints |
+| [T20 observation IPC comparison](t20-observation-ipc/README.md) | Pinned C/Rust Host and Android transport measurements; selection gate in Plane, not Product integration |
 
 ## Complete directory inventory
 

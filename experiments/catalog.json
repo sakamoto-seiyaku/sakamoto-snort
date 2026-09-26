@@ -16,6 +16,14 @@
   },
   "groups": [
     {
+      "id": "t20_observation_ipc_selection",
+      "directories": [
+        "experiments/t20-observation-ipc"
+      ],
+      "classification": "selection_experiment_evidence",
+      "purpose": "T20 source-bound C/Rust IPC comparison; user selection gate remains in Plane. Experimental adapters are not Product source."
+    },
+    {
       "id": "experiment_navigation",
       "files": [
         "experiments/README.md",
