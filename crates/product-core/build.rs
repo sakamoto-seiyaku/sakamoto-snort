@@ -31,6 +31,10 @@ fn main() {
         .map(|value| value == "1")
         .unwrap_or(false);
     let use_vapi = vapi_include.is_some() && generated_include.is_some();
+    println!("cargo:rustc-check-cfg=cfg(product_vapi)");
+    if use_vapi {
+        println!("cargo:rustc-cfg=product_vapi");
+    }
     if vapi_include.is_some() != generated_include.is_some() {
         panic!("SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR and SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR must be supplied together");
     }
@@ -116,6 +120,41 @@ fn main() {
         .expect("failed to invoke the C compiler for the product ABI");
     assert!(status.success(), "product ABI C compilation failed");
 
+    let observation_object = out_dir.join("product_observation_transport.o");
+    if use_vapi {
+        let observation_source = source
+            .parent()
+            .unwrap()
+            .join("product_observation_transport.c");
+        let mut command = Command::new(target_tool("CC", &target, "cc"));
+        command
+            .args([
+                "-std=gnu11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fno-strict-aliasing",
+                "-fPIC",
+            ])
+            .arg("-I")
+            .arg(&include_dir)
+            .arg("-I")
+            .arg(vapi_include.as_ref().unwrap());
+        if target.ends_with("-android") {
+            command.args(["-include", "sys/endian.h"]);
+        }
+        let status = command
+            .arg("-c")
+            .arg(&observation_source)
+            .arg("-o")
+            .arg(&observation_object)
+            .status()
+            .expect("observation C transport compiler");
+        assert!(
+            status.success(),
+            "observation C transport compilation failed"
+        );
+    }
     let archiver_name = target_tool("AR", &target, "ar");
     let status = Command::new(archiver_name)
         .args(["crus"])
@@ -124,6 +163,15 @@ fn main() {
         .status()
         .expect("failed to invoke ar for the product ABI");
     assert!(status.success(), "product ABI archive failed");
+    if use_vapi {
+        assert!(Command::new(target_tool("AR", &target, "ar"))
+            .args(["rus"])
+            .arg(&library)
+            .arg(&observation_object)
+            .status()
+            .expect("observation archive")
+            .success());
+    }
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static={library_name}");
@@ -135,6 +183,8 @@ fn main() {
             );
         }
         println!("cargo:rustc-link-lib=dylib=vapiclient");
+        println!("cargo:rustc-link-lib=dylib=svm");
+        println!("cargo:rustc-link-lib=dylib=vppinfra");
         if target.ends_with("-android") {
             // Android exposes pthread and realtime primitives from libc; the
             // standalone libpthread/lib rt names used by glibc do not exist

@@ -222,6 +222,48 @@ final class ProtocolFactsProbe {
         }
     }
 
+    private static void observation(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        int flood = plan.optInt("observationFlood", 10000);
+        int window = plan.optInt("observationBatch", 1);
+        if (flood < 1 || flood > 10000) throw new IllegalArgumentException("observation flood bound");
+        if (window < 1 || window > 16) throw new IllegalArgumentException("observation batch bound");
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port); socket.setSoTimeout(5000);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            int[] counts = {1, 3, 1, flood, 1};
+            int[] sizes = {32, 40, 32, 32, 32};
+            String[] phases = {"observation_created", "observation_tail", "observation_reused",
+                    "observation_full", "observation_final"};
+            int sequence = 0, sent = 0, received = 0;
+            for (int phase = 0; phase < counts.length; phase++) {
+                for (int offset = 0; offset < counts[phase]; offset += window) {
+                    java.util.HashSet<String> pending = new java.util.HashSet<>();
+                    int batch = Math.min(window, counts[phase] - offset);
+                    for (int i = 0; i < batch; i++) {
+                        byte[] payload = Arrays.copyOf((String.format(java.util.Locale.ROOT,
+                                "%08d:", sequence++) + nonce).getBytes(StandardCharsets.US_ASCII), sizes[phase]);
+                        pending.add(toHex(payload));
+                        socket.send(new DatagramPacket(payload, payload.length));
+                        sent++;
+                        result.put("sent", sent);
+                    }
+                    for (int i = 0; i < batch; i++) {
+                        DatagramPacket reply = new DatagramPacket(new byte[128], 128);
+                        socket.receive(reply);
+                        if (!pending.remove(toHex(Arrays.copyOf(reply.getData(), reply.getLength()))))
+                            throw new IllegalStateException("unexpected observation echo");
+                        received++;
+                        result.put("received", received);
+                    }
+                }
+                result.put("sent", sent).put("received", received).put("payloadBytes", sizes[phase]);
+                gate(app, nonce, result, phases[phase]);
+            }
+        }
+    }
+
     private static void udp(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         try (DatagramSocket socket = new DatagramSocket(null)) {
@@ -503,7 +545,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);

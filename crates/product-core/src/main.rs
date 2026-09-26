@@ -82,6 +82,36 @@ fn main() {
         }
     };
     print_status("connect", &connected);
+    if command == "observation-query" {
+        println!("observation.response={}", core.observation_json());
+        return;
+    }
+    if command == "observation-serve" {
+        use std::io::{BufRead, Write};
+        if let Err(error) = core.start_observation() {
+            eprintln!("observation.start={error}");
+            std::process::exit(1);
+        }
+        println!("observation.ready={generation}");
+        std::io::stdout().flush().unwrap();
+        for line in std::io::stdin().lock().lines() {
+            match line.unwrap_or_default().trim() {
+                "pause" => {
+                    core.pause_observation(true).unwrap();
+                    println!("observation.paused=true");
+                }
+                "resume" => {
+                    core.pause_observation(false).unwrap();
+                    println!("observation.paused=false");
+                }
+                "query" => println!("observation.response={}", core.observation_json()),
+                "quit" => break,
+                _ => println!("observation.error=unknown_command"),
+            }
+            std::io::stdout().flush().unwrap();
+        }
+        return;
+    }
     if command == "rule-import" || command == "rule-export" {
         use std::io::Read;
         let (expected_revision, text) = if command == "rule-import" && remaining.len() == 2 {

@@ -12,6 +12,8 @@ pub use rule_config::{
 };
 pub use rule_import::{export_rule_config, prepare_rule_import};
 mod session;
+pub mod observation;
+mod observation_service;
 
 pub use ffi::{
     abi_version, api_version, sakamoto_product_core_apply_empty_policy,

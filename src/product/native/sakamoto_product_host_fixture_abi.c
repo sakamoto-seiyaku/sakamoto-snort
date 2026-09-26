@@ -767,6 +767,14 @@ sakamoto_product_session_destroy (sakamoto_product_session_t *session)
   return SAKAMOTO_PRODUCT_OK;
 }
 
+#include "sakamoto_product_observation.h"
+uint32_t sakamoto_product_session_observation_query (sakamoto_product_session_t *session,
+  uint64_t generation, product_observation_status_t *out)
+{
+  (void) session; (void) generation;
+  if (out) memset (out, 0, sizeof (*out));
+  return SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+}
 uint32_t sakamoto_product_session_sni_query(sakamoto_product_session_t *session,
   uint64_t generation,uint32_t worker,uint32_t slot,uint64_t incarnation,
   sakamoto_product_sni_status_t *out)

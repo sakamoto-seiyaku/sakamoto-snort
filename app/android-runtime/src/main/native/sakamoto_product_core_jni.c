@@ -12,6 +12,25 @@
 #include <string.h>
 
 JNIEXPORT jbyteArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationQuery(
+    JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation) {
+    (void) type;
+    if (!handle || generation <= 0 || operation < 0 || operation > 2) return NULL;
+    uint8_t *reply = malloc(SAKAMOTO_OBSERVATION_REPLY_BYTES);
+    if (!reply) return NULL;
+    uint32_t length = 0;
+    uint32_t code = sakamoto_product_core_observation_query(
+        (sakamoto_product_core_handle_t *)(uintptr_t)handle, (uint64_t)generation,
+        (uint32_t)operation, reply, SAKAMOTO_OBSERVATION_REPLY_BYTES, &length);
+    if (code) length = (uint32_t)snprintf((char *)reply, SAKAMOTO_OBSERVATION_REPLY_BYTES,
+        "{\"error\":\"observation_query_failed\",\"code\":%" PRIu32 "}", code);
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)length);
+    if (result) (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (jbyte *)reply);
+    free(reply);
+    return result;
+}
+
+JNIEXPORT jbyteArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleImport(
     JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation,
     jlong expected_saved, jbyteArray document) {
@@ -1019,6 +1038,16 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeConnect (
   if (values == NULL && handle != NULL)
     (void) sakamoto_product_core_destroy (handle);
   return values;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationStart (
+    JNIEnv *env, jclass clazz, jlong handle, jlong generation)
+{
+  (void) env; (void) clazz;
+  return (jint) sakamoto_product_core_observation_start (
+      (sakamoto_product_core_handle_t *) (intptr_t) handle,
+      generation > 0 ? (uint64_t) generation : 0U);
 }
 
 JNIEXPORT jobjectArray JNICALL

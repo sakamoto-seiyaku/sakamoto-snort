@@ -258,8 +258,10 @@ public final class RuntimeControlNative {
     }
 
     private static native String[] nativeConnect(String apiSocket, long generation);
+    private static native byte[] nativeObservationQuery(long handle, long generation, int operation);
 
     private static native String[] nativeQuery(long handle, long generation);
+    private static native int nativeObservationStart(long handle, long generation);
 
     private static native String nativeSniQuery(long handle, long generation,
             int worker, int slot, long incarnation);
@@ -366,6 +368,19 @@ public final class RuntimeControlNative {
             if (!LOADED || nativeHandle == 0L) throw new IllegalStateException("VPP management is unavailable");
             return new RuleConfiguration.CompleteStatus(nativeCompleteRuleConfig(nativeHandle, generation,
                     operation, expectedSaved, rules));
+        }
+
+        /** Called by RuntimeService after the generation's policy graph is ready. */
+        public synchronized int startObservation() {
+            return !LOADED || nativeHandle == 0L ? -1
+                    : nativeObservationStart(nativeHandle, generation);
+        }
+
+        public synchronized String observationQuery(int operation) {
+            if (!LOADED || nativeHandle == 0) return "{\"error\":\"disconnected\"}";
+            byte[] reply = nativeObservationQuery(nativeHandle, generation, operation);
+            return reply == null ? "{\"error\":\"native_query_failed\"}"
+                    : new String(reply, java.nio.charset.StandardCharsets.UTF_8);
         }
 
         public synchronized String ruleImport(int operation, long expectedSaved, byte[] document) {

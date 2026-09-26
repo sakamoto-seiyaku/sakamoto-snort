@@ -11,6 +11,7 @@
 
 #include "sakamoto_product_abi.h"
 #include "sakamoto_product_status.h"
+#include "sakamoto_product_observation.h"
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -81,6 +82,63 @@ typedef struct {
   uint64_t generation, incarnation;
   sakamoto_product_sni_status_t *out;
 } sni_call_t;
+
+typedef struct {
+  bool called, invalid;
+  uint32_t code;
+  uint64_t generation;
+  product_observation_status_t *out;
+} observation_call_t;
+static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
+  bool last, vapi_payload_product_core_observation_query_reply *reply)
+{
+  (void) context; (void) last;
+  observation_call_t *call = opaque; call->called = true;
+  if (rv != VAPI_OK || !reply) { call->invalid = true; return VAPI_OK; }
+  if (reply->retval) { call->code = SAKAMOTO_PRODUCT_STALE_HANDLE; return VAPI_OK; }
+  if (reply->generation != call->generation || reply->owners > 2
+      || reply->version > 1 || reply->flow_capacity > 65536 || reply->connected > 1) {
+    call->invalid = true; return VAPI_OK;
+  }
+#define COPY(field) call->out->field = reply->field
+  COPY (generation); COPY (mapping_bytes); COPY (version); COPY (owners);
+  COPY (flow_capacity); COPY (connected);
+#undef COPY
+  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+#define COPY(field) call->out->channels[i].field = reply->channels[i].field
+    COPY (attempted); COPY (published); COPY (full); COPY (oversize); COPY (consumed);
+    COPY (notify_errors); COPY (pending); COPY (notifications); COPY (occupancy); COPY (capacity);
+#undef COPY
+    for (unsigned j = 0; j < 3; j++) {
+      call->out->channels[i].basic_packets[j] = reply->channels[i].basic_packets[j];
+      call->out->channels[i].basic_bytes[j] = reply->channels[i].basic_bytes[j];
+    }
+  }
+  call->code = SAKAMOTO_PRODUCT_OK; return VAPI_OK;
+}
+uint32_t sakamoto_product_session_observation_query (sakamoto_product_session_t *session,
+  uint64_t generation, product_observation_status_t *out)
+{
+  if (out) memset (out, 0, sizeof (*out));
+  if (!session || !generation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if (!session->connected || generation != session->generation) goto done;
+  code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if (!vapi_is_msg_available (session->context, vapi_msg_id_product_core_observation_query)
+      || !vapi_is_msg_available (session->context, vapi_msg_id_product_core_observation_query_reply)) goto done;
+  vapi_msg_product_core_observation_query *message = vapi_alloc_product_core_observation_query (session->context);
+  code = SAKAMOTO_PRODUCT_ALLOCATION_FAILED; if (!message) goto done;
+  message->payload.generation = generation;
+  observation_call_t call = { .code = SAKAMOTO_PRODUCT_QUERY_FAILED, .generation = generation, .out = out };
+  vapi_error_e rv = vapi_product_core_observation_query (session->context, message, observation_reply, &call);
+  release_unsent_request (session, rv, call.called, message);
+  if (rv != VAPI_OK || !call.called || call.invalid) {
+    session->connected = 0; memset (out, 0, sizeof (*out)); code = SAKAMOTO_PRODUCT_QUERY_FAILED;
+  } else code = call.code;
+done:
+  (void) pthread_mutex_unlock (&session->mutex); return code;
+}
 static vapi_error_e sni_reply(vapi_ctx_t context, void *opaque, vapi_error_e rv,
   bool last, vapi_payload_product_core_sni_query_reply *reply)
 {

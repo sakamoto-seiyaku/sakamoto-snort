@@ -18,7 +18,13 @@ cat >"$cc_wrapper" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
-for required in -Werror -D_DEFAULT_SOURCE=1; do
+required_flags=(-Werror)
+# The observation transport deliberately uses GNU C11; generated VAPI is
+# strict C11 and needs the explicit glibc endian feature switch.
+if [[ "$args" != *"product_observation_transport.c "* ]]; then
+  required_flags+=(-D_DEFAULT_SOURCE=1)
+fi
+for required in "${required_flags[@]}"; do
   if [[ "$args" != *" $required "* ]]; then
     echo "missing Host generated-VAPI compiler flag: $required" >&2
     exit 1

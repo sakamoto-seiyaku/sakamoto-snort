@@ -2,6 +2,7 @@ package com.sakamoto.snort.androidruntime;
 
 /** Stable, versioned product-control vocabulary shared by the Activity and service. */
 public final class RuntimeControlProtocol {
+    public static final String ACTION_OBSERVATION_QUERY = "observation_query";
     public static final int VERSION = 1;
     public static final String NAME = "android-runtime-control/v1";
 

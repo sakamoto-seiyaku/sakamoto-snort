@@ -290,6 +290,11 @@ public class DebugControlActivity extends Activity {
                     intent.getLongExtra("expectedSavedRevision", 0L));
             handled = true;
         }
+        if (debuggable && intent.hasExtra("observationNonce")) {
+            backend.observationQuery(this, intent.getStringExtra("observationNonce"),
+                    intent.getIntExtra("observationOperation", 0));
+            handled = true;
+        }
         if (debuggable && intent.hasExtra("t12ProbePlan")) {
             ProtocolFactsProbe.start(this, intent.getStringExtra("t12ProbePlan"));
             handled = true;

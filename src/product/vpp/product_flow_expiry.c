@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_expiry.h"
+#include "product_observation.h"
 #include "product_flow_timeout.h"
 #include "product_packet_graph.h"
 #include <vlib/file.h>
@@ -60,6 +61,8 @@ schedule (vlib_main_t *vm, expiry_owner_t *owner)
   if (owner->mode != EXPIRY_DEADLINE)
     return;
   u64 next = product_flow_runtime_next_deadline (owner->runtime);
+  u64 observation_next = product_observation_deadline (vlib_get_worker_index (vm->thread_index));
+  if (observation_next < next) next = observation_next;
   if (next != UINT64_MAX && next < owner->eligible_us)
     next = owner->eligible_us;
   if (owner->scheduled_us == next)
@@ -245,6 +248,7 @@ VLIB_NODE_FN (product_flow_expiry_node)
         (unsigned long long) now_us (vm), EXPIRY_BATCH, EXPIRY_BATCH_GAP_US);
     }
   u64 now = now_us (vm);
+  product_observation_flush_due (vm, now);
   u64 next = product_flow_runtime_next_deadline (owner->runtime);
   if (now >= owner->eligible_us && next <= now)
     {

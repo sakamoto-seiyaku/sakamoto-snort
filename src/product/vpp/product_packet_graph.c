@@ -14,6 +14,7 @@
 #include "product_protocol_catalog.h"
 #include "product_flow_end.h"
 #include "product_flow_expiry.h"
+#include "product_observation.h"
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
 #include "product_vpn_flow_stack_driver.h"
@@ -2018,6 +2019,13 @@ VLIB_NODE_FN (product_packet_terminal_node)
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       metadata.state_bits |= PRODUCT_META_SETTLED;
 #endif
+      /* Count the final logical IP packet once, including primary-handoff
+       * bypasses, before fragment fanout or return to the originating adapter. */
+      if (lease.facts.ip_family == 4 || lease.facts.ip_family == 6)
+        product_observation_basic (vm,
+          lease.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
+            ? (lease.runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4 ? 1 : 2) : 0,
+          lease.facts.packet_length);
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_TERMINAL,
                          metadata.origin_obligation_id);
@@ -2320,6 +2328,7 @@ product_packet_graph_stop_external (vlib_main_t *vm)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_flow_end_quiesce (vm);
+  product_observation_quiesce ();
   if (PREDICT_FALSE (product_packet_graph_buffer_debt ()))
     clib_panic ("cannot stop graph with live packet/FlowEnd buffers");
   clib_atomic_store_rel_n (&graph->accepting, 0);
@@ -2416,6 +2425,7 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   if (product_flow_end_buffer_debt ())
     return 0;
   product_flow_end_unbind ();
+  product_observation_unbind ();
   clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
   clib_memset (graph->policy_workers, 0, sizeof (graph->policy_workers));
   graph->policy_packet_lock_acquisitions = 0;
@@ -2444,6 +2454,8 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
       }
   if (!product_flow_end_start (graph->generation, graph->flow_pools,
                                PRODUCT_GRAPH_WORKERS))
+    return 0;
+  if (!product_observation_bind (graph->generation, graph->flow_pools))
     return 0;
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
   clib_atomic_store_rel_n (&graph->flow_active_snapshot_hash, 0);
@@ -3900,7 +3912,7 @@ product_packet_graph_policy_on_owner (
     eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK && !post_flow ? &early : 0);
   if (result == PRODUCT_PACKET_OK && !post_flow
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
-    product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, 0);
+    product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
   else if (result == PRODUCT_PACKET_OK && observation.entry
            && !evaluation->terminal_preserved && snapshot.identity.revision)
     {
@@ -3909,6 +3921,8 @@ product_packet_graph_policy_on_owner (
       (void) product_packet_graph_flow_record_decision (
         pool, observation.entry, evaluation, lease, owner_worker);
     }
+  if (observation.entry)
+    product_observation_observed (vm, observation.entry, observation.slot);
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
   if (worker)
     {

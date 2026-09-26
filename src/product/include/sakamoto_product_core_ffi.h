@@ -11,6 +11,14 @@ extern "C" {
 /* The handle is allocated and owned by the Rust Product Core cdylib. */
 typedef struct sakamoto_product_core_handle sakamoto_product_core_handle_t;
 
+#define SAKAMOTO_OBSERVATION_REPLY_BYTES (4U * 1024U * 1024U)
+uint32_t sakamoto_product_core_observation_start(
+    sakamoto_product_core_handle_t *, uint64_t generation);
+/* operation 0=current query, 1/2=controlled pause/resume validation. */
+uint32_t sakamoto_product_core_observation_query(
+    sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,
+    uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
+
 uint32_t sakamoto_product_core_sni_query(
     sakamoto_product_core_handle_t *, uint64_t, uint32_t, uint32_t, uint64_t,
     sakamoto_product_sni_status_t *);

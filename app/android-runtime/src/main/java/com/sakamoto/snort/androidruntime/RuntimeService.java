@@ -405,6 +405,21 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(() -> manageRuleImport(nonce, operation, expectedSaved));
             return START_STICKY;
         }
+        if (RuntimeControlProtocol.ACTION_OBSERVATION_QUERY.equals(action)) {
+            final String nonce = intent.getStringExtra("observationNonce");
+            final int operation = intent.getIntExtra("observationOperation", 0);
+            enqueueLifecycle(() -> {
+                if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}")
+                        || operation < 0 || operation > 2
+                        || (operation != 0 && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0)) return;
+                String response = "{\"error\":\"management_unavailable\"}";
+                try {
+                    if (productCoreSession != null) response = productCoreSession.observationQuery(operation);
+                } catch (RuntimeException error) { response = "{\"error\":\"query_failed\"}"; }
+                writeBestEffortEvidenceFile("product-state/observation-" + nonce + ".json", response);
+            });
+            return START_STICKY;
+        }
         if (RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)) {
             final int operation = intent.getIntExtra("ruleOperation", 0);
             final long expectedSaved = intent.getLongExtra("expectedSavedRevision", 0L);
@@ -694,6 +709,7 @@ public final class RuntimeService extends VpnService {
                 || RuntimeControlProtocol.ACTION_SNI_QUERY.equals(action)
                 || RuntimeControlProtocol.ACTION_RULE_CONFIG.equals(action)
                 || RuntimeControlProtocol.ACTION_RULE_IMPORT.equals(action)
+                || RuntimeControlProtocol.ACTION_OBSERVATION_QUERY.equals(action)
                 || RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action);
     }
 
@@ -1203,6 +1219,11 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             status = reconciled;
+            if (session.startObservation() != 0) {
+                failProductCoreGeneration("product_observation_start_failed",
+                        "Flow observation ingestion could not start");
+                return;
+            }
             if (selected == RuntimeProfile.ROOT || vpnGraphValidation) {
                 final long networkGeneration = generation;
                 platformNetworkSnapshots = new PlatformNetworkSnapshots(

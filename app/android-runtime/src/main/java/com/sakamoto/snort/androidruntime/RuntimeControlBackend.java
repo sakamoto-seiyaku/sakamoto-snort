@@ -242,6 +242,14 @@ public final class RuntimeControlBackend {
                 .putExtra("expectedSavedRevision", expectedSaved));
     }
 
+    public void observationQuery(Context context, String nonce, int operation) {
+        context.startService(new Intent(context, RuntimeService.class)
+                .setAction(RuntimeControlProtocol.ACTION_OBSERVATION_QUERY)
+                .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
+                .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_OBSERVATION_QUERY)
+                .putExtra("observationNonce", nonce).putExtra("observationOperation", operation));
+    }
+
     public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {
         context.startService(new Intent(context, RuntimeService.class)
                 .setAction(RuntimeControlProtocol.ACTION_RULE_CONFIG)

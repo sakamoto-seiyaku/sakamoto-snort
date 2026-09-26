@@ -83,11 +83,14 @@ fn lock_generation_ledger() -> std::sync::MutexGuard<'static, GenerationLedger> 
 pub struct ProductCore {
     pub(super) session: Option<NonNull<ProductSession>>,
     pub(super) generation: u64,
+    pub(super) api_path: std::path::PathBuf,
+    pub(super) observation: Option<crate::observation_service::ObservationService>,
     _not_send_or_sync: PhantomData<*mut ()>,
 }
 
 impl ProductCore {
     pub fn connect(path: &Path, generation: u64) -> Result<(Self, Status), ProductError> {
+        let api_path = path.to_path_buf();
         let actual_abi = abi_version();
         if actual_abi != ABI_VERSION {
             return Err(ProductError::AbiVersion {
@@ -169,6 +172,8 @@ impl ProductCore {
             Self {
                 session: Some(session),
                 generation,
+                api_path,
+                observation: None,
                 _not_send_or_sync: PhantomData,
             },
             status,
@@ -376,6 +381,7 @@ impl ProductCore {
     }
 
     pub fn disconnect(&mut self) -> Result<(), ProductError> {
+        self.observation.take();
         let Some(session) = self.session else {
             return Ok(());
         };
@@ -402,6 +408,7 @@ impl ProductCore {
 
 impl Drop for ProductCore {
     fn drop(&mut self) {
+        self.observation.take();
         if let Some(session) = self.session.take() {
             let _ = unsafe { sakamoto_product_session_disconnect(session.as_ptr()) };
             let _ = unsafe { sakamoto_product_session_destroy(session.as_ptr()) };
@@ -421,6 +428,8 @@ mod tests {
         let mut core = ProductCore {
             session: None,
             generation: 7,
+            api_path: std::path::PathBuf::new(),
+            observation: None,
             _not_send_or_sync: PhantomData,
         };
         assert!(matches!(

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_flow_end.h"
 #include "product_flow_expiry.h"
+#include "product_observation.h"
 #include "product_packet_graph.h"
 #include <vlib/threads.h>
 #include <vnet/buffer.h>
@@ -299,6 +300,7 @@ product_flow_end_consume (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi)
   product_flow_end_metadata_t metadata = metadata_load (vlib_get_buffer (vm, bi));
   const product_flow_entry_t *entry = validate_identity (vm, &metadata);
   owner->consumers++;
+  product_observation_end (vm, entry, metadata.flow_index);
   trace_signal (vm, "consumer_end", node->node_index, bi, &metadata, entry);
   /* There are no DPI/telemetry attachments in the current product. This is
    * the shared post-conntrack consumer seam, not a parallel lifecycle arc. */

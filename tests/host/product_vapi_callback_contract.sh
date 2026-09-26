@@ -303,6 +303,13 @@ typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_cor
 typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
   vapi_ctx_t, void *, vapi_error_e, bool, vapi_payload_product_core_root_stop_reply *);
 
+#include "sakamoto_product_observation.h"
+typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_core_observation_query;
+typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected; product_observation_channel_status_t channels[4]; } vapi_payload_product_core_observation_query_reply;
+typedef vapi_error_e (*vapi_product_core_observation_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_observation_query_reply *);
+extern vapi_msg_id_t vapi_msg_id_product_core_observation_query, vapi_msg_id_product_core_observation_query_reply;
+vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_query(vapi_ctx_t);
+vapi_error_e vapi_product_core_observation_query(vapi_ctx_t,vapi_msg_product_core_observation_query *,vapi_product_core_observation_query_callback_t,void *);
 typedef struct { struct { uint64_t generation, incarnation; uint32_t worker, slot; } payload; } vapi_msg_product_core_sni_query;
 typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vapi_payload_product_core_sni_query_reply;
 typedef vapi_error_e (*vapi_product_core_sni_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_sni_query_reply *);
@@ -333,6 +340,8 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t, vapi_msg_product_core_rul
 #define DEFINE_VAPI_MSG_IDS_VLIB_API_JSON \
   vapi_msg_id_t vapi_msg_id_vlib;
 #define DEFINE_VAPI_MSG_IDS_PRODUCT_CORE_API_JSON \
+  vapi_msg_id_t vapi_msg_id_product_core_observation_query; \
+  vapi_msg_id_t vapi_msg_id_product_core_observation_query_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_sni_query; \
   vapi_msg_id_t vapi_msg_id_product_core_sni_query_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_rule_config; \
@@ -799,6 +808,15 @@ vapi_product_core_policy_bundle_apply (
               : sakamoto_test_policy_bundle_callback_error,
             true, &reply);
   return VAPI_OK;
+}
+vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_query(vapi_ctx_t context)
+{ (void)context;return test_message_alloc(sizeof(vapi_msg_product_core_observation_query)); }
+vapi_error_e vapi_product_core_observation_query(vapi_ctx_t context,vapi_msg_product_core_observation_query *message,
+  vapi_product_core_observation_query_callback_t callback,void *opaque)
+{
+  vapi_payload_product_core_observation_query_reply reply={.generation=message->payload.generation,.owners=2,.version=1};
+  vapi_msg_free(context,message);
+  return callback(context,opaque,VAPI_OK,true,&reply);
 }
 int sakamoto_test_sni_mode;
 vapi_msg_product_core_sni_query *vapi_alloc_product_core_sni_query(vapi_ctx_t context)

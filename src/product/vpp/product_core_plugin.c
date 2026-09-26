@@ -31,6 +31,7 @@
 #include "product_vpn_tun_adapter.h"
 #include "product_rule_config.h"
 #include "product_core_policy.h"
+#include "product_observation.h"
 
 #ifndef SAKAMOTO_PRODUCT_VPP_REVISION
 #error "the product plugin must be compiled with the pinned VPP revision"
@@ -525,6 +526,34 @@ vl_api_product_core_policy_bundle_apply_t_handler (vl_api_product_core_policy_bu
   int rv = -95;
   REPLY_MACRO2 (VL_API_PRODUCT_CORE_POLICY_BUNDLE_APPLY_REPLY,
                 ({ rmp->retval = htonl (rv); }));
+}
+
+static void
+vl_api_product_core_observation_query_t_handler (vl_api_product_core_observation_query_t *mp)
+{
+  vl_api_product_core_observation_query_reply_t *rmp;
+  product_observation_status_t status;
+  product_observation_status (&status);
+  int rv = clib_net_to_host_u64 (mp->generation) == product_core_main.generation ? 0 : -1;
+#define OBS_FIELD(name) rmp->channels[i].name = clib_host_to_net_u64 (status.channels[i].name)
+  REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_OBSERVATION_QUERY_REPLY, ({
+    rmp->retval = htonl (rv);
+    rmp->generation = clib_host_to_net_u64 (product_core_main.generation);
+    rmp->mapping_bytes = clib_host_to_net_u64 (status.mapping_bytes);
+    rmp->version = htonl (status.version); rmp->owners = htonl (status.owners);
+    rmp->flow_capacity = htonl (status.flow_capacity); rmp->connected = htonl (status.connected);
+    for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+      OBS_FIELD (attempted); OBS_FIELD (published); OBS_FIELD (full); OBS_FIELD (oversize);
+      OBS_FIELD (consumed); OBS_FIELD (notify_errors); OBS_FIELD (pending); OBS_FIELD (notifications);
+      for (unsigned j = 0; j < 3; j++) {
+        rmp->channels[i].basic_packets[j] = clib_host_to_net_u64 (status.channels[i].basic_packets[j]);
+        rmp->channels[i].basic_bytes[j] = clib_host_to_net_u64 (status.channels[i].basic_bytes[j]);
+      }
+      rmp->channels[i].occupancy = htonl (status.channels[i].occupancy);
+      rmp->channels[i].capacity = htonl (status.channels[i].capacity);
+    }
+  }));
+#undef OBS_FIELD
 }
 
 static void
