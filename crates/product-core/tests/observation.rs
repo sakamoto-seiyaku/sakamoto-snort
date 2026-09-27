@@ -72,8 +72,8 @@ fn rollback_and_retired_incarnation_cannot_change_overview() {
 
 #[test]
 fn wire_record_is_length_and_version_checked() {
-    let mut bytes = [0u8; 160];
-    bytes[0..4].copy_from_slice(&[136, 0, 2, 2]);
+    let mut bytes = [0u8; 448];
+    bytes[0..4].copy_from_slice(&[168, 1, 3, 2]);
     bytes[16] = 7; // generation
     bytes[24] = 11; // incarnation
     bytes[32] = 1; // update
@@ -81,8 +81,22 @@ fn wire_record_is_length_and_version_checked() {
     bytes[80] = 80; // REPLY bytes
     bytes[112] = 4;
     bytes[113] = 17;
-    bytes[128..136].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
+    bytes[416..424].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
+    bytes[128] = 1; // ORIG segment
+    bytes[128 + 24] = 61; // activity UTC
+    bytes[128 + 32] = 7; // policy generation
+    bytes[128 + 40] = 3; // revision
+    bytes[128 + 48] = 9; // hash
+    bytes[128 + 56..128 + 64].copy_from_slice(&65537u64.to_le_bytes());
+    bytes[128 + 64] = 42; // UID
+    bytes[128 + 72..128 + 76].copy_from_slice(&[2, 1, 1, 1]);
+    bytes[128 + 76..128 + 79].copy_from_slice(b"old");
     let r = FlowRecord::decode(&bytes).unwrap();
+    assert_eq!(r.attribution[0].name, "old");
+    assert_eq!(r.attribution[0].winner, 65537);
+    assert_eq!(r.attribution[0].declared_action, 2);
+    assert_eq!(r.attribution[0].actual_action, 1);
+    assert!(!r.attribution[1].valid);
     assert_eq!(r.generation, 7);
     assert_eq!(r.incarnation, 11);
     assert_eq!(r.packets, [3, 0]);
@@ -90,7 +104,7 @@ fn wire_record_is_length_and_version_checked() {
     assert_eq!(r.addresses, [10, 1, 2, 3, 10, 4, 5, 6]);
     bytes[0] = 127;
     assert!(FlowRecord::decode(&bytes).is_none());
-    bytes[0] = 136;
+    bytes[0] = 168;
     bytes[2] = 1;
     assert!(FlowRecord::decode(&bytes).is_none());
 }

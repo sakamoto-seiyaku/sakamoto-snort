@@ -7,7 +7,8 @@
 int product_observation_bind (uint64_t, product_flow_runtime_t **);
 void product_observation_unbind (void);
 void product_observation_quiesce (void);
-void product_observation_observed (vlib_main_t *, const product_flow_entry_t *, uint32_t);
+void product_observation_observed (vlib_main_t *, const product_flow_entry_t *, uint32_t,
+                                   const product_observation_attribution_t *);
 void product_observation_end (vlib_main_t *, const product_flow_entry_t *, uint32_t);
 uint64_t product_observation_deadline (unsigned owner);
 void product_observation_flush_due (vlib_main_t *, uint64_t);

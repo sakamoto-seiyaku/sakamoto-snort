@@ -686,6 +686,7 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
             goto done;
         }
         r->rule_id = s->version;
+        memcpy(r->name, c->state.metadata.rules[i].name, sizeof(r->name));
         r->uid = s->uid;
         r->network_context_id = s->network_context;
         r->ifindex = s->ifindex;

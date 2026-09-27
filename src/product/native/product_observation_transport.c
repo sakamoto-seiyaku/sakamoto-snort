@@ -59,8 +59,8 @@ struct product_observation_transport {
 };
 
 static svm_msg_q_ring_cfg_t rings[] = {
-  { .nitems = OBS_SLOTS, .elsize = 144 },
-  { .nitems = OBS_SLOTS, .elsize = 160 },
+  { .nitems = OBS_SLOTS, .elsize = 432 },
+  { .nitems = OBS_SLOTS, .elsize = 448 },
 };
 static svm_msg_q_cfg_t config = {
   .q_nitems = OBS_SLOTS * 2, .n_rings = 2, .ring_cfgs = rings,

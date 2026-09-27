@@ -1,5 +1,5 @@
 //! Minimal transactional overall-window store. No raw event log or repository framework.
-use crate::observation::FlowRecord;
+use crate::observation::{Attribution, FlowRecord};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,7 @@ const MAX_BASELINES: usize = 131072;
 const MAX_RECENT: usize = 32768;
 const MAX_MINUTES: usize = 262144;
 const MAX_DIRTY: usize = 4096;
+const MAX_EFFECT_WINDOWS: usize = 65536;
 const FLUSH_ROWS: usize = 2048;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 // The 256 MiB owner budget includes the retained <=64 MiB predecessor,
@@ -48,6 +49,49 @@ impl Counts {
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
+struct ApplicationWindow {
+    minute: u64,
+    uid: u32,
+    actual_action: u8,
+    counts: Counts,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RuleReference {
+    policy_generation: u64,
+    policy_revision: u64,
+    policy_hash: u64,
+    winner: u64,
+    uid: u32,
+    network: u32,
+    declared_action: u8,
+    actual_action: u8,
+    mode: u8,
+    name: String,
+}
+impl From<&Attribution> for RuleReference {
+    fn from(a: &Attribution) -> Self {
+        Self {
+            policy_generation: a.policy_generation,
+            policy_revision: a.policy_revision,
+            policy_hash: a.policy_hash,
+            winner: a.winner,
+            uid: a.uid,
+            network: a.network,
+            declared_action: a.declared_action,
+            actual_action: a.actual_action,
+            mode: a.mode,
+            name: a.name.clone(),
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct RuleWindow {
+    minute: u64,
+    attribution: RuleReference,
+    counts: Counts,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct Baseline {
     record: FlowRecord,
     first_end_us: Option<u64>,
@@ -57,12 +101,24 @@ struct State {
     baselines: BTreeMap<String, Baseline>,
     recent: BTreeMap<String, Baseline>,
     minutes: BTreeMap<u64, Counts>,
+    #[serde(default)]
+    unknown_minutes: BTreeMap<u64, Counts>,
+    #[serde(default)]
+    applications: BTreeMap<String, ApplicationWindow>,
+    #[serde(default)]
+    rules: BTreeMap<String, RuleWindow>,
     #[serde(flatten)]
     meta: Metadata,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Metadata {
     schema: u32,
+    #[serde(default)]
+    attribution_schema: u32,
+    #[serde(default)]
+    attribution_unknown: Counts,
+    #[serde(default)]
+    legacy_unattributed: Counts,
     totals: Counts,
     ended: u64,
     accepted: u64,
@@ -78,6 +134,9 @@ impl Default for Metadata {
     fn default() -> Self {
         Self {
             schema: 1,
+            attribution_schema: 1,
+            attribution_unknown: Counts::default(),
+            legacy_unattributed: Counts::default(),
             totals: Counts::default(),
             ended: 0,
             accepted: 0,
@@ -97,6 +156,9 @@ impl Default for State {
             baselines: BTreeMap::new(),
             recent: BTreeMap::new(),
             minutes: BTreeMap::new(),
+            unknown_minutes: BTreeMap::new(),
+            applications: BTreeMap::new(),
+            rules: BTreeMap::new(),
             meta: Metadata::default(),
         }
     }
@@ -106,11 +168,19 @@ struct Dirty {
     baselines: BTreeSet<String>,
     recent: BTreeSet<String>,
     minutes: BTreeSet<u64>,
+    unknown_minutes: BTreeSet<u64>,
+    applications: BTreeSet<String>,
+    rules: BTreeSet<String>,
     meta: bool,
 }
 impl Dirty {
     fn len(&self) -> usize {
-        self.baselines.len() + self.recent.len() + self.minutes.len()
+        self.baselines.len()
+            + self.recent.len()
+            + self.minutes.len()
+            + self.applications.len()
+            + self.rules.len()
+            + self.unknown_minutes.len()
     }
 }
 
@@ -124,7 +194,7 @@ fn put_row(
     value: &impl Serialize,
 ) -> Result<(), String> {
     let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-    if key.len() > 80 || bytes.len() > 4096 {
+    if key.len() > 192 || bytes.len() > 4096 {
         return Err("observation_row_capacity".into());
     }
     statement
@@ -203,7 +273,7 @@ impl ObservationStore {
         let page_size: i64 = db
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        let oversized: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM observation WHERE length(key)>80 OR length(value)>4096)", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let oversized: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM observation WHERE length(key)>192 OR length(value)>4096)", [], |r| r.get(0)).map_err(|e| e.to_string())?;
         if page_size != 4096 || oversized {
             return Err("observation_store_bounds".into());
         }
@@ -215,7 +285,7 @@ impl ObservationStore {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let state = if let Some(ref meta) = meta {
+        let mut state = if let Some(ref meta) = meta {
             let mut state = State {
                 meta: serde_json::from_slice(&meta).map_err(|e| e.to_string())?,
                 ..State::default()
@@ -243,6 +313,24 @@ impl ObservationStore {
                     }
                     3 => {
                         state.minutes.insert(
+                            key.parse::<u64>().map_err(|e| e.to_string())?,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                        );
+                    }
+                    4 => {
+                        state.applications.insert(
+                            key,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                        );
+                    }
+                    5 => {
+                        state.rules.insert(
+                            key,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                        );
+                    }
+                    6 => {
+                        state.unknown_minutes.insert(
                             key.parse::<u64>().map_err(|e| e.to_string())?,
                             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
                         );
@@ -279,6 +367,13 @@ impl ObservationStore {
             }
         };
         Self::validate_state(&state)?;
+        if state.meta.attribution_schema == 0 {
+            // Earlier committed history has no directional provenance. Preserve
+            // every total without guessing from its latest winner or config.
+            state.meta.attribution_unknown = state.meta.totals;
+            state.meta.legacy_unattributed = state.meta.totals;
+            state.meta.attribution_schema = 1;
+        }
         let mut store = Self {
             path: database,
             _lock: lock,
@@ -326,6 +421,15 @@ impl ObservationStore {
             for (key, value) in &self.state.minutes {
                 put_row(&mut put, 3, &key.to_string(), value)?;
             }
+            for (key, value) in &self.state.applications {
+                put_row(&mut put, 4, key, value)?;
+            }
+            for (key, value) in &self.state.rules {
+                put_row(&mut put, 5, key, value)?;
+            }
+            for (key, value) in &self.state.unknown_minutes {
+                put_row(&mut put, 6, &key.to_string(), value)?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         let count: i64 = tx
@@ -342,7 +446,12 @@ impl ObservationStore {
             .query_row("PRAGMA quick_check", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         if count as usize
-            != 1 + self.state.baselines.len() + self.state.recent.len() + self.state.minutes.len()
+            != 1 + self.state.baselines.len()
+                + self.state.recent.len()
+                + self.state.minutes.len()
+                + self.state.applications.len()
+                + self.state.rules.len()
+                + self.state.unknown_minutes.len()
             || meta != serde_json::to_vec(&self.state.meta).map_err(|e| e.to_string())?
             || integrity != "ok"
         {
@@ -361,6 +470,9 @@ impl ObservationStore {
         if state.baselines.len() > MAX_BASELINES
             || state.recent.len() > MAX_RECENT
             || state.minutes.len() > MAX_MINUTES
+            || state.unknown_minutes.len() > MAX_MINUTES
+            || state.applications.len() > MAX_EFFECT_WINDOWS
+            || state.rules.len() > MAX_EFFECT_WINDOWS
         {
             return Err("observation_state_capacity".into());
         }
@@ -379,10 +491,51 @@ impl ObservationStore {
         if totals.packets != state.meta.totals.packets || totals.bytes != state.meta.totals.bytes {
             return Err("observation_inconsistent_totals".into());
         }
+        if state.meta.attribution_schema > 1 {
+            return Err("observation_attribution_schema".into());
+        }
+        if state.meta.attribution_schema == 1 {
+            let mut attributed = state.meta.attribution_unknown;
+            for window in state.applications.values() {
+                if window.minute % 60 != 0 || !(1..=3).contains(&window.actual_action) {
+                    return Err("observation_invalid_application_window".into());
+                }
+                attributed.add(&window.counts)?;
+            }
+            if attributed.packets != totals.packets || attributed.bytes != totals.bytes {
+                return Err("observation_inconsistent_attribution".into());
+            }
+            let mut unknown = state.meta.legacy_unattributed;
+            for (minute, counts) in &state.unknown_minutes {
+                if minute % 60 != 0 {
+                    return Err("observation_invalid_minute".into());
+                }
+                unknown.add(counts)?;
+            }
+            if unknown.packets != state.meta.attribution_unknown.packets
+                || unknown.bytes != state.meta.attribution_unknown.bytes
+            {
+                return Err("observation_inconsistent_unknown".into());
+            }
+            for window in state.rules.values() {
+                if window.minute % 60 != 0
+                    || window.attribution.winner == 0
+                    || window.attribution.name.len() > 63
+                {
+                    return Err("observation_invalid_rule_window".into());
+                }
+            }
+        } else if !state.applications.is_empty()
+            || !state.rules.is_empty()
+            || !state.unknown_minutes.is_empty()
+        {
+            return Err("observation_attribution_schema".into());
+        }
         for (key, baseline) in &state.baselines {
             let r = &baseline.record;
             if key != &format!("{}:{}:{}", r.generation, r.owner, r.slot)
                 || !Self::valid_record(r)
+                || Self::validate_segments(r, None).is_err()
                 || baseline.first_end_us.is_some() != r.ended
             {
                 return Err("observation_invalid_baseline".into());
@@ -407,6 +560,51 @@ impl ObservationStore {
         Ok(())
     }
 
+    fn valid_attribution(a: &Attribution, packets: u64, bytes: u64) -> bool {
+        !a.valid
+            || (a.segment != 0
+                && a.activity_utc_us != 0
+                && a.policy_generation != 0
+                && a.policy_revision != 0
+                && a.policy_hash != 0
+                && a.start_packets <= packets
+                && a.start_bytes <= bytes
+                && a.name.len() <= 63
+                && !a.name.as_bytes().contains(&0)
+                && (1..=2).contains(&a.declared_action)
+                && (1..=3).contains(&a.actual_action)
+                && a.mode <= 1
+                && (a.actual_action == 3
+                    || a.actual_action == if a.mode == 1 { 1 } else { a.declared_action })
+                && (a.winner != 0 || (a.name.is_empty() && a.mode == 0 && a.declared_action == 1)))
+    }
+
+    fn validate_segments(record: &FlowRecord, previous: Option<&FlowRecord>) -> Result<(), String> {
+        for side in 0..2 {
+            let a = &record.attribution[side];
+            if !Self::valid_attribution(a, record.packets[side], record.bytes[side]) {
+                return Err("observation_invalid_segment".into());
+            }
+            if let Some(old) = previous.filter(|p| p.incarnation == record.incarnation) {
+                let b = &old.attribution[side];
+                if a.valid
+                    && b.valid
+                    && (a.segment < b.segment
+                        || (a.segment == b.segment
+                            && (a.start_packets != b.start_packets
+                                || a.start_bytes != b.start_bytes
+                                || RuleReference::from(a) != RuleReference::from(b)))
+                        || (a.segment > b.segment
+                            && (a.start_packets < old.packets[side]
+                                || a.start_bytes < old.bytes[side])))
+                {
+                    return Err("observation_inconsistent_segment".into());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn valid_record(record: &FlowRecord) -> bool {
         record.generation != 0
             && record.incarnation != 0
@@ -416,6 +614,10 @@ impl ObservationStore {
             && record.last_seen >= record.first_seen
             && record.activity_utc_us != 0
             && record.addresses.len() <= 32
+            && record
+                .attribution
+                .iter()
+                .all(|a| a.name.len() <= 63 && !a.name.as_bytes().contains(&0))
     }
 
     pub fn has_pending(&self) -> bool {
@@ -488,6 +690,20 @@ impl ObservationStore {
             for key in &self.dirty.minutes {
                 put_row(&mut put, 3, &key.to_string(), &self.state.minutes[key])?;
             }
+            for key in &self.dirty.applications {
+                put_row(&mut put, 4, key, &self.state.applications[key])?;
+            }
+            for key in &self.dirty.rules {
+                put_row(&mut put, 5, key, &self.state.rules[key])?;
+            }
+            for key in &self.dirty.unknown_minutes {
+                put_row(
+                    &mut put,
+                    6,
+                    &key.to_string(),
+                    &self.state.unknown_minutes[key],
+                )?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         tx.commit().map_err(|e| e.to_string())
@@ -510,7 +726,7 @@ impl ObservationStore {
     pub fn consume(&mut self, records: &[FlowRecord], received_us: u64) -> Result<(), String> {
         // A failed flush does not stop the live merge while dirty capacity is
         // still available. Retry at most once per interval, never per packet.
-        let flush_error = if self.last_flush.elapsed() >= FLUSH_INTERVAL {
+        let mut flush_error = if self.last_flush.elapsed() >= FLUSH_INTERVAL {
             self.flush().err()
         } else {
             None
@@ -536,7 +752,15 @@ impl ObservationStore {
             self.dirty.recent.insert(key);
         }
         for record in records {
-            if self.dirty.len() + 3 > MAX_DIRTY {
+            // Multi-view records can dirty more rows than overall-only ones.
+            // Commit between records before the next bounded drain can exceed
+            // capacity. A failed attempt still leaves room for live merging.
+            if self.dirty.len() >= FLUSH_ROWS && self.save_error.is_none() {
+                if let Err(error) = self.flush() {
+                    flush_error = Some(error);
+                }
+            }
+            if self.dirty.len() + 10 > MAX_DIRTY {
                 self.mark_gap();
                 self.save_error = Some("observation_dirty_capacity".into());
                 return Err("observation_dirty_capacity".into());
@@ -613,31 +837,174 @@ impl ObservationStore {
         {
             self.state.meta.clock_changes = self.state.meta.clock_changes.saturating_add(1);
         }
-        if delta.packets != [0; 2] || delta.bytes != [0; 2] {
-            let minute = record.activity_utc_us / 60_000_000 * 60;
-            if !self.state.minutes.contains_key(&minute) && self.state.minutes.len() >= MAX_MINUTES
-            {
-                return Err("observation_minute_capacity".into());
+        Self::validate_segments(record, old.map(|b| &b.record))?;
+        // Stage all affected rows before mutating the live aggregate. One
+        // record can touch two application and two rule rows, never history.
+        let mut applications = BTreeMap::<String, ApplicationWindow>::new();
+        let mut rules = BTreeMap::<String, RuleWindow>::new();
+        let mut unknown = self.state.meta.attribution_unknown;
+        let mut unattributed = Counts::default();
+        let mut minutes = BTreeMap::<u64, Counts>::new();
+        let mut activity_times = [0; 3];
+        for side in 0..2 {
+            let a = &record.attribution[side];
+            let mut contribution = Counts::default();
+            if a.valid && a.segment != 0 && a.activity_utc_us != 0 {
+                let start_packets = record.packets[side]
+                    .checked_sub(a.start_packets)
+                    .ok_or("observation_invalid_segment")?;
+                let start_bytes = record.bytes[side]
+                    .checked_sub(a.start_bytes)
+                    .ok_or("observation_invalid_segment")?;
+                contribution.packets[side] = delta.packets[side].min(start_packets);
+                contribution.bytes[side] = delta.bytes[side].min(start_bytes);
             }
-            let mut count = self.state.minutes.get(&minute).copied().unwrap_or_default();
-            let mut totals = self.state.meta.totals;
-            count.add(&delta)?;
-            totals.add(&delta)?;
+            unattributed.packets[side] = delta.packets[side] - contribution.packets[side];
+            unattributed.bytes[side] = delta.bytes[side] - contribution.bytes[side];
+            if contribution.packets[side] == 0 && contribution.bytes[side] == 0 {
+                continue;
+            }
+            activity_times[side] = a.activity_utc_us;
+            let minute = a.activity_utc_us / 60_000_000 * 60;
+            minutes
+                .entry(minute)
+                .or_insert_with(|| self.state.minutes.get(&minute).copied().unwrap_or_default())
+                .add(&contribution)?;
+            let app_key = format!("{minute:020}:{}:{}", a.uid, a.actual_action);
+            let window = applications.entry(app_key.clone()).or_insert_with(|| {
+                self.state
+                    .applications
+                    .get(&app_key)
+                    .cloned()
+                    .unwrap_or(ApplicationWindow {
+                        minute,
+                        uid: a.uid,
+                        actual_action: a.actual_action,
+                        counts: Counts::default(),
+                    })
+            });
+            window.counts.add(&contribution)?;
+            if a.winner != 0 {
+                let rule_key = format!(
+                    "{minute:020}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                    a.uid,
+                    a.network,
+                    a.policy_generation,
+                    a.policy_revision,
+                    a.policy_hash,
+                    a.winner,
+                    a.mode,
+                    a.declared_action,
+                    a.actual_action
+                );
+                let window = rules.entry(rule_key.clone()).or_insert_with(|| {
+                    self.state
+                        .rules
+                        .get(&rule_key)
+                        .cloned()
+                        .unwrap_or(RuleWindow {
+                            minute,
+                            attribution: a.into(),
+                            counts: Counts::default(),
+                        })
+                });
+                if window.attribution != RuleReference::from(a) {
+                    return Err("observation_rule_reference_conflict".into());
+                }
+                window.counts.add(&contribution)?;
+            }
+        }
+        if self.state.applications.len()
+            + applications
+                .keys()
+                .filter(|k| !self.state.applications.contains_key(*k))
+                .count()
+            > MAX_EFFECT_WINDOWS
+            || self.state.rules.len()
+                + rules
+                    .keys()
+                    .filter(|k| !self.state.rules.contains_key(*k))
+                    .count()
+                > MAX_EFFECT_WINDOWS
+        {
+            return Err("observation_effect_window_capacity".into());
+        }
+        unknown.add(&unattributed)?;
+        let unknown_minute = record.activity_utc_us / 60_000_000 * 60;
+        let has_unknown = unattributed.packets != [0; 2] || unattributed.bytes != [0; 2];
+        let mut unknown_count = self
+            .state
+            .unknown_minutes
+            .get(&unknown_minute)
+            .copied()
+            .unwrap_or_default();
+        if has_unknown {
+            activity_times[2] = record.activity_utc_us;
+            unknown_count.add(&unattributed)?;
+            minutes
+                .entry(unknown_minute)
+                .or_insert_with(|| {
+                    self.state
+                        .minutes
+                        .get(&unknown_minute)
+                        .copied()
+                        .unwrap_or_default()
+                })
+                .add(&unattributed)?;
+        }
+        if self.state.minutes.len()
+            + minutes
+                .keys()
+                .filter(|k| !self.state.minutes.contains_key(*k))
+                .count()
+            > MAX_MINUTES
+            || (has_unknown
+                && !self.state.unknown_minutes.contains_key(&unknown_minute)
+                && self.state.unknown_minutes.len() >= MAX_MINUTES)
+        {
+            return Err("observation_minute_capacity".into());
+        }
+        let mut totals = self.state.meta.totals;
+        totals.add(&delta)?;
+        // All checked arithmetic and capacity admission has completed. Apply
+        // baseline, lifecycle and every view together to the one live state.
+        for (minute, count) in minutes {
             self.state.minutes.insert(minute, count);
-            self.state.meta.totals = totals;
             self.dirty.minutes.insert(minute);
+        }
+        if has_unknown {
+            self.state
+                .unknown_minutes
+                .insert(unknown_minute, unknown_count);
+            self.dirty.unknown_minutes.insert(unknown_minute);
+        }
+        self.state.meta.totals = totals;
+        // Coverage describes the timestamps actually used by retained
+        // contributions, including independent directions and unknown growth.
+        // A zero-delta direction or state-only update cannot widen it.
+        if let Some(first) = activity_times.iter().copied().filter(|t| *t != 0).min() {
+            let last = activity_times.iter().copied().max().unwrap();
             self.state.meta.first_activity_us = Some(
                 self.state
                     .meta
                     .first_activity_us
-                    .map_or(record.activity_utc_us, |v| v.min(record.activity_utc_us)),
+                    .map_or(first, |v| v.min(first)),
             );
             self.state.meta.last_activity_us = Some(
                 self.state
                     .meta
                     .last_activity_us
-                    .map_or(record.activity_utc_us, |v| v.max(record.activity_utc_us)),
+                    .map_or(last, |v| v.max(last)),
             );
+        }
+        self.state.meta.attribution_unknown = unknown;
+        for (key, window) in applications {
+            self.dirty.applications.insert(key.clone());
+            self.state.applications.insert(key, window);
+        }
+        for (key, window) in rules {
+            self.dirty.rules.insert(key.clone());
+            self.state.rules.insert(key, window);
         }
         let baseline = Baseline {
             record: record.clone(),
@@ -676,6 +1043,27 @@ impl ObservationStore {
             .rev()
             .take(MAX_QUERY_MINUTES)
             .collect();
+        let unknown_minutes: BTreeMap<_, _> = self
+            .state
+            .unknown_minutes
+            .iter()
+            .rev()
+            .take(MAX_QUERY_MINUTES)
+            .collect();
+        let applications: BTreeMap<_, _> = self
+            .state
+            .applications
+            .iter()
+            .rev()
+            .take(MAX_QUERY_MINUTES)
+            .collect();
+        let rules: BTreeMap<_, _> = self
+            .state
+            .rules
+            .iter()
+            .rev()
+            .take(MAX_QUERY_MINUTES)
+            .collect();
         let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128).collect();
         serde_json::json!({ "schema": 1, "storage": "sqlite", "visibility": "live_including_pending",
             "persistence": { "packets": self.committed.totals.packets, "bytes": self.committed.totals.bytes,
@@ -685,6 +1073,16 @@ impl ObservationStore {
             "limits": { "dirty_rows": MAX_DIRTY, "baselines": MAX_BASELINES, "recent": MAX_RECENT,
                 "minutes": MAX_MINUTES, "database_bytes": DATABASE_LIMIT, "budget_bytes": 256*1024*1024 },
             "packets": self.state.meta.totals.packets, "bytes": self.state.meta.totals.bytes,
+            "application_windows": applications, "rule_windows": rules,
+            "attribution_unknown": self.state.meta.attribution_unknown,
+            "attribution_unknown_minutes": unknown_minutes,
+            "legacy_unattributed": self.state.meta.legacy_unattributed,
+            "unknown_minute_count": self.state.unknown_minutes.len(),
+            "unknown_query_truncated": self.state.unknown_minutes.len() > MAX_QUERY_MINUTES,
+            "application_window_count": self.state.applications.len(), "rule_window_count": self.state.rules.len(),
+            "effect_query_limit": MAX_QUERY_MINUTES, "effect_window_limit": MAX_EFFECT_WINDOWS,
+            "application_query_truncated": self.state.applications.len() > MAX_QUERY_MINUTES,
+            "rule_query_truncated": self.state.rules.len() > MAX_QUERY_MINUTES,
             "minutes": minutes, "ended": self.state.meta.ended, "recent": recent,
             "recent_count": self.state.recent.len(), "recent_query_limit": 128,
             "minute_query_limit": MAX_QUERY_MINUTES,
@@ -693,6 +1091,7 @@ impl ObservationStore {
             "baselines": self.state.baselines.len(), "accepted": self.state.meta.accepted,
             "rejected": self.state.meta.rejected, "save_error": self.save_error,
             "coverage": { "scope": "observed_flows", "incomplete": self.state.meta.gaps != 0 || self.uncertain,
+                "attribution_incomplete": self.state.meta.attribution_unknown.packets != [0; 2] || self.state.meta.attribution_unknown.bytes != [0; 2],
                 "gaps": self.state.meta.gaps, "recoveries": self.state.meta.recoveries,
                 "clock_changes": self.state.meta.clock_changes,
                 "first_activity_us": self.state.meta.first_activity_us,

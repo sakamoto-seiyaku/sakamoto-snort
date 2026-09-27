@@ -3798,6 +3798,10 @@ product_packet_graph_policy_stage_snapshot (
       evaluation->matched = 1;
       evaluation->winner = PRODUCT_PACKET_GRAPH_L4_WINNER_RULE;
       evaluation->rule_id = matched_view.rule_id;
+      evaluation->declared_action = matched_view.action;
+      evaluation->actual_action = matched_view.actual_action;
+      evaluation->mode = matched_view.mode;
+      evaluation->rule_index = matched_view.rule_index;
       evaluation->reason_id = matched_view.reason_id;
       evaluation->verdict = matched_view.stage_verdict == PRODUCT_L4_POLICY_VERDICT_DROP
         ? PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP : PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT;
@@ -3922,7 +3926,29 @@ product_packet_graph_policy_on_owner (
         pool, observation.entry, evaluation, lease, owner_worker);
     }
   if (observation.entry)
-    product_observation_observed (vm, observation.entry, observation.slot);
+    {
+      product_observation_attribution_t context = {
+        .policy_generation = snapshot.identity.generation,
+        .policy_revision = snapshot.identity.revision,
+        .policy_hash = snapshot.identity.snapshot_hash,
+        .winner = evaluation->matched ? evaluation->rule_id : 0,
+        .uid = (lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
+          ? lease->platform.uid : PRODUCT_FLOW_ENTRY_UID_UNKNOWN,
+        .network = (lease->platform.availability & PRODUCT_PLATFORM_CONTEXT_KNOWN)
+          ? lease->platform.network_context_id : PRODUCT_FLOW_ENTRY_NETWORK_CONTEXT_UNKNOWN,
+        .declared_action = evaluation->matched ? evaluation->declared_action : PRODUCT_L4_POLICY_ACTION_ALLOW,
+        .actual_action = evaluation->matched ? evaluation->actual_action : PRODUCT_L4_POLICY_ACTION_ALLOW,
+        .mode = evaluation->matched ? evaluation->mode : 0,
+        .valid = result == PRODUCT_PACKET_OK && snapshot.identity.revision != 0,
+      };
+      if (evaluation->matched && evaluation->rule_index < snapshot.bank->view.rule_count)
+        {
+          const product_l4_policy_rule_t *rule = &snapshot.bank->view.rules[evaluation->rule_index].source;
+          if (rule->rule_id == context.winner) memcpy (context.name, rule->name, sizeof (context.name));
+          else context.valid = 0;
+        }
+      product_observation_observed (vm, observation.entry, observation.slot, &context);
+    }
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
   if (worker)
     {

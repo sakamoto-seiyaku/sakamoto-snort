@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 U8, U16, U32, U64 = C.c_uint8, C.c_uint16, C.c_uint32, C.c_uint64
 
 class Rule(C.Structure):
-    _fields_ = [('expression_length', U32), ('expression', U8*64), ('rule_id', U64)] + [
+    _fields_ = [('expression_length', U32), ('expression', U8*64), ('rule_id', U64), ('name', U8*64)] + [
         (n, U32) for n in ('uid', 'network_context_id', 'ifindex', 'priority', 'order', 'reason_id')] + [
         (n, U16) for n in ('source_port_first', 'source_port_last', 'destination_port_first', 'destination_port_last')] + [
         (n, U8) for n in ('family', 'protocol', 'direction', 'source_prefix_length', 'destination_prefix_length', 'action', 'mode')] + [
@@ -44,7 +44,7 @@ DOMAIN_BACKEND = None
 
 class Result(C.Structure):
     _fields_ = [(n, U8) for n in ('evaluation', 'stage_verdict', 'action', 'no_match_reason', 'mode', 'actual_action')] + [
-        ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'probes', 'probe_limit', 'subject_probes', 'candidate_count', 'subtable_probes', 'key_probes')]
+        ('rule_id', U64)] + [(n, U32) for n in ('reason_id', 'priority', 'order', 'winner_rank', 'rule_index', 'probes', 'probe_limit', 'subject_probes', 'candidate_count', 'subtable_probes', 'key_probes')]
 
 class CacheIdentity(C.Structure):
     _fields_ = [(n, U64) for n in ("generation", "revision", "snapshot_hash", "flow_incarnation")]

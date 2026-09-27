@@ -203,6 +203,8 @@ typedef struct
   uint8_t verdict;
   uint8_t matched;
   uint8_t terminal_preserved;
+  uint8_t declared_action, actual_action, mode;
+  uint32_t rule_index;
   uint32_t winner;
   uint64_t generation;
   uint64_t revision;

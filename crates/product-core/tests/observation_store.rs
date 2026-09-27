@@ -566,3 +566,383 @@ fn interrupted_migration_reopens_original_after_transaction_recovery() {
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn directional_attribution_windows_survive_end_commit_and_duplicate() {
+    use sakamoto_product_core::observation::Attribution;
+    let root = std::env::temp_dir().join(format!("t23-directions-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let context = |uid, winner, declared_action, actual_action, name: &str| Attribution {
+        segment: 1,
+        activity_utc_us: 61_000_000,
+        uid,
+        winner,
+        policy_generation: 7,
+        policy_revision: 3,
+        policy_hash: 99,
+        declared_action,
+        actual_action,
+        mode: u8::from(declared_action != actual_action),
+        name: name.into(),
+        valid: true,
+        ..Default::default()
+    };
+    let mut r = FlowRecord {
+        generation: 7,
+        incarnation: 1,
+        sequence: 1,
+        activity_utc_us: 61_000_000,
+        packets: [2, 1],
+        bytes: [120, 80],
+        attribution: [
+            context(1001, 65537, 2, 1, "observe request"),
+            context(1001, 131073, 1, 1, "reply"),
+        ],
+        ..Default::default()
+    };
+    store.consume(&[r.clone()], 62_000_000).unwrap();
+    r.sequence = 2;
+    r.packets = [3, 2];
+    r.bytes = [180, 160];
+    r.ended = true;
+    store.consume(&[r.clone(), r.clone()], 63_000_000).unwrap();
+    let check = |q: serde_json::Value| {
+        assert_eq!(q["packets"], serde_json::json!([3, 2]));
+        let apps = q["application_windows"].as_object().unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(
+            apps.values().next().unwrap()["counts"]["packets"],
+            serde_json::json!([3, 2])
+        );
+        let rules = q["rule_windows"].as_object().unwrap();
+        assert_eq!(rules.len(), 2);
+        let request = rules
+            .values()
+            .find(|v| v["attribution"]["winner"] == 65537)
+            .unwrap();
+        assert_eq!(request["counts"]["packets"], serde_json::json!([3, 0]));
+        assert_eq!(request["attribution"]["declared_action"], 2);
+        assert_eq!(request["attribution"]["actual_action"], 1);
+        assert_eq!(request["attribution"]["name"], "observe request");
+        assert_eq!(
+            q["attribution_unknown"]["packets"],
+            serde_json::json!([0, 0])
+        );
+    };
+    check(store.query());
+    store.flush().unwrap();
+    drop(store);
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.consume(&[r], 90_000_000).unwrap();
+    check(store.query());
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_boundary_preserves_only_provable_segments_and_directional_minutes() {
+    use sakamoto_product_core::observation::Attribution;
+    let root = std::env::temp_dir().join(format!("t23-gap-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let a = Attribution {
+        segment: 1,
+        activity_utc_us: 61_000_000,
+        policy_generation: 9,
+        policy_revision: 1,
+        policy_hash: 101,
+        uid: 42,
+        winner: 65537,
+        declared_action: 1,
+        actual_action: 1,
+        valid: true,
+        name: "old".into(),
+        ..Default::default()
+    };
+    let mut r = FlowRecord {
+        generation: 9,
+        incarnation: 1,
+        sequence: 1,
+        packets: [2, 0],
+        bytes: [120, 0],
+        activity_utc_us: 61_000_000,
+        attribution: [a.clone(), Attribution::default()],
+        ..Default::default()
+    };
+    store.consume(&[r.clone()], 62_000_000).unwrap();
+    // A missing boundary hides three request packets. Current segment started
+    // at five; its two packets are provable, not all five recovered packets.
+    r.sequence = 4;
+    r.packets = [7, 2];
+    r.bytes = [420, 180];
+    r.activity_utc_us = 181_000_000;
+    r.attribution[0] = Attribution {
+        segment: 3,
+        start_packets: 5,
+        start_bytes: 300,
+        activity_utc_us: 121_000_000,
+        policy_revision: 3,
+        policy_hash: 303,
+        winner: 196609,
+        name: "new".into(),
+        ..a.clone()
+    };
+    // Default ALLOW contributes to application traffic without a rule hit.
+    r.attribution[1] = Attribution {
+        activity_utc_us: 181_000_000,
+        uid: 43,
+        winner: 0,
+        name: String::new(),
+        ..a
+    };
+    r.ended = true;
+    store.consume(&[r.clone()], 900_000_000).unwrap();
+    let q = store.query();
+    assert_eq!(q["packets"], serde_json::json!([7, 2]));
+    assert_eq!(
+        q["attribution_unknown"]["packets"],
+        serde_json::json!([3, 0])
+    );
+    assert_eq!(q["minutes"]["120"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(q["minutes"]["180"]["packets"], serde_json::json!([3, 2]));
+    assert_eq!(
+        q["attribution_unknown_minutes"]["180"]["packets"],
+        serde_json::json!([3, 0])
+    );
+    let rules = q["rule_windows"].as_object().unwrap();
+    assert_eq!(rules.len(), 2);
+    assert_eq!(
+        rules
+            .values()
+            .find(|v| v["attribution"]["winner"] == 196609)
+            .unwrap()["counts"]["packets"],
+        serde_json::json!([2, 0])
+    );
+    assert_eq!(q["coverage"]["incomplete"], true);
+    store.flush().unwrap();
+    drop(store);
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.consume(&[r], 990_000_000).unwrap();
+    assert_eq!(
+        store.query()["attribution_unknown"],
+        q["attribution_unknown"]
+    );
+    assert_eq!(
+        store.query()["application_windows"],
+        q["application_windows"]
+    );
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn segment_context_cannot_change_without_boundary_or_partially_advance_views() {
+    use sakamoto_product_core::observation::Attribution;
+    let root = std::env::temp_dir().join(format!("t23-invalid-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let mut r = FlowRecord {
+        generation: 8,
+        incarnation: 1,
+        sequence: 1,
+        packets: [1, 0],
+        bytes: [60, 0],
+        activity_utc_us: 61_000_000,
+        attribution: [
+            Attribution {
+                segment: 1,
+                activity_utc_us: 61_000_000,
+                policy_generation: 8,
+                policy_revision: 1,
+                policy_hash: 88,
+                uid: 5,
+                winner: 65537,
+                declared_action: 1,
+                actual_action: 1,
+                valid: true,
+                name: "first".into(),
+                ..Default::default()
+            },
+            Default::default(),
+        ],
+        ..Default::default()
+    };
+    store.consume(&[r.clone()], 62_000_000).unwrap();
+    let before = store.query();
+    r.sequence = 2;
+    r.packets[0] = 2;
+    r.bytes[0] = 120;
+    for mutation in 0..4 {
+        let mut bad = r.clone();
+        match mutation {
+            0 => bad.attribution[0].winner += 1,
+            1 => bad.attribution[0].start_packets = 1,
+            2 => bad.attribution[0].name = "latest name".into(),
+            _ => bad.attribution[0].mode = 2,
+        }
+        assert!(store.consume(&[bad], 63_000_000).is_err());
+        for field in [
+            "packets",
+            "bytes",
+            "minutes",
+            "application_windows",
+            "rule_windows",
+            "accepted",
+        ] {
+            assert_eq!(
+                store.query()[field],
+                before[field],
+                "partial advance: {field}"
+            );
+        }
+    }
+    store.consume(&[r], 64_000_000).unwrap();
+    assert_eq!(store.query()["packets"], serde_json::json!([2, 0]));
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn healthy_multi_view_batches_commit_before_dirty_admission_runs_out() {
+    use sakamoto_product_core::observation::Attribution;
+    let root = std::env::temp_dir().join(format!("t23-batch-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut store = ObservationStore::open(&root.join("overall.json")).unwrap();
+    let records: Vec<_> = (0..800)
+        .map(|slot| {
+            let a = Attribution {
+                segment: 2,
+                start_packets: 1,
+                start_bytes: 60,
+                activity_utc_us: (u64::from(slot) * 3 + 1) * 60_000_000 + 1,
+                policy_generation: 1,
+                policy_revision: 1,
+                policy_hash: 1,
+                uid: slot * 2,
+                winner: 65537,
+                declared_action: 1,
+                actual_action: 1,
+                valid: true,
+                ..Default::default()
+            };
+            FlowRecord {
+                generation: 1,
+                slot,
+                incarnation: u64::from(slot) + 1,
+                sequence: 1,
+                packets: [2, 2],
+                bytes: [120, 140],
+                ended: true,
+                activity_utc_us: (u64::from(slot) * 3 + 3) * 60_000_000 + 1,
+                attribution: [
+                    a.clone(),
+                    Attribution {
+                        uid: slot * 2 + 1,
+                        activity_utc_us: a.activity_utc_us + 60_000_000,
+                        ..a
+                    },
+                ],
+                ..Default::default()
+            }
+        })
+        .collect();
+    store.consume(&records[..200], 62_000_000).unwrap();
+    store.consume(&records[200..456], 62_000_000).unwrap();
+    store.consume(&records[456..], 62_000_000).unwrap();
+    assert_eq!(store.query()["packets"], serde_json::json!([1600, 1600]));
+    assert_eq!(store.query()["coverage"]["incomplete"], false);
+    assert!(
+        store.query()["persistence"]["pending_rows"]
+            .as_u64()
+            .unwrap()
+            <= 4096
+    );
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn coverage_bounds_follow_each_nonzero_direction_and_unknown_remainder() {
+    use sakamoto_product_core::observation::Attribution;
+    let root = std::env::temp_dir().join(format!("t23-coverage-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut store = ObservationStore::open(&root.join("overall.json")).unwrap();
+    let a = Attribution {
+        segment: 1,
+        activity_utc_us: 61_000_000,
+        policy_generation: 1,
+        policy_revision: 1,
+        policy_hash: 1,
+        uid: 42,
+        declared_action: 1,
+        actual_action: 1,
+        valid: true,
+        ..Default::default()
+    };
+    let mut r = FlowRecord {
+        generation: 1,
+        incarnation: 1,
+        sequence: 3,
+        packets: [1, 1],
+        bytes: [60, 60],
+        activity_utc_us: 181_000_000,
+        attribution: [
+            a.clone(),
+            Attribution {
+                activity_utc_us: 181_000_000,
+                ..a
+            },
+        ],
+        ..Default::default()
+    };
+    store.consume(&[r.clone()], 999_000_000).unwrap();
+    assert_eq!(
+        store.query()["coverage"]["first_activity_us"],
+        61_000_000u64
+    );
+    assert_eq!(
+        store.query()["coverage"]["last_activity_us"],
+        181_000_000u64
+    );
+    // Latest header moves backwards, while the other direction has a later
+    // contribution. A direction with no delta must not expand coverage.
+    r.sequence = 4;
+    r.packets = [2, 2];
+    r.bytes = [120, 120];
+    r.activity_utc_us = 31_000_000;
+    r.attribution[0].activity_utc_us = 301_000_000;
+    r.attribution[1].activity_utc_us = 31_000_000;
+    store.consume(&[r.clone()], 1_000_000_000).unwrap();
+    assert_eq!(
+        store.query()["coverage"]["first_activity_us"],
+        31_000_000u64
+    );
+    assert_eq!(
+        store.query()["coverage"]["last_activity_us"],
+        301_000_000u64
+    );
+    r.sequence = 6;
+    r.packets[0] = 4;
+    r.bytes[0] = 240;
+    r.activity_utc_us = 421_000_000;
+    r.attribution[0].segment = 3;
+    r.attribution[0].start_packets = 3;
+    r.attribution[0].start_bytes = 180;
+    r.attribution[0].activity_utc_us = 361_000_000;
+    r.attribution[1].activity_utc_us = 1;
+    store.consume(&[r], 1_001_000_000).unwrap();
+    assert_eq!(
+        store.query()["coverage"]["first_activity_us"],
+        31_000_000u64
+    );
+    assert_eq!(
+        store.query()["coverage"]["last_activity_us"],
+        421_000_000u64
+    );
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}

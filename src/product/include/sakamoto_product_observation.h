@@ -4,13 +4,24 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PRODUCT_OBSERVATION_VERSION 2
+#define PRODUCT_OBSERVATION_VERSION 3
 #define PRODUCT_OBSERVATION_OWNERS 2
 #define PRODUCT_OBSERVATION_CHANNELS 4
 #define PRODUCT_OBSERVATION_END 1
 #define PRODUCT_OBSERVATION_CREATE 2
 #define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
-#define PRODUCT_OBSERVATION_MAX_RECORD 160
+#define PRODUCT_OBSERVATION_MAX_RECORD 448
+
+/* Direction-local provenance; no pointers, source conditions or packet bytes.
+ * A segment starts at the counters immediately preceding its first packet. */
+typedef struct {
+  uint64_t segment, start_packets, start_bytes, activity_utc_us;
+  uint64_t policy_generation, policy_revision, policy_hash, winner;
+  uint32_t uid, network;
+  uint8_t declared_action, actual_action, mode, valid;
+  uint8_t name[64], padding[4];
+} product_observation_attribution_t;
+_Static_assert (sizeof (product_observation_attribution_t) == 144, "attribution ABI");
 
 /* Local little-endian x86-64/ARM64 wire ABI; no pointer or packet payload.
  * IPv4 omits the final 24 bytes and places its two addresses in address[0..8]. */
@@ -28,10 +39,11 @@ typedef struct {
   uint8_t family, protocol, origin_direction, last_direction, flow_direction,
     end_reason, padding[2];
   uint64_t activity_utc_us;
+  product_observation_attribution_t attribution[2];
   uint8_t address[32];
 } product_observation_record_t;
-_Static_assert (sizeof (product_observation_record_t) == 160, "observation record ABI");
-_Static_assert (offsetof (product_observation_record_t, address) == 128, "record addresses");
+_Static_assert (sizeof (product_observation_record_t) == 448, "observation record ABI");
+_Static_assert (offsetof (product_observation_record_t, address) == 416, "record addresses");
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;

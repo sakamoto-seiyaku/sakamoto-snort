@@ -992,6 +992,7 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
           result->priority = compiled->source.priority;
           result->order = compiled->source.order;
           result->winner_rank = compiled->winner_rank;
+          result->rule_index = rule;
           break;
         }
     }

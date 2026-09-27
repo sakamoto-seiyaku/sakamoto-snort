@@ -30,6 +30,27 @@ pub struct ObservationHealth {
     pub channels: [ChannelHealth; 4],
 }
 
+/// Direction-local segment provenance. Start counters delimit only this segment;
+/// a lost predecessor is never inferred from the latest context.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Attribution {
+    pub segment: u64,
+    pub start_packets: u64,
+    pub start_bytes: u64,
+    pub activity_utc_us: u64,
+    pub policy_generation: u64,
+    pub policy_revision: u64,
+    pub policy_hash: u64,
+    pub winner: u64,
+    pub uid: u32,
+    pub network: u32,
+    pub declared_action: u8,
+    pub actual_action: u8,
+    pub mode: u8,
+    pub valid: bool,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FlowRecord {
     pub generation: u64,
@@ -56,11 +77,13 @@ pub struct FlowRecord {
     pub addresses: Vec<u8>,
     pub policy_revision: u64,
     pub winner: u64,
+    #[serde(default)]
+    pub attribution: [Attribution; 2],
 }
 
 impl FlowRecord {
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 136 {
+        if data.len() < 424 {
             return None;
         }
         let u16_at = |n| u16::from_le_bytes([data[n], data[n + 1]]);
@@ -72,15 +95,42 @@ impl FlowRecord {
             6 => 32,
             _ => return None,
         };
-        if length != 128 + address_bytes
+        if length != 416 + address_bytes
             || data.len() < length
-            || data[2] != 2
+            || data[2] != 3
             || data[3] & !7 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
         {
             return None;
         }
+        let decode_attribution = |offset: usize| -> Option<Attribution> {
+            let name = &data[offset + 76..offset + 140];
+            let end = name.iter().position(|b| *b == 0)?;
+            if name[end..].iter().any(|b| *b != 0)
+                || data[offset + 140..offset + 144] != [0; 4]
+                || data[offset + 75] > 1
+            {
+                return None;
+            }
+            Some(Attribution {
+                segment: u64_at(offset),
+                start_packets: u64_at(offset + 8),
+                start_bytes: u64_at(offset + 16),
+                activity_utc_us: u64_at(offset + 24),
+                policy_generation: u64_at(offset + 32),
+                policy_revision: u64_at(offset + 40),
+                policy_hash: u64_at(offset + 48),
+                winner: u64_at(offset + 56),
+                uid: u32_at(offset + 64),
+                network: u32_at(offset + 68),
+                declared_action: data[offset + 72],
+                actual_action: data[offset + 73],
+                mode: data[offset + 74],
+                valid: data[offset + 75] != 0,
+                name: std::str::from_utf8(&name[..end]).ok()?.into(),
+            })
+        };
         Some(Self {
             generation: u64_at(16),
             owner: u16_at(4),
@@ -103,9 +153,10 @@ impl FlowRecord {
             last_flow_direction: data[116],
             end_reason: data[117],
             ports: [u16_at(108), u16_at(110)],
-            addresses: data[128..length].to_vec(),
+            addresses: data[416..length].to_vec(),
             policy_revision: u64_at(88),
             winner: u64_at(96),
+            attribution: [decode_attribution(128)?, decode_attribution(272)?],
         })
     }
 }

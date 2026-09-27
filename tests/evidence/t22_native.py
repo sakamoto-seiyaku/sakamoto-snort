@@ -27,7 +27,7 @@ result = dict(started_ns=time.time_ns(),status="HOLD",commands=[],
 sources = ["src/product/native/product_observation_transport.c", "src/product/include/sakamoto_product_observation.h",
            "crates/product-core/src/observation.rs", "crates/product-core/src/observation_service.rs",
            "crates/product-core/src/observation_store.rs", "tests/host/product_observation_transport_test.c",
-           "tests/host/product_observation_handshake_test.c", "tests/host/product_observation_producer.c"]
+           "tests/host/product_observation_handshake_test.c", "tests/host/product_observation_producer.c", "tests/host/t23_query_delay.c"]
 result["source_hashes"] = {name:digest(ROOT/name) for name in sources}
 for name in sources:
     destination = out/"source"/name; destination.parent.mkdir(parents=True,exist_ok=True)
@@ -49,7 +49,10 @@ try:
                                   *libraries,"-o",out/name])
     run("transport-test",[out/"transport_test"])
     run("handshake-test",[out/"handshake_test",f"/tmp/t22-handshake-{os.getpid()}.sock"])
-    live = dict(env,SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR=str(include),
+    run("query-delay-build", ["cc", "-shared", "-fPIC", "-Wall", "-Wextra", "-Werror",
+        ROOT/"tests/host/t23_query_delay.c", "-ldl", "-o", out/"query-delay.so"])
+    live = dict(env,LD_PRELOAD=str(out/"query-delay.so"),
+                SAKAMOTO_QUERY_DELAY_ARM=str(out/"query-delay.arm"),SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR=str(include),
                 SAKAMOTO_PRODUCT_VAPI_LIBRARY_DIR=str(artifact/"lib"),
                 SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR=str(artifact/"include/vapi"),
                 SAKAMOTO_OBSERVATION_PRODUCER=str(out/"producer"))

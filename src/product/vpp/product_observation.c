@@ -21,6 +21,9 @@
 typedef struct {
   uint64_t incarnation, sequence, exported_packets, exported_bytes, due;
   uint64_t activity_utc_us, activity_mono_us;
+  uint64_t packets[2], bytes[2];
+  product_observation_attribution_t attribution[2];
+  uint8_t last_direction, flow_direction;
   uint8_t clock_changed;
   uint32_t previous, next;
 } observation_slot_t;
@@ -59,21 +62,26 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
   }
   if (s->sequence == UINT64_MAX) return; /* explicit lifetime cannot wrap */
   product_observation_record_t r = {
-    .length = entry->key.ip_family == 4 ? 136 : 160,
+    .length = entry->key.ip_family == 4 ? 424 : 448,
     .version = PRODUCT_OBSERVATION_VERSION,
     .flags = flags | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
     .owner = owner, .slot = slot, .uid = entry->uid,
     .generation = o->generation, .incarnation = entry->incarnation,
-    .sequence = ++s->sequence, .first_seen = entry->first_seen, .last_seen = entry->last_seen,
+    .sequence = ++s->sequence, .first_seen = entry->first_seen, .last_seen = s->activity_mono_us,
     .policy_revision = entry->policy_revision, .winner = entry->winner_rule_id,
     .network = entry->network_context, .family = entry->key.ip_family,
     .protocol = entry->key.protocol, .origin_direction = entry->flow_origin_device_direction,
-    .last_direction = entry->last_device_direction, .flow_direction = entry->last_flow_direction,
+    .last_direction = s->last_direction, .flow_direction = s->flow_direction,
     .end_reason = entry->end_reason,
     .activity_utc_us = s->activity_utc_us,
   };
-  memcpy (r.packets, entry->side_packets, sizeof (r.packets));
-  memcpy (r.bytes, entry->side_bytes, sizeof (r.bytes));
+  memcpy (r.packets, s->packets, sizeof (r.packets));
+  memcpy (r.bytes, s->bytes, sizeof (r.bytes));
+  memcpy (r.attribution, s->attribution, sizeof (r.attribution));
+  unsigned last_side = s->flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY;
+  r.uid = s->attribution[last_side].uid; r.network = s->attribution[last_side].network;
+  r.policy_revision = s->attribution[last_side].policy_revision;
+  r.winner = s->attribution[last_side].winner;
   unsigned bytes = entry->key.ip_family == 4 ? 4 : 16;
   const uint8_t *orig = entry->origin_is_endpoint_a ? entry->key.address_a : entry->key.address_b;
   const uint8_t *reply = entry->origin_is_endpoint_a ? entry->key.address_b : entry->key.address_a;
@@ -88,14 +96,15 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
   (void) product_observation_publish (transport, owner * 2, &r, r.length);
   /* A failed attempt is lost evidence, not a retry obligation. Later real
    * growth still carries the full cumulative value; loss remains in health. */
-  s->exported_packets = entry->packets;
-  s->exported_bytes = entry->bytes;
+  s->exported_packets = s->packets[0] + s->packets[1];
+  s->exported_bytes = s->bytes[0] + s->bytes[1];
   remove_pending (o, slot);
 }
 void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *entry,
-                                   uint32_t slot) {
+                                   uint32_t slot,
+                                   const product_observation_attribution_t *context) {
   unsigned owner = vlib_get_worker_index (vm->thread_index);
-  if (owner >= PRODUCT_OBSERVATION_OWNERS || !entry || !transport) return;
+  if (owner >= PRODUCT_OBSERVATION_OWNERS || !entry || !transport || !context) return;
   observation_owner_t *o = &owners[owner];
   if (slot >= o->capacity) return;
   observation_slot_t *s = &o->slots[slot];
@@ -104,6 +113,25 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
     remove_pending (o, slot);
     *s = (observation_slot_t) { .incarnation = entry->incarnation };
   }
+  unsigned side = entry->last_flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY;
+  product_observation_attribution_t *a = &s->attribution[side];
+  /* The Flow tracker already processed this packet to produce policy inputs.
+   * Observation accounting is independent: export its exact previous cumulative
+   * boundary before adding this packet under its final logical winner. */
+  int changed = !a->segment || memcmp (&a->policy_generation, &context->policy_generation,
+    sizeof (*a) - offsetof (product_observation_attribution_t, policy_generation));
+  if (changed) {
+    if (a->segment) export_record (owner, entry, slot, 0);
+    uint64_t next = a->segment == UINT64_MAX ? UINT64_MAX : a->segment + 1;
+    *a = *context;
+    a->segment = next;
+    a->start_packets = s->packets[side]; a->start_bytes = s->bytes[side];
+    if (next == UINT64_MAX) a->valid = 0; /* no identifier reuse at exhaustion */
+  }
+  memcpy (s->packets, entry->side_packets, sizeof (s->packets));
+  memcpy (s->bytes, entry->side_bytes, sizeof (s->bytes));
+  s->last_direction = entry->last_device_direction;
+  s->flow_direction = entry->last_flow_direction;
   /* Only real packet activity samples wall time. Pending flush and END retain
    * the sample even across a wall-clock step or a long idle timeout. */
   struct timespec wall;
@@ -116,7 +144,8 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
     if (difference > UINT64_C (1000000)) s->clock_changed = 1;
   }
   s->activity_utc_us = utc; s->activity_mono_us = entry->last_seen;
-  if (created || entry->packets - s->exported_packets >= 32
+  a->activity_utc_us = utc;
+  if (created || changed || entry->packets - s->exported_packets >= 32
       || entry->bytes - s->exported_bytes >= 65536) {
     export_record (owner, entry, slot, created ? PRODUCT_OBSERVATION_CREATE : 0);
   } else if (!s->due) {

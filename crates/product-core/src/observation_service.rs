@@ -23,7 +23,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 160]);
+    struct RawRecord([u8; 448]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -31,7 +31,6 @@ mod live {
         error: Option<String>,
         waits: u64,
         malformed: u64,
-        persistent: serde_json::Value,
         store_error: Option<String>,
     }
     #[derive(Default)]
@@ -40,11 +39,48 @@ mod live {
         paused: bool,
         parked: bool,
         finished: bool,
+        query_requested: u64,
+        query_completed: u64,
+        reply: Arc<serde_json::Value>,
     }
     type Control = Arc<(Mutex<Command>, Condvar)>;
 
+    fn capture_query(state: &State, store: Option<&ObservationStore>) -> serde_json::Value {
+        let mut reply = serde_json::to_value(state).expect("observation serialization");
+        reply["persistent"] = store.map_or(serde_json::Value::Null, ObservationStore::query);
+        reply["query_fresh"] = true.into();
+        reply["query_error"] = serde_json::Value::Null;
+        reply
+    }
+    fn answer_query(state: &State, store: Option<&ObservationStore>, control: &Control) {
+        let (mutex, cv) = &**control;
+        let request = {
+            let command = mutex.lock().unwrap();
+            if command.query_requested == command.query_completed {
+                return;
+            }
+            command.query_requested
+        };
+        // The consumer owns both sources. Render without the shared control
+        // lock so requesters can time out even during a slow projection.
+        let reply = Arc::new(capture_query(state, store));
+        let mut command = mutex.lock().unwrap();
+        command.reply = reply;
+        command.query_completed = request;
+        cv.notify_all();
+    }
+    fn unavailable_query(previous: &serde_json::Value, error: &str) -> serde_json::Value {
+        let mut reply = if previous.is_object() {
+            previous.clone()
+        } else {
+            serde_json::json!({})
+        };
+        reply["query_fresh"] = false.into();
+        reply["query_error"] = error.into();
+        reply
+    }
+
     pub(crate) struct ObservationService {
-        state: Arc<Mutex<State>>,
         control: Control,
         interrupt: c_int,
         thread: Option<JoinHandle<()>>,
@@ -63,17 +99,15 @@ mod live {
             let store_path = store_path.to_owned();
             let path =
                 CString::new(format!("{}.obs", api.display())).map_err(|_| "invalid_socket")?;
-            let state = Arc::new(Mutex::new(State {
+            let mut worker_state = State {
                 overview: Overview::new(generation, 0, 0),
                 live: false,
                 error: None,
                 waits: 0,
                 malformed: 0,
-                persistent: serde_json::Value::Null,
                 store_error: None,
-            }));
+            };
             let control: Control = Arc::new((Mutex::new(Command::default()), Condvar::new()));
-            let worker_state = state.clone();
             let worker_control = control.clone();
             let (tx, rx) = mpsc::sync_channel(1);
             let worker = thread::Builder::new()
@@ -97,21 +131,18 @@ mod live {
                     let mut store = match ObservationStore::open(&store_path) {
                         Ok(store) => Some(store),
                         Err(error) => {
-                            worker_state.lock().unwrap().store_error = Some(error);
+                            worker_state.store_error = Some(error);
                             None
                         }
                     };
                     {
-                        let mut s = worker_state.lock().unwrap();
+                        let s = &mut worker_state;
                         s.overview = Overview::new(
                             generation,
                             health.owners as usize,
                             health.flow_capacity as usize,
                         );
                         s.live = true;
-                        if let Some(store) = &store {
-                            s.persistent = store.query();
-                        }
                         s.overview.incomplete = health
                             .channels
                             .iter()
@@ -131,7 +162,15 @@ mod live {
                         while command.paused && !command.stop {
                             command.parked = true;
                             cv.notify_all();
-                            command = cv.wait(command).unwrap();
+                            drop(command);
+                            answer_query(&worker_state, store.as_ref(), &worker_control);
+                            command = mutex.lock().unwrap();
+                            if command.query_requested != command.query_completed {
+                                continue;
+                            }
+                            if command.paused && !command.stop {
+                                command = cv.wait(command).unwrap();
+                            }
                         }
                         command.parked = false;
                         cv.notify_all();
@@ -139,11 +178,12 @@ mod live {
                             break;
                         }
                         drop(command);
+                        answer_query(&worker_state, store.as_ref(), &worker_control);
                         let mut work = false;
                         let mut records = Vec::new();
                         for channel in 0..4 {
                             for _ in 0..128 {
-                                let mut raw = RawRecord([0; 160]);
+                                let mut raw = RawRecord([0; 448]);
                                 let rv = unsafe {
                                     product_observation_receive(handle, channel, &mut raw)
                                 };
@@ -151,14 +191,14 @@ mod live {
                                     break;
                                 }
                                 if rv < 0 {
-                                    let mut s = worker_state.lock().unwrap();
+                                    let s = &mut worker_state;
                                     s.error = Some("invalid_channel_record".into());
                                     s.overview.incomplete = true;
                                     break 'consume;
                                 }
                                 work = true;
                                 if channel % 2 == 0 {
-                                    let mut s = worker_state.lock().unwrap();
+                                    let s = &mut worker_state;
                                     match FlowRecord::decode(&raw.0) {
                                         Some(record)
                                             if record.owner as u32 == channel / 2
@@ -182,11 +222,11 @@ mod live {
                             .iter()
                             .any(|c| c.full != 0 || c.oversize != 0 || c.notify_errors != 0)
                         {
-                            worker_state.lock().unwrap().overview.incomplete = true;
+                            worker_state.overview.incomplete = true;
                         }
                         if let Some(store) = &mut store {
                             let newly_incomplete = !coverage_reported
-                                && worker_state.lock().unwrap().overview.incomplete;
+                                && worker_state.overview.incomplete;
                             if newly_incomplete {
                                 store.mark_gap();
                                 coverage_reported = true;
@@ -197,15 +237,13 @@ mod live {
                                     .map(|d| d.as_micros() as u64)
                                     .unwrap_or(0);
                                 let result = store.consume(&records, now);
-                                let mut s = worker_state.lock().unwrap();
                                 if let Err(error) = result {
-                                    s.store_error = Some(error);
+                                    worker_state.store_error = Some(error);
                                 }
-                                s.persistent = store.query();
                             }
                         }
                         if !work {
-                            worker_state.lock().unwrap().waits += 1;
+                            worker_state.waits += 1;
                             let timeout =
                                 store.as_ref().map_or(-1, ObservationStore::wait_timeout_ms);
                             if unsafe { product_observation_wait(handle, timeout) } < 0 {
@@ -214,7 +252,7 @@ mod live {
                         }
                     }
                     {
-                        let mut s = worker_state.lock().unwrap();
+                        let s = &mut worker_state;
                         s.live = false;
                         // The producer may still publish, and this consumer
                         // cannot prove quiescence or drain completion. Even an
@@ -227,18 +265,20 @@ mod live {
                             if let Err(error) = store.close() {
                                 s.store_error = Some(error);
                             }
-                            s.persistent = store.query();
                         }
                     }
                     unsafe { product_observation_transport_destroy(handle) };
                     let (mutex, cv) = &*worker_control;
-                    mutex.lock().unwrap().finished = true;
+                    let reply = Arc::new(capture_query(&worker_state, store.as_ref()));
+                    let mut command = mutex.lock().unwrap();
+                    command.reply = reply;
+                    command.query_completed = command.query_requested;
+                    command.finished = true;
                     cv.notify_all();
                 })
                 .map_err(|e| e.to_string())?;
             match rx.recv() {
                 Ok(Ok(interrupt)) => Ok(Self {
-                    state,
                     control,
                     interrupt,
                     thread: Some(worker),
@@ -250,7 +290,35 @@ mod live {
             }
         }
         pub(crate) fn snapshot(&self) -> serde_json::Value {
-            serde_json::to_value(&*self.state.lock().unwrap()).expect("observation serialization")
+            let (mutex, cv) = &*self.control;
+            let mut command = mutex.lock().unwrap();
+            if !command.finished {
+                let Some(request) = command.query_requested.checked_add(1) else {
+                    return unavailable_query(
+                        &command.reply,
+                        "observation_query_sequence_exhausted",
+                    );
+                };
+                command.query_requested = request;
+                cv.notify_all(); // Also serves a deliberately paused consumer.
+                unsafe { product_observation_interrupt(self.interrupt) };
+                command = cv
+                    .wait_timeout_while(command, std::time::Duration::from_secs(2), |c| {
+                        c.query_completed < request && !c.finished
+                    })
+                    .unwrap()
+                    .0;
+                if command.query_completed < request && !command.finished {
+                    let reply = command.reply.clone();
+                    drop(command);
+                    return unavailable_query(&reply, "observation_query_timeout");
+                }
+            }
+            // The reply was captured as one consistent view by the store's
+            // owning consumer. New packets cannot mutate that projection.
+            let reply = command.reply.clone();
+            drop(command);
+            (*reply).clone()
         }
         pub(crate) fn pause(&self, paused: bool) {
             let (mutex, cv) = &*self.control;
@@ -284,6 +352,224 @@ mod live {
         use std::time::{Duration, Instant};
 
         #[test]
+        #[ignore = "requires the actual Product C producer and one-shot WAL delay shim"]
+        fn native_query_timeout_returns_qualified_coherent_view_then_recovers() {
+            let arm = std::path::PathBuf::from(std::env::var("SAKAMOTO_QUERY_DELAY_ARM").unwrap());
+            let hit = std::path::PathBuf::from(format!("{}.hit", arm.display()));
+            let root = std::env::temp_dir().join(format!("t23-delay-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs"))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "emit 0 1 424 1 10 0").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "EMITTED 1");
+            thread::sleep(Duration::from_millis(1300));
+            let first = service.snapshot();
+            assert_eq!(first["query_fresh"], true);
+            assert_eq!(first["persistent"]["persistence"]["packets"], serde_json::json!([1, 0]));
+            std::fs::write(&arm, b"delay next WAL sync").unwrap();
+            writeln!(input, "emit 0 1 424 2 10 0").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "EMITTED 1");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !hit.exists() {
+                assert!(Instant::now() < deadline, "WAL delay was not exercised");
+                thread::sleep(Duration::from_millis(5));
+            }
+            let started = Instant::now();
+            let stale = service.snapshot();
+            assert!(started.elapsed() >= Duration::from_millis(1900));
+            assert!(started.elapsed() < Duration::from_millis(2800));
+            assert_eq!(stale["query_fresh"], false);
+            assert_eq!(stale["query_error"], "observation_query_timeout");
+            assert_eq!(stale["overview"]["packets"], first["overview"]["packets"]);
+            assert_eq!(stale["persistent"], first["persistent"]);
+            let recovered = service.snapshot();
+            assert_eq!(recovered["query_fresh"], true);
+            assert!(recovered["query_error"].is_null());
+            assert_eq!(recovered["overview"]["packets"], serde_json::json!([2, 0]));
+            assert_eq!(recovered["persistent"]["packets"], serde_json::json!([2, 0]));
+            assert_eq!(recovered["persistent"]["persistence"]["packets"], serde_json::json!([2, 0]));
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            drop(service);
+            std::fs::remove_dir_all(root).unwrap();
+            std::fs::remove_file(hit).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires the actual pinned-VPP Product C producer executable"]
+        fn native_fresh_queries_work_without_new_packets_while_paused_and_concurrently() {
+            let root = std::env::temp_dir().join(format!("t23-query-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs"))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "LISTEN");
+            let service =
+                ObservationService::start(&root.join("api"), 77, &root.join("overall.json"))
+                    .unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "emit 0 1 424 1 10 0").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "EMITTED 1");
+            // No query owns ingestion or its idle commit deadline.
+            thread::sleep(Duration::from_millis(1300));
+            service.pause(true);
+            let q = service.snapshot();
+            assert_eq!(q["query_fresh"], true);
+            assert_eq!(q["persistent"]["packets"], serde_json::json!([1, 0]));
+            assert_eq!(
+                q["persistent"]["persistence"]["packets"],
+                serde_json::json!([1, 0])
+            );
+            thread::scope(|scope| {
+                for _ in 0..4 {
+                    scope.spawn(|| {
+                        for _ in 0..8 {
+                            let q = service.snapshot();
+                            assert_eq!(q["query_fresh"], true);
+                            assert!(q["query_error"].is_null());
+                            assert_eq!(q["persistent"]["packets"], serde_json::json!([1, 0]));
+                            assert_eq!(q["overview"]["packets"], q["persistent"]["packets"]);
+                        }
+                    });
+                }
+            });
+            service.pause(false);
+            writeln!(input, "emit 0 1 424 2 10 1").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "EMITTED 1");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let q = service.snapshot();
+                assert_eq!(q["query_fresh"], true);
+                assert_eq!(q["overview"]["packets"], q["persistent"]["packets"]);
+                if q["persistent"]["ended"] == 1 {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+            writeln!(input, "quit").unwrap();
+            input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            drop(service);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires the actual pinned-VPP Product C producer executable"]
+        fn native_directional_segments_are_atomic_across_transport_and_restart() {
+            let root = std::env::temp_dir().join(format!("t23-native-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs"))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "LISTEN");
+            let service =
+                ObservationService::start(&root.join("api"), 77, &root.join("overall.json"))
+                    .unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "attribution").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "ATTRIBUTION 5");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let snapshot = loop {
+                let value = service.snapshot();
+                if value["persistent"]["rejected"] == 1
+                    && value["persistent"]["persistence"]["pending"] == false
+                {
+                    break value;
+                }
+                assert!(Instant::now() < deadline, "{value}");
+                thread::sleep(Duration::from_millis(5));
+            };
+            let q = &snapshot["persistent"];
+            assert_eq!(q["packets"], serde_json::json!([7, 2]));
+            assert_eq!(q["bytes"], serde_json::json!([420, 160]));
+            assert_eq!(q["accepted"], 4);
+            assert_eq!(q["ended"], 1);
+            assert_eq!(
+                q["attribution_unknown"]["packets"],
+                serde_json::json!([2, 0])
+            );
+            let rules = q["rule_windows"].as_object().unwrap();
+            let rule_packets = |winner| -> [u64; 2] {
+                let mut result = [0; 2];
+                for row in rules
+                    .values()
+                    .filter(|v| v["attribution"]["winner"] == winner)
+                {
+                    for side in 0..2 {
+                        result[side] += row["counts"]["packets"][side].as_u64().unwrap();
+                    }
+                }
+                result
+            };
+            assert_eq!(rule_packets(65537), [3, 0]);
+            assert_eq!(rule_packets(131073), [0, 2]);
+            assert_eq!(rule_packets(196609), [1, 0]);
+            assert!(rules.values().all(|v| v["attribution"]["winner"] != 0));
+            assert!(rules
+                .values()
+                .any(|v| v["attribution"]["name"] == "observe request"
+                    && v["attribution"]["declared_action"] == 2
+                    && v["attribution"]["actual_action"] == 1));
+            writeln!(input, "quit").unwrap();
+            input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            drop(service);
+            let store = ObservationStore::open(&root.join("overall.json")).unwrap();
+            for field in [
+                "packets",
+                "bytes",
+                "minutes",
+                "application_windows",
+                "rule_windows",
+                "attribution_unknown",
+                "ended",
+            ] {
+                assert_eq!(store.query()[field], q[field], "restart changed {field}");
+            }
+            drop(store);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
         #[ignore = "requires the actual pinned-VPP Product C producer executable"]
         fn native_shutdown_with_unseen_queued_flow_preserves_a_coverage_gap() {
             let fixture = std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap();
@@ -307,7 +593,7 @@ mod live {
             output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "CONNECTED");
             service.pause(true);
-            writeln!(input, "emit 0 1 136 1 10 1").unwrap();
+            writeln!(input, "emit 0 1 424 1 10 1").unwrap();
             input.flush().unwrap();
             line.clear();
             output.read_line(&mut line).unwrap();
@@ -372,24 +658,24 @@ mod live {
                     thread::sleep(Duration::from_millis(5));
                 }
             };
-            assert_eq!(emit("emit 0 2 136 1 10 0"), 2);
+            assert_eq!(emit("emit 0 2 424 1 10 0"), 2);
             wait(&|s| s["overview"]["packets"][0] == 2);
             service.pause(true);
-            assert_eq!(emit("emit 1 600 136 1 10 0"), 512);
-            assert_eq!(emit("emit 0 600 136 3 10 0"), 512);
-            assert_eq!(emit("emit 2 125 160 1 20 0"), 125);
+            assert_eq!(emit("emit 1 600 424 1 10 0"), 512);
+            assert_eq!(emit("emit 0 600 424 3 10 0"), 512);
+            assert_eq!(emit("emit 2 125 448 1 20 0"), 125);
             assert_eq!(service.snapshot()["overview"]["packets"][0], 2);
             service.pause(false);
             let s = wait(&|s| s["overview"]["packets"][0] == 639);
             assert_eq!(s["overview"]["bytes"][0], 38340);
             assert_eq!(s["overview"]["active"], 2);
             assert_eq!(s["overview"]["incomplete"], true);
-            assert_eq!(emit("emit 0 1 160 515 10 1"), 1);
+            assert_eq!(emit("emit 0 1 448 515 10 1"), 1);
             let s = wait(&|s| s["overview"]["ended"] == 1);
             assert_eq!(s["overview"]["packets"][0], 640);
             assert_eq!(s["overview"]["bytes"][0], 38400);
-            assert_eq!(emit("emit 0 1 136 514 10 0"), 1);
-            assert_eq!(emit("emit 0 1 160 515 10 1"), 1);
+            assert_eq!(emit("emit 0 1 424 514 10 0"), 1);
+            assert_eq!(emit("emit 0 1 448 515 10 1"), 1);
             let s = wait(&|s| s["overview"]["rejected"] == 2);
             assert_eq!(s["overview"]["active"], 1);
             assert_eq!(s["overview"]["packets"][0], 640);
@@ -412,7 +698,9 @@ mod live {
             thread::sleep(Duration::from_millis(30));
             let waits = service.snapshot()["waits"].clone();
             thread::sleep(Duration::from_millis(60));
-            assert_eq!(service.snapshot()["waits"], waits);
+            // A query intentionally wakes the owner once; there is no
+            // independent idle polling between these explicit requests.
+            assert_eq!(service.snapshot()["waits"], waits.as_u64().unwrap() + 1);
             drop(emit);
             writeln!(input, "quit").unwrap();
             input.flush().unwrap();

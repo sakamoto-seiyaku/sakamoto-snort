@@ -98,6 +98,7 @@ typedef struct
   uint32_t expression_length;
   uint8_t expression[PRODUCT_STATIC_EXPRESSION_BYTES];
   uint64_t rule_id;
+  uint8_t name[64]; /* Contemporaneous metadata in the protected snapshot. */
   uint32_t uid;
   uint32_t network_context_id;
   uint32_t ifindex;
@@ -239,6 +240,7 @@ typedef struct
   uint32_t priority;
   uint32_t order;
   uint32_t winner_rank;
+  uint32_t rule_index; /* Index in this protected snapshot, including cache hits. */
   uint32_t probes;
   uint32_t probe_limit;
   uint32_t subject_probes;
