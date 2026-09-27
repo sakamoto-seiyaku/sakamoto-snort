@@ -13,6 +13,7 @@ p.add_argument('--run', type=Path, required=True)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--require-ui', action='store_true')
+p.add_argument('--expected-rules', type=int, default=4)
 a = p.parse_args()
 run, build_path = a.run.resolve(), a.build.resolve()
 digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -76,7 +77,7 @@ for profile, quic_port, rtp_port in (('root',46330,46310),('vpn',46430,46410)):
     queried = [props(x['query']) for x in configs]
     for cfg, query in zip(configs, queried):
         assert int(query['savedRevision']) == int(query['activeRevision']) == cfg['revision']
-        assert query['result'] == '0' and query['activeCount'] == query['effectiveRules'] == '4'
+        assert query['result'] == '0' and query['activeCount'] == query['effectiveRules'] == str(a.expected_rules)
         assert query['domain.0.name'] == 'example.test'
         assert '0d020ff903000001' in read(cfg['label']+'-request.txt')
         assert (run / cfg['source']).read_bytes().startswith(b'SKRULE')

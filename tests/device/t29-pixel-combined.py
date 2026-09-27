@@ -25,8 +25,12 @@ p.add_argument('--fixtures',type=Path,required=True)
 p.add_argument('--quic-fixtures',type=Path,required=True)
 p.add_argument('--python',default='python3')
 p.add_argument('--skip-install',action='store_true')
+p.add_argument('--cost-extra-rules',type=int,default=0)
+p.add_argument('--cost-extra-domains',type=int,default=0)
 
 args = p.parse_args()
+assert 0 <= args.cost_extra_rules <= 120
+assert 0 <= args.cost_extra_domains <= 120
 
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
 assert SERIAL and SERIAL != 'unknown'
@@ -182,12 +186,27 @@ def configure(label,prior,protocol,target_id,mode=1):
            'lists 1','domain 0 exact example.test',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',
            f'bind 1 {uid} 2 10 {mode}',f'bind 2 {uid} 2 20 1',f'bind 3 {uid} 1 3 1']
+    if args.cost_extra_rules:
+        lines += ['group 30']
+        for i in range(args.cost_extra_rules):
+            version=prior.get(f'rule.{i+4}.version','0')
+            port=60000+i
+            lines += [f'0 {version} 4294967295 4294967295 4294967295 1 0 17 0 1 * * 0 65535 {port} {port}',
+                      f'edge 30 1 {i+4}']
+        lines += [f'bind 4 {uid} 2 30 1']
+    for i in range(args.cost_extra_domains):
+        lines += [f'domain 0 exact cost-{i:03d}.example.test']
     text='\n'.join(lines);save(label+'-request.txt',text+'\n')
     save(label+'-prefill.txt',action('--es','completeRuleText',shlex.quote(text)))
-    old=config().get('queryElapsedMillis');tap(label,'Replace all rules')
+    old=config().get('queryElapsedMillis');begun=time.monotonic_ns();tap(label,'Replace all rules')
     status=wait_config(label+'-apply',lambda c:c.get('queryElapsedMillis') not in (None,old))
+    with (output/'cost-operations.jsonl').open('a') as f:
+        f.write(json.dumps(dict(label=label,operation='replace-all-ui',started_ns=begun,
+                                completed_ns=time.monotonic_ns()))+'\n')
     assert status['result']=='0' and status['savedRevision']==status['activeRevision'],status
-    assert status['effectiveRules']=='4' and status['activeCount']=='4',status
+    expected=str(4+args.cost_extra_rules)
+    assert status['effectiveRules']==expected and status['activeCount']==expected,status
+    cli(label+'-resources','show product rule-budget','show product policy-index','show product flows')
     source_file(label)
     result.setdefault('configurations',[]).append(dict(label=label,profile=result['lifetimes'][-1]['profile'],
         revision=int(status['activeRevision']),source=label+'-source.conf',query=label+'-apply.properties',

@@ -10,6 +10,7 @@ p = argparse.ArgumentParser()
 p.add_argument('--run', type=Path, required=True)
 p.add_argument('--build', type=Path, required=True)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--expected-rules', type=int, default=4)
 a = p.parse_args()
 run, build_path = a.run.resolve(), a.build.resolve()
 digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -35,8 +36,9 @@ for expected_revision, row in enumerate(result['configurations'], 2):
     q = props(row['query'])
     assert int(q['config.saved_revision']) == int(q['config.active_revision']) == expected_revision
     assert q['config.result'] == q['config.save_error'] == q['config.compile_error'] == '0'
-    assert q['config.count'] == q['config.active_count'] == '4'
-    assert q['config.domain.0.name'] == 'example.test' and q['config.binding_count'] == '3'
+    assert q['config.count'] == q['config.active_count'] == str(a.expected_rules)
+    assert q['config.domain.0.name'] == 'example.test'
+    assert q['config.binding_count'] == ('4' if a.expected_rules > 4 else '3')
     assert q['config.rule.3.expression'] == '1100'
     assert q['config.rule.0.expression'] == '0d020ff903000001'
     assert q['config.rule.0.action'] == q['config.rule.3.action'] == '2'

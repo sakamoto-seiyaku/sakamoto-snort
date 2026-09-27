@@ -21,9 +21,16 @@ parser.add_argument('--fixtures',type=Path,required=True)
 parser.add_argument('--quic-fixtures',type=Path,required=True)
 parser.add_argument('--python',default='python3')
 parser.add_argument('--observation',action='store_true')
+parser.add_argument('--cost-extra-rules',type=int,default=0)
+parser.add_argument('--cost-extra-domains',type=int,default=0)
+parser.add_argument('--cost-supplemental',action='store_true')
 
 
 args = parser.parse_args()
+assert 0 <= args.cost_extra_rules <= 120
+assert 0 <= args.cost_extra_domains <= 120
+assert not args.cost_supplemental or args.cost_extra_rules >= 2
+assert not args.cost_supplemental or args.observation
 
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -70,8 +77,13 @@ def cli(name, *commands):
     return save(name+'.txt', ''.join(command(vppctl, '-s', runtime/'cli.sock', c) for c in commands))
 
 def api(name, operation, *values):
+    begun=time.monotonic_ns()
     text = save(name+'.txt', command(artifact/'bin/sakamoto-product-core-host', operation,
                                    runtime/'api.sock', generation, *values, check=False))
+    if operation in ('rule-replace-all','rule-query'):
+        with (output/'cost-operations.jsonl').open('a') as f:
+            f.write(json.dumps(dict(label=name,operation=operation,started_ns=begun,
+                                    completed_ns=time.monotonic_ns()))+'\n')
     return props(text)
 
 def drain(name):
@@ -125,8 +137,30 @@ def start_quic_endpoint():
 hooks = [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--uid-owner','12001',
           flag,str(port),'-j','NFQUEUE','--queue-num','176']
          for protocol,port in [('udp',5004),('udp',40650),('udp',40651)] for flag in ['--sport','--dport']]
+if args.cost_supplemental:
+    hooks += [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--uid-owner','12001',
+               flag,str(port),'-j','NFQUEUE','--queue-num','176']
+              for protocol,port in [('tcp',2525),('udp',1195)] for flag in ['--sport','--dport']]
 clients=[]
+extra_endpoints=[]
 process = None; log = None; hooked = []; observer = None
+def start_supplemental_endpoints():
+    peers=[('smtp','tests/device/helpers/r2_mail_peer.py',
+            ['--directory',str(args.quic_fixtures.resolve().parent),'--applications','smtp']),
+           ('openvpn','tests/device/helpers/r3_tunnel_peer.py',
+            ['--fixtures',str(output/'r3-fixtures.json'),'--applications','openvpn_udp'])]
+    save('r3-fixtures.json',json.dumps({'wireguard':[]})+'\n')
+    for label,source,extra in peers:
+        peer=ROOT/source;save(label+'-peer.py',peer.read_text())
+        handle=(output/(label+'-endpoint.jsonl')).open('w')
+        child=subprocess.Popen(['python3','-u',str(peer),'server','--host','127.0.0.2',*extra],
+            env=env,user=12001,group=12001,extra_groups=[],stdout=handle,stderr=subprocess.STDOUT)
+        extra_endpoints.append((child,handle))
+        deadline=time.monotonic()+5
+        while '"kind": "ready"' not in (output/(label+'-endpoint.jsonl')).read_text():
+            assert child.poll() is None,(output/(label+'-endpoint.jsonl')).read_text()
+            assert time.monotonic()<deadline
+            time.sleep(.02)
 def start(label):
     global process, log, runtime, generation, observer
     generation = 28601 if label == "first" else 25602
@@ -197,8 +231,25 @@ def configure(label, prior, protocol, target, mode=1):
            'lists 1','domain 0 exact example.test',
            'group 10','edge 10 1 0','group 20','edge 20 1 1',
            f'bind 1 12001 2 10 {mode}','bind 2 12001 2 20 1','bind 3 12001 1 3 1']
+    if args.cost_extra_rules:
+        lines += ['group 30']
+        for i in range(args.cost_extra_rules):
+            version=prior.get(f'config.rule.{i+4}.version','0')
+            port=60000+i
+            if args.cost_supplemental and i < 2:
+                protocol_id=1007 if i==0 else 1011
+                transport=6 if i==0 else 17
+                expression='0d020f'+protocol_id.to_bytes(4,'little').hex()+'01'
+                lines.append(f'0 {version} 4294967295 4294967295 4294967295 1 0 {transport} 0 2 * * 0 65535 0 65535 {expression}')
+            else:
+                lines.append(f'0 {version} 4294967295 4294967295 4294967295 1 0 17 0 1 * * 0 65535 {port} {port}')
+            lines.append(f'edge 30 1 {i+4}')
+        lines += ['bind 4 12001 2 30 1']
+    for i in range(args.cost_extra_domains):
+        lines += [f'domain 0 exact cost-{i:03d}.example.test']
     status=submit(label,prior,lines)
     assert status['config.result']=='0' and status['config.saved_revision']==status['config.active_revision'],status
+    cli(label+'-resources','show product rule-budget','show product policy-index','show product flows')
     result.setdefault('configurations',[]).append(dict(label=label,revision=int(status['config.active_revision']),
         source=label+'-source.conf',query=label+'-apply.txt',expression=expression,mode=mode,protocol=protocol,target=target,
         quic_domain='example.test',quic_rule_mode='observe'))
@@ -281,9 +332,37 @@ class QuicClient:
             self.execute('close','closed');self.process.wait(timeout=5)
         assert self.process.returncode==0
 
+class SupplementalClient:
+    def __init__(self,label,source,application,port):
+        self.label=label
+        peer=ROOT/source
+        values=['python3','-u',str(peer),'client','--host','127.0.0.2',
+                '--source',str(port),'--application',application,'--nonce','t30-'+label+'-'+str(time.time_ns())]
+        if label=='openvpn':values += ['--fixtures',str(output/'r3-fixtures.json')]
+        self.process=subprocess.Popen(values,env=env,user=12001,group=12001,extra_groups=[],
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+        self.events=[];clients.append(self)
+        assert self.read()['kind']=='connected'
+    def read(self):
+        assert select.select([self.process.stdout],[],[],20)[0],self.label+' response deadline'
+        line=self.process.stdout.readline();assert line,line
+        value=json.loads(line);self.events.append(value)
+        save(self.label+'-client.json',json.dumps(self.events,indent=2))
+        return value
+    def execute(self,operation,wanted):
+        self.process.stdin.write(json.dumps(dict(op=operation,timeout=10))+'\n')
+        self.process.stdin.flush();answer=self.read()
+        assert answer['kind']==wanted,answer
+        return answer
+    def close(self):
+        if self.process.poll() is None:
+            self.execute('close','closed');self.process.wait(timeout=5)
+        assert self.process.returncode==0
+
 try:
     start_endpoint()
     start_quic_endpoint()
+    if args.cost_supplemental:start_supplemental_endpoints()
     result['fixtures_sha256']=hashlib.sha256(args.fixtures.read_bytes()).hexdigest()
     save('fixtures.json',args.fixtures.read_text())
     result['quic_fixtures_sha256']=hashlib.sha256(args.quic_fixtures.read_bytes()).hexdigest()
@@ -295,13 +374,29 @@ try:
     rtp.execute('first','first_ready');rtp.capture('rtp-first',status,'first')
     rtp.execute('added','added_ready');rtp.capture('rtp-added',status,'added')
     quic.execute('echo','received');quic.capture('quic-allow',status)
+    if args.cost_supplemental:
+        smtp=SupplementalClient('smtp','tests/device/helpers/r2_mail_peer.py','smtp',45400)
+        openvpn=SupplementalClient('openvpn','tests/device/helpers/r3_tunnel_peer.py','openvpn_udp',45410)
+        for extra in (smtp,openvpn):
+            extra.execute('first','first_ready');extra.execute('added','added_ready')
+        cli('supplemental-all-live','show product flows','show product policy-index')
+        observer.query('supplemental-all-live')
     status=configure('combined-enforce',status,17,1017,0)
     rtp.execute('send','timeout');rtp.capture('rtp-blocked',status,'blocked')
     quic.execute('echo','received');quic.capture('quic-during-rtp-drop',status)
+    if args.cost_supplemental:
+        for extra in (smtp,openvpn):extra.execute('send','received')
     status=configure('combined-recover',status,17,1017,1)
     rtp.execute('recv','received')
     rtp.execute('repeat','received');rtp.capture('rtp-recovered',status,'recovered')
     quic.execute('echo','received');quic.capture('quic-after-recover',status)
+    if args.cost_supplemental:
+        for extra in (smtp,openvpn):extra.execute('send','received')
+        cli('supplemental-final-live','show product flows','show product policy-index')
+        observer.query('supplemental-final-live')
+        result['supplemental']=dict(labels=['smtp','openvpn'],
+            flow='supplemental-final-live.txt',observation='supplemental-final-live-observation.json')
+        smtp.close();openvpn.close()
     rtp.close();quic.close()
     cache=cli('final-counters','show product flows','show product completion')
     if args.observation:observer.query('final')
@@ -335,9 +430,18 @@ finally:
         if quic_endpoint_log is not None:quic_endpoint_log.close()
     try:save('hooks-after.txt',command('iptables-save','-t','mangle'))
     except Exception as error:cleanup_errors.append(repr(error))
+    for child,handle in extra_endpoints:
+        try:
+            if child.poll() is None:
+                child.terminate()
+                try:child.wait(timeout=3)
+                except subprocess.TimeoutExpired:child.kill();child.wait(timeout=3)
+        except Exception as error:cleanup_errors.append(repr(error))
+        finally:handle.close()
     if cleanup_errors:result['cleanup_error']=cleanup_errors
     result['process_absent']=(process is None and (endpoint is None or endpoint.poll() is not None)
                               and (quic_endpoint is None or quic_endpoint.poll() is not None)
+                              and all(child.poll() is not None for child,_ in extra_endpoints)
                               and all(client.process.poll() is not None for client in clients))
     result['completed_ns']=time.time_ns();save('result.json',json.dumps(result,indent=2)+'\n')
     if cleanup_errors:raise RuntimeError('cleanup: '+repr(cleanup_errors))
