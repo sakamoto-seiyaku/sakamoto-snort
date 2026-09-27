@@ -16,7 +16,7 @@ args = parser.parse_args()
 run = args.run.resolve()
 build = json.loads(args.build.read_text())
 result = json.loads((run / "result.json").read_text())
-assert result["status"] == "RAW_COMPLETE" and result["task"] == "T26"
+assert result["status"] == "RAW_COMPLETE" and result["task"] in ("T26", "T28")
 assert result["build_sha256"] == hashlib.sha256(args.build.read_bytes()).hexdigest()
 assert result["source_sha256"] == build["source_sha256"]
 for name, expected in result["files"].items():
@@ -142,6 +142,49 @@ def check(snapshots, traffic, endpoint_payloads, wire):
 
 
 checks = check(snapshots, traffic, endpoint_payloads, wire)
+if result["task"] == "T28":
+    dashboard = {name:json.loads((run/name).read_text()) for name in (
+        "original-live-0-dashboard.json", "queue-full-dashboard.json",
+        "store-open-failed-dashboard.json")}
+    pressure = json.loads((run/"pressure-traffic.json").read_text())
+    def check_dashboard(value):
+        original = value["original-live-0-dashboard.json"]
+        assert original["current_flows"]["source"] == "vpp"
+        assert original["current_flows"]["generation"] == result["lifetimes"][0]["generation"]
+        assert original["current_flows"]["count"] <= 16
+        assert original["current_flows"]["scanned"] <= 256
+        entries = [e for e in original["current_flows"]["entries"]
+                   if 43500 in (e["port_a"],e["port_b"])]
+        assert len(entries) == 1
+        live = entries[0]
+        prior = next(r for r in snapshots["original"]["consumer"]["overview"]["records"]
+                     if r and r["slot"] == live["slot"] and r["owner"] == live["worker"])
+        assert live["canonical_a"] == "10.225.0.1" and live["canonical_b"] == "10.225.0.2"
+        assert live["incarnation"] == str(prior["incarnation"])
+        assert live["uid"] == prior["attribution"][0]["uid"] == 12001
+        assert live["network"] == prior["network"]
+        assert live["packets"] == prior["packets"] and live["bytes"] == prior["bytes"]
+        assert live["attribution"][0]["name"] == "original-request"
+        assert live["attribution"][1]["name"] == "original-reply"
+        assert live["attribution"][0]["winner"] == str(prior["attribution"][0]["winner"])
+        assert live["attribution"][1]["winner"] == str(prior["attribution"][1]["winner"])
+        assert len(live["protocol_labels"]) == int(live["protocol_set"]).bit_count()
+        assert original["vpp"]["policy_active_revision"] == original["policy_source"]["active_revision"]
+        assert original["consumer"]["query_fresh"]
+        full = value["queue-full-dashboard.json"]
+        assert pressure["sent"] == 700 and pressure["received"] > 0
+        assert sum(c["full"] for c in full["health"]["channels"]) > 0
+        assert full["vpp"]["core_ready"] and full["consumer"]["query_fresh"]
+        assert full["current_flows"]["generation"] == result["lifetimes"][1]["generation"]
+        failed = value["store-open-failed-dashboard.json"]
+        assert failed["consumer"]["store_error"] is not None
+        assert failed["consumer"]["persistent"] is None
+        assert failed["health"]["generation"] == result["lifetimes"][2]["generation"]
+        assert failed["vpp"]["generation"] == result["lifetimes"][2]["generation"]
+        return ["typed live VPP flow matches independent observation and packet evidence",
+                "control health remains fresh with full channels",
+                "store-open failure remains explicit while VPP is healthy"]
+    checks.extend(check_dashboard(dashboard))
 mutations = []
 # Mutations bypass file hashes to prove that the selected semantic oracle rejects them.
 for label, change in (
@@ -160,6 +203,19 @@ for label, change in (
         mutations.append(label)
     else:
         raise AssertionError("semantic mutation survived: " + label)
+
+if result["task"] == "T28":
+    for label, change in (
+        ("live_uid",lambda q:q["original-live-0-dashboard.json"]["current_flows"]["entries"][0].__setitem__("uid",0)),
+        ("live_name",lambda q:q["original-live-0-dashboard.json"]["current_flows"]["entries"][0]["attribution"][0].__setitem__("name","latest")),
+        ("live_count",lambda q:q["original-live-0-dashboard.json"]["current_flows"]["entries"][0].__setitem__("packets",[0,0])),
+        ("full_hidden",lambda q:[c.__setitem__("full",0) for c in q["queue-full-dashboard.json"]["health"]["channels"]]),
+        ("store_hidden",lambda q:q["store-open-failed-dashboard.json"]["consumer"].__setitem__("store_error",None)),
+    ):
+        changed=copy.deepcopy(dashboard);change(changed)
+        try:check_dashboard(changed)
+        except AssertionError:mutations.append(label)
+        else:raise AssertionError("dashboard mutation survived: "+label)
 
 answer = {"status":"VALID", "run":str(run), "build":str(args.build.resolve()),
           "source_sha256":build["source_sha256"], "checks":checks,

@@ -17,6 +17,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--build", type=Path, required=True)
 p.add_argument("--stage", type=Path, required=True)
 p.add_argument("--output", type=Path, required=True)
+p.add_argument("--t28-dashboard", action="store_true")
 a = p.parse_args()
 out = a.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 build = json.loads(a.build.read_text()); artifact = Path(build["artifact"])
@@ -30,7 +31,7 @@ peer = ROOT/"tests/device/helpers/t23_udp_peer.py"
 spec = importlib.util.spec_from_file_location("requests", ROOT/"tests/device/helpers/t23_policy.py")
 requests = importlib.util.module_from_spec(spec); spec.loader.exec_module(requests)
 store = out/"observation/overall.json"
-result = dict(status="HOLD", kind="linux", profile="root", source="NFQ_CAPTURED", task="T26",
+result = dict(status="HOLD", kind="linux", profile="root", source="NFQ_CAPTURED", task="T28" if a.t28_dashboard else "T26",
     build=str(a.build.resolve()), build_sha256=digest(a.build), source_sha256=build["source_sha256"],
     started_ns=time.time_ns(), lifetimes=[], configurations=[], phases=[], snapshots=[])
 for path in (Path(__file__), peer, ROOT/"tests/device/helpers/t23_policy.py"):
@@ -68,6 +69,32 @@ def query(label):
     save(label+".json", value)
     result["snapshots"].append(dict(label=label, generation=generation))
     return value
+
+def dashboard(label, cursor=0):
+    text = control("dashboard " + str(cursor))
+    assert text.startswith("dashboard.response="), text
+    value = json.loads(text.split("=", 1)[1]); save(label + "-dashboard.json", value)
+    assert "error" not in value and value["health"]["generation"] == generation, value
+    assert value["vpp"]["generation"] == generation, value
+    assert value["policy_source"]["generation"] == generation, value
+    assert value["current_flows"]["generation"] == generation, value
+    assert value["consumer"]["query_fresh"] and value["consumer"]["persistent"] is not None, value
+    result.setdefault("dashboard_queries", []).append(dict(label=label, cursor=cursor,
+        next_cursor=value["current_flows"]["next_cursor"], file=label+"-dashboard.json"))
+    return value
+
+def live_flow(label, source_port):
+    cursor = 0
+    for page in range(512):
+        value = dashboard(label + "-" + str(page), cursor)
+        flows = value["current_flows"]
+        assert flows["scanned"] <= 256 and flows["count"] <= 16
+        for entry in flows["entries"]:
+            if source_port in (entry["port_a"], entry["port_b"]): return entry, value
+        if flows["done"]: break
+        assert flows["next_cursor"] > cursor
+        cursor = flows["next_cursor"]
+    raise AssertionError("active live flow absent")
 
 def settle(label):
     until = time.monotonic()+10
@@ -198,6 +225,10 @@ try:
         stdout=(out/"capture.log").open("w"),stderr=subprocess.STDOUT)
     start(27801)
     query("baseline")
+    if a.t28_dashboard:
+        baseline = dashboard("baseline")
+        assert baseline["current_flows"]["active"] == [0,0]
+        assert baseline["vpp"]["policy_active_revision"] == baseline["policy_source"]["active_revision"]
     for flag in ("--sport","--dport"):
         hook=["iptables","-t","mangle","-A","OUTPUT","-p","udp",flag,"42151","-j","NFQUEUE","--queue-num","176"]
         command(*hook); hooks.append(hook)
@@ -205,8 +236,18 @@ try:
     for label, count in (("original", 2), ("renamed", 2)):
         config=configuration(label)
         observed=send(label,count)
-        assert observed["consumer"]["persistent"]["history_source"]["status"] == "available"
         matched=flow(observed)
+        if a.t28_dashboard:
+            live, current = live_flow(label+"-live", 43500)
+            assert live["canonical_a"] in ("10.225.0.1", "10.225.0.2")
+            assert live["canonical_b"] in ("10.225.0.1", "10.225.0.2")
+            assert live["uid"] == 12001 and live["network"] == matched["network"]
+            assert live["packets"][0] >= count and live["bytes"][0] >= count*64
+            assert live["first_seen_monotonic_us"] <= live["last_seen_monotonic_us"]
+            assert live["protocols_available"] in (True, False)
+            assert current["vpp"]["logical_hits"] >= count
+            assert current["policy_source"]["save_error"] == 0
+        assert observed["consumer"]["persistent"]["history_source"]["status"] == "available"
         cli(label+"-close",f"product flow-end close owner {matched['owner']} slot {matched['slot']} generation {generation} incarnation {matched['incarnation']}")
         settle(label+"-ended")
     original, renamed = result["configurations"][:2]
@@ -214,6 +255,10 @@ try:
     assert int(original["versions"][0]) >> 16 == int(renamed["versions"][0]) >> 16
     configuration("condition", actions=(2,1), condition=True)
     dropped=send("condition",2)
+    if a.t28_dashboard:
+        current = dashboard("condition")
+        assert current["vpp"]["policy_drops"] >= 2
+        assert sum(c["basic_packets"][1] for c in current["health"]["channels"]) >= 2
     assert json.loads((out/"condition-traffic.json").read_text())["received"] == 0
     assert sum(channel["basic_packets"][1] for channel in dropped["health"]["channels"]) >= 2
     assert any(row["attribution"]["name"]=="condition-request"
@@ -230,9 +275,38 @@ try:
     for field in ("packets","bytes","rule_windows"):
         assert after[field] == before[field], field
     assert after["history_source"]["status"] == "unavailable"
+    if a.t28_dashboard:
+        dashboard("restarted")
+        # The record channel can fill while control queries remain available.
+        assert control("pause") == "observation.paused=true"
+        pressure = dict(label="pressure",count=700,size=64,short=True,
+            nonce="t28-"+tag+"-pressure-"+str(time.time_ns()))
+        client.stdin.write((json.dumps(pressure)+"\n").encode()); client.stdin.flush()
+        traffic = json.loads(line(client, timeout=180)); save("pressure-traffic.json", traffic)
+        assert traffic["sent"] == 700 and traffic["received"] == 700
+        full = dashboard("queue-full")
+        assert sum(c["full"] for c in full["health"]["channels"]) > 0
+        assert full["vpp"]["core_ready"]
+        assert control("resume") == "observation.paused=false"
+        result["queue_full_query_available"] = True
+        stop_runtime()
+        healthy_store = store
+        store = Path("/proc/1/t28-unwritable/overall.json")
+        start(27803)
+        failed = control("dashboard")
+        assert failed.startswith("dashboard.response=")
+        failed = json.loads(failed.split("=",1)[1]); save("store-open-failed-dashboard.json", failed)
+        assert failed["consumer"]["store_error"] is not None
+        assert failed["consumer"]["persistent"] is None
+        assert failed["health"]["generation"] == generation
+        assert failed["vpp"]["generation"] == generation
+        result["store_failure_visible"] = True
+        stop_runtime(); store = healthy_store
     result["history_reopened"] = True
-    cli("final-flows","show product flows"); cli("final-completion","show product completion")
-    stop_runtime(); result["status"]="RAW_COMPLETE"
+    if process is not None:
+        cli("final-flows","show product flows"); cli("final-completion","show product completion")
+        stop_runtime()
+    result["status"]="RAW_COMPLETE"
 except Exception as error:
     result["error"]=repr(error); raise
 finally:

@@ -31,6 +31,26 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationQue
 }
 
 JNIEXPORT jbyteArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationPageQuery(
+    JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation, jint cursor) {
+    (void) type;
+    if (!handle || generation <= 0 || operation < 0 || operation > 2 || cursor < 0) return NULL;
+    uint8_t *reply = malloc(SAKAMOTO_OBSERVATION_REPLY_BYTES);
+    if (!reply) return NULL;
+    uint32_t length = 0;
+    uint32_t code = sakamoto_product_core_observation_page_query(
+        (sakamoto_product_core_handle_t *)(uintptr_t)handle, (uint64_t)generation,
+        (uint32_t)operation, (uint32_t)cursor, reply,
+        SAKAMOTO_OBSERVATION_REPLY_BYTES, &length);
+    if (code) length = (uint32_t)snprintf((char *)reply, SAKAMOTO_OBSERVATION_REPLY_BYTES,
+        "{\"error\":\"observation_page_query_failed\",\"code\":%" PRIu32 "}", code);
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)length);
+    if (result) (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (jbyte *)reply);
+    free(reply);
+    return result;
+}
+
+JNIEXPORT jbyteArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeRuleImport(
     JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation,
     jlong expected_saved, jbyteArray document) {

@@ -408,14 +408,38 @@ public final class RuntimeService extends VpnService {
         if (RuntimeControlProtocol.ACTION_OBSERVATION_QUERY.equals(action)) {
             final String nonce = intent.getStringExtra("observationNonce");
             final int operation = intent.getIntExtra("observationOperation", 0);
+            final int cursor = intent.getIntExtra("observationCursor", 0);
             enqueueLifecycle(() -> {
                 if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}")
-                        || operation < 0 || operation > 2
+                        || operation < 0 || operation > 2 || cursor < 0 || cursor > 131072
                         || (operation != 0 && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0)) return;
                 String response = "{\"error\":\"management_unavailable\"}";
                 try {
-                    if (productCoreSession != null) response = productCoreSession.observationQuery(operation);
+                    if (productCoreSession != null) response = productCoreSession.observationPageQuery(operation, cursor);
                 } catch (RuntimeException error) { response = "{\"error\":\"query_failed\"}"; }
+                try {
+                    // Validate the native document, then append our own section
+                    // without parsing and reserializing its 64-bit identities.
+                    // org.json may round unsigned rule versions above Long.MAX_VALUE.
+                    new JSONObject(response);
+                    String nativeReply = response.trim();
+                    if (!nativeReply.startsWith("{") || !nativeReply.endsWith("}"))
+                        throw new JSONException("dashboard is not an object");
+                    RuntimeSnapshot current = snapshot;
+                    JSONObject platform;
+                    if (current != null) {
+                        platform = new JSONObject(current.encode());
+                        platform.put("source", "runtime_service");
+                    } else {
+                        platform = new JSONObject().put("source", "runtime_service")
+                                .put("error", "runtime_snapshot_unavailable");
+                    }
+                    response = nativeReply.substring(0, nativeReply.length() - 1)
+                            + (nativeReply.substring(1, nativeReply.length() - 1).trim().isEmpty() ? "" : ",")
+                            + "\"runtime\":" + platform + "}";
+                } catch (JSONException error) {
+                    response = "{\"error\":\"dashboard_encoding_failed\"}";
+                }
                 writeBestEffortEvidenceFile("product-state/observation-" + nonce + ".json", response);
             });
             return START_STICKY;

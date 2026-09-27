@@ -4623,6 +4623,91 @@ product_packet_graph_init (vlib_main_t *vm)
 
 VLIB_INIT_FUNCTION (product_packet_graph_init);
 
+/* A page is one bounded live VPP sample. Cursor positions are slot positions,
+ * not a promise that mutable entries remain present on a later page. */
+int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
+                                     sakamoto_product_flow_page_t *out)
+{
+  if (!out) return -1;
+  memset (out, 0, sizeof (*out));
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  if (!generation || generation != graph->generation) return -5;
+  vlib_main_t *vm = vlib_get_main ();
+  vlib_worker_thread_barrier_sync (vm);
+  product_flow_runtime_snapshot_t pool[PRODUCT_GRAPH_WORKERS];
+  uint32_t total = 0;
+  for (uint32_t worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+    {
+      pool[worker] = product_flow_runtime_snapshot (graph->flow_pools[worker]);
+      out->capacity[worker] = pool[worker].capacity;
+      out->active[worker] = pool[worker].linked_entries;
+      out->high_watermark[worker] = pool[worker].high_watermark;
+      out->allocated_bytes[worker] = pool[worker].allocated_bytes;
+      out->capacity_misses[worker] = pool[worker].capacity_rejection_count;
+      total += pool[worker].capacity;
+    }
+  if (cursor > total)
+    {
+      vlib_worker_thread_barrier_release (vm);
+      return -1;
+    }
+  out->generation = generation;
+  out->cursor = cursor;
+  uint32_t position = cursor;
+  while (position < total && out->scanned < SAKAMOTO_FLOW_QUERY_SCAN
+         && out->count < SAKAMOTO_FLOW_QUERY_PAGE)
+    {
+      uint32_t worker = position < pool[0].capacity ? 0 : 1;
+      uint32_t slot = position - (worker ? pool[0].capacity : 0);
+      position++;
+      out->scanned++;
+      const product_flow_entry_t *e =
+        product_flow_runtime_entry (graph->flow_pools[worker], slot);
+      if (!e || !e->linked) continue;
+      sakamoto_product_flow_entry_t *r = &out->entries[out->count++];
+      r->incarnation = e->incarnation;
+      r->first_seen = e->first_seen;
+      r->last_seen = e->last_seen;
+      for (unsigned side = 0; side < 2; side++)
+        {
+          r->packets[side] = e->side_packets[side];
+          r->bytes[side] = e->side_bytes[side];
+        }
+      r->policy_generation = e->policy_generation;
+      r->policy_revision = e->policy_revision;
+      r->policy_hash = e->policy_snapshot_hash;
+      r->winner = e->winner_rule_id;
+      r->protocols = e->lpi.protocols;
+      r->worker = worker;
+      r->slot = slot;
+      r->uid = e->uid;
+      r->network = e->network_context;
+      r->query_class = e->key.query_class;
+      r->sni_result = e->sni.result;
+      r->sni_stop = e->sni.stop;
+      r->lpi_stop = e->lpi.stop_reason;
+      r->ports[0] = e->key.kind == PRODUCT_OWNER_KEY_L4_PORTS
+        ? e->key.transport.ports.a : e->key.transport.query.identifier;
+      r->ports[1] = e->key.kind == PRODUCT_OWNER_KEY_L4_PORTS
+        ? e->key.transport.ports.b : 0;
+      r->family = e->key.ip_family;
+      r->protocol = e->key.protocol;
+      r->kind = e->key.kind;
+      r->origin_is_a = e->origin_is_endpoint_a;
+      r->flow_origin_direction = e->flow_origin_device_direction;
+      r->last_device_direction = e->last_device_direction;
+      r->last_flow_direction = e->last_flow_direction;
+      r->protocols_available = e->lpi.available;
+      memcpy (r->addresses, e->key.address_a, 16);
+      memcpy (r->addresses + 16, e->key.address_b, 16);
+      product_observation_current (worker, slot, e->incarnation, r->attribution);
+    }
+  out->done = position == total;
+  out->next_cursor = out->done ? 0 : position;
+  vlib_worker_thread_barrier_release (vm);
+  return 0;
+}
+
 /* Called on the API main thread. One bounded copy under the worker barrier. */
 int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
   uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *out)

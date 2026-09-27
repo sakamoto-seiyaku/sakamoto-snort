@@ -35,6 +35,18 @@ typedef struct {
   uint64_t generation;
 } observation_owner_t;
 static observation_owner_t owners[PRODUCT_OBSERVATION_OWNERS];
+
+void product_observation_current (unsigned owner, uint32_t slot,
+                                  uint64_t incarnation,
+                                  product_observation_attribution_t out[2]) {
+  if (!out) return;
+  memset (out, 0, 2 * sizeof (*out));
+  if (owner >= PRODUCT_OBSERVATION_OWNERS || !owners[owner].slots
+      || slot >= owners[owner].capacity) return;
+  const observation_slot_t *s = &owners[owner].slots[slot];
+  if (s->incarnation != incarnation) return;
+  memcpy (out, s->attribution, 2 * sizeof (*out));
+}
 static product_blocked_observation_t *blocked[PRODUCT_OBSERVATION_OWNERS];
 static uint32_t blocked_capacity;
 static product_observation_transport_t *transport;

@@ -14,6 +14,12 @@ pub(super) struct ProductSession {
 }
 
 unsafe extern "C" {
+    pub(super) fn sakamoto_product_session_flow_query(
+        session: *mut ProductSession,
+        generation: u64,
+        cursor: u32,
+        out: *mut crate::observation::LiveFlowPage,
+    ) -> c_uint;
     pub(super) fn sakamoto_product_session_observation_query(
         session: *mut ProductSession,
         generation: u64,
@@ -146,6 +152,42 @@ pub unsafe extern "C" fn sakamoto_product_core_observation_query(
             return ErrorCode::ApiUnavailable.raw();
         }
         let response = core.observation_json();
+        if response.len() > reply_capacity as usize {
+            return ErrorCode::AllocationFailed.raw();
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(response.as_ptr(), reply, response.len());
+            *out_length = response.len() as u32;
+        }
+        0
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_observation_page_query(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    operation: u32,
+    cursor: u32,
+    reply: *mut u8,
+    reply_capacity: u32,
+    out_length: *mut u32,
+) -> c_uint {
+    if handle.is_null() || generation == 0 || operation > 2 || reply.is_null()
+        || out_length.is_null() || reply_capacity == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe { *out_length = 0; }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let core = unsafe { &mut (*handle).core };
+        if core.generation != generation { return ErrorCode::StaleHandle.raw(); }
+        if operation != 0 && core.pause_observation(operation == 1).is_err() {
+            return ErrorCode::ApiUnavailable.raw();
+        }
+        let response = core.observation_page_json(cursor);
         if response.len() > reply_capacity as usize {
             return ErrorCode::AllocationFailed.raw();
         }

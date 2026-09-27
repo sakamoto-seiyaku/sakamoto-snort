@@ -439,3 +439,36 @@ define product_core_observation_query_reply {
   u64 blocked_capacity_misses[2]; u64 blocked_retired[2];
   vl_api_product_observation_channel_t channels[4];
 };
+
+typedef product_flow_query_attribution {
+  u64 segment; u64 start_packets; u64 start_bytes; u64 activity_utc_us;
+  u64 policy_generation; u64 policy_revision; u64 policy_hash; u64 winner;
+  u32 uid; u32 network;
+  u8 declared_action; u8 actual_action; u8 mode; u8 valid;
+  u8 name[64]; u8 padding[4];
+  u64 protocol_set; u8 protocols_available; u8 protocol_padding[7];
+};
+typedef product_flow_query_entry {
+  u64 incarnation; u64 first_seen; u64 last_seen;
+  u64 packets[2]; u64 bytes[2];
+  u64 policy_generation; u64 policy_revision; u64 policy_hash;
+  u64 winner; u64 protocols;
+  u32 worker; u32 slot; u32 uid; u32 network; u32 query_class;
+  u32 sni_result; u32 sni_stop; u32 lpi_stop;
+  u16 ports[2];
+  u8 family; u8 protocol; u8 kind; u8 origin_is_a;
+  u8 flow_origin_direction; u8 last_device_direction;
+  u8 last_flow_direction; u8 protocols_available;
+  u8 addresses[32];
+  vl_api_product_flow_query_attribution_t attribution[2];
+};
+define product_core_flow_query {
+  u32 client_index; u32 context; u64 generation; u32 cursor;
+};
+define product_core_flow_query_reply {
+  u32 context; i32 retval; u64 generation;
+  u64 allocated_bytes[2]; u64 capacity_misses[2];
+  u32 capacity[2]; u32 active[2]; u32 high_watermark[2];
+  u32 cursor; u32 next_cursor; u32 scanned; u32 count; u32 done;
+  vl_api_product_flow_query_entry_t entries[16];
+};

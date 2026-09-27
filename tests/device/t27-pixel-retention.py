@@ -21,12 +21,13 @@ p.add_argument("--serial-from",type=Path,required=True);p.add_argument("--build"
 p.add_argument("--probe-build",type=Path,required=True);p.add_argument("--output",type=Path,required=True)
 p.add_argument("--profile",choices=("root","vpn"),required=True)
 p.add_argument("--skip-install",action="store_true")
+p.add_argument("--t28-dashboard",action="store_true")
 p.add_argument("--endpoint",default="192.168.4.5")
 a=p.parse_args();serial=json.loads(a.serial_from.read_text())["serial"];build=json.loads(a.build.read_text())
 probe_build=json.loads(a.probe_build.read_text());out=a.output.resolve();out.mkdir(parents=True,exist_ok=False)
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 tag=hashlib.sha256(str(out).encode()).hexdigest()[:9]
-result=dict(status="HOLD",kind="android",profile=a.profile,scenario="retention",task="T27",serial=serial,
+result=dict(status="HOLD",kind="android",profile=a.profile,scenario="dashboard" if a.t28_dashboard else "retention",task="T28" if a.t28_dashboard else "T27",serial=serial,
     build=str(a.build.resolve()),build_sha256=digest(a.build),source_sha256=build["source_sha256"],
     probe_build=str(a.probe_build.resolve()),probe_build_sha256=digest(a.probe_build),
     started_ns=time.time_ns(),configurations=[],phases=[],snapshots=[],lifetimes=[])
@@ -70,11 +71,18 @@ target=object.__new__(module.Target);target.pixel=True
 base="/data/user/0/"+PKG+"/files/profiles/"+a.profile+"/vpp"
 owned=[]
 def cli(label,text):return save(label+".txt",target.cli(base+"/runtime",[text]))
-def query(label):
+def query(label,cursor=0):
     nonce="t23q-"+tag+"-"+str(time.time_ns());path="files/product-state/observation-"+nonce+".json"
-    action("--es","observationNonce",nonce,"--ei","observationOperation",0)
+    action("--es","observationNonce",nonce,"--ei","observationOperation",0,"--ei","observationCursor",cursor)
     value=wait_json(path,label);owned.append(path)
     assert "error" not in value and value["health"]["generation"]==generation,value
+    if a.t28_dashboard:
+        assert value["runtime"]["generation"]==str(generation),value["runtime"]
+        assert value["runtime"]["profile"]==a.profile
+        assert value["vpp"]["generation"]==generation,value["vpp"]
+        assert value["policy_source"]["generation"]==generation,value["policy_source"]
+        assert value["current_flows"]["generation"]==generation,value["current_flows"]
+        assert value["current_flows"]["scanned"]<=256 and value["current_flows"]["count"]<=16
     result["snapshots"].append(dict(label=label,generation=generation));return value
 
 def settle(label):
@@ -198,6 +206,104 @@ def ui_query_history():
         "text":projection,"source_status":value["consumer"]["persistent"]["history_source"]["status"]}
     return value
 
+def ui_tap(label,target):
+    action()
+    size=adb("shell","wm","size");height=int(re.search(r"(\d+)x(\d+)",size)[2])
+    if target in ("Start","Stop"):
+        for _ in range(5):adb("shell","input","swipe","500",str(height//4),"500",str(height*3//4),"250")
+    for attempt in range(16):
+        adb("shell","uiautomator","dump","/sdcard/t28-window.xml",timeout=20)
+        xml=adb("shell","cat","/sdcard/t28-window.xml")
+        save("ui-"+label+"-before-"+str(attempt)+".xml",xml)
+        for node in ET.fromstring(xml).iter("node"):
+            if node.get("content-desc")==target or node.get("text")==target:
+                match=re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",node.get("bounds",""))
+                if match:
+                    x1,y1,x2,y2=map(int,match.groups())
+                    if 0<=y1<y2<=height and y2-y1>10:
+                        chosen=((x1+x2)//2,(y1+y2)//2)
+                        adb("shell","input","tap",*chosen)
+                        result.setdefault("ui_taps",[]).append(dict(label=label,target=target,bounds=match.group()))
+                        return chosen
+        adb("shell","input","swipe","500",str(height*3//4),"500",str(height//4),"400")
+    raise AssertionError(target+" button not visible")
+
+def ui_query_dashboard(label):
+    def keepalive(suffix):
+        request=dict(label="ui-keepalive-"+suffix,count=1,size=64,sockets=1,short=False,
+            nonce="t28-ui-"+tag+"-"+suffix+"-"+str(time.time_ns()))
+        probe.stdin.write((json.dumps(request)+"\n").encode());probe.stdin.flush()
+        exchange=probe_line();assert exchange["sent"]==exchange["received"]==1,exchange
+        save(request["label"]+"-traffic.json",exchange)
+        result.setdefault("ui_keepalives",[]).append(request["label"])
+    keepalive("before")
+    ui_tap(label,"Query health and flows")
+    until=time.monotonic()+15;projection="";xml=""
+    while time.monotonic()<until:
+        adb("shell","uiautomator","dump","/sdcard/t28-window.xml",timeout=20)
+        xml=adb("shell","cat","/sdcard/t28-window.xml")
+        for node in ET.fromstring(xml).iter("node"):
+            if node.get("content-desc")=="Health and flow result":projection=node.get("text","")
+        if projection.startswith("Runtime / VPP / Rust health"):break
+        adb("shell","input","swipe","500","1600","500","900","240")
+        time.sleep(.2)
+    assert projection.startswith("Runtime / VPP / Rust health"),projection
+    assert "Current flows:" in projection and "Rust store:" in projection
+    assert a.profile in projection
+    target=result["live_flow_query"]
+    flow_label="Flow "+str(target["worker"])+":"+str(target["slot"])
+    next_node=next((n for n in ET.fromstring(xml).iter("node")
+        if n.get("content-desc")=="Next flows"),None)
+    assert next_node is not None,"Next flows button missing"
+    next_bounds=re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",next_node.get("bounds",""))
+    assert next_bounds is not None
+    nx1,ny1,nx2,ny2=map(int,next_bounds.groups());next_tap=((nx1+nx2)//2,(ny1+ny2)//2)
+    for step in range(16):
+        if flow_label in projection:break
+        if step % 2 == 0:keepalive("page"+str(step))
+        adb("shell","input","tap",*next_tap)
+        result.setdefault("ui_taps",[]).append(dict(label=label+"-next-"+str(step),target="Next flows",bounds=next_bounds.group()))
+        previous=projection;deadline=time.monotonic()+12
+        while time.monotonic()<deadline:
+            adb("shell","uiautomator","dump","/sdcard/t28-window.xml",timeout=20)
+            xml=adb("shell","cat","/sdcard/t28-window.xml")
+            for node in ET.fromstring(xml).iter("node"):
+                if node.get("content-desc")=="Health and flow result":projection=node.get("text","")
+            if projection.startswith("Runtime / VPP / Rust health") and projection!=previous:break
+            time.sleep(.1)
+        assert projection!=previous,"Next flows did not advance"
+    assert flow_label in projection,projection
+    assert "allow-request" in projection and "ORIG: winner=" in projection
+    save("ui-"+label+"-result.xml",xml)
+    (out/("ui-"+label+"-result.png")).write_bytes(adb("exec-out","screencap","-p",binary=True))
+    raw=query("ui-"+label+"-raw")
+    assert str(raw["vpp"]["policy_active_revision"]) in projection
+    result["ui_dashboard"]=dict(label=label,projection=projection,raw="ui-"+label+"-raw.json")
+    return raw
+
+def check_live_dashboard(label,observed):
+    item=flow(observed)
+    current=observed["current_flows"]
+    cursor=item["owner"]*current["capacity"][0]+item["slot"]
+    page=query(label+"-slot",cursor)["current_flows"]
+    matches=[e for e in page["entries"] if e["worker"]==item["owner"]
+        and e["slot"]==item["slot"] and e["incarnation"]==str(item["incarnation"])]
+    assert len(matches)==1,(item,page)
+    entry=matches[0]
+    assert a.endpoint in (entry["canonical_a"],entry["canonical_b"])
+    assert entry["uid"]==item["attribution"][0]["uid"]==uid
+    assert entry["network"]==item["attribution"][0]["network"]
+    assert entry["packets"]==item["packets"] and entry["bytes"]==item["bytes"]
+    assert entry["first_seen_monotonic_us"]<=entry["last_seen_monotonic_us"]
+    assert entry["protocols_available"] or int(entry["protocol_set"])==0
+    assert len(entry["protocol_labels"])==int(entry["protocol_set"]).bit_count()
+    assert entry["attribution"][0]["available"]
+    assert entry["attribution"][0]["name"]=="allow-request"
+    assert entry["attribution"][0]["winner"]==str(item["attribution"][0]["winner"])
+    result["live_flow_query"]=dict(label=label,worker=entry["worker"],slot=entry["slot"],
+        incarnation=entry["incarnation"],cursor=cursor,file=label+"-slot.json")
+    return entry
+
 def flow(snapshot):
     rows=[r for r in snapshot["consumer"]["overview"]["records"] if r and r["ports"][0]==44500 and not r["ended"]]
     assert len(rows)==1,"one persistent app socket Flow";return rows[0]
@@ -218,7 +324,10 @@ def copy_database(label):
 def start_runtime(label):
     global started,generation,vpp_pid,service_pid,policy
     started=True
-    action(*(["--ez","debugVpnHevValidation","true"] if a.profile=="vpn" else ["--ez","runtimeStart","true","--es","runtimeProfile","root"]))
+    if a.t28_dashboard and a.profile=="root" and label=="pressure":
+        ui_tap(label+"-start","Start")
+    else:
+        action(*(["--ez","debugVpnHevValidation","true"] if a.profile=="vpn" else ["--ez","runtimeStart","true","--es","runtimeProfile","root"]))
     running=state(label+"-running","running");generation=int(running["generation"])
     assert running["profile"]==a.profile and running["protectionRunning"]==("true" if a.profile=="root" else "false")
     process_text=save(label+"-processes.txt",root("ps -A -o PID,UID,ARGS"))
@@ -232,9 +341,19 @@ def stop_runtime(label):
     global started
     save(label+"-vpp.log",app("files/profiles/"+a.profile+"/vpp/logs/vpp-stdout.log"))
     cli(label+"-completion","show product completion")
-    action("--ez","runtimeStop","true");stopped=state(label+"-stopped","stopped");started=False
+    if a.t28_dashboard and label=="initial":ui_tap(label+"-stop","Stop")
+    else:action("--ez","runtimeStop","true")
+    stopped=state(label+"-stopped","stopped");started=False
     assert stopped["mayBeActive"]=="false"
     assert root(f"test ! -d /proc/{vpp_pid} && echo absent").strip()=="absent"
+    if a.t28_dashboard:
+        nonce="t28stopped-"+tag+"-"+str(time.time_ns())
+        path="files/product-state/observation-"+nonce+".json"
+        action("--es","observationNonce",nonce,"--ei","observationOperation",0)
+        stopped_query=wait_json(path,label+"-stopped-query");owned.append(path)
+        assert stopped_query["error"]=="management_unavailable",stopped_query
+        assert stopped_query["runtime"]["state"]=="stopped",stopped_query
+        assert stopped_query["runtime"]["protectionRunning"]=="false",stopped_query
     result["lifetimes"][-1]["process_absent"]=True
     adb("shell","am","force-stop",PKG)
     assert not adb("shell","pidof",PKG+":runtime",check=False).strip()
@@ -309,18 +428,28 @@ try:
     allowed=send("allow",2,size=64);allowed_q=snapshot_counts(allowed)
     assert json.loads((out/"allow-traffic.json").read_text())["received"]==2
     assert allowed_q["packets"][0]>=2 and allowed_q["stored_minute_count"]>=1
+    if a.t28_dashboard:
+        assert allowed["runtime"]["state"]=="running"
+        assert allowed["vpp"]["policy_active_revision"]==allowed["policy_source"]["active_revision"]
+        assert allowed["policy_source"]["save_error"]==0
+        check_live_dashboard("allow",allowed)
+        ui_query_dashboard("allow")
     item=flow(allowed)
     cli("allow-close",f"product flow-end close owner {item['owner']} slot {item['slot']} generation {generation} incarnation {item['incarnation']}")
     ended=settle("allow-ended");ended_q=snapshot_counts(ended);assert ended_q["recent_count"]>=1
     configuration("drop",actions=(2,1))
     dropped=send("drop",2,size=64);dropped_q=snapshot_counts(dropped)
     assert json.loads((out/"drop-traffic.json").read_text())["received"]==0
+    if a.t28_dashboard:
+        assert dropped["vpp"]["policy_drops"]>=2
+        assert sum(c["basic_packets"][1] for c in dropped["health"]["channels"])>=2
+        assert dropped["runtime"]["protectionRunning"]==("true" if a.profile=="root" else "false")
     assert any(row["attribution"]["name"]=="drop-request" and row["counts"]["packets"][0]>=2
         for row in dropped_q["rule_windows"].values())
     selected_name="allow-request"
     selected=sum(row["counts"]["packets"][0] for row in dropped_q["rule_windows"].values()
         if row["attribution"]["name"]==selected_name)
-    assert selected==2,selected
+    assert selected==(2+len(result.get("ui_keepalives",[])) if a.t28_dashboard else 2),selected
     result["selected_rule_packets"]=selected
     configuration("empty",empty=True)
     probe.stdin.write(b'{"quit":true}\n');probe.stdin.flush();probe.wait(timeout=10);probe=None
@@ -334,6 +463,9 @@ try:
     initial_size=(out/"initial.sqlite3").stat().st_size
     test_config("pressure",0,max(64*1024,3*initial_size))
     pressured=start_runtime("pressure");pressure_q=snapshot_counts(pressured)
+    if a.t28_dashboard:
+        assert pressured["runtime"]["state"]=="running"
+        assert pressured["current_flows"]["generation"]==generation
     assert side_ge(pressure_q["packets"],dropped_q["packets"])
     assert pressure_q["recent_count"]<ended_q["recent_count"] or pressure_q["hour_windows"]["counts"]["overall"]>0 or pressure_q["coverage"]["evicted"]["packets"][0]>0,pressure_q
     result["pressure_reclaimed"]=True

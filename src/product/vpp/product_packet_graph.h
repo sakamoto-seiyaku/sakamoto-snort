@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "sakamoto_product_sni.h"
+#include "sakamoto_product_flow_query.h"
 
 #include <vlib/vlib.h>
 
@@ -316,4 +317,6 @@ int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
 
 int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
   uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *);
+int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
+  sakamoto_product_flow_page_t *);
 #endif

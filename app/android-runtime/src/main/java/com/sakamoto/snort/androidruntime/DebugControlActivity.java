@@ -191,9 +191,12 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private TextView productView;
-    private TextView ruleConfigView, completeRuleView, historyView;
+    private TextView ruleConfigView, completeRuleView, historyView, dashboardView;
     private final java.util.concurrent.atomic.AtomicBoolean historyQueryRunning =
             new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean dashboardQueryRunning =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private int nextFlowCursor;
     private EditText completeRuleInput;
     private long completeSavedRevision;
     private java.util.Properties completeRuleProjection;
@@ -295,7 +298,8 @@ public class DebugControlActivity extends Activity {
         }
         if (debuggable && intent.hasExtra("observationNonce")) {
             backend.observationQuery(this, intent.getStringExtra("observationNonce"),
-                    intent.getIntExtra("observationOperation", 0));
+                    intent.getIntExtra("observationOperation", 0),
+                    intent.getIntExtra("observationCursor", 0));
             handled = true;
         }
         if (debuggable && intent.hasExtra("t12ProbePlan")) {
@@ -845,6 +849,27 @@ public class DebugControlActivity extends Activity {
         historyView.setContentDescription("History result");
         root.addView(historyView, fillWrap());
 
+        LinearLayout dashboardButtons = new LinearLayout(this);
+        Button dashboardQuery = new Button(this);
+        dashboardQuery.setText("Query health and flows");
+        dashboardQuery.setContentDescription("Query health and flows");
+        dashboardQuery.setAllCaps(false);
+        dashboardQuery.setOnClickListener(view -> queryDashboard(0));
+        dashboardButtons.addView(dashboardQuery, weighted());
+        Button nextFlows = new Button(this);
+        nextFlows.setText("Next flows");
+        nextFlows.setContentDescription("Next flows");
+        nextFlows.setAllCaps(false);
+        nextFlows.setOnClickListener(view -> {
+            if (nextFlowCursor != 0) queryDashboard(nextFlowCursor);
+            else if (dashboardView != null) dashboardView.append("\nEnd of current flow scan");
+        });
+        dashboardButtons.addView(nextFlows, weighted());
+        root.addView(dashboardButtons, fillWrap());
+        dashboardView = new TextView(this);
+        dashboardView.setContentDescription("Health and flow result");
+        root.addView(dashboardView, fillWrap());
+
 
         LinearLayout appSelector = new LinearLayout(this);
         appSelector.setOrientation(LinearLayout.HORIZONTAL);
@@ -971,6 +996,176 @@ public class DebugControlActivity extends Activity {
             String finalDisplay = display;
             main.post(() -> { if (historyView != null) historyView.setText(finalDisplay); });
         }, "history-query").start();
+    }
+
+    private void queryDashboard(int cursor) {
+        if (!dashboardQueryRunning.compareAndSet(false, true)) return;
+        String nonce = "dashboard-" + Long.toHexString(System.nanoTime());
+        File result = new File(getFilesDir(), "product-state/observation-" + nonce + ".json");
+        dashboardView.setText("Querying health and current flows…");
+        try {
+            backend.observationQuery(this, nonce, 0, cursor);
+        } catch (RuntimeException error) {
+            dashboardQueryRunning.set(false);
+            dashboardView.setText("Health query unavailable");
+            return;
+        }
+        new Thread(() -> {
+            String display = "Health query unavailable";
+            int next = 0;
+            try {
+                for (int attempt = 0; attempt < 50; ++attempt) {
+                    if (result.isFile() && result.length() > 0 && result.length() <= 4 * 1024 * 1024) {
+                        try (FileInputStream input = new FileInputStream(result)) {
+                            byte[] bytes = new byte[(int) result.length()];
+                            int count = 0;
+                            while (count < bytes.length) {
+                                int read = input.read(bytes, count, bytes.length - count);
+                                if (read < 0) break;
+                                count += read;
+                            }
+                            if (count == bytes.length) {
+                                JSONObject reply = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+                                display = renderDashboard(reply);
+                                JSONObject flows = reply.optJSONObject("current_flows");
+                                if (flows != null && !flows.has("error"))
+                                    next = flows.optInt("next_cursor", 0);
+                                break;
+                            }
+                        } catch (IOException | JSONException ignored) {
+                            // The service may still be writing the query file.
+                        }
+                    }
+                    try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
+                }
+            } finally {
+                if (result.exists() && !result.delete()) display = "Health query unavailable";
+                dashboardQueryRunning.set(false);
+            }
+            final String shown = display;
+            final int following = next;
+            main.post(() -> {
+                nextFlowCursor = following;
+                if (dashboardView != null) dashboardView.setText(shown);
+            });
+        }, "dashboard-query").start();
+    }
+
+    private static String renderDashboard(JSONObject reply) {
+        if (reply.has("error")) return "Health query error: " + reply.optString("error");
+        StringBuilder text = new StringBuilder("Runtime / VPP / Rust health\n");
+        JSONObject runtime = reply.optJSONObject("runtime");
+        if (runtime == null) text.append("Runtime: unavailable\n");
+        else text.append("Runtime: ").append(runtime.optString("profile", "unknown"))
+                .append(" · ").append(runtime.optString("state", "unknown"))
+                .append(" · protection=").append(runtime.optString("protectionRunning", "unknown"))
+                .append(" · generation=").append(runtime.optString("generation", "unknown"))
+                .append(" · error=").append(runtime.optString("errorCode", "none")).append('\n');
+        JSONObject vpp = reply.optJSONObject("vpp");
+        if (vpp == null || vpp.has("error"))
+            text.append("VPP: unavailable ").append(vpp == null ? "" : vpp.optString("error")).append('\n');
+        else text.append("VPP: generation=").append(vpp.optString("generation"))
+                .append(" · adapter=").append(vpp.optBoolean("adapter_available"))
+                .append(" · protection=").append(vpp.optBoolean("protection_running"))
+                .append(" · RX root=").append(vpp.optString("root_input_packets"))
+                .append(" / VPN=").append(vpp.optString("vpn_tun_ingress_packets"))
+                .append(" · TX root verdicts=").append(vpp.optString("root_verdict_attempts"))
+                .append(" / VPN TUN=").append(vpp.optString("vpn_tun_write_completions"))
+                .append("\nRules: active=").append(vpp.optString("policy_active_revision"))
+                .append(" · hits=").append(vpp.optString("logical_hits"))
+                .append(" · policy drops=").append(vpp.optString("policy_drops"))
+                .append(" · runtime faults=").append(vpp.optString("vpn_infrastructure_faults"))
+                .append(" / root verdict failures=").append(vpp.optString("root_verdict_failed_definite"))
+                .append('\n');
+        JSONObject source = reply.optJSONObject("policy_source");
+        if (source == null || source.has("error")) text.append("Saved policy: unavailable\n");
+        else text.append("Saved policy: revision=").append(source.optString("saved_revision"))
+                .append(" · applied=").append(source.optString("active_revision"))
+                .append(" · save error=").append(source.optString("save_error"))
+                .append(" · compile error=").append(source.optString("compile_error"))
+                .append('\n');
+        JSONObject health = reply.optJSONObject("health");
+        if (health == null) text.append("Export: unavailable ").append(reply.optString("error")).append('\n');
+        else {
+            text.append("Export: connected=").append(health.optInt("connected"))
+                    .append(" · mapping bytes=").append(health.optString("mapping_bytes"))
+                    .append('\n');
+            JSONArray channels = health.optJSONArray("channels");
+            if (channels != null) for (int i = 0; i < channels.length(); ++i) {
+                JSONObject channel = channels.optJSONObject(i);
+                if (channel != null) text.append("Channel ").append(i)
+                        .append(": full=").append(channel.optString("full"))
+                        .append(" pending=").append(channel.optString("pending"))
+                        .append(" consumed=").append(channel.optString("consumed"))
+                        .append(" allocation lost=").append(channel.optString("allocation_lost"))
+                        .append('\n');
+            }
+        }
+        JSONObject consumer = reply.optJSONObject("consumer");
+        if (consumer == null) text.append("Rust consumer: unavailable\n");
+        else {
+            text.append("Rust consumer: fresh=").append(consumer.optBoolean("query_fresh"))
+                    .append(" · error=").append(consumer.optString("query_error", "none"))
+                    .append(" · live=").append(consumer.optBoolean("live"))
+                    .append(" · save error=").append(consumer.optString("store_error", "none"))
+                    .append('\n');
+            JSONObject persisted = consumer.optJSONObject("persistent");
+            if (persisted == null) text.append("Rust store: unavailable\n");
+            else {
+                JSONObject coverage = persisted.optJSONObject("coverage");
+                text.append("Rust store: save error=").append(persisted.optString("save_error", "none"))
+                        .append(" · gaps=").append(coverage == null ? "unknown" : coverage.optString("gaps"))
+                        .append(" · evicted=").append(coverage == null ? "unknown" : coverage.optString("evicted"))
+                        .append('\n');
+                JSONObject space = persisted.optJSONObject("storage_space");
+                text.append("Store space: ");
+                if (space == null) text.append("unavailable");
+                else text.append(space.optString("actual_bytes", "unknown"))
+                        .append(" / ").append(space.optString("budget_bytes", "unknown"))
+                        .append(" bytes · within budget=").append(space.optString("within_budget", "unknown"));
+                text.append('\n');
+            }
+        }
+        JSONObject flows = reply.optJSONObject("current_flows");
+        if (flows == null || flows.has("error"))
+            text.append("Current flows: unavailable ").append(flows == null ? "" : flows.optString("error"));
+        else {
+            text.append("Current flows: active=").append(flows.optJSONArray("active"))
+                    .append(" · capacity=").append(flows.optJSONArray("capacity"))
+                    .append(" · misses=").append(flows.optJSONArray("capacity_misses"))
+                    .append(" · allocated bytes=").append(flows.optJSONArray("allocated_bytes"))
+                    .append(" · cursor=").append(flows.optInt("cursor"))
+                    .append(" → ").append(flows.optInt("next_cursor"))
+                    .append(flows.optBoolean("done") ? " · end" : " · more")
+                    .append('\n');
+            JSONArray entries = flows.optJSONArray("entries");
+            if (entries != null) for (int i = 0; i < entries.length(); ++i) {
+                JSONObject flow = entries.optJSONObject(i);
+                if (flow == null) continue;
+                text.append("Flow ").append(flow.optInt("worker")).append(':').append(flow.optInt("slot"))
+                        .append(" · ").append(flow.optString("canonical_a"))
+                        .append(':').append(flow.optString("port_a"))
+                        .append(" ↔ ").append(flow.optString("canonical_b"))
+                        .append(':').append(flow.optString("port_b"))
+                        .append(" · UID ").append(flow.optString("uid"))
+                        .append(" · network ").append(flow.optString("network"))
+                        .append(" · packets ").append(flow.optJSONArray("packets"))
+                        .append(" · L7 ").append(flow.optBoolean("protocols_available")
+                                ? flow.optJSONArray("protocol_labels") : "unavailable")
+                        .append('\n');
+                JSONArray attribution = flow.optJSONArray("attribution");
+                if (attribution != null) for (int side = 0; side < Math.min(2, attribution.length()); ++side) {
+                    JSONObject fact = attribution.optJSONObject(side);
+                    text.append(side == 0 ? "  ORIG" : "  REPLY").append(": ");
+                    if (fact == null || !fact.optBoolean("available")) text.append("unavailable");
+                    else text.append("winner=").append(fact.optString("winner"))
+                            .append(" action=").append(fact.optString("actual_action"))
+                            .append(" name=").append(fact.optString("name", "unavailable"));
+                    text.append('\n');
+                }
+            }
+        }
+        return text.toString();
     }
 
     private static void appendHistoryLine(StringBuilder text, String label,

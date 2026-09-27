@@ -243,11 +243,16 @@ public final class RuntimeControlBackend {
     }
 
     public void observationQuery(Context context, String nonce, int operation) {
+        observationQuery(context, nonce, operation, 0);
+    }
+
+    public void observationQuery(Context context, String nonce, int operation, int cursor) {
         context.startService(new Intent(context, RuntimeService.class)
                 .setAction(RuntimeControlProtocol.ACTION_OBSERVATION_QUERY)
                 .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
                 .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_OBSERVATION_QUERY)
-                .putExtra("observationNonce", nonce).putExtra("observationOperation", operation));
+                .putExtra("observationNonce", nonce).putExtra("observationOperation", operation)
+                .putExtra("observationCursor", cursor));
     }
 
     public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {

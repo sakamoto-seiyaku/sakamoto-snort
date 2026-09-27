@@ -59,7 +59,7 @@ fn print_status(label: &str, status: &Status) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sakamoto-product-core-host <query|rule-query|rule-clear|rule-export> <api-socket> <generation> [expected-saved]\n       sakamoto-product-core-host rule-import <api-socket> <generation> <expected-saved> <json-file>\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
+    eprintln!("usage: sakamoto-product-core-host <query|dashboard-query|rule-query|rule-clear|rule-export> <api-socket> <generation> [cursor]\n       sakamoto-product-core-host rule-import <api-socket> <generation> <expected-saved> <json-file>\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
     std::process::exit(2);
 }
 
@@ -86,6 +86,12 @@ fn main() {
         println!("observation.response={}", core.observation_json());
         return;
     }
+    if command == "dashboard-query" {
+        if remaining.len() > 1 { usage(); }
+        let cursor = remaining.first().map(|s| s.parse().unwrap_or_else(|_| usage())).unwrap_or(0);
+        println!("dashboard.response={}", core.observation_page_json(cursor));
+        return;
+    }
     if command == "observation-serve" {
         use std::io::{BufRead, Write};
         let store = remaining
@@ -100,7 +106,9 @@ fn main() {
         println!("observation.ready={generation}");
         std::io::stdout().flush().unwrap();
         for line in std::io::stdin().lock().lines() {
-            match line.unwrap_or_default().trim() {
+            let line = line.unwrap_or_default();
+            let command = line.trim();
+            match command {
                 "pause" => {
                     core.pause_observation(true).unwrap();
                     println!("observation.paused=true");
@@ -110,7 +118,14 @@ fn main() {
                     println!("observation.paused=false");
                 }
                 "query" => println!("observation.response={}", core.observation_json()),
+                "dashboard" => println!("dashboard.response={}", core.observation_page_json(0)),
                 "quit" => break,
+                _ if command.starts_with("dashboard ") => {
+                    match command[10..].parse::<u32>() {
+                        Ok(cursor) => println!("dashboard.response={}", core.observation_page_json(cursor)),
+                        Err(_) => println!("dashboard.error=invalid_cursor"),
+                    }
+                }
                 _ => println!("observation.error=unknown_command"),
             }
             std::io::stdout().flush().unwrap();

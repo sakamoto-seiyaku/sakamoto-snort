@@ -259,6 +259,7 @@ public final class RuntimeControlNative {
 
     private static native String[] nativeConnect(String apiSocket, long generation);
     private static native byte[] nativeObservationQuery(long handle, long generation, int operation);
+    private static native byte[] nativeObservationPageQuery(long handle, long generation, int operation, int cursor);
 
     private static native String[] nativeQuery(long handle, long generation);
     private static native int nativeObservationStart(long handle, long generation, String storePath);
@@ -379,6 +380,13 @@ public final class RuntimeControlNative {
         public synchronized String observationQuery(int operation) {
             if (!LOADED || nativeHandle == 0) return "{\"error\":\"disconnected\"}";
             byte[] reply = nativeObservationQuery(nativeHandle, generation, operation);
+            return reply == null ? "{\"error\":\"native_query_failed\"}"
+                    : new String(reply, java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        public synchronized String observationPageQuery(int operation, int cursor) {
+            if (!LOADED || nativeHandle == 0) return "{\"error\":\"disconnected\"}";
+            byte[] reply = nativeObservationPageQuery(nativeHandle, generation, operation, cursor);
             return reply == null ? "{\"error\":\"native_query_failed\"}"
                     : new String(reply, java.nio.charset.StandardCharsets.UTF_8);
         }

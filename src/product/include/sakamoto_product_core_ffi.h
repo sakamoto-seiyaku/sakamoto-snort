@@ -21,6 +21,10 @@ uint32_t sakamoto_product_core_observation_start_at(
 uint32_t sakamoto_product_core_observation_query(
     sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,
     uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
+/* Same independent producer/consumer query plus a bounded VPP live-flow page. */
+uint32_t sakamoto_product_core_observation_page_query(
+    sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,
+    uint32_t cursor, uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
 
 uint32_t sakamoto_product_core_sni_query(
     sakamoto_product_core_handle_t *, uint64_t, uint32_t, uint32_t, uint64_t,

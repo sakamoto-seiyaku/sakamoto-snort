@@ -64,6 +64,171 @@ pub struct ObservationHealth {
     pub channels: [ChannelHealth; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiveFlowEntry {
+    pub incarnation: u64,
+    pub first_seen: u64,
+    pub last_seen: u64,
+    pub packets: [u64; 2],
+    pub bytes: [u64; 2],
+    pub policy_generation: u64,
+    pub policy_revision: u64,
+    pub policy_hash: u64,
+    pub winner: u64,
+    pub protocols: u64,
+    pub worker: u32,
+    pub slot: u32,
+    pub uid: u32,
+    pub network: u32,
+    pub query_class: u32,
+    pub sni_result: u32,
+    pub sni_stop: u32,
+    pub lpi_stop: u32,
+    pub ports: [u16; 2],
+    pub family: u8,
+    pub protocol: u8,
+    pub kind: u8,
+    pub origin_is_a: u8,
+    pub flow_origin_direction: u8,
+    pub last_device_direction: u8,
+    pub last_flow_direction: u8,
+    pub protocols_available: u8,
+    pub addresses: [u8; 32],
+    pub attribution: [LiveFlowAttribution; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LiveFlowAttribution {
+    pub segment: u64,
+    pub start_packets: u64,
+    pub start_bytes: u64,
+    pub activity_utc_us: u64,
+    pub policy_generation: u64,
+    pub policy_revision: u64,
+    pub policy_hash: u64,
+    pub winner: u64,
+    pub uid: u32,
+    pub network: u32,
+    pub declared_action: u8,
+    pub actual_action: u8,
+    pub mode: u8,
+    pub valid: u8,
+    pub name: [u8; 64],
+    pub padding: [u8; 4],
+    pub protocol_set: u64,
+    pub protocols_available: u8,
+    pub protocol_padding: [u8; 7],
+}
+
+impl Default for LiveFlowAttribution {
+    fn default() -> Self { Self {
+        segment:0,start_packets:0,start_bytes:0,activity_utc_us:0,
+        policy_generation:0,policy_revision:0,policy_hash:0,winner:0,
+        uid:0,network:0,declared_action:0,actual_action:0,mode:0,valid:0,
+        name:[0;64],padding:[0;4],protocol_set:0,protocols_available:0,
+        protocol_padding:[0;7],
+    }}
+}
+
+fn published_labels(mask: u64) -> Vec<serde_json::Value> {
+    (0..64)
+        .filter(|bit| mask & (1u64 << bit) != 0)
+        .filter_map(|bit| protocol_label(bit).map(|(id, key)| serde_json::json!({"id":id,"key":key})))
+        .collect()
+}
+
+impl LiveFlowAttribution {
+    fn json(&self) -> serde_json::Value {
+        if self.valid == 0 { return serde_json::json!({"available":false}); }
+        let end = self.name.iter().position(|byte| *byte == 0).unwrap_or(self.name.len());
+        let name = std::str::from_utf8(&self.name[..end]).ok();
+        serde_json::json!({
+            "available":true,"segment":self.segment.to_string(),
+            "start_packets":self.start_packets,"start_bytes":self.start_bytes,
+            "activity_utc_us":self.activity_utc_us,
+            "policy_generation":self.policy_generation.to_string(),
+            "policy_revision":self.policy_revision.to_string(),"policy_hash":self.policy_hash.to_string(),
+            "winner":self.winner.to_string(),"uid":self.uid,"network":self.network,
+            "declared_action":self.declared_action,"actual_action":self.actual_action,
+            "mode":self.mode,"name":name,
+            "protocols_available":self.protocols_available != 0,
+            "protocol_set":self.protocol_set.to_string(),
+            "protocol_labels":published_labels(self.protocol_set),
+        })
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct LiveFlowPage {
+    pub generation: u64,
+    pub allocated_bytes: [u64; 2],
+    pub capacity_misses: [u64; 2],
+    pub capacity: [u32; 2],
+    pub active: [u32; 2],
+    pub high_watermark: [u32; 2],
+    pub cursor: u32,
+    pub next_cursor: u32,
+    pub scanned: u32,
+    pub count: u32,
+    pub done: u32,
+    pub entries: [LiveFlowEntry; 16],
+}
+
+impl LiveFlowEntry {
+    fn endpoint(&self, side: usize) -> String {
+        let bytes = &self.addresses[side * 16..side * 16 + 16];
+        match self.family {
+            4 => std::net::Ipv4Addr::from(<[u8; 4]>::try_from(&bytes[12..16]).unwrap()).to_string(),
+            6 => std::net::Ipv6Addr::from(<[u8; 16]>::try_from(bytes).unwrap()).to_string(),
+            _ => "unknown".into(),
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        let labels = published_labels(self.protocols);
+        serde_json::json!({
+            "worker":self.worker,"slot":self.slot,"incarnation":self.incarnation.to_string(),
+            "canonical_a":self.endpoint(0),"canonical_b":self.endpoint(1),
+            "port_a":self.ports[0],"port_b":self.ports[1],
+            "origin_is_a":self.origin_is_a != 0,"family":self.family,
+            "protocol":self.protocol,"kind":self.kind,"query_class":self.query_class,
+            "uid":self.uid,"network":self.network,
+            "first_seen_monotonic_us":self.first_seen,
+            "last_seen_monotonic_us":self.last_seen,
+            "packets":self.packets,"bytes":self.bytes,
+            "flow_origin_device_direction":self.flow_origin_direction,
+            "last_device_direction":self.last_device_direction,
+            "last_flow_direction":self.last_flow_direction,
+            "protocols_available":self.protocols_available != 0,
+            "protocol_set":self.protocols.to_string(),"protocol_labels":labels,
+            "lpi_stop":self.lpi_stop,"sni_result":self.sni_result,"sni_stop":self.sni_stop,
+            "policy_generation":self.policy_generation.to_string(),"policy_revision":self.policy_revision.to_string(),
+            "policy_hash":self.policy_hash.to_string(),"winner":self.winner.to_string(),
+            "attribution":[self.attribution[0].json(),self.attribution[1].json()]
+        })
+    }
+}
+
+impl LiveFlowPage {
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "source":"vpp","generation":self.generation,
+            "cursor":self.cursor,"next_cursor":self.next_cursor,
+            "scanned":self.scanned,"count":self.count,"done":self.done != 0,
+            "page_limit":16,"scan_limit":256,
+            "snapshot_consistent_across_pages":false,
+            "capacity":self.capacity,"active":self.active,
+            "high_watermark":self.high_watermark,
+            "allocated_bytes":self.allocated_bytes,
+            "capacity_misses":self.capacity_misses,
+            "entries":self.entries[..self.count as usize].iter().map(LiveFlowEntry::json).collect::<Vec<_>>()
+        })
+    }
+}
+
 /// Direction-local segment provenance. Start counters delimit only this segment;
 /// a lost predecessor is never inferred from the latest context.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -348,6 +513,76 @@ impl Overview {
 }
 
 impl ProductCore {
+    pub fn query_live_flows(&mut self, cursor: u32) -> Result<LiveFlowPage, ProductError> {
+        let session = self.session.ok_or(ProductError::Native {
+            code: ErrorCode::Disconnected,
+            status: Status::empty(self.generation),
+        })?;
+        let mut page = LiveFlowPage::default();
+        let code = unsafe { ffi::sakamoto_product_session_flow_query(
+            session.as_ptr(), self.generation, cursor, &mut page) };
+        if code != 0 {
+            return Err(ProductError::Native {
+                code: ErrorCode::from_raw(code),
+                status: Status::empty(self.generation),
+            });
+        }
+        Ok(page)
+    }
+
+    pub fn observation_page_json(&mut self, cursor: u32) -> String {
+        let mut reply: serde_json::Value = serde_json::from_str(&self.observation_json())
+            .expect("observation JSON");
+        reply["current_flows"] = match self.query_live_flows(cursor) {
+            Ok(page) => page.json(),
+            Err(error) => serde_json::json!({"source":"vpp","error":format!("{error:?}")}),
+        };
+        reply["vpp"] = match self.query() {
+            Ok(status) => serde_json::json!({
+                "source":"vpp","generation":status.generation,
+                "core_ready":status.core_ready,
+                "adapter_available":status.adapter_available,
+                "protection_running":status.protection_running,
+                "graph_enabled":status.product_graph_enabled,
+                "graph_accepting":status.product_graph_accepting,
+                "policy_requested_revision":status.policy_requested_revision.to_string(),
+                "policy_active_revision":status.policy_active_revision.to_string(),
+                "policy_generation":status.policy_generation.to_string(),
+                "policy_snapshot_hash":status.policy_snapshot_hash.to_string(),
+                "policy_last_apply_status_code":status.policy_last_apply_status_code,
+                "policy_rule_count":status.policy_l4_rule_count,
+                "logical_hits":status.policy_l4_match_records,
+                "policy_drops":status.policy_drop_records,
+                "root_input_packets":status.root_nfqueue_input_packets,
+                "root_output_packets":status.root_nfqueue_output_packets,
+                "root_verdict_attempts":status.root_nfqueue_verdict_attempts,
+                "root_verdict_failed_definite":status.root_nfqueue_verdict_failed_definite,
+                "root_verdict_outcome_unknown":status.root_nfqueue_verdict_outcome_unknown,
+                "root_graph_submit_fail_opens":status.root_nfqueue_graph_submit_fail_opens,
+                "vpn_tun_ingress_packets":status.vpn_tun_ingress_packets,
+                "vpn_tun_write_completions":status.vpn_tun_write_completions,
+                "vpn_infrastructure_faults":status.vpn_infrastructure_faults,
+                "error_detail":status.error_detail,
+            }),
+            Err(error) => serde_json::json!({"source":"vpp","error":format!("{error:?}")}),
+        };
+        let source = crate::RuleConfigRequest { schema: 1, ..Default::default() };
+        reply["policy_source"] = match self.rule_config_boxed(&source) {
+            Ok(status) => serde_json::json!({
+                "source":"vpp","generation":status.generation,
+                "saved_revision":status.saved_revision.to_string(),"active_revision":status.active_revision.to_string(),
+                "saved_rule_version":status.saved_rule_version.to_string(),
+                "active_rule_version":status.active_rule_version.to_string(),
+                "result":status.result,"save_error":status.save_error,
+                "compile_error":status.compile_error,"compiler_status":status.compiler_status,
+                "error_index":status.error_index,"saved_rule_count":status.count,
+                "active_rule_count":status.active_count,
+            }),
+            Err(error) => serde_json::json!({"source":"vpp","error":format!("{error:?}")}),
+        };
+        reply.to_string()
+    }
+
     pub fn query_observation_health(&mut self) -> Result<ObservationHealth, ProductError> {
         let session = self.session.ok_or(ProductError::Native {
             code: ErrorCode::Disconnected,
@@ -415,5 +650,46 @@ impl ProductCore {
             .ok_or("consumer_not_started")?
             .pause(pause);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod live_flow_query_tests {
+    use super::*;
+
+    #[test]
+    fn native_page_layout_and_published_facts_keep_their_identity() {
+        assert_eq!(std::mem::size_of::<LiveFlowAttribution>(), 160);
+        assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 496);
+        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 8024);
+        let mut page = LiveFlowPage { generation: 19, count: 1, scanned: 2,
+            next_cursor: 2, capacity: [1024, 1024], active: [1, 0],
+            ..LiveFlowPage::default() };
+        page.entries[0] = LiveFlowEntry {
+            incarnation: 7, worker: 0, slot: 1, family: 4, protocol: 17,
+            ports: [44000, 53], protocols: 1, protocols_available: 1,
+            packets: [2, 1], bytes: [200, 100], ..LiveFlowEntry::default()
+        };
+        page.entries[0].addresses[12..16].copy_from_slice(&[10, 1, 2, 3]);
+        page.entries[0].addresses[28..32].copy_from_slice(&[10, 4, 5, 6]);
+        page.entries[0].winner = u64::MAX;
+        page.entries[0].attribution[0].valid = 1;
+        page.entries[0].attribution[0].winner = u64::MAX;
+        let view = page.json();
+        assert_eq!(view["generation"], 19);
+        assert_eq!(view["next_cursor"], 2);
+        assert_eq!(view["entries"][0]["canonical_a"], "10.1.2.3");
+        assert_eq!(view["entries"][0]["canonical_b"], "10.4.5.6");
+        assert_eq!(view["entries"][0]["packets"], serde_json::json!([2, 1]));
+        assert_eq!(view["entries"][0]["winner"], u64::MAX.to_string());
+        assert_eq!(view["entries"][0]["attribution"][0]["winner"], u64::MAX.to_string());
+        let (id, key) = protocol_label(0).unwrap();
+        assert_eq!(view["entries"][0]["protocol_labels"][0]["id"], id);
+        assert_eq!(view["entries"][0]["protocol_labels"][0]["key"], key);
+        page.entries[0].protocols = 0;
+        page.entries[0].protocols_available = 0;
+        let unknown = page.json();
+        assert_eq!(unknown["entries"][0]["protocols_available"], false);
+        assert!(unknown["entries"][0]["protocol_labels"].as_array().unwrap().is_empty());
     }
 }

@@ -564,6 +564,84 @@ vl_api_product_core_observation_query_t_handler (vl_api_product_core_observation
 }
 
 static void
+vl_api_product_core_flow_query_t_handler (vl_api_product_core_flow_query_t *mp)
+{
+  vl_api_product_core_flow_query_reply_t *rmp;
+  sakamoto_product_flow_page_t page;
+  int rv = product_packet_graph_flow_query (
+    clib_net_to_host_u64 (mp->generation), clib_net_to_host_u32 (mp->cursor),
+    &page);
+#define FLOW_U64(field) out->field = clib_host_to_net_u64 (in->field)
+#define FLOW_U32(field) out->field = htonl (in->field)
+  REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_FLOW_QUERY_REPLY, ({
+    rmp->retval = htonl (rv);
+    if (!rv)
+      {
+        rmp->generation = clib_host_to_net_u64 (page.generation);
+        for (unsigned worker = 0; worker < 2; worker++)
+          {
+            rmp->allocated_bytes[worker] = clib_host_to_net_u64 (page.allocated_bytes[worker]);
+            rmp->capacity_misses[worker] = clib_host_to_net_u64 (page.capacity_misses[worker]);
+            rmp->capacity[worker] = htonl (page.capacity[worker]);
+            rmp->active[worker] = htonl (page.active[worker]);
+            rmp->high_watermark[worker] = htonl (page.high_watermark[worker]);
+          }
+        rmp->cursor = htonl (page.cursor);
+        rmp->next_cursor = htonl (page.next_cursor);
+        rmp->scanned = htonl (page.scanned);
+        rmp->count = htonl (page.count);
+        rmp->done = htonl (page.done);
+        for (unsigned i = 0; i < page.count; i++)
+          {
+            sakamoto_product_flow_entry_t *in = &page.entries[i];
+            vl_api_product_flow_query_entry_t *out = &rmp->entries[i];
+            FLOW_U64 (incarnation); FLOW_U64 (first_seen); FLOW_U64 (last_seen);
+            FLOW_U64 (policy_generation); FLOW_U64 (policy_revision);
+            FLOW_U64 (policy_hash); FLOW_U64 (winner); FLOW_U64 (protocols);
+            FLOW_U32 (worker); FLOW_U32 (slot); FLOW_U32 (uid);
+            FLOW_U32 (network); FLOW_U32 (query_class);
+            FLOW_U32 (sni_result); FLOW_U32 (sni_stop); FLOW_U32 (lpi_stop);
+            for (unsigned side = 0; side < 2; side++)
+              {
+                out->packets[side] = clib_host_to_net_u64 (in->packets[side]);
+                out->bytes[side] = clib_host_to_net_u64 (in->bytes[side]);
+                out->ports[side] = clib_host_to_net_u16 (in->ports[side]);
+              }
+            out->family = in->family; out->protocol = in->protocol;
+            out->kind = in->kind; out->origin_is_a = in->origin_is_a;
+            out->flow_origin_direction = in->flow_origin_direction;
+            out->last_device_direction = in->last_device_direction;
+            out->last_flow_direction = in->last_flow_direction;
+            out->protocols_available = in->protocols_available;
+            memcpy (out->addresses, in->addresses, sizeof out->addresses);
+            for (unsigned side = 0; side < 2; side++)
+              {
+                const product_observation_attribution_t *a = &in->attribution[side];
+                vl_api_product_flow_query_attribution_t *b = &out->attribution[side];
+                b->segment = clib_host_to_net_u64 (a->segment);
+                b->start_packets = clib_host_to_net_u64 (a->start_packets);
+                b->start_bytes = clib_host_to_net_u64 (a->start_bytes);
+                b->activity_utc_us = clib_host_to_net_u64 (a->activity_utc_us);
+                b->policy_generation = clib_host_to_net_u64 (a->policy_generation);
+                b->policy_revision = clib_host_to_net_u64 (a->policy_revision);
+                b->policy_hash = clib_host_to_net_u64 (a->policy_hash);
+                b->winner = clib_host_to_net_u64 (a->winner);
+                b->uid = htonl (a->uid); b->network = htonl (a->network);
+                b->declared_action = a->declared_action;
+                b->actual_action = a->actual_action;
+                b->mode = a->mode; b->valid = a->valid;
+                memcpy (b->name, a->name, sizeof b->name);
+                b->protocol_set = clib_host_to_net_u64 (a->protocol_set);
+                b->protocols_available = a->protocols_available;
+              }
+          }
+      }
+  }));
+#undef FLOW_U64
+#undef FLOW_U32
+}
+
+static void
 vl_api_product_core_sni_query_t_handler (vl_api_product_core_sni_query_t *mp)
 {
   vl_api_product_core_sni_query_reply_t *rmp;

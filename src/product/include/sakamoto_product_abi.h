@@ -7,6 +7,7 @@
 #include "sakamoto_product_network.h"
 #include "sakamoto_product_sni.h"
 #include "sakamoto_product_rule_config.h"
+#include "sakamoto_product_flow_query.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -388,6 +389,10 @@ typedef struct sakamoto_product_session sakamoto_product_session_t;
 uint32_t sakamoto_product_session_sni_query (
   sakamoto_product_session_t *, uint64_t generation, uint32_t worker,
   uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *);
+
+uint32_t sakamoto_product_session_flow_query (
+  sakamoto_product_session_t *, uint64_t generation, uint32_t cursor,
+  sakamoto_product_flow_page_t *);
 
 uint32_t sakamoto_product_session_rule_config(
   sakamoto_product_session_t *, uint64_t generation,

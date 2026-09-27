@@ -147,6 +147,136 @@ uint32_t sakamoto_product_session_observation_query (sakamoto_product_session_t 
 done:
   (void) pthread_mutex_unlock (&session->mutex); return code;
 }
+
+typedef struct {
+  bool called, invalid;
+  uint32_t code, cursor;
+  uint64_t generation;
+  sakamoto_product_flow_page_t *out;
+} flow_call_t;
+
+static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
+  bool last, vapi_payload_product_core_flow_query_reply *reply)
+{
+  (void) context; (void) last;
+  flow_call_t *call = opaque;
+  call->called = true;
+  if (rv != VAPI_OK || !reply) { call->invalid = true; return VAPI_OK; }
+  if (reply->retval) {
+    call->code = reply->retval == -1 ? SAKAMOTO_PRODUCT_INVALID_ARGUMENT
+                                     : SAKAMOTO_PRODUCT_STALE_HANDLE;
+    return VAPI_OK;
+  }
+  uint64_t total = (uint64_t)reply->capacity[0] + reply->capacity[1];
+  if (reply->generation != call->generation || reply->cursor != call->cursor
+      || reply->count > SAKAMOTO_FLOW_QUERY_PAGE
+      || reply->scanned > SAKAMOTO_FLOW_QUERY_SCAN
+      || reply->done > 1 || total > 131072
+      || (uint64_t)call->cursor + reply->scanned > total
+      || (reply->done ? reply->next_cursor != 0
+                      : reply->next_cursor != call->cursor + reply->scanned
+                        || reply->scanned == 0)
+      || reply->count > reply->scanned) {
+    call->invalid = true; return VAPI_OK;
+  }
+  sakamoto_product_flow_page_t *out = call->out;
+  out->generation = reply->generation;
+  out->cursor = reply->cursor; out->next_cursor = reply->next_cursor;
+  out->scanned = reply->scanned; out->count = reply->count;
+  out->done = reply->done;
+  for (unsigned worker = 0; worker < 2; worker++) {
+    out->allocated_bytes[worker] = reply->allocated_bytes[worker];
+    out->capacity_misses[worker] = reply->capacity_misses[worker];
+    out->capacity[worker] = reply->capacity[worker];
+    out->active[worker] = reply->active[worker];
+    out->high_watermark[worker] = reply->high_watermark[worker];
+    if (out->active[worker] > out->capacity[worker]
+        || out->high_watermark[worker] > out->capacity[worker]) {
+      call->invalid = true; return VAPI_OK;
+    }
+  }
+  for (unsigned i = 0; i < reply->count; i++) {
+    const vapi_type_product_flow_query_entry *in = &reply->entries[i];
+    sakamoto_product_flow_entry_t *entry = &out->entries[i];
+    if (in->worker >= 2 || in->slot >= out->capacity[in->worker]
+        || !in->incarnation || (in->family != 4 && in->family != 6)
+        || in->protocols_available > 1 || (!in->protocols_available && in->protocols)
+        || in->last_seen < in->first_seen) {
+      call->invalid = true; return VAPI_OK;
+    }
+#define COPY_FLOW(field) entry->field = in->field
+    COPY_FLOW (incarnation); COPY_FLOW (first_seen); COPY_FLOW (last_seen);
+    COPY_FLOW (policy_generation); COPY_FLOW (policy_revision);
+    COPY_FLOW (policy_hash); COPY_FLOW (winner); COPY_FLOW (protocols);
+    COPY_FLOW (worker); COPY_FLOW (slot); COPY_FLOW (uid); COPY_FLOW (network);
+    COPY_FLOW (query_class); COPY_FLOW (sni_result); COPY_FLOW (sni_stop);
+    COPY_FLOW (lpi_stop); COPY_FLOW (family); COPY_FLOW (protocol);
+    COPY_FLOW (kind); COPY_FLOW (origin_is_a);
+    COPY_FLOW (flow_origin_direction); COPY_FLOW (last_device_direction);
+    COPY_FLOW (last_flow_direction); COPY_FLOW (protocols_available);
+#undef COPY_FLOW
+    for (unsigned side = 0; side < 2; side++) {
+      entry->packets[side] = in->packets[side];
+      entry->bytes[side] = in->bytes[side];
+      entry->ports[side] = in->ports[side];
+    }
+    memcpy(entry->addresses, in->addresses, sizeof entry->addresses);
+    for (unsigned side = 0; side < 2; side++) {
+      const vapi_type_product_flow_query_attribution *a = &in->attribution[side];
+      product_observation_attribution_t *b = &entry->attribution[side];
+      if (a->valid > 1 || a->protocols_available > 1
+          || (!a->protocols_available && a->protocol_set)
+          || !memchr (a->name, 0, sizeof a->name)) {
+        call->invalid = true; return VAPI_OK;
+      }
+      b->segment = a->segment; b->start_packets = a->start_packets;
+      b->start_bytes = a->start_bytes; b->activity_utc_us = a->activity_utc_us;
+      b->policy_generation = a->policy_generation;
+      b->policy_revision = a->policy_revision;
+      b->policy_hash = a->policy_hash; b->winner = a->winner;
+      b->uid = a->uid; b->network = a->network;
+      b->declared_action = a->declared_action;
+      b->actual_action = a->actual_action;
+      b->mode = a->mode; b->valid = a->valid;
+      memcpy (b->name, a->name, sizeof b->name);
+      b->protocol_set = a->protocol_set;
+      b->protocols_available = a->protocols_available;
+    }
+  }
+  call->code = SAKAMOTO_PRODUCT_OK;
+  return VAPI_OK;
+}
+
+uint32_t sakamoto_product_session_flow_query (sakamoto_product_session_t *session,
+  uint64_t generation, uint32_t cursor, sakamoto_product_flow_page_t *out)
+{
+  if (out) memset (out, 0, sizeof (*out));
+  if (!session || !generation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  if (pthread_mutex_lock (&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
+  if (!session->connected || generation != session->generation) goto done;
+  code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
+  if (!vapi_is_msg_available (session->context, vapi_msg_id_product_core_flow_query)
+      || !vapi_is_msg_available (session->context, vapi_msg_id_product_core_flow_query_reply)) goto done;
+  vapi_msg_product_core_flow_query *message = vapi_alloc_product_core_flow_query (session->context);
+  code = SAKAMOTO_PRODUCT_ALLOCATION_FAILED;
+  if (!message) goto done;
+  message->payload.generation = generation;
+  message->payload.cursor = cursor;
+  flow_call_t call = {.code = SAKAMOTO_PRODUCT_QUERY_FAILED,
+                      .generation = generation, .cursor = cursor, .out = out};
+  vapi_error_e rv = vapi_product_core_flow_query (session->context, message, flow_reply, &call);
+  release_unsent_request (session, rv, call.called, message);
+  if (rv != VAPI_OK || !call.called || call.invalid) {
+    session->connected = 0;
+    memset (out, 0, sizeof (*out));
+    code = SAKAMOTO_PRODUCT_QUERY_FAILED;
+  } else code = call.code;
+done:
+  (void) pthread_mutex_unlock (&session->mutex);
+  return code;
+}
+
 static vapi_error_e sni_reply(vapi_ctx_t context, void *opaque, vapi_error_e rv,
   bool last, vapi_payload_product_core_sni_query_reply *reply)
 {

@@ -304,12 +304,21 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
   vapi_ctx_t, void *, vapi_error_e, bool, vapi_payload_product_core_root_stop_reply *);
 
 #include "sakamoto_product_observation.h"
+#include "sakamoto_product_flow_query.h"
 typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_core_observation_query;
 typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[2]; uint64_t blocked_capacity_misses[2], blocked_retired[2]; product_observation_channel_status_t channels[4]; } vapi_payload_product_core_observation_query_reply;
 typedef vapi_error_e (*vapi_product_core_observation_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_observation_query_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_observation_query, vapi_msg_id_product_core_observation_query_reply;
 vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_query(vapi_ctx_t);
 vapi_error_e vapi_product_core_observation_query(vapi_ctx_t,vapi_msg_product_core_observation_query *,vapi_product_core_observation_query_callback_t,void *);
+typedef product_observation_attribution_t vapi_type_product_flow_query_attribution;
+typedef sakamoto_product_flow_entry_t vapi_type_product_flow_query_entry;
+typedef struct { struct { uint64_t generation; uint32_t cursor; } payload; } vapi_msg_product_core_flow_query;
+typedef struct { int32_t retval; uint64_t generation; uint64_t allocated_bytes[2], capacity_misses[2]; uint32_t capacity[2], active[2], high_watermark[2]; uint32_t cursor, next_cursor, scanned, count, done; vapi_type_product_flow_query_entry entries[16]; } vapi_payload_product_core_flow_query_reply;
+typedef vapi_error_e (*vapi_product_core_flow_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_flow_query_reply *);
+extern vapi_msg_id_t vapi_msg_id_product_core_flow_query, vapi_msg_id_product_core_flow_query_reply;
+vapi_msg_product_core_flow_query *vapi_alloc_product_core_flow_query(vapi_ctx_t);
+vapi_error_e vapi_product_core_flow_query(vapi_ctx_t,vapi_msg_product_core_flow_query *,vapi_product_core_flow_query_callback_t,void *);
 typedef struct { struct { uint64_t generation, incarnation; uint32_t worker, slot; } payload; } vapi_msg_product_core_sni_query;
 typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vapi_payload_product_core_sni_query_reply;
 typedef vapi_error_e (*vapi_product_core_sni_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_sni_query_reply *);
@@ -342,6 +351,8 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t, vapi_msg_product_core_rul
 #define DEFINE_VAPI_MSG_IDS_PRODUCT_CORE_API_JSON \
   vapi_msg_id_t vapi_msg_id_product_core_observation_query; \
   vapi_msg_id_t vapi_msg_id_product_core_observation_query_reply; \
+  vapi_msg_id_t vapi_msg_id_product_core_flow_query; \
+  vapi_msg_id_t vapi_msg_id_product_core_flow_query_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_sni_query; \
   vapi_msg_id_t vapi_msg_id_product_core_sni_query_reply; \
   vapi_msg_id_t vapi_msg_id_product_core_rule_config; \
@@ -515,6 +526,8 @@ vapi_ctx_alloc (vapi_ctx_t *context)
   vapi_msg_id_product_core_root_stop_reply = 109U;
   vapi_msg_id_product_core_sni_query = 112U;
   vapi_msg_id_product_core_sni_query_reply = 113U;
+  vapi_msg_id_product_core_flow_query = 114U;
+  vapi_msg_id_product_core_flow_query_reply = 115U;
   vapi_msg_id_product_core_rule_config = 110U;
   vapi_msg_id_product_core_rule_config_reply = 111U;
   return VAPI_OK;
@@ -532,6 +545,7 @@ vapi_is_msg_available (vapi_ctx_t context, vapi_msg_id_t type)
 {
   (void) context;
   if (type == vapi_msg_id_product_core_sni_query || type == vapi_msg_id_product_core_sni_query_reply) return true;
+  if (type == vapi_msg_id_product_core_flow_query || type == vapi_msg_id_product_core_flow_query_reply) return true;
   if (type == vapi_msg_id_product_core_rule_config || type == vapi_msg_id_product_core_rule_config_reply) return true;
   if (type == vapi_msg_id_product_core_root_stop
       || type == vapi_msg_id_product_core_root_stop_reply)
@@ -815,6 +829,16 @@ vapi_error_e vapi_product_core_observation_query(vapi_ctx_t context,vapi_msg_pro
   vapi_product_core_observation_query_callback_t callback,void *opaque)
 {
   vapi_payload_product_core_observation_query_reply reply={.generation=message->payload.generation,.owners=2,.version=PRODUCT_OBSERVATION_VERSION};
+  vapi_msg_free(context,message);
+  return callback(context,opaque,VAPI_OK,true,&reply);
+}
+vapi_msg_product_core_flow_query *vapi_alloc_product_core_flow_query(vapi_ctx_t context)
+{ (void)context;return test_message_alloc(sizeof(vapi_msg_product_core_flow_query)); }
+vapi_error_e vapi_product_core_flow_query(vapi_ctx_t context,vapi_msg_product_core_flow_query *message,
+  vapi_product_core_flow_query_callback_t callback,void *opaque)
+{
+  vapi_payload_product_core_flow_query_reply reply={.generation=message->payload.generation,
+    .cursor=message->payload.cursor,.done=1};
   vapi_msg_free(context,message);
   return callback(context,opaque,VAPI_OK,true,&reply);
 }

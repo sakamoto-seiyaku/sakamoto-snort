@@ -42,9 +42,36 @@ class ObservationClient:
             if (all(not channel['occupancy'] for channel in value['health']['channels'])
                 and not value['consumer']['persistent']['persistence']['pending']):
                 (self.output/(label+'-observation.json')).write_text(json.dumps(value,indent=2)+'\n')
+                if os.environ.get('T28_DASHBOARD') == '1':
+                    self.dashboard(label,value)
                 return value
             assert time.monotonic()<deadline,'observation settle '+label
             time.sleep(.05)
+
+    def dashboard(self,label,observed):
+        def page(cursor,suffix):
+            self.process.stdin.write(('dashboard '+str(cursor)+'\n').encode());self.process.stdin.flush()
+            text=self._line();assert text.startswith('dashboard.response='),text
+            value=json.loads(text.split('=',1)[1]);assert 'error' not in value,value
+            assert value['consumer']['query_fresh'] and value['vpp']['generation']==observed['health']['generation']
+            assert value['policy_source']['generation']==observed['health']['generation']
+            assert value['current_flows']['generation']==observed['health']['generation']
+            assert value['current_flows']['count']<=16 and value['current_flows']['scanned']<=256
+            (self.output/(label+suffix+'-dashboard.json')).write_text(json.dumps(value,indent=2)+'\n')
+            return value
+        first=page(0,'')
+        rows=[r for r in observed['consumer']['overview']['records'] if r and not r['ended']]
+        if rows:
+            selected=max(rows,key=lambda r:(any(a['protocol_set'] for a in r['attribution']),r['last_seen']))
+            cursor=selected['owner']*first['current_flows']['capacity'][0]+selected['slot']
+            sampled=page(cursor,'-live')
+            matches=[e for e in sampled['current_flows']['entries'] if e['worker']==selected['owner']
+                and e['slot']==selected['slot'] and e['incarnation']==str(selected['incarnation'])]
+            if matches:
+                live=matches[0]
+                assert live['protocol']==selected['protocol']
+                assert len(live['protocol_labels'])==int(live['protocol_set']).bit_count()
+                assert live['packets'][0]>=selected['packets'][0]
 
     def close(self):
         if self.process.poll() is None:
