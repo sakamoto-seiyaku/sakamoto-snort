@@ -388,7 +388,15 @@ impl ProductCore {
 
     pub fn observation_json(&mut self) -> String {
         let health = self.query_observation_health();
-        let overview = self.observation.as_ref().map(|s| s.snapshot());
+        let mut overview = self.observation.as_ref().map(|s| s.snapshot());
+        if let Some(ref mut snapshot) = overview {
+            let source = if crate::history::needs_source(snapshot) {
+                crate::history::live_source(self)
+            } else {
+                Err("no_historical_rule_reference")
+            };
+            crate::history::annotate(snapshot, source);
+        }
         match health {
             Ok(health) => serde_json::json!({ "schema": 1, "health": health,
                 "consumer": overview, "persistent_history": true })

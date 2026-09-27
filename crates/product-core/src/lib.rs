@@ -6,6 +6,7 @@ pub use sni::SniStatus;
 mod ffi;
 mod rule_config;
 mod rule_import;
+mod history;
 pub use rule_config::{
     ConfigRule, DirectRule, DomainEntry, Domains, RuleConfigRequest, RuleConfigStatus,
     MAX_CONFIG_RULES,

@@ -17,6 +17,7 @@ const MAX_MINUTES: usize = 262144;
 const MAX_DIRTY: usize = 4096;
 const MAX_EFFECT_WINDOWS: usize = 65536;
 const MAX_PROTOCOL_WINDOWS: usize = 65536;
+const MAX_RULE_NAMES: usize = 65536;
 const FLUSH_ROWS: usize = 2048;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 // The 256 MiB owner budget includes the retained <=64 MiB predecessor,
@@ -141,6 +142,8 @@ struct State {
     rules: BTreeMap<String, RuleWindow>,
     #[serde(default)]
     protocols: BTreeMap<String, ProtocolWindow>,
+    #[serde(default)]
+    rule_names: BTreeMap<u64, Option<String>>,
     #[serde(flatten)]
     meta: Metadata,
 }
@@ -161,6 +164,8 @@ struct Metadata {
     l4_unknown: Counts,
     #[serde(default)]
     l7_unknown: Counts,
+    #[serde(default)]
+    rule_metadata_association_misses: u64,
     totals: Counts,
     #[serde(default)]
     blocked_totals: Counts,
@@ -187,6 +192,7 @@ impl Default for Metadata {
             legacy_protocol_unavailable: Counts::default(),
             l4_unknown: Counts::default(),
             l7_unknown: Counts::default(),
+            rule_metadata_association_misses: 0,
             totals: Counts::default(),
             blocked_totals: Counts::default(),
             blocked_ended: 0,
@@ -212,6 +218,7 @@ impl Default for State {
             applications: BTreeMap::new(),
             rules: BTreeMap::new(),
             protocols: BTreeMap::new(),
+            rule_names: BTreeMap::new(),
             meta: Metadata::default(),
         }
     }
@@ -225,6 +232,7 @@ struct Dirty {
     applications: BTreeSet<String>,
     rules: BTreeSet<String>,
     protocols: BTreeSet<String>,
+    rule_names: BTreeSet<u64>,
     meta: bool,
 }
 impl Dirty {
@@ -235,6 +243,7 @@ impl Dirty {
             + self.applications.len()
             + self.rules.len()
             + self.protocols.len()
+            + self.rule_names.len()
             + self.unknown_minutes.len()
     }
 }
@@ -295,6 +304,40 @@ fn protocol_share(counts: &Counts, denominator: &Counts) -> serde_json::Value {
         "bytes": [ratio(counts.bytes[0], denominator.bytes[0]),
                   ratio(counts.bytes[1], denominator.bytes[1])],
     })
+}
+
+fn rule_interpretation(
+    winner: u64,
+    recorded_name: &str,
+    names: &BTreeMap<u64, Option<String>>,
+    actual_action: u8,
+    proven: bool,
+) -> serde_json::Value {
+    if !proven {
+        return serde_json::json!({"version": null, "name": null,
+            "name_status": "unavailable", "actual_action": null,
+            "conditions": {"status": "unavailable", "reason": "attribution_unavailable"}});
+    }
+    if winner == 0 {
+        return serde_json::json!({"version": null, "name": null,
+            "name_status": "not_applicable", "actual_action": actual_action,
+            "conditions": {"status": "not_applicable"}});
+    }
+    let linked = names.get(&winner);
+    let (name, status) = if !recorded_name.is_empty() {
+        (Some(recorded_name), "recorded")
+    } else if let Some(Some(name)) = linked {
+        (Some(name.as_str()), "linked")
+    } else if linked.is_some() {
+        (None, "conflict")
+    } else {
+        (None, "unavailable")
+    };
+    serde_json::json!({"version": winner.to_string(),
+        "logical_identity": format!("{:012x}", winner >> 16),
+        "revision": winner & 65535, "name": name, "name_status": status,
+        "actual_action": actual_action,
+        "conditions": {"status": "unavailable", "reason": "matching_source_unavailable"}})
 }
 
 fn put_row(
@@ -451,6 +494,12 @@ impl ObservationStore {
                             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
                         );
                     }
+                    8 => {
+                        state.rule_names.insert(
+                            key.parse::<u64>().map_err(|e| e.to_string())?,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                        );
+                    }
                     _ => return Err("observation_store_schema".into()),
                 }
                 Self::validate_bounds(&state)?;
@@ -557,6 +606,9 @@ impl ObservationStore {
             for (key, value) in &self.state.protocols {
                 put_row(&mut put, 7, key, value)?;
             }
+            for (key, value) in &self.state.rule_names {
+                put_row(&mut put, 8, &key.to_string(), value)?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         let count: i64 = tx
@@ -580,6 +632,7 @@ impl ObservationStore {
                 + self.state.rules.len()
                 + self.state.unknown_minutes.len()
                 + self.state.protocols.len()
+                + self.state.rule_names.len()
             || meta != serde_json::to_vec(&self.state.meta).map_err(|e| e.to_string())?
             || integrity != "ok"
         {
@@ -602,6 +655,7 @@ impl ObservationStore {
             || state.applications.len() > MAX_EFFECT_WINDOWS
             || state.rules.len() > MAX_EFFECT_WINDOWS
             || state.protocols.len() > MAX_PROTOCOL_WINDOWS
+            || state.rule_names.len() > MAX_RULE_NAMES
         {
             return Err("observation_state_capacity".into());
         }
@@ -630,6 +684,13 @@ impl ObservationStore {
         }
         if state.meta.attribution_schema > 1 {
             return Err("observation_attribution_schema".into());
+        }
+        for (&version, name) in &state.rule_names {
+            if version >> 16 == 0 || version & 65535 == 0
+                || name.as_ref().is_some_and(|n| n.is_empty() || n.len() > 63 || n.as_bytes().contains(&0))
+            {
+                return Err("observation_invalid_rule_metadata".into());
+            }
         }
         if state.meta.attribution_schema == 1 {
             let mut attributed = state.meta.attribution_unknown;
@@ -892,6 +953,9 @@ impl ObservationStore {
             for key in &self.dirty.protocols {
                 put_row(&mut put, 7, key, &self.state.protocols[key])?;
             }
+            for key in &self.dirty.rule_names {
+                put_row(&mut put, 8, &key.to_string(), &self.state.rule_names[key])?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         tx.commit().map_err(|e| e.to_string())
@@ -1034,6 +1098,7 @@ impl ObservationStore {
         let mut applications = BTreeMap::<String, ApplicationWindow>::new();
         let mut rules = BTreeMap::<String, RuleWindow>::new();
         let mut protocols = BTreeMap::<String, ProtocolWindow>::new();
+        let mut rule_names = BTreeMap::<u64, Option<String>>::new();
         let mut unknown = self.state.meta.attribution_unknown;
         let mut l4_unknown = self.state.meta.l4_unknown;
         let mut l7_unknown = self.state.meta.l7_unknown;
@@ -1042,6 +1107,16 @@ impl ObservationStore {
         let mut activity_times = [0; 3];
         for side in 0..2 {
             let a = &record.attribution[side];
+            if a.valid && a.winner >> 16 != 0 && a.winner & 65535 != 0 && !a.name.is_empty() {
+                let prior = rule_names.get(&a.winner)
+                    .or_else(|| self.state.rule_names.get(&a.winner));
+                let next = match prior {
+                    None => Some(a.name.clone()),
+                    Some(Some(name)) if name == &a.name => Some(name.clone()),
+                    Some(_) => None, // Reused/conflicting version cannot name missing records.
+                };
+                rule_names.insert(a.winner, next);
+            }
             let mut contribution = Counts::default();
             if a.valid && a.segment != 0 && a.activity_utc_us != 0 {
                 let start_packets = record.packets[side]
@@ -1132,8 +1207,24 @@ impl ObservationStore {
                             counts: Counts::default(),
                         })
                 });
-                if window.attribution != RuleReference::from(a) {
+                let mut incoming = RuleReference::from(a);
+                let mut existing = window.attribution.clone();
+                existing.name.clear();
+                incoming.name.clear();
+                if existing != incoming {
                     return Err("observation_rule_reference_conflict".into());
+                }
+                if !window.attribution.name.is_empty() && !a.name.is_empty()
+                    && window.attribution.name != a.name {
+                    return Err("observation_rule_reference_conflict".into());
+                }
+                if window.attribution.name.is_empty() {
+                    if !a.name.is_empty() {
+                        window.attribution.name = a.name.clone();
+                    } else if let Some(Some(name)) = rule_names.get(&a.winner)
+                        .or_else(|| self.state.rule_names.get(&a.winner)) {
+                        window.attribution.name = name.clone();
+                    }
                 }
                 window.counts.add(&contribution)?;
             }
@@ -1156,6 +1247,17 @@ impl ObservationStore {
         {
             return Err("observation_effect_window_capacity".into());
         }
+        // A full association table must not discard packet counts. The actual
+        // record/window still retains its supplied name; only future blank-name
+        // records may lose this optional cross-record link.
+        let mut spare = MAX_RULE_NAMES.saturating_sub(self.state.rule_names.len());
+        let staged_names = rule_names.len();
+        rule_names.retain(|version, _| {
+            if self.state.rule_names.contains_key(version) { true }
+            else if spare != 0 { spare -= 1; true }
+            else { false }
+        });
+        let association_misses = (staged_names - rule_names.len()) as u64;
         unknown.add(&unattributed)?;
         let unknown_minute = record.activity_utc_us / 60_000_000 * 60;
         let has_unknown = unattributed.packets != [0; 2] || unattributed.bytes != [0; 2];
@@ -1230,6 +1332,8 @@ impl ObservationStore {
         self.state.meta.attribution_unknown = unknown;
         self.state.meta.l4_unknown = l4_unknown;
         self.state.meta.l7_unknown = l7_unknown;
+        self.state.meta.rule_metadata_association_misses = self.state.meta
+            .rule_metadata_association_misses.saturating_add(association_misses);
         for (key, window) in applications {
             self.dirty.applications.insert(key.clone());
             self.state.applications.insert(key, window);
@@ -1241,6 +1345,12 @@ impl ObservationStore {
         for (key, window) in protocols {
             self.dirty.protocols.insert(key.clone());
             self.state.protocols.insert(key, window);
+        }
+        for (version, name) in rule_names {
+            if self.state.rule_names.get(&version) != Some(&name) {
+                self.dirty.rule_names.insert(version);
+                self.state.rule_names.insert(version, name);
+            }
         }
         let baseline = Baseline {
             record: record.clone(),
@@ -1296,13 +1406,15 @@ impl ObservationStore {
             .rev()
             .take(MAX_QUERY_MINUTES)
             .collect();
-        let rules: BTreeMap<_, _> = self
-            .state
-            .rules
-            .iter()
-            .rev()
+        let rules: BTreeMap<_, _> = self.state.rules.iter().rev()
             .take(MAX_QUERY_MINUTES)
-            .collect();
+            .map(|(key, window)| {
+                let mut row = serde_json::to_value(window).expect("stored rule window");
+                row["interpretation"] = rule_interpretation(
+                    window.attribution.winner, &window.attribution.name,
+                    &self.state.rule_names, window.attribution.actual_action, true);
+                (key, row)
+            }).collect();
         let protocols: BTreeMap<_, _> = self.state.protocols.iter().rev()
             .take(MAX_QUERY_MINUTES)
             .map(|(key, window)| {
@@ -1316,7 +1428,26 @@ impl ObservationStore {
                     "share": protocol_share(&window.counts, denominator),
                 }))
             }).collect();
-        let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128).collect();
+        let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128)
+            .map(|(key, baseline)| {
+                let mut row = serde_json::to_value(baseline).expect("stored recent observation");
+                for side in 0..2 {
+                    let a = &baseline.record.attribution[side];
+                    let mut interpretation = rule_interpretation(
+                        a.winner, &a.name, &self.state.rule_names, a.actual_action, a.valid);
+                    interpretation["scope"] = "last_directional_segment".into();
+                    interpretation["segment_counts"] = if a.valid {
+                        serde_json::json!({
+                            "packets": baseline.record.packets[side].saturating_sub(a.start_packets),
+                            "bytes": baseline.record.bytes[side].saturating_sub(a.start_bytes),
+                        })
+                    } else {
+                        serde_json::Value::Null
+                    };
+                    row["record"]["attribution"][side]["interpretation"] = interpretation;
+                }
+                (key, row)
+            }).collect();
         let mut response = serde_json::json!({ "schema": 1, "storage": "sqlite", "visibility": "live_including_pending",
             "persistence": { "packets": self.committed.totals.packets, "bytes": self.committed.totals.bytes,
                 "accepted": self.committed.accepted, "pending_rows": self.dirty.len(), "pending": self.dirty.meta || self.dirty.len() != 0,
@@ -1350,6 +1481,14 @@ impl ObservationStore {
                 "last_activity_us": self.state.meta.last_activity_us },
             "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
         response["protocol_windows"] = serde_json::json!(protocols);
+        response["rule_metadata_count"] = serde_json::json!(self.state.rule_names.len());
+        response["rule_metadata_conflicts"] = serde_json::json!(
+            self.state.rule_names.values().filter(|name| name.is_none()).count());
+        response["rule_metadata_association_misses"] =
+            serde_json::json!(self.state.meta.rule_metadata_association_misses);
+        response["coverage"]["rule_metadata_incomplete"] = serde_json::json!(
+            self.state.meta.rule_metadata_association_misses != 0
+                || self.state.rule_names.values().any(|name| name.is_none()));
         response["protocol_window_count"] = serde_json::json!(self.state.protocols.len());
         response["protocol_query_truncated"] =
             serde_json::json!(self.state.protocols.len() > MAX_QUERY_MINUTES);

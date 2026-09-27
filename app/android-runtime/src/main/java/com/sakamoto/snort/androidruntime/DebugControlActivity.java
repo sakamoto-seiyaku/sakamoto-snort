@@ -40,6 +40,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -190,7 +191,9 @@ public class DebugControlActivity extends Activity {
     private TextView statusView;
     private TextView actionView;
     private TextView productView;
-    private TextView ruleConfigView, completeRuleView;
+    private TextView ruleConfigView, completeRuleView, historyView;
+    private final java.util.concurrent.atomic.AtomicBoolean historyQueryRunning =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private EditText completeRuleInput;
     private long completeSavedRevision;
     private java.util.Properties completeRuleProjection;
@@ -832,6 +835,16 @@ public class DebugControlActivity extends Activity {
         root.addView(completeButtons, fillWrap());
         completeRuleView = new TextView(this); root.addView(completeRuleView, fillWrap());
 
+        Button historyQuery = new Button(this);
+        historyQuery.setText("Query history");
+        historyQuery.setContentDescription("Query history");
+        historyQuery.setAllCaps(false);
+        historyQuery.setOnClickListener(view -> queryHistory());
+        root.addView(historyQuery, fillWrap());
+        historyView = new TextView(this);
+        historyView.setContentDescription("History result");
+        root.addView(historyView, fillWrap());
+
 
         LinearLayout appSelector = new LinearLayout(this);
         appSelector.setOrientation(LinearLayout.HORIZONTAL);
@@ -911,6 +924,111 @@ public class DebugControlActivity extends Activity {
         actionView = new TextView(this);
         root.addView(actionView, fillWrap());
         return scroller;
+    }
+
+    private void queryHistory() {
+        if (!historyQueryRunning.compareAndSet(false, true)) return;
+        String nonce = "history-" + Long.toHexString(System.nanoTime());
+        File result = new File(getFilesDir(), "product-state/observation-" + nonce + ".json");
+        File[] stale = result.getParentFile().listFiles((directory, name) ->
+                name.startsWith("observation-history-") && name.endsWith(".json"));
+        if (stale != null) for (File file : stale) file.delete();
+        historyView.setText("Querying recent history…");
+        try {
+            backend.observationQuery(this, nonce, 0);
+        } catch (RuntimeException error) {
+            historyQueryRunning.set(false);
+            historyView.setText("History query unavailable");
+            return;
+        }
+        new Thread(() -> {
+            String display = "History query unavailable";
+            try {
+                for (int attempt = 0; attempt < 50; ++attempt) {
+                    if (result.isFile() && result.length() > 0 && result.length() <= 4 * 1024 * 1024) {
+                        try (FileInputStream input = new FileInputStream(result)) {
+                            byte[] bytes = new byte[(int) result.length()];
+                            int count = 0;
+                            while (count < bytes.length) {
+                                int read = input.read(bytes, count, bytes.length - count);
+                                if (read < 0) break;
+                                count += read;
+                            }
+                            if (count == bytes.length) {
+                                display = renderHistory(new JSONObject(new String(bytes, StandardCharsets.UTF_8)));
+                                break;
+                            }
+                        } catch (IOException | JSONException ignored) {
+                            // The service may still be writing the development query file.
+                        }
+                    }
+                    try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
+                }
+            } finally {
+                if (result.exists() && !result.delete()) display = "History query unavailable";
+                historyQueryRunning.set(false);
+            }
+            String finalDisplay = display;
+            main.post(() -> { if (historyView != null) historyView.setText(finalDisplay); });
+        }, "history-query").start();
+    }
+
+    private static void appendHistoryLine(StringBuilder text, String label,
+                                          JSONObject interpretation, JSONObject counts) {
+        if (interpretation == null || interpretation.isNull("version")) return;
+        String name = interpretation.isNull("name") ? "name unavailable"
+                : interpretation.optString("name", "name unavailable");
+        JSONObject conditions = interpretation.optJSONObject("conditions");
+        String conditionStatus = conditions == null ? "unavailable"
+                : conditions.optString("status", "unavailable");
+        text.append(label).append(" · v").append(interpretation.optString("version"))
+                .append(" · ").append(name)
+                .append(" · action ").append(interpretation.optInt("actual_action"))
+                .append(" · conditions ").append(conditionStatus);
+        if (counts != null && counts.has("packets"))
+            text.append(" · packets ").append(counts.opt("packets"));
+        text.append('\n');
+    }
+
+    private static String renderHistory(JSONObject reply) {
+        JSONObject consumer = reply.optJSONObject("consumer");
+        JSONObject history = consumer == null ? null : consumer.optJSONObject("persistent");
+        if (history == null) return "History query unavailable";
+        StringBuilder text = new StringBuilder("Recent history · query ");
+        text.append(consumer.optBoolean("query_fresh") ? "fresh" : "cached").append('\n');
+        JSONObject recent = history.optJSONObject("recent");
+        if (recent != null) {
+            ArrayList<String> keys = new ArrayList<>();
+            for (java.util.Iterator<String> it = recent.keys(); it.hasNext();) keys.add(it.next());
+            keys.sort(java.util.Collections.reverseOrder());
+            for (int i = 0; i < Math.min(4, keys.size()); ++i) {
+                JSONObject record = recent.optJSONObject(keys.get(i));
+                record = record == null ? null : record.optJSONObject("record");
+                JSONArray sides = record == null ? null : record.optJSONArray("attribution");
+                if (sides == null) continue;
+                for (int side = 0; side < Math.min(2, sides.length()); ++side) {
+                    JSONObject attribution = sides.optJSONObject(side);
+                    JSONObject interpretation = attribution == null ? null
+                            : attribution.optJSONObject("interpretation");
+                    appendHistoryLine(text, "END " + (side == 0 ? "ORIG" : "REPLY"),
+                            interpretation, interpretation == null ? null
+                                    : interpretation.optJSONObject("segment_counts"));
+                }
+            }
+        }
+        JSONObject windows = history.optJSONObject("rule_windows");
+        if (windows != null) {
+            ArrayList<String> keys = new ArrayList<>();
+            for (java.util.Iterator<String> it = windows.keys(); it.hasNext();) keys.add(it.next());
+            keys.sort(java.util.Collections.reverseOrder());
+            for (int i = 0; i < Math.min(8, keys.size()); ++i) {
+                JSONObject window = windows.optJSONObject(keys.get(i));
+                if (window != null) appendHistoryLine(text, "Rule window",
+                        window.optJSONObject("interpretation"), window.optJSONObject("counts"));
+            }
+        }
+        if (text.indexOf(" · v") < 0) text.append("No recent rule effects");
+        return text.toString();
     }
 
     private void startSelected() {
