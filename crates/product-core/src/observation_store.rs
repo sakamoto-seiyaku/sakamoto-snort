@@ -120,6 +120,10 @@ struct Metadata {
     #[serde(default)]
     legacy_unattributed: Counts,
     totals: Counts,
+    #[serde(default)]
+    blocked_totals: Counts,
+    #[serde(default)]
+    blocked_ended: u64,
     ended: u64,
     accepted: u64,
     rejected: u64,
@@ -138,6 +142,8 @@ impl Default for Metadata {
             attribution_unknown: Counts::default(),
             legacy_unattributed: Counts::default(),
             totals: Counts::default(),
+            blocked_totals: Counts::default(),
+            blocked_ended: 0,
             ended: 0,
             accepted: 0,
             rejected: 0,
@@ -186,6 +192,15 @@ impl Dirty {
 
 const UPSERT_ROW: &str = "INSERT INTO observation(kind,key,value) VALUES(?1,?2,?3)
     ON CONFLICT(kind,key) DO UPDATE SET value=excluded.value";
+
+fn identity_key(record: &FlowRecord) -> String {
+    // Existing Flow keys remain byte-for-byte stable across the upgrade.
+    if record.blocked {
+        format!("B:{}:{}:{}", record.generation, record.owner, record.slot)
+    } else {
+        format!("{}:{}:{}", record.generation, record.owner, record.slot)
+    }
+}
 
 fn put_row(
     statement: &mut rusqlite::Statement<'_>,
@@ -491,6 +506,14 @@ impl ObservationStore {
         if totals.packets != state.meta.totals.packets || totals.bytes != state.meta.totals.bytes {
             return Err("observation_inconsistent_totals".into());
         }
+        if state.meta.blocked_ended > state.meta.ended
+            || (0..2).any(|side| {
+                state.meta.blocked_totals.packets[side] > totals.packets[side]
+                    || state.meta.blocked_totals.bytes[side] > totals.bytes[side]
+            })
+        {
+            return Err("observation_inconsistent_blocked_totals".into());
+        }
         if state.meta.attribution_schema > 1 {
             return Err("observation_attribution_schema".into());
         }
@@ -533,7 +556,7 @@ impl ObservationStore {
         }
         for (key, baseline) in &state.baselines {
             let r = &baseline.record;
-            if key != &format!("{}:{}:{}", r.generation, r.owner, r.slot)
+            if key != &identity_key(r)
                 || !Self::valid_record(r)
                 || Self::validate_segments(r, None).is_err()
                 || baseline.first_end_us.is_some() != r.ended
@@ -548,11 +571,7 @@ impl ObservationStore {
             };
             if !r.ended
                 || !Self::valid_record(r)
-                || key
-                    != &format!(
-                        "{first:020}:{}:{}:{}:{}",
-                        r.generation, r.owner, r.slot, r.incarnation
-                    )
+                || key != &format!("{first:020}:{}:{}", identity_key(r), r.incarnation)
             {
                 return Err("observation_invalid_lifecycle".into());
             }
@@ -611,6 +630,7 @@ impl ObservationStore {
             && record.sequence != 0
             && record.owner < 2
             && record.slot < 65536
+            && record.kind_attribution_valid()
             && record.last_seen >= record.first_seen
             && record.activity_utc_us != 0
             && record.addresses.len() <= 32
@@ -787,7 +807,8 @@ impl ObservationStore {
             self.state.meta.gaps = self.state.meta.gaps.saturating_add(1);
             return Ok(());
         }
-        let key = format!("{}:{}:{}", record.generation, record.owner, record.slot);
+        // The Blocked namespace cannot collide with a simultaneous Flow slot.
+        let key = identity_key(record);
         let mut delta = Counts {
             packets: record.packets,
             bytes: record.bytes,
@@ -966,6 +987,8 @@ impl ObservationStore {
         }
         let mut totals = self.state.meta.totals;
         totals.add(&delta)?;
+        let mut blocked_totals = self.state.meta.blocked_totals;
+        if record.blocked { blocked_totals.add(&delta)?; }
         // All checked arithmetic and capacity admission has completed. Apply
         // baseline, lifecycle and every view together to the one live state.
         for (minute, count) in minutes {
@@ -979,6 +1002,7 @@ impl ObservationStore {
             self.dirty.unknown_minutes.insert(unknown_minute);
         }
         self.state.meta.totals = totals;
+        self.state.meta.blocked_totals = blocked_totals;
         // Coverage describes the timestamps actually used by retained
         // contributions, including independent directions and unknown growth.
         // A zero-delta direction or state-only update cannot widen it.
@@ -1012,6 +1036,9 @@ impl ObservationStore {
         };
         if record.ended {
             self.state.meta.ended = self.state.meta.ended.saturating_add(1);
+            if record.blocked {
+                self.state.meta.blocked_ended = self.state.meta.blocked_ended.saturating_add(1);
+            }
             let recent_key = format!("{received_us:020}:{key}:{}", record.incarnation);
             self.dirty.recent.insert(recent_key.clone());
             self.state.recent.insert(recent_key, baseline.clone());
@@ -1065,7 +1092,7 @@ impl ObservationStore {
             .take(MAX_QUERY_MINUTES)
             .collect();
         let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128).collect();
-        serde_json::json!({ "schema": 1, "storage": "sqlite", "visibility": "live_including_pending",
+        let mut response = serde_json::json!({ "schema": 1, "storage": "sqlite", "visibility": "live_including_pending",
             "persistence": { "packets": self.committed.totals.packets, "bytes": self.committed.totals.bytes,
                 "accepted": self.committed.accepted, "pending_rows": self.dirty.len(), "pending": self.dirty.meta || self.dirty.len() != 0,
                 "maintenance_pending": self.maintenance_pending,
@@ -1096,7 +1123,13 @@ impl ObservationStore {
                 "clock_changes": self.state.meta.clock_changes,
                 "first_activity_us": self.state.meta.first_activity_us,
                 "last_activity_us": self.state.meta.last_activity_us },
-            "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT })
+            "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
+        response["blocked"] = serde_json::json!({
+            "packets": self.state.meta.blocked_totals.packets,
+            "bytes": self.state.meta.blocked_totals.bytes,
+            "ended": self.state.meta.blocked_ended,
+        });
+        response
     }
 }
 

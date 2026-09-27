@@ -186,7 +186,7 @@ cat >"$work_dir/product_core.api_types.h" <<'EOF'
 #include "sakamoto_product_rule_config.h"
 #include "sakamoto_product_observation.h"
 typedef struct { uint64_t generation; } vl_api_product_core_observation_query_t;
-typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected; product_observation_channel_status_t channels[4]; } vl_api_product_core_observation_query_reply_t;
+typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[2]; uint64_t blocked_capacity_misses[2], blocked_retired[2]; product_observation_channel_status_t channels[4]; } vl_api_product_core_observation_query_reply_t;
 typedef struct { uint64_t generation, incarnation; uint32_t worker, slot; } vl_api_product_core_sni_query_t;
 typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vl_api_product_core_sni_query_reply_t;
 typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;

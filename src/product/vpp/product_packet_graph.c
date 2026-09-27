@@ -3925,7 +3925,10 @@ product_packet_graph_policy_on_owner (
       (void) product_packet_graph_flow_record_decision (
         pool, observation.entry, evaluation, lease, owner_worker);
     }
-  if (observation.entry)
+  int blocked_packet = result == PRODUCT_PACKET_OK && eligible && !post_flow
+    && evaluation->matched && evaluation->actual_action == PRODUCT_L4_POLICY_ACTION_DROP
+    && lease->runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4;
+  if (observation.entry || blocked_packet)
     {
       product_observation_attribution_t context = {
         .policy_generation = snapshot.identity.generation,
@@ -3947,7 +3950,11 @@ product_packet_graph_policy_on_owner (
           if (rule->rule_id == context.winner) memcpy (context.name, rule->name, sizeof (context.name));
           else context.valid = 0;
         }
-      product_observation_observed (vm, observation.entry, observation.slot, &context);
+      if (observation.entry)
+        product_observation_observed (vm, observation.entry, observation.slot, &context);
+      else
+        product_observation_blocked (vm, &lease->assignment, context.uid, context.network,
+          lease->platform.direction, lease->facts.packet_length, &context);
     }
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
   if (worker)

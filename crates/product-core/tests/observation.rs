@@ -71,9 +71,52 @@ fn rollback_and_retired_incarnation_cannot_change_overview() {
 }
 
 #[test]
+fn blocked_and_flow_with_same_slot_remain_independent() {
+    let mut view = Overview::new(77, 2, 4);
+    let flow = FlowRecord {
+        generation: 77, owner: 0, slot: 1, incarnation: 1, sequence: 1,
+        packets: [1, 0], bytes: [60, 0], ..Default::default()
+    };
+    let blocked = FlowRecord {
+        blocked: true, packets: [2, 0], bytes: [120, 0], ..flow.clone()
+    };
+    assert!(view.consume(blocked.clone()));
+    assert!(view.consume(flow));
+    assert_eq!(view.packets, [3, 0]);
+    assert_eq!(view.blocked_packets, [2, 0]);
+    assert_eq!(view.active, 2);
+    assert_eq!(view.blocked_active, 1);
+    assert!(!view.consume(blocked.clone()));
+    assert!(view.consume(FlowRecord { sequence: 2, ended: true, end_reason: 2, ..blocked }));
+    assert_eq!(view.active, 1);
+    assert_eq!(view.blocked_active, 0);
+    assert_eq!(view.blocked_ended, 1);
+}
+
+#[test]
+fn blocked_shape_uses_its_own_capacity_and_drop_provenance() {
+    let mut view = Overview::new(77, 2, 2048);
+    assert_eq!(view.records.len(), 4096);
+    assert_eq!(view.blocked_records.len(), 2048);
+    let mut record = FlowRecord {
+        blocked: true, generation: 77, owner: 0, slot: 1024,
+        incarnation: 1, sequence: 1, ..Default::default()
+    };
+    assert!(!view.consume(record.clone()));
+    record.slot = 1;
+    record.attribution[0].valid = true;
+    record.attribution[0].winner = 65537;
+    record.attribution[0].actual_action = 1;
+    assert!(!view.consume(record.clone()));
+    record.attribution[0].actual_action = 2;
+    assert!(view.consume(record));
+    assert_eq!(view.blocked_active, 1);
+}
+
+#[test]
 fn wire_record_is_length_and_version_checked() {
     let mut bytes = [0u8; 448];
-    bytes[0..4].copy_from_slice(&[168, 1, 3, 2]);
+    bytes[0..4].copy_from_slice(&[168, 1, 4, 2]);
     bytes[16] = 7; // generation
     bytes[24] = 11; // incarnation
     bytes[32] = 1; // update
@@ -102,6 +145,17 @@ fn wire_record_is_length_and_version_checked() {
     assert_eq!(r.packets, [3, 0]);
     assert_eq!(r.bytes, [0, 80]);
     assert_eq!(r.addresses, [10, 1, 2, 3, 10, 4, 5, 6]);
+    bytes[3] |= 8; // same record is invalid as blocked/actual ALLOW
+    assert!(FlowRecord::decode(&bytes).is_none());
+    bytes[128 + 73] = 2; // valid blocked/actual DROP
+    assert!(FlowRecord::decode(&bytes).unwrap().blocked);
+    bytes[117] = 2; // live blocked record cannot claim idle END reason
+    assert!(FlowRecord::decode(&bytes).is_none());
+    bytes[3] |= 1; // idle END requires reason 2
+    assert!(FlowRecord::decode(&bytes).unwrap().ended);
+    bytes[117] = 0;
+    assert!(FlowRecord::decode(&bytes).is_none());
+    bytes[3] &= !8;
     bytes[0] = 127;
     assert!(FlowRecord::decode(&bytes).is_none());
     bytes[0] = 168;

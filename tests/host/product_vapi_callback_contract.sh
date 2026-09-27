@@ -305,7 +305,7 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
 
 #include "sakamoto_product_observation.h"
 typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_core_observation_query;
-typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected; product_observation_channel_status_t channels[4]; } vapi_payload_product_core_observation_query_reply;
+typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[2]; uint64_t blocked_capacity_misses[2], blocked_retired[2]; product_observation_channel_status_t channels[4]; } vapi_payload_product_core_observation_query_reply;
 typedef vapi_error_e (*vapi_product_core_observation_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_observation_query_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_observation_query, vapi_msg_id_product_core_observation_query_reply;
 vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_query(vapi_ctx_t);

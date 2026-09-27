@@ -424,6 +424,7 @@ define product_core_sni_query_reply {
 typedef product_observation_channel {
   u64 attempted; u64 published; u64 full; u64 oversize; u64 consumed;
   u64 notify_errors; u64 pending; u64 notifications;
+  u64 allocation_lost;
   u64 basic_packets[3]; u64 basic_bytes[3];
   u32 occupancy; u32 capacity;
 };
@@ -434,5 +435,7 @@ define product_core_observation_query_reply {
   u32 context; i32 retval;
   u64 generation; u64 mapping_bytes;
   u32 version; u32 owners; u32 flow_capacity; u32 connected;
+  u32 blocked_capacity; u32 blocked_active[2];
+  u64 blocked_capacity_misses[2]; u64 blocked_retired[2];
   vl_api_product_observation_channel_t channels[4];
 };

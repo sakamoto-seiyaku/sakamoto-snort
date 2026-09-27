@@ -242,6 +242,7 @@ add_vpp_plugin(product_core
     product_flow_end.c
     product_flow_expiry.c
     product_observation.c
+    product_blocked_observation.c
     ../native/product_observation_transport.c
     product_flow_udp.c
     product_flow_icmp.c

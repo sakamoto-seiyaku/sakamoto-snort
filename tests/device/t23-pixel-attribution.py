@@ -19,7 +19,7 @@ p=argparse.ArgumentParser()
 p.add_argument("--serial-from",type=Path,required=True);p.add_argument("--build",type=Path,required=True)
 p.add_argument("--probe-build",type=Path,required=True);p.add_argument("--output",type=Path,required=True)
 p.add_argument("--profile",choices=("root","vpn"),required=True)
-p.add_argument("--scenario",choices=("semantic","benchmark"),default="semantic")
+p.add_argument("--scenario",choices=("semantic","benchmark","blocked"),default="semantic")
 p.add_argument("--baseline",action="store_true");p.add_argument("--skip-install",action="store_true")
 p.add_argument("--endpoint",default="192.168.4.5")
 a=p.parse_args();serial=json.loads(a.serial_from.read_text())["serial"];build=json.loads(a.build.read_text())
@@ -99,16 +99,21 @@ def import_call(label,document=None,expected=0):
         return value
     finally:
         adb("shell","rm","-f",temporary,check=False);adb("shell","run-as",PKG,"rm","-f",destination,check=False)
-def configuration(label,actions=(1,2),modes=(0,1),empty=False):
+def configuration(label,actions=(1,2),modes=(0,1),empty=False,pre=False):
     global policy
     document=requests.empty() if empty else requests.document(label,policy,[uid],actions,modes)
+    if pre:
+        document["rules"] = document["rules"][:1]
+        document["rules"][0]["definition"] = document["rules"][0]["definition"].removesuffix("0e01") + "0603"
+        document["rules"][0]["source"] = "t24-pre-drop"
+        document["bindings"] = [binding for binding in document["bindings"] if binding[3]==0]
     policy=import_call(label,document,policy["saved_revision"])
     index=cli(label+"-index","show product policy-index")
     line=next(l for l in index.splitlines() if l.startswith("policy.index "))
     identity=dict(part.split("=",1) for part in line.split()[1:])
     row=dict(label=label,generation=generation,input=label+"-input.json",response=label+"-apply.json",
         revision=policy["active_revision"],snapshot_hash=int(identity["hash"]),versions=policy["active_versions"],
-        actions=list(actions),modes=list(modes),empty=empty)
+        actions=list(actions),modes=list(modes),empty=empty,pre=pre)
     result["configurations"].append(row);return row
 
 def proc(pid,label):
@@ -223,6 +228,49 @@ try:
     if a.scenario=="benchmark":
         for label,count,options in [("low",20,{"delay":100}),("burst",256,{}),("sustained",1000,{"delay":2}),("active",512,{"sockets":128}),("short",128,{"short":True})]:
             configuration("bench-"+label,(2,1),(1,0));send(label,count,**options)
+    elif a.scenario=="blocked":
+        def blocked(value):
+            rows=[r for r in value["consumer"]["overview"]["blocked_records"]
+                  if r and r["ports"][0]==44500]
+            assert len(rows)==1,"one retained Blocked Observation for persistent tuple"
+            return rows[0]
+        def basic_drop(value):
+            return sum(value["health"]["channels"][i]["basic_packets"][1] for i in (0,2))
+        configuration("t24-allow-a",empty=True)
+        allowed=send("t24-allow-a",2,size=56)
+        assert json.loads((out/"t24-allow-a-traffic.json").read_text())["received"]==2
+        first_flow=flow(allowed);first_id=(first_flow["owner"],first_flow["slot"],first_flow["incarnation"])
+        before_packets=first_flow["packets"]
+        configuration("t24-drop-a",actions=(2,1),modes=(0,0),pre=True)
+        first=send("t24-drop-a",3,size=56)
+        assert json.loads((out/"t24-drop-a-traffic.json").read_text())["received"]==0
+        first_blocked=blocked(first);blocked_id=(first_blocked["owner"],first_blocked["slot"],first_blocked["incarnation"])
+        assert first_blocked["packets"]==[3,0]
+        assert first_blocked["attribution"][0]["actual_action"]==2
+        assert (flow(first)["owner"],flow(first)["slot"],flow(first)["incarnation"])==first_id
+        assert flow(first)["packets"]==before_packets,"PRE DROP must not advance CT Flow"
+        assert basic_drop(first)-basic_drop(allowed)==3
+        configuration("t24-allow-b",empty=True)
+        middle=send("t24-allow-b",2,size=56)
+        assert json.loads((out/"t24-allow-b-traffic.json").read_text())["received"]==2
+        assert (blocked(middle)["owner"],blocked(middle)["slot"],blocked(middle)["incarnation"])==blocked_id
+        assert blocked(middle)["packets"]==[3,0]
+        assert flow(middle)["packets"][0]>=before_packets[0]+2
+        configuration("t24-drop-b",actions=(2,1),modes=(0,0),pre=True)
+        second=send("t24-drop-b",2,size=56)
+        assert json.loads((out/"t24-drop-b-traffic.json").read_text())["received"]==0
+        second_blocked=blocked(second)
+        assert (second_blocked["owner"],second_blocked["slot"],second_blocked["incarnation"])==blocked_id
+        assert second_blocked["packets"]==[5,0]
+        assert second_blocked["attribution"][0]["winner"]!=first_blocked["attribution"][0]["winner"]
+        assert flow(second)["packets"]==flow(middle)["packets"]
+        assert second["consumer"]["persistent"]["blocked"]["packets"][0]>=5
+        assert sum(row["counts"]["packets"][0] for row in second["consumer"]["persistent"]["rule_windows"].values()
+                   if row["attribution"]["actual_action"]==2)>=5
+        send("t24-short",4,size=56,short=True)
+        result["first_identity"]={k:first_flow[k] for k in ("owner","slot","incarnation")}
+        result["blocked_identity"]={k:first_blocked[k] for k in ("owner","slot","incarnation")}
+        configuration("t24-restore-empty",empty=True)
     else:
         configuration("nomatch",empty=True);first=send("nomatch",3,size=48);identity=flow(first)
         for label,actions,modes,count in [("request-allow",(1,2),(0,1),3),("request-observe",(2,1),(1,0),4),("request-drop",(2,1),(0,0),2),("reply-drop",(1,2),(0,0),2),("both-observe",(2,2),(1,1),2)]:

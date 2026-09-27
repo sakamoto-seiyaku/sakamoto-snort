@@ -50,6 +50,43 @@ static unsigned attribution_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   return n;
 }
+static unsigned blocked_fixture (product_observation_transport_t *t) {
+  product_observation_record_t flow = {
+    .length = 424, .version = PRODUCT_OBSERVATION_VERSION,
+    .owner = 0, .slot = 7, .generation = 77, .incarnation = 1, .sequence = 1,
+    .first_seen = 100, .last_seen = 100, .activity_utc_us = 61000000,
+    .family = 4, .protocol = 17, .packets = {1, 0}, .bytes = {60, 0},
+    .attribution = {{.segment=1, .activity_utc_us=61000000,
+      .policy_generation=77, .policy_revision=1, .policy_hash=100,
+      .uid=42, .declared_action=1, .actual_action=1, .valid=1}},
+  };
+  unsigned n = product_observation_publish (t, 0, &flow, flow.length) == 1;
+  product_observation_record_t blocked = flow;
+  blocked.flags = PRODUCT_OBSERVATION_BLOCKED | PRODUCT_OBSERVATION_CREATE;
+  blocked.incarnation = 20;
+  blocked.attribution[0].winner = 65537;
+  blocked.attribution[0].declared_action = 2;
+  blocked.attribution[0].actual_action = 2;
+  memcpy (blocked.attribution[0].name, "first drop", 11);
+  n += product_observation_publish (t, 1, &blocked, blocked.length) == 1;
+  blocked.flags = PRODUCT_OBSERVATION_BLOCKED;
+  blocked.sequence = 2; blocked.last_seen = 101;
+  n += product_observation_publish (t, 1, &blocked, blocked.length) == 1;
+  blocked.sequence = 3; blocked.last_seen = 102;
+  blocked.packets[0] = 2; blocked.bytes[0] = 120;
+  blocked.attribution[0] = (product_observation_attribution_t) {
+    .segment=2, .start_packets=1, .start_bytes=60, .activity_utc_us=61000000,
+    .policy_generation=77, .policy_revision=2, .policy_hash=200,
+    .winner=131073, .uid=42, .declared_action=2, .actual_action=2,
+    .valid=1, .name="second drop" };
+  n += product_observation_publish (t, 1, &blocked, blocked.length) == 1;
+  blocked.flags = PRODUCT_OBSERVATION_BLOCKED | PRODUCT_OBSERVATION_END;
+  blocked.end_reason = PRODUCT_OBSERVATION_END_IDLE;
+  blocked.sequence = 4; blocked.last_seen = 103;
+  blocked.packets[0] = 3; blocked.bytes[0] = 180;
+  n += product_observation_publish (t, 1, &blocked, blocked.length) == 1;
+  return n;
+}
 int main (int argc, char **argv) {
   assert (argc == 2);
   assert (clib_mem_init (NULL, 4 * 1024 * 1024));
@@ -91,6 +128,8 @@ int main (int argc, char **argv) {
       printf ("EMITTED %u\n", admitted);
     } else if (!strncmp (command, "attribution", 11)) {
       printf ("ATTRIBUTION %u\n", attribution_fixture (t));
+    } else if (!strncmp (command, "blocked", 7)) {
+      printf ("BLOCKED %u\n", blocked_fixture (t));
     } else if (!strncmp (command, "status", 6)) {
       product_observation_status_t s;
       product_observation_transport_status (t, &s);

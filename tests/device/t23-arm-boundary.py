@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the source-bound Product C V3 boundary tests in Android root context."""
+"""Run source-bound Product C observation boundary tests in Android root context."""
 import argparse
 import hashlib
 import json

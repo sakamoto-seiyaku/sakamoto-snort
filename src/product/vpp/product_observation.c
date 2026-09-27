@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "product_observation.h"
+#include "product_blocked_observation.h"
 #include "product_flow_expiry.h"
 #include <vlib/threads.h>
 #include <vlib/file.h>
@@ -34,6 +35,8 @@ typedef struct {
   uint64_t generation;
 } observation_owner_t;
 static observation_owner_t owners[PRODUCT_OBSERVATION_OWNERS];
+static product_blocked_observation_t *blocked[PRODUCT_OBSERVATION_OWNERS];
+static uint32_t blocked_capacity;
 static product_observation_transport_t *transport;
 static u32 listener_file = ~0U, peer_file = ~0U, negotiation_file = ~0U;
 static int negotiation_fd = -1;
@@ -164,10 +167,35 @@ void product_observation_end (vlib_main_t *vm, const product_flow_entry_t *entry
   export_record (owner, entry, slot, PRODUCT_OBSERVATION_END);
   product_flow_expiry_changed (vm);
 }
+static void blocked_emit (void *context, const product_observation_record_t *record) {
+  unsigned owner = (unsigned) (uintptr_t) context;
+  if (transport) (void) product_observation_publish (transport, owner * 2 + 1,
+                                                     record, record->length);
+}
+void product_observation_blocked (vlib_main_t *vm,
+  const product_owner_assignment_t *assignment, uint32_t uid, uint32_t network,
+  uint8_t device_direction, uint32_t bytes,
+  const product_observation_attribution_t *context) {
+  unsigned owner = vlib_get_worker_index (vm->thread_index);
+  if (owner >= PRODUCT_OBSERVATION_OWNERS || !transport || !blocked[owner]) return;
+  uint64_t mono = (uint64_t) (vlib_time_now (vm) * 1000000.0);
+  struct timespec wall;
+  uint64_t utc = 0;
+  if (!clock_gettime (CLOCK_REALTIME, &wall) && wall.tv_sec >= 0)
+    utc = (uint64_t) wall.tv_sec * UINT64_C (1000000) + wall.tv_nsec / 1000;
+  uint64_t old_misses = product_blocked_observation_misses (blocked[owner]);
+  product_blocked_observation_observe (blocked[owner], assignment, uid, network,
+                                      device_direction, bytes, mono, utc, context);
+  if (product_blocked_observation_misses (blocked[owner]) != old_misses)
+    product_observation_allocation_lost (transport, owner * 2 + 1);
+  product_flow_expiry_changed (vm);
+}
 uint64_t product_observation_deadline (unsigned owner) {
-  if (owner >= PRODUCT_OBSERVATION_OWNERS || !transport || owners[owner].head == NO_SLOT)
-    return UINT64_MAX;
-  return owners[owner].slots[owners[owner].head].due;
+  if (owner >= PRODUCT_OBSERVATION_OWNERS || !transport) return UINT64_MAX;
+  uint64_t flow = owners[owner].head == NO_SLOT ? UINT64_MAX
+    : owners[owner].slots[owners[owner].head].due;
+  uint64_t early = product_blocked_observation_deadline (blocked[owner]);
+  return flow < early ? flow : early;
 }
 void product_observation_flush_due (vlib_main_t *vm, uint64_t now) {
   unsigned owner = vlib_get_worker_index (vm->thread_index);
@@ -181,6 +209,7 @@ void product_observation_flush_due (vlib_main_t *vm, uint64_t now) {
       export_record (owner, entry, slot, 0);
     else remove_pending (o, slot);
   }
+  product_blocked_observation_flush_due (blocked[owner], now, FLUSH_BUDGET);
 }
 void product_observation_basic (vlib_main_t *vm, unsigned outcome, uint32_t bytes) {
   if (vm->thread_index)
@@ -188,6 +217,12 @@ void product_observation_basic (vlib_main_t *vm, unsigned outcome, uint32_t byte
 }
 void product_observation_status (product_observation_status_t *status) {
   product_observation_transport_status (transport, status);
+  status->blocked_capacity = blocked_capacity;
+  for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+    status->blocked_active[i] = product_blocked_observation_active (blocked[i]);
+    status->blocked_capacity_misses[i] = product_blocked_observation_misses (blocked[i]);
+    status->blocked_retired[i] = product_blocked_observation_retired (blocked[i]);
+  }
 }
 
 static void close_peer (void) {
@@ -256,19 +291,25 @@ void product_observation_unbind (void) {
   for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
     free (owners[i].slots); memset (&owners[i], 0, sizeof (owners[i]));
     owners[i].head = owners[i].tail = NO_SLOT;
+    product_blocked_observation_destroy (blocked[i]); blocked[i] = NULL;
   }
+  blocked_capacity = 0;
   claimed = 0;
 }
 int product_observation_bind (uint64_t generation, product_flow_runtime_t **runtimes) {
   product_observation_unbind ();
   if (!runtimes) return 1;
   uint32_t capacity = product_flow_runtime_snapshot (runtimes[0]).capacity;
+  blocked_capacity = capacity < 1024 ? capacity : 1024;
   transport = product_observation_transport_create (generation, capacity);
   if (!transport) goto fail;
   for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
     owners[i].runtime = runtimes[i]; owners[i].capacity = capacity; owners[i].generation = generation;
     owners[i].slots = calloc (capacity, sizeof (*owners[i].slots));
-    if (!owners[i].slots || product_flow_runtime_snapshot (runtimes[i]).capacity != capacity) goto fail;
+    blocked[i] = product_blocked_observation_create (
+      blocked_capacity, generation, i, blocked_emit, (void *) (uintptr_t) i);
+    if (!owners[i].slots || !blocked[i]
+        || product_flow_runtime_snapshot (runtimes[i]).capacity != capacity) goto fail;
   }
   const char *api = (const char *) socket_main.socket_name;
   if (!api || strlen (api) + 4 >= sizeof (socket_path)) goto fail;

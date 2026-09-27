@@ -542,9 +542,16 @@ vl_api_product_core_observation_query_t_handler (vl_api_product_core_observation
     rmp->mapping_bytes = clib_host_to_net_u64 (status.mapping_bytes);
     rmp->version = htonl (status.version); rmp->owners = htonl (status.owners);
     rmp->flow_capacity = htonl (status.flow_capacity); rmp->connected = htonl (status.connected);
+    rmp->blocked_capacity = htonl (status.blocked_capacity);
+    for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+      rmp->blocked_active[i] = htonl (status.blocked_active[i]);
+      rmp->blocked_capacity_misses[i] = clib_host_to_net_u64 (status.blocked_capacity_misses[i]);
+      rmp->blocked_retired[i] = clib_host_to_net_u64 (status.blocked_retired[i]);
+    }
     for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
       OBS_FIELD (attempted); OBS_FIELD (published); OBS_FIELD (full); OBS_FIELD (oversize);
-      OBS_FIELD (consumed); OBS_FIELD (notify_errors); OBS_FIELD (pending); OBS_FIELD (notifications);
+      OBS_FIELD (consumed); OBS_FIELD (notify_errors); OBS_FIELD (allocation_lost);
+      OBS_FIELD (pending); OBS_FIELD (notifications);
       for (unsigned j = 0; j < 3; j++) {
         rmp->channels[i].basic_packets[j] = clib_host_to_net_u64 (status.channels[i].basic_packets[j]);
         rmp->channels[i].basic_bytes[j] = clib_host_to_net_u64 (status.channels[i].basic_bytes[j]);

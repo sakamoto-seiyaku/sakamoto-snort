@@ -104,10 +104,17 @@ static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_er
 #define COPY(field) call->out->field = reply->field
   COPY (generation); COPY (mapping_bytes); COPY (version); COPY (owners);
   COPY (flow_capacity); COPY (connected);
+  COPY (blocked_capacity);
+  for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+    call->out->blocked_active[i] = reply->blocked_active[i];
+    call->out->blocked_capacity_misses[i] = reply->blocked_capacity_misses[i];
+    call->out->blocked_retired[i] = reply->blocked_retired[i];
+  }
 #undef COPY
   for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
 #define COPY(field) call->out->channels[i].field = reply->channels[i].field
     COPY (attempted); COPY (published); COPY (full); COPY (oversize); COPY (consumed);
+    COPY (allocation_lost);
     COPY (notify_errors); COPY (pending); COPY (notifications); COPY (occupancy); COPY (capacity);
 #undef COPY
     for (unsigned j = 0; j < 3; j++) {

@@ -176,6 +176,10 @@ void product_observation_account (product_observation_transport_t *t, unsigned o
   ADD (&s->basic_packets[outcome], 1);
   ADD (&s->basic_bytes[outcome], bytes);
 }
+void product_observation_allocation_lost (product_observation_transport_t *t, unsigned channel) {
+  if (t && channel < PRODUCT_OBSERVATION_CHANNELS)
+    __atomic_add_fetch (&t->shared->channels[channel].allocation_lost, 1, __ATOMIC_RELAXED);
+}
 void product_observation_connected (product_observation_transport_t *t, int connected) {
   if (t) __atomic_store_n (&t->shared->connected, !!connected, __ATOMIC_RELEASE);
 }
@@ -188,6 +192,7 @@ void product_observation_transport_status (product_observation_transport_t *t,
   out->version = PRODUCT_OBSERVATION_VERSION;
   out->owners = PRODUCT_OBSERVATION_OWNERS;
   out->flow_capacity = t->shared->flow_capacity;
+  out->blocked_capacity = t->shared->flow_capacity < 1024 ? t->shared->flow_capacity : 1024;
   out->connected = LOAD (&t->shared->connected);
   for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
     product_observation_channel_status_t *dst = &out->channels[i];
@@ -195,7 +200,8 @@ void product_observation_transport_status (product_observation_transport_t *t,
     /* Status is a per-counter sample, not a transaction across running owners. */
 #define SAMPLE(field) dst->field = LOAD (&src->field)
     SAMPLE (attempted); SAMPLE (published); SAMPLE (full); SAMPLE (oversize);
-    SAMPLE (consumed); SAMPLE (notify_errors); SAMPLE (pending); SAMPLE (notifications);
+    SAMPLE (consumed); SAMPLE (notify_errors); SAMPLE (allocation_lost);
+    SAMPLE (pending); SAMPLE (notifications);
 #undef SAMPLE
     for (unsigned j = 0; j < 3; j++) {
       dst->basic_packets[j] = LOAD (&src->basic_packets[j]);

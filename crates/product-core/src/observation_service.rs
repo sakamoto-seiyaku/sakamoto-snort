@@ -197,13 +197,18 @@ mod live {
                                     break 'consume;
                                 }
                                 work = true;
-                                if channel % 2 == 0 {
+                                {
                                     let s = &mut worker_state;
                                     match FlowRecord::decode(&raw.0) {
                                         Some(record)
                                             if record.owner as u32 == channel / 2
+                                                && record.blocked == (channel % 2 == 1)
                                                 && record.generation == generation
-                                                && record.slot < health.flow_capacity =>
+                                                && record.slot < if record.blocked {
+                                                    health.blocked_capacity
+                                                } else {
+                                                    health.flow_capacity
+                                                } =>
                                         {
                                             s.overview.consume(record.clone());
                                             records.push(record);
@@ -220,7 +225,8 @@ mod live {
                         if health
                             .channels
                             .iter()
-                            .any(|c| c.full != 0 || c.oversize != 0 || c.notify_errors != 0)
+                            .any(|c| c.full != 0 || c.oversize != 0 || c.notify_errors != 0
+                                || c.allocation_lost != 0)
                         {
                             worker_state.overview.incomplete = true;
                         }
@@ -477,6 +483,59 @@ mod live {
             input.flush().unwrap();
             assert!(child.wait().unwrap().success());
             drop(service);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires the actual Product C transport producer executable"]
+        fn native_blocked_and_flow_channels_persist_independent_identities() {
+            let root = std::env::temp_dir().join(format!("t24-native-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs"))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json"))
+                .unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "blocked").unwrap();
+            input.flush().unwrap();
+            line.clear();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "BLOCKED 5");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let snapshot = loop {
+                let value = service.snapshot();
+                if value["persistent"]["blocked"]["ended"] == 1
+                    && value["persistent"]["persistence"]["pending"] == false {
+                    break value;
+                }
+                assert!(Instant::now() < deadline, "{value}");
+                thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(snapshot["overview"]["packets"], serde_json::json!([4, 0]));
+            assert_eq!(snapshot["overview"]["blocked_packets"], serde_json::json!([3, 0]));
+            assert_eq!(snapshot["persistent"]["blocked"]["packets"], serde_json::json!([3, 0]));
+            assert_eq!(snapshot["persistent"]["packets"], serde_json::json!([4, 0]));
+            assert_eq!(snapshot["persistent"]["rule_windows"].as_object().unwrap().len(), 2);
+            assert_eq!(snapshot["persistent"]["application_windows"].as_object().unwrap().len(), 2);
+            assert_eq!(snapshot["persistent"]["rejected"], 0);
+            writeln!(input, "quit").unwrap();
+            input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            drop(service);
+            let store = ObservationStore::open(&root.join("overall.json")).unwrap();
+            assert_eq!(store.query()["blocked"], snapshot["persistent"]["blocked"]);
+            drop(store);
             std::fs::remove_dir_all(root).unwrap();
         }
 

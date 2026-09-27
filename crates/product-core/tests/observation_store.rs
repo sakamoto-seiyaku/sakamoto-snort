@@ -1,5 +1,76 @@
-use sakamoto_product_core::observation::FlowRecord;
+use sakamoto_product_core::observation::{Attribution, FlowRecord};
 use sakamoto_product_core::observation_store::ObservationStore;
+
+#[test]
+fn blocked_and_flow_share_windows_without_sharing_identity_or_recounting() {
+    let root = std::env::temp_dir().join(format!("t24-store-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let allow = Attribution {
+        segment: 1, activity_utc_us: 61_000_000, policy_generation: 77,
+        policy_revision: 1, policy_hash: 100, uid: 42,
+        declared_action: 1, actual_action: 1, valid: true,
+        ..Default::default()
+    };
+    let drop_rule = Attribution {
+        winner: 65537, declared_action: 2, actual_action: 2,
+        name: "first drop".into(), ..allow.clone()
+    };
+    let flow = FlowRecord {
+        generation: 77, slot: 1, incarnation: 1, sequence: 1,
+        activity_utc_us: 61_000_000, first_seen: 1, last_seen: 1,
+        packets: [1, 0], bytes: [60, 0], attribution: [allow, Attribution::default()],
+        ..Default::default()
+    };
+    let mut blocked = FlowRecord {
+        blocked: true, packets: [1, 0], bytes: [60, 0],
+        attribution: [drop_rule, Attribution::default()], ..flow.clone()
+    };
+    store.consume(&[flow, blocked.clone()], 62_000_000).unwrap();
+    blocked.sequence = 2;
+    blocked.last_seen = 2;
+    blocked.packets = [2, 0];
+    blocked.bytes = [120, 0];
+    blocked.ended = true;
+    blocked.end_reason = 2;
+    blocked.attribution[0] = Attribution {
+        segment: 2, start_packets: 1, start_bytes: 60,
+        winner: 131073, policy_revision: 2, policy_hash: 200,
+        name: "second drop".into(), ..blocked.attribution[0].clone()
+    };
+    store.consume(&[blocked.clone(), blocked], 63_000_000).unwrap();
+    let q = store.query();
+    assert_eq!(q["packets"], serde_json::json!([3, 0]));
+    assert_eq!(q["blocked"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(q["blocked"]["ended"], 1);
+    assert_eq!(q["rejected"], 1);
+    assert_eq!(q["application_windows"].as_object().unwrap().len(), 2);
+    assert_eq!(q["rule_windows"].as_object().unwrap().len(), 2);
+    assert_eq!(q["recent"].as_object().unwrap().len(), 1);
+    assert_eq!(q["recent"].as_object().unwrap().values().next().unwrap()["record"]["blocked"], true);
+    let mut malformed = FlowRecord {
+        blocked: true, generation: 77, slot: 2, incarnation: 1,
+        sequence: 1, activity_utc_us: 61_000_000, packets: [1,0], bytes: [60,0],
+        ..Default::default()
+    };
+    malformed.attribution[0] = Attribution {
+        segment: 1, activity_utc_us: 61_000_000, policy_generation: 77,
+        policy_revision: 2, policy_hash: 200, winner: 131073,
+        uid: 42, declared_action: 2, actual_action: 1, valid: true,
+        name: "invalid blocked allow".into(), ..Default::default()
+    };
+    store.consume(&[malformed], 63_000_000).unwrap();
+    assert_eq!(store.query()["packets"], q["packets"]);
+    assert_eq!(store.query()["blocked"], q["blocked"]);
+    assert_eq!(store.query()["rejected"], 2);
+    store.close().unwrap();
+    drop(store);
+    let reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["blocked"], q["blocked"]);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
 
 #[test]
 fn live_pending_is_visible_but_only_committed_tail_survives_restart() {

@@ -85,6 +85,14 @@ target_compile_options(sakamoto-product-flow-entry-test PRIVATE
 target_link_libraries(sakamoto-product-flow-entry-test PRIVATE
   sakamoto_product_flow_entry)
 
+add_executable(sakamoto-product-blocked-observation-test
+  tests/host/product_blocked_observation_test.c
+  src/product/vpp/product_blocked_observation.c)
+target_include_directories(sakamoto-product-blocked-observation-test PRIVATE
+  src/product/include src/product/vpp)
+target_compile_features(sakamoto-product-blocked-observation-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-blocked-observation-test PRIVATE -Wall -Wextra -Werror)
+
 add_executable(sakamoto-product-host-fixture-abi-test
   tests/host/product_host_fixture_abi_test.c
 )
@@ -106,6 +114,7 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
   sakamoto_product_host_fixture_abi pthread)
 
 enable_testing()
+add_test(NAME sakamoto-product-blocked-observation-test COMMAND sakamoto-product-blocked-observation-test)
 add_executable(sakamoto-product-domains-test tests/host/product_domains_test.c)
 target_link_libraries(sakamoto-product-domains-test PRIVATE sakamoto_product_domains)
 target_link_options(sakamoto-product-domains-test PRIVATE -Wl,--wrap=product_domains_memory_alloc -Wl,--wrap=product_domains_memory_free)

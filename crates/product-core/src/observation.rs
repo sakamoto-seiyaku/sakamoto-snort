@@ -11,6 +11,7 @@ pub struct ChannelHealth {
     pub oversize: u64,
     pub consumed: u64,
     pub notify_errors: u64,
+    pub allocation_lost: u64,
     pub pending: u64,
     pub notifications: u64,
     pub basic_packets: [u64; 3],
@@ -27,6 +28,10 @@ pub struct ObservationHealth {
     pub owners: u32,
     pub flow_capacity: u32,
     pub connected: u32,
+    pub blocked_capacity: u32,
+    pub blocked_active: [u32; 2],
+    pub blocked_capacity_misses: [u64; 2],
+    pub blocked_retired: [u64; 2],
     pub channels: [ChannelHealth; 4],
 }
 
@@ -53,6 +58,8 @@ pub struct Attribution {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FlowRecord {
+    #[serde(default)]
+    pub blocked: bool,
     pub generation: u64,
     pub owner: u16,
     pub slot: u32,
@@ -82,6 +89,15 @@ pub struct FlowRecord {
 }
 
 impl FlowRecord {
+    pub fn kind_attribution_valid(&self) -> bool {
+        !self.blocked
+            || ((if self.ended { self.end_reason == 2 } else { self.end_reason == 0 })
+                && self
+                    .attribution
+                    .iter()
+                    .all(|a| !a.valid || (a.actual_action == 2 && a.winner != 0)))
+    }
+
     pub fn decode(data: &[u8]) -> Option<Self> {
         if data.len() < 424 {
             return None;
@@ -97,8 +113,8 @@ impl FlowRecord {
         };
         if length != 416 + address_bytes
             || data.len() < length
-            || data[2] != 3
-            || data[3] & !7 != 0
+            || data[2] != 4
+            || data[3] & !15 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
         {
@@ -131,7 +147,8 @@ impl FlowRecord {
                 name: std::str::from_utf8(&name[..end]).ok()?.into(),
             })
         };
-        Some(Self {
+        let record = Self {
+            blocked: data[3] & 8 != 0,
             generation: u64_at(16),
             owner: u16_at(4),
             slot: u32_at(8),
@@ -157,7 +174,8 @@ impl FlowRecord {
             policy_revision: u64_at(88),
             winner: u64_at(96),
             attribution: [decode_attribution(128)?, decode_attribution(272)?],
-        })
+        };
+        record.kind_attribution_valid().then_some(record)
     }
 }
 
@@ -172,7 +190,13 @@ pub struct Overview {
     pub rejected: u64,
     pub incomplete: bool,
     pub records: Vec<Option<FlowRecord>>,
+    pub blocked_records: Vec<Option<FlowRecord>>,
+    pub blocked_packets: [u64; 2],
+    pub blocked_bytes: [u64; 2],
+    pub blocked_active: u64,
+    pub blocked_ended: u64,
     capacity: usize,
+    blocked_capacity: usize,
 }
 
 impl Overview {
@@ -187,7 +211,13 @@ impl Overview {
             rejected: 0,
             incomplete: false,
             records: vec![None; owners * capacity],
+            blocked_records: vec![None; owners * capacity.min(1024)],
+            blocked_packets: [0; 2],
+            blocked_bytes: [0; 2],
+            blocked_active: 0,
+            blocked_ended: 0,
             capacity,
+            blocked_capacity: capacity.min(1024),
         }
     }
 
@@ -195,20 +225,27 @@ impl Overview {
     /// Replacing a still-active instance denotes a missing END, not a new delta
     /// from the old instance. Cumulative rollback rejects the entire update.
     pub fn consume(&mut self, record: FlowRecord) -> bool {
-        let index = record.owner as usize * self.capacity + record.slot as usize;
+        let capacity = if record.blocked { self.blocked_capacity } else { self.capacity };
+        let index = record.owner as usize * capacity + record.slot as usize;
+        let records = if record.blocked {
+            &mut self.blocked_records
+        } else {
+            &mut self.records
+        };
         if record.generation != self.generation
             || record.incarnation == 0
             || record.sequence == 0
-            || record.slot as usize >= self.capacity
-            || index >= self.records.len()
+            || record.slot as usize >= capacity
+            || index >= records.len()
             || record.last_seen < record.first_seen
+            || !record.kind_attribution_valid()
         {
             self.rejected += 1;
             return false;
         }
         let mut packets = record.packets;
         let mut bytes = record.bytes;
-        if let Some(old) = &self.records[index] {
+        if let Some(old) = &records[index] {
             if record.incarnation < old.incarnation
                 || (record.incarnation == old.incarnation
                     && (old.ended
@@ -232,12 +269,15 @@ impl Overview {
             } else {
                 if !old.ended {
                     self.active -= 1;
+                    if record.blocked { self.blocked_active -= 1; }
                     self.incomplete = true;
                 }
                 self.active += 1;
+                if record.blocked { self.blocked_active += 1; }
             }
         } else {
             self.active += 1;
+            if record.blocked { self.blocked_active += 1; }
             if record.sequence != 1 {
                 self.incomplete = true;
             }
@@ -245,12 +285,20 @@ impl Overview {
         for i in 0..2 {
             self.packets[i] = self.packets[i].saturating_add(packets[i]);
             self.bytes[i] = self.bytes[i].saturating_add(bytes[i]);
+            if record.blocked {
+                self.blocked_packets[i] = self.blocked_packets[i].saturating_add(packets[i]);
+                self.blocked_bytes[i] = self.blocked_bytes[i].saturating_add(bytes[i]);
+            }
         }
         if record.ended {
             self.active -= 1;
             self.ended += 1;
+            if record.blocked {
+                self.blocked_active -= 1;
+                self.blocked_ended += 1;
+            }
         }
-        self.records[index] = Some(record);
+        records[index] = Some(record);
         self.accepted += 1;
         true
     }

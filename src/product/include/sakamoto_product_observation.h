@@ -4,12 +4,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PRODUCT_OBSERVATION_VERSION 3
+#define PRODUCT_OBSERVATION_VERSION 4
 #define PRODUCT_OBSERVATION_OWNERS 2
 #define PRODUCT_OBSERVATION_CHANNELS 4
 #define PRODUCT_OBSERVATION_END 1
 #define PRODUCT_OBSERVATION_CREATE 2
 #define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
+#define PRODUCT_OBSERVATION_BLOCKED 8
+#define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
 #define PRODUCT_OBSERVATION_MAX_RECORD 448
 
 /* Direction-local provenance; no pointers, source conditions or packet bytes.
@@ -47,6 +49,7 @@ _Static_assert (offsetof (product_observation_record_t, address) == 416, "record
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;
+  uint64_t allocation_lost;
   uint64_t pending, notifications;
   uint64_t basic_packets[3], basic_bytes[3]; /* ALLOW, policy DROP, runtime failure */
   uint32_t occupancy, capacity;
@@ -54,6 +57,9 @@ typedef struct {
 typedef struct {
   uint64_t generation, mapping_bytes;
   uint32_t version, owners, flow_capacity, connected;
+  uint32_t blocked_capacity, blocked_active[PRODUCT_OBSERVATION_OWNERS];
+  uint64_t blocked_capacity_misses[PRODUCT_OBSERVATION_OWNERS];
+  uint64_t blocked_retired[PRODUCT_OBSERVATION_OWNERS];
   product_observation_channel_status_t channels[PRODUCT_OBSERVATION_CHANNELS];
 } product_observation_status_t;
 
@@ -67,6 +73,7 @@ int product_observation_publish (product_observation_transport_t *, unsigned cha
                                  const void *, uint32_t length);
 void product_observation_account (product_observation_transport_t *, unsigned owner,
                                   unsigned outcome, uint32_t bytes);
+void product_observation_allocation_lost (product_observation_transport_t *, unsigned channel);
 void product_observation_transport_status (product_observation_transport_t *,
                                            product_observation_status_t *);
 /* Nonblocking first-claim server handshake, with producers quiesced. Validates
