@@ -392,7 +392,8 @@ def verify(directory,profile_scope=None):
         for _,row in runtime:
             assert row['capacity']=='1024' and row['entry_bytes']==('9024' if run.get('domain_policy') else '9016') and row['allocated_bytes']==('9261384' if run.get('domain_policy') else '9253192')
             assert row['capacity_misses']=='0'
-        for _,row in records(counters,'policy.cache '):assert row['storage_bytes']==('24608' if run.get('domain_policy') else '23584') and row['capacity']=='128'
+        expected_cache_bytes = '25632' if run.get('task') == 'T29' else ('24608' if run.get('domain_policy') else '23584')
+        for _,row in records(counters,'policy.cache '):assert row['storage_bytes']==expected_cache_bytes and row['capacity']=='128'
         completions=records(counters,'completion.status ');assert len(completions)==1
         assert all(completions[0][1][key]=='0' for key in ('pending','frames','buffers','obligations')),'native buffer conservation'
         if pixel:

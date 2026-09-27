@@ -27,6 +27,7 @@ and [build commands](../tooling/README.md) for Host checks.
 
 | Scope | Record |
 | --- | --- |
+| Combined Root/VPN protocol, CT, rule publication, observation stress and debug writer regression | [T29](2026-09-27_T29_COMBINED_RESULTS.md) |
 | Directional Flow effects and query freshness | [T23](2026-09-27_T23_DIRECTIONAL_ATTRIBUTION_RESULTS.md) |
 | Pre-Flow Blocked observations and independent windows | [T24](2026-09-27_T24_BLOCKED_OBSERVATION_RESULTS.md) |
 | L4 and multi-label L7 protocol windows, Root/VPN and R1–R4 integration | [T25](2026-09-27_T25_PROTOCOL_WINDOWS_RESULTS.md) |

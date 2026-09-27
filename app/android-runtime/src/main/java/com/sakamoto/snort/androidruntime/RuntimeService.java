@@ -591,28 +591,6 @@ public final class RuntimeService extends VpnService {
             enqueueLifecycle(() -> selectProductProfile(profile));
             return START_STICKY;
         }
-        if (ACTION_PRODUCT_BIND_APP.equals(action)) {
-            if (requestedSubject == null) {
-                enqueueLifecycle(() -> publishError("invalid_product_bind_request",
-                        "product app bind requires an application subject",
-                        currentMayBeActive(), currentPid()));
-                return START_NOT_STICKY;
-            }
-            final ApplicationSubjectId subject = requestedSubject;
-            enqueueLifecycle(() -> bindProductApplication(subject));
-            return START_STICKY;
-        }
-        if (ACTION_PRODUCT_UNBIND_APP.equals(action)) {
-            if (requestedSubject == null) {
-                enqueueLifecycle(() -> publishError("invalid_product_unbind_request",
-                        "product app unbind requires an application subject",
-                        currentMayBeActive(), currentPid()));
-                return START_NOT_STICKY;
-            }
-            final ApplicationSubjectId subject = requestedSubject;
-            enqueueLifecycle(() -> unbindProductApplication(subject));
-            return START_STICKY;
-        }
         if (ACTION_PRODUCT_SET_NETWORK_GATE.equals(action)) {
             if (requestedSubject == null || requestedNetworkContext == null) {
                 enqueueLifecycle(() -> publishError("invalid_product_network_gate_request",
@@ -624,18 +602,6 @@ public final class RuntimeService extends VpnService {
             final AuthoringPolicyBundle.NetworkContextId context = requestedNetworkContext;
             enqueueLifecycle(() -> setProductNetworkGate(
                     subject, context, requestedNetworkGateBlocked));
-            return START_STICKY;
-        }
-        if (ACTION_PRODUCT_SET_L4_RULE.equals(action)) {
-            final AuthoringPolicyBundle.L4Rule rule;
-            try {
-                rule = parseL4RuleIntent(intent, requestedSubject, requestedNetworkContext);
-            } catch (IllegalArgumentException error) {
-                enqueueLifecycle(() -> publishError("invalid_product_l4_rule_request",
-                        error.getMessage(), currentMayBeActive(), currentPid()));
-                return START_NOT_STICKY;
-            }
-            enqueueLifecycle(() -> setProductL4Rule(rule));
             return START_STICKY;
         }
         if (ACTION_PRODUCT_APPLY_EMPTY_POLICY.equals(action)) {
@@ -735,59 +701,6 @@ public final class RuntimeService extends VpnService {
                 || RuntimeControlProtocol.ACTION_RULE_IMPORT.equals(action)
                 || RuntimeControlProtocol.ACTION_OBSERVATION_QUERY.equals(action)
                 || RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG.equals(action);
-    }
-
-    private static AuthoringPolicyBundle.L4Rule parseL4RuleIntent(
-            Intent intent, ApplicationSubjectId subjectId,
-            AuthoringPolicyBundle.NetworkContextId context) {
-        if (intent == null || subjectId == null) {
-            throw new IllegalArgumentException("L4 rule mutation requires an application subject");
-        }
-        AuthoringPolicyBundle.IpFamily family = AuthoringPolicyBundle.IpFamily.parse(
-                requiredStringExtra(intent, RuntimeControlProtocol.EXTRA_L4_FAMILY));
-        String sourceCidr = intent.getStringExtra(RuntimeControlProtocol.EXTRA_L4_SOURCE_CIDR);
-        String destinationCidr = intent.getStringExtra(
-                RuntimeControlProtocol.EXTRA_L4_DESTINATION_CIDR);
-        int ipProtocol = intent.getIntExtra(
-                RuntimeControlProtocol.EXTRA_L4_IP_PROTOCOL, -1);
-        AuthoringPolicyBundle.PacketDirection direction =
-                AuthoringPolicyBundle.PacketDirection.parse(requiredStringExtra(
-                        intent, RuntimeControlProtocol.EXTRA_L4_PACKET_DIRECTION));
-        AuthoringPolicyBundle.L4Action action = AuthoringPolicyBundle.L4Action.parse(
-                requiredStringExtra(intent, RuntimeControlProtocol.EXTRA_L4_ACTION));
-        int priority = intent.getIntExtra(RuntimeControlProtocol.EXTRA_L4_PRIORITY, 0);
-        int order = intent.getIntExtra(RuntimeControlProtocol.EXTRA_L4_ORDER, 0);
-        return AuthoringPolicyBundle.L4Rule.create(subjectId, family, sourceCidr,
-                destinationCidr, portRangeExtra(intent,
-                        RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_FIRST,
-                        RuntimeControlProtocol.EXTRA_L4_SOURCE_PORT_LAST),
-                portRangeExtra(intent,
-                        RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_FIRST,
-                        RuntimeControlProtocol.EXTRA_L4_DESTINATION_PORT_LAST),
-                ipProtocol, direction, context, action, priority, order);
-    }
-
-    private static String requiredStringExtra(Intent intent, String name) {
-        String value = intent.getStringExtra(name);
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException("missing " + name);
-        }
-        return value;
-    }
-
-    private static AuthoringPolicyBundle.PortRange portRangeExtra(
-            Intent intent, String firstName, String lastName) {
-        boolean hasFirst = intent.hasExtra(firstName);
-        boolean hasLast = intent.hasExtra(lastName);
-        if (!hasFirst && !hasLast) {
-            return null;
-        }
-        if (!hasFirst || !hasLast) {
-            throw new IllegalArgumentException(firstName + "/" + lastName
-                    + " must be supplied together");
-        }
-        return AuthoringPolicyBundle.PortRange.inclusive(
-                intent.getIntExtra(firstName, -1), intent.getIntExtra(lastName, -1));
     }
 
     private void queueHealthQuery(int requestStartId) {
@@ -6771,38 +6684,6 @@ public final class RuntimeService extends VpnService {
         stopIfInactive();
     }
 
-    private void bindProductApplication(ApplicationSubjectId subjectId) {
-        if (productBackend == null) {
-            stopIfInactive();
-            return;
-        }
-        ProductStore.MutationResult result = productBackend.bindApplication(subjectId);
-        if (result.persisted) {
-            appendLog("product_control=bind_app subject=" + subjectId.encode());
-        } else {
-            publishProductMutationFailure("product_bind_failed", result,
-                    "application binding could not be persisted");
-        }
-        refreshProductCatalogProjection("bind_app");
-        stopIfInactive();
-    }
-
-    private void unbindProductApplication(ApplicationSubjectId subjectId) {
-        if (productBackend == null) {
-            stopIfInactive();
-            return;
-        }
-        ProductStore.MutationResult result = productBackend.unbindApplication(subjectId);
-        if (result.persisted) {
-            appendLog("product_control=unbind_app subject=" + subjectId.encode());
-        } else {
-            publishProductMutationFailure("product_unbind_failed", result,
-                    "application unbinding could not be persisted");
-        }
-        refreshProductCatalogProjection("unbind_app");
-        stopIfInactive();
-    }
-
     private void setProductNetworkGate(ApplicationSubjectId subjectId,
                                        AuthoringPolicyBundle.NetworkContextId context,
                                        boolean blocked) {
@@ -6823,28 +6704,6 @@ public final class RuntimeService extends VpnService {
         } catch (RuntimeException error) {
             writeBestEffortEvidenceFile(path, "error=network_disable_request_failed\n");
         }
-    }
-
-    private void setProductL4Rule(AuthoringPolicyBundle.L4Rule rule) {
-        if (productBackend == null) {
-            stopIfInactive();
-            return;
-        }
-        ProductStore.MutationResult result = productBackend.setL4Rule(rule);
-        if (result.persisted) {
-            appendLog("product_control=l4_rule subject=" + rule.subjectId.encode()
-                    + " family=" + rule.family.wireName
-                    + " direction=" + rule.direction.wireName
-                    + " ipProtocol=" + rule.ipProtocol
-                    + " action=" + rule.action.wireName
-                    + " ruleId=" + Long.toUnsignedString(rule.ruleId));
-        } else {
-            publishProductMutationFailure("product_l4_rule_failed", result,
-                    "L4 rule mutation could not be applied");
-        }
-        refreshProductCatalogProjection("l4_rule");
-        refreshProductActivityProjection("l4_rule", rule.subjectId);
-        stopIfInactive();
     }
 
     private void refreshProductCatalogProjection(String reason) {

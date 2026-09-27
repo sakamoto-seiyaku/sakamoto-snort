@@ -60,13 +60,15 @@ def document_matches_source(document, saved):
     assert entries == saved['domains']
 
 
-def verify(directory, packet_check=True):
+def verify(directory, packet_check=True, expected_cache_bytes=None):
     directory = Path(directory)
     run = json.loads((directory/'result.json').read_text())
-    assert run['status'] == 'RAW_COMPLETE' and run['process_absent'] and run['import_policy']
+    assert run['status'] == 'RAW_COMPLETE' and run['process_absent']
+    assert run.get('import_policy') or (run.get('task') == 'T29' and run.get('import_policy_sha256'))
     assert not run.get('error') and not run.get('cleanup_error')
     assert digest(directory/'import-policy.py') == run['import_policy_sha256']
     pixel = 'serial' in run
+    import_prefix = 't29-tls' if run.get('task') == 'T29' else 't19'
     generations = {life['profile']:life['generation'] for life in run['lifetimes']} if pixel else {'root':run['generation']}
     records = run['imports']; assert records
     labels = {item['label']:item for item in records}; assert len(labels) == len(records)
@@ -104,6 +106,9 @@ def verify(directory, packet_check=True):
         assert repaired['saved_revision']==repaired['active_revision']==1 and repaired['export_error'] is None
         assert repaired['configuration']==inputs['t19-startup-repair']
     for item in run['configurations']:
+        if item['label'] not in inputs:
+            assert run.get('task') == 'T29' and item['label'].endswith(('-ack-drop','-ack-recover'))
+            continue  # T14's separate live ACK suppression scenario uses the direct test control.
         label=item['label']; original=inputs[label]; accepted=replies[label]
         assert accepted['stage'] == 'vpp' and accepted['result'] == 0
         assert accepted['saved_revision'] == accepted['active_revision']
@@ -128,13 +133,13 @@ def verify(directory, packet_check=True):
         saved=source.source(directory/item['source']); assert saved['source_schema'] == 6
         # The first configuration includes a separately recorded save/compile
         # failure-and-repair sequence before packet collection starts.
-        profile=item.get('profile','root'); prefix='t19-'+profile+'-failures'
+        profile=item.get('profile','root'); prefix=import_prefix+'-'+profile+'-failures'
         final=replies[prefix+'-repaired-export'] if saved['revision'] != accepted['saved_revision'] else accepted
         assert final['saved_revision'] == item['revision'] == saved['revision']
         document_matches_source(final['configuration'],saved)
     rejected=0
     for profile in generations:
-        prefix='t19-'+profile+'-failures'
+        prefix=import_prefix+'-'+profile+'-failures'
         first=next(item for item in run['configurations'] if item.get('profile','root')==profile)
         baseline=replies[first['label']+'-export']; config=baseline['configuration']; revision=baseline['saved_revision']
         cases={'identity-content-conflict':2,'identity-name-conflict':2,'duplicate-identity':2,
@@ -189,13 +194,14 @@ def verify(directory, packet_check=True):
         source_decoder_sha256=digest(HERE/'verify_t06_expressions.py'),
         scope='online import/export, full identity/provenance, save/compile separation and real QUIC decisions')
     if packet_check:
-        result['packet_verification']=packets.verify(directory)
+        result['packet_verification']=packets.verify(directory,expected_cache_bytes)
         assert result['packet_verification']['status']=='PASS'
     return result
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('directory');parser.add_argument('--output',type=Path)
-    args=parser.parse_args();result=verify(args.directory);text=json.dumps(result,indent=2)+'\n'
+    parser.add_argument('--expected-cache-bytes',type=int)
+    args=parser.parse_args();result=verify(args.directory,expected_cache_bytes=args.expected_cache_bytes);text=json.dumps(result,indent=2)+'\n'
     if args.output:args.output.write_text(text)
     print(text,end='')

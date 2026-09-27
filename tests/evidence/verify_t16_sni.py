@@ -167,7 +167,7 @@ def query(directory,case,packets,pixel):
     stale=props(directory/(case['label']+'-stale-sni.properties' if pixel else case['label']+'-stale.txt'))
     assert stale.get('code' if pixel else 'sni.code')!='0'
 
-def verify(directory):
+def verify(directory, expected_cache_bytes=None):
     directory=Path(directory);run=json.loads((directory/'result.json').read_text());pixel='serial' in run
     assert run['status']=='RAW_COMPLETE' and run['process_absent'] and not run.get('error') and not run.get('cleanup_error')
     build=t.base.build_reader.verify_product_build(run['build'])
@@ -269,8 +269,9 @@ def verify(directory):
         for _,row in runtime_rows:
             assert row['capacity']=='1024' and row['entry_bytes']=='9024'
             assert row['allocated_bytes']=='9261384' and row['capacity_misses']=='0'
+        cache_bytes=str(expected_cache_bytes) if expected_cache_bytes is not None else ('24608' if run.get('domain_policy') else '23584')
         for _,row in records(counters,'policy.cache '):
-            assert row['storage_bytes']==('24608' if run.get('domain_policy') else '23584') and row['capacity']=='128'
+            assert row['storage_bytes']==cache_bytes and row['capacity']=='128'
         totals['maximum_admit_to_terminal_us']=max(delays)/1000
         totals['peak_crypto_retained']=max(int(p['assembly']['retained']) for p in packets)
         totals['peak_crypto_ranges']=max(int(p['assembly']['ranges']) for p in packets)
@@ -281,6 +282,7 @@ def verify(directory):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('directory',type=Path);parser.add_argument('--output',type=Path)
-    args=parser.parse_args();value=verify(args.directory);text=json.dumps(value,indent=2)+'\n'
+    parser.add_argument('--expected-cache-bytes',type=int)
+    args=parser.parse_args();value=verify(args.directory,args.expected_cache_bytes);text=json.dumps(value,indent=2)+'\n'
     if args.output:args.output.write_text(text)
     print(text,end='')

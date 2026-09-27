@@ -717,7 +717,7 @@ public class DebugControlActivity extends Activity {
         }
         String l4Subject = intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_SUBJECT);
         if (l4Subject != null && !l4Subject.trim().isEmpty()) {
-            main.post(() -> requestDebugL4Rule(intent, l4Subject));
+            main.post(this::rejectDebugL4Rule);
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
@@ -1750,22 +1750,7 @@ public class DebugControlActivity extends Activity {
     }
 
     private void requestDebugProductBinding(String encodedSubject, boolean bind) {
-        final ApplicationSubjectId subjectId;
-        try {
-            subjectId = ApplicationSubjectId.parse(encodedSubject);
-        } catch (IllegalArgumentException error) {
-            action("Invalid debug application subject: " + encodedSubject);
-            return;
-        }
-        if (bind) {
-            backend.bindProductApplication(this, subjectId);
-            action("Debug bind requested for application subject " + subjectId.encode() + ".");
-        } else {
-            backend.unbindProductApplication(this, subjectId);
-            action("Debug unbind requested for application subject " + subjectId.encode() + ".");
-        }
-        selectedApplicationSubjectId = subjectId;
-        refreshProductCatalog();
+        action("Legacy debug application binding request retired. Use VPP rule configuration.");
     }
 
     private void requestDebugNetworkGate(String encodedSubject, String contextName,
@@ -1787,67 +1772,8 @@ public class DebugControlActivity extends Activity {
         refreshProductCatalog();
     }
 
-    private void requestDebugL4Rule(Intent intent, String encodedSubject) {
-        final AuthoringPolicyBundle.L4Rule rule;
-        try {
-            ApplicationSubjectId subjectId = ApplicationSubjectId.parse(encodedSubject);
-            AuthoringPolicyBundle.IpFamily family = AuthoringPolicyBundle.IpFamily.parse(
-                    stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_FAMILY, "ipv4"));
-            AuthoringPolicyBundle.PacketDirection direction =
-                    AuthoringPolicyBundle.PacketDirection.parse(
-                            stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_DIRECTION, "output"));
-            AuthoringPolicyBundle.L4Action action = AuthoringPolicyBundle.L4Action.parse(
-                    stringExtra(intent, EXTRA_DEBUG_SET_L4_RULE_ACTION, "drop"));
-            AuthoringPolicyBundle.NetworkContextId context = optionalNetworkContext(
-                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_NETWORK_CONTEXT));
-            int ipProtocol = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_IP_PROTOCOL, 6);
-            int priority = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_PRIORITY, 0);
-            int order = intent.getIntExtra(EXTRA_DEBUG_SET_L4_RULE_ORDER, 0);
-            rule = AuthoringPolicyBundle.L4Rule.create(subjectId, family,
-                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_SOURCE_CIDR),
-                    intent.getStringExtra(EXTRA_DEBUG_SET_L4_RULE_DESTINATION_CIDR),
-                    optionalDebugPortRange(intent,
-                            EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_FIRST,
-                            EXTRA_DEBUG_SET_L4_RULE_SOURCE_PORT_LAST),
-                    optionalDebugPortRange(intent,
-                            EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_FIRST,
-                            EXTRA_DEBUG_SET_L4_RULE_DESTINATION_PORT_LAST),
-                    ipProtocol, direction, context, action, priority, order);
-        } catch (IllegalArgumentException error) {
-            action("Invalid debug L4 rule request: " + boundedError(error));
-            return;
-        }
-        backend.setL4Rule(this, rule);
-        action("Debug L4 rule " + rule.action.wireName
-                + " requested for subject " + rule.subjectId.encode()
-                + " ruleId " + Long.toUnsignedString(rule.ruleId) + ".");
-        selectedApplicationSubjectId = rule.subjectId;
-        refreshProductCatalog();
-    }
-
-    private static String stringExtra(Intent intent, String name, String defaultValue) {
-        String value = intent.getStringExtra(name);
-        return value == null || value.trim().isEmpty() ? defaultValue : value;
-    }
-
-    private static AuthoringPolicyBundle.NetworkContextId optionalNetworkContext(String value) {
-        return value == null || value.trim().isEmpty()
-                ? null : AuthoringPolicyBundle.NetworkContextId.parse(value);
-    }
-
-    private static AuthoringPolicyBundle.PortRange optionalDebugPortRange(
-            Intent intent, String firstName, String lastName) {
-        boolean hasFirst = intent.hasExtra(firstName);
-        boolean hasLast = intent.hasExtra(lastName);
-        if (!hasFirst && !hasLast) {
-            return null;
-        }
-        if (!hasFirst || !hasLast) {
-            throw new IllegalArgumentException(firstName + "/" + lastName
-                    + " must be supplied together");
-        }
-        return AuthoringPolicyBundle.PortRange.inclusive(
-                intent.getIntExtra(firstName, -1), intent.getIntExtra(lastName, -1));
+    private void rejectDebugL4Rule() {
+        action("Legacy debug L4 rule request retired. Use Complete direct rules.");
     }
 
     private void runDebugTrafficProbe() {

@@ -17,7 +17,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
@@ -27,7 +27,8 @@ import org.json.JSONObject;
 /** Debug-only ordinary app sockets for bounded protocol-fact acceptance.
  * No native Flow mutation, packet injection, socket protection or policy API. */
 final class ProtocolFactsProbe {
-    private static final AtomicBoolean RUNNING = new AtomicBoolean();
+    private static final AtomicInteger RUNNING = new AtomicInteger();
+    private static final int MAX_CONCURRENT_PROBES = 2;
 
     private static byte[] hex(String value) {
         if (value.length() > 65536 || (value.length() & 1) != 0
@@ -226,17 +227,23 @@ final class ProtocolFactsProbe {
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         int flood = plan.optInt("observationFlood", 10000);
         int window = plan.optInt("observationBatch", 1);
+        boolean tolerateLoss = plan.optBoolean("observationTolerateLoss", false);
+        int maxTimeouts = plan.optInt("observationMaxTimeouts", 0);
         if (flood < 1 || flood > 10000) throw new IllegalArgumentException("observation flood bound");
         if (window < 1 || window > 16) throw new IllegalArgumentException("observation batch bound");
+        if (maxTimeouts < 0 || maxTimeouts > 256 || (tolerateLoss && maxTimeouts == 0)
+                || (!tolerateLoss && maxTimeouts != 0))
+            throw new IllegalArgumentException("observation timeout bound");
         try (DatagramSocket socket = new DatagramSocket(null)) {
             socket.bind(new InetSocketAddress(local, source));
-            socket.connect(endpoint, port); socket.setSoTimeout(5000);
+            socket.connect(endpoint, port); socket.setSoTimeout(tolerateLoss ? 750 : 5000);
             result.put("local", socket.getLocalSocketAddress().toString());
             int[] counts = {1, 3, 1, flood, 1};
             int[] sizes = {32, 40, 32, 32, 32};
             String[] phases = {"observation_created", "observation_tail", "observation_reused",
                     "observation_full", "observation_final"};
-            int sequence = 0, sent = 0, received = 0;
+            int sequence = 0, sent = 0, received = 0, transportTimeouts = 0, lateReplies = 0;
+            java.util.HashSet<String> unresolved = new java.util.HashSet<>();
             for (int phase = 0; phase < counts.length; phase++) {
                 for (int offset = 0; offset < counts[phase]; offset += window) {
                     java.util.HashSet<String> pending = new java.util.HashSet<>();
@@ -249,16 +256,34 @@ final class ProtocolFactsProbe {
                         sent++;
                         result.put("sent", sent);
                     }
-                    for (int i = 0; i < batch; i++) {
+                    while (!pending.isEmpty()) {
                         DatagramPacket reply = new DatagramPacket(new byte[128], 128);
-                        socket.receive(reply);
-                        if (!pending.remove(toHex(Arrays.copyOf(reply.getData(), reply.getLength()))))
+                        try {
+                            socket.receive(reply);
+                        } catch (SocketTimeoutException missing) {
+                            if (!tolerateLoss) throw missing;
+                            transportTimeouts += pending.size();
+                            if (transportTimeouts > maxTimeouts)
+                                throw new IllegalStateException("observation timeout budget");
+                            unresolved.addAll(pending);
+                            pending.clear();
+                            break;
+                        }
+                        String payload = toHex(Arrays.copyOf(reply.getData(), reply.getLength()));
+                        if (pending.remove(payload)) {
+                            received++;
+                        } else if (unresolved.remove(payload)) {
+                            received++;
+                            lateReplies++;
+                        } else {
                             throw new IllegalStateException("unexpected observation echo");
-                        received++;
+                        }
                         result.put("received", received);
                     }
                 }
-                result.put("sent", sent).put("received", received).put("payloadBytes", sizes[phase]);
+                result.put("sent", sent).put("received", received).put("payloadBytes", sizes[phase])
+                        .put("transportTimeouts", transportTimeouts).put("lateReplies", lateReplies)
+                        .put("unresolvedReplies", unresolved.size());
                 gate(app, nonce, result, phases[phase]);
             }
         }
@@ -532,9 +557,22 @@ final class ProtocolFactsProbe {
             plan = new JSONObject(text); nonce = plan.getString("nonce");
             if (!nonce.matches("[a-zA-Z0-9_-]{1,80}")) return;
         } catch (Exception invalid) { return; }
-        if (!RUNNING.compareAndSet(false, true)) return;
+        int active;
+        do {
+            active = RUNNING.get();
+            if (active >= MAX_CONCURRENT_PROBES) {
+                try {
+                    JSONObject rejected = new JSONObject();
+                    rejected.put("nonce", nonce).put("error", "protocol_probe_capacity");
+                    report(context.getApplicationContext(), nonce, rejected, "finished");
+                } catch (Exception error) {
+                    android.util.Log.e("SakamotoProtocolProbe", "capacity result write failed", error);
+                }
+                return;
+            }
+        } while (!RUNNING.compareAndSet(active, active + 1));
         Context app = context.getApplicationContext();
-        new Thread(() -> {
+        Thread probe = new Thread(() -> {
             JSONObject result = new JSONObject();
             try {
                 result.put("nonce", nonce).put("uid", android.os.Process.myUid()).put("plan", plan);
@@ -559,8 +597,14 @@ final class ProtocolFactsProbe {
                 try { result.put("error", error.toString()); } catch (Exception ignored) { }
             } finally {
                 try { report(app, nonce, result, "finished"); } catch (Exception ignored) { }
-                RUNNING.set(false);
+                RUNNING.decrementAndGet();
             }
-        }, "t12-app-protocol").start();
+        }, "t12-app-protocol");
+        try {
+            probe.start();
+        } catch (RuntimeException error) {
+            RUNNING.decrementAndGet();
+            throw error;
+        }
     }
 }
