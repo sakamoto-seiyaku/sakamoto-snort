@@ -110,7 +110,7 @@ fn same_window_name_conflict_keeps_existing_history_unchanged() {
 }
 
 #[test]
-fn full_name_table_reports_missing_links_without_losing_packet_counts() {
+fn full_name_table_retires_unreferenced_links_without_losing_packet_counts() {
     let root = std::env::temp_dir().join(format!("t26-name-cap-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("overall.json");
@@ -131,15 +131,15 @@ fn full_name_table_reports_missing_links_without_losing_packet_counts() {
     store.consume(&[ended(1, new_version, "overflow", 1, 61)], 61_000_000).unwrap();
     let q = store.query();
     assert_eq!(q["packets"], serde_json::json!([1, 0]));
-    assert_eq!(q["rule_metadata_count"], 65536);
-    assert_eq!(q["rule_metadata_association_misses"], 1);
-    assert_eq!(q["coverage"]["rule_metadata_incomplete"], true);
+    assert_eq!(q["rule_metadata_count"], 65536 - 64 + 1);
+    assert_eq!(q["rule_metadata_association_misses"], 0);
+    assert_eq!(q["coverage"]["rule_metadata_incomplete"], false);
     assert!(q["rule_windows"].as_object().unwrap().values().any(|row|
         row["interpretation"]["name"] == "overflow"));
     store.close().unwrap(); drop(store);
     let reopened = ObservationStore::open(&path).unwrap();
     assert_eq!(reopened.query()["packets"], serde_json::json!([1, 0]));
-    assert_eq!(reopened.query()["rule_metadata_association_misses"], 1);
+    assert_eq!(reopened.query()["rule_metadata_association_misses"], 0);
     drop(reopened);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -223,7 +223,8 @@ fn duplicate_end_does_not_extend_recent_lifetime_or_remove_active_baseline() {
     store.consume(&[later], later_us).unwrap();
     let q = store.query();
     assert_eq!(q["recent_count"], 1);
-    assert_eq!(q["baselines"], 2); // Old cumulative state is still needed for dedup.
+    assert_eq!(q["baselines"], 1);
+    assert_eq!(q["end_marker_count"], 1); // Compact marker still rejects a late duplicate.
     assert_eq!(q["rule_window_count"], 2); // The coarse effects outlive END detail.
     assert_eq!(q["rule_metadata_count"], 2);
     assert_eq!(q["packets"], serde_json::json!([2, 0]));
@@ -232,7 +233,8 @@ fn duplicate_end_does_not_extend_recent_lifetime_or_remove_active_baseline() {
     store.close().unwrap(); drop(store);
     let reopened = ObservationStore::open(&path).unwrap();
     assert_eq!(reopened.query()["recent_count"], 1);
-    assert_eq!(reopened.query()["baselines"], 2);
+    assert_eq!(reopened.query()["baselines"], 1);
+    assert_eq!(reopened.query()["end_marker_count"], 1);
     drop(reopened);
     std::fs::remove_dir_all(root).unwrap();
 }

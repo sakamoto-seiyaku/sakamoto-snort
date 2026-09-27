@@ -20,9 +20,9 @@ fn identity(text: &str) -> Option<(u64, u64)> {
 
 pub(crate) fn needs_source(snapshot: &Value) -> bool {
     let persistent = &snapshot["persistent"];
-    persistent["rule_windows"]
-        .as_object()
-        .is_some_and(|windows| !windows.is_empty())
+    [&persistent["rule_windows"], &persistent["hour_windows"]["rule_windows"],
+        &persistent["day_windows"]["rule_windows"]].into_iter()
+        .any(|windows| windows.as_object().is_some_and(|windows| !windows.is_empty()))
         || persistent["recent"].as_object().is_some_and(|recent| {
             recent.values().any(|item| {
                 item["record"]["attribution"]
@@ -152,11 +152,18 @@ pub(crate) fn annotate(snapshot: &mut Value, source: Result<RuleSource, &'static
         return;
     }
     let mut any_available = false;
-    if let Some(windows) = persistent["rule_windows"].as_object_mut() {
-        for window in windows.values_mut() {
-            let attribution = window["attribution"].clone();
-            any_available |=
-                interpret_reference(&attribution, &mut window["interpretation"], &source);
+    for tier in ["minute", "hour", "day"] {
+        let windows = match tier {
+            "minute" => &mut persistent["rule_windows"],
+            "hour" => &mut persistent["hour_windows"]["rule_windows"],
+            _ => &mut persistent["day_windows"]["rule_windows"],
+        };
+        if let Some(windows) = windows.as_object_mut() {
+            for window in windows.values_mut() {
+                let attribution = window["attribution"].clone();
+                any_available |=
+                    interpret_reference(&attribution, &mut window["interpretation"], &source);
+            }
         }
     }
     if let Some(recent) = persistent["recent"].as_object_mut() {
@@ -197,6 +204,8 @@ mod tests {
                 "ended":{"record":{"attribution":[{"winner":65537},{"winner":0}]}}
             }}})
         ));
+        assert!(needs_source(&json!({"persistent":{"rule_windows":{},"recent":{},
+            "hour_windows":{"rule_windows":{"old":{}}}}})));
     }
 
     #[test]
@@ -261,5 +270,25 @@ mod tests {
             "metadata_conflict"
         );
         assert!(conflict["persistent"]["history_source"]["configuration"].is_null());
+    }
+
+    #[test]
+    fn rolled_rule_windows_keep_the_same_condition_proof() {
+        let source = RuleSource {
+            revision: 5, hash: 99,
+            configuration: json!({"rules":[{"name":"old","definition":"65537 0 ..."}]}),
+            indexes: BTreeMap::from([(65537, 0)]),
+        };
+        let row = json!({"attribution":{"valid":true,"winner":65537,
+            "policy_revision":5,"policy_hash":99},
+            "interpretation":{"version":"65537","name":"old","name_status":"recorded"}});
+        let mut snapshot = json!({"persistent":{"rule_windows":{},"recent":{},
+            "hour_windows":{"rule_windows":{"h":row}},
+            "day_windows":{"rule_windows":{"d":row}}}});
+        annotate(&mut snapshot, Ok(source));
+        for tier in ["hour_windows", "day_windows"] {
+            assert_eq!(snapshot["persistent"][tier]["rule_windows"].as_object().unwrap()
+                .values().next().unwrap()["interpretation"]["conditions"]["status"], "available");
+        }
     }
 }

@@ -80,6 +80,17 @@ mod live {
         reply
     }
 
+    fn tick_store(state: &mut State, store: &mut Option<ObservationStore>) {
+        if let Some(store) = store {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_micros() as u64).unwrap_or(0);
+            if let Err(error) = store.tick_real(now) {
+                state.store_error = Some(error);
+            }
+        }
+    }
+
     pub(crate) struct ObservationService {
         control: Control,
         interrupt: c_int,
@@ -128,7 +139,8 @@ mod live {
                     }
                     let mut health = ObservationHealth::default();
                     unsafe { product_observation_transport_status(handle, &mut health) };
-                    let mut store = match ObservationStore::open(&store_path) {
+                    let mut store = match ObservationStore::open(&store_path)
+                        .and_then(|mut store| { store.begin_generation(generation)?; Ok(store) }) {
                         Ok(store) => Some(store),
                         Err(error) => {
                             worker_state.store_error = Some(error);
@@ -163,6 +175,7 @@ mod live {
                             command.parked = true;
                             cv.notify_all();
                             drop(command);
+                            tick_store(&mut worker_state, &mut store);
                             answer_query(&worker_state, store.as_ref(), &worker_control);
                             command = mutex.lock().unwrap();
                             if command.query_requested != command.query_completed {
@@ -178,6 +191,7 @@ mod live {
                             break;
                         }
                         drop(command);
+                        tick_store(&mut worker_state, &mut store);
                         answer_query(&worker_state, store.as_ref(), &worker_control);
                         let mut work = false;
                         let mut records = Vec::new();
@@ -242,7 +256,7 @@ mod live {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_micros() as u64)
                                     .unwrap_or(0);
-                                let result = store.consume(&records, now);
+                                let result = store.consume_real(&records, now);
                                 if let Err(error) = result {
                                     worker_state.store_error = Some(error);
                                 }
