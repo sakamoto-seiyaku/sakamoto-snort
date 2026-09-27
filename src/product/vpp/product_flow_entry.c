@@ -83,6 +83,45 @@ find_entry (product_flow_runtime_t *pool,
   return NO_SLOT;
 }
 
+uint64_t product_flow_entry_current_incarnation (product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, uint64_t generation,
+  uint64_t timestamp_us)
+{
+  if (!pool || !assignment || !assignment_is_eligible(assignment)
+      || !generation || pool->stats.generation != generation
+      || assignment->execution_owner != pool->stats.worker_index)
+    return 0;
+  uint32_t slot = find_entry(pool, assignment);
+  if (slot == NO_SLOT) return 0;
+  const product_flow_entry_t *entry = &pool->slots[slot].entry;
+  if (entry->deadline_us && entry->deadline_us <= timestamp_us) return 0;
+  return entry->incarnation;
+}
+
+int product_flow_entry_enrich_uid (product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, uint64_t generation,
+  uint64_t incarnation, uint32_t uid, uint64_t timestamp_us)
+{
+  if (!pool || !assignment || !incarnation || uid == PRODUCT_FLOW_ENTRY_UID_UNKNOWN
+      || !generation || pool->stats.generation != generation
+      || assignment->execution_owner != pool->stats.worker_index)
+    return 0;
+  uint32_t slot = find_entry(pool, assignment);
+  if (slot == NO_SLOT) return 0;
+  product_flow_entry_t *entry = &pool->slots[slot].entry;
+  if (entry->incarnation != incarnation
+      || (entry->deadline_us && entry->deadline_us <= timestamp_us)) return 0;
+  if (entry->uid == uid) return 0;
+  if (entry->uid != PRODUCT_FLOW_ENTRY_UID_UNKNOWN)
+    return product_flow_runtime_close(pool, slot, generation, incarnation,
+        PRODUCT_FLOW_END_REPLACED) == PRODUCT_FLOW_ENTRY_STATUS_OK ? 2 : -1;
+  entry->uid = uid;
+  entry->decision = PRODUCT_FLOW_ENTRY_DECISION_NONE;
+  entry->winner_rule_id = 0;
+  entry->reason_id = 0;
+  return 1;
+}
+
 static unsigned
 entry_protocol (const product_flow_entry_t *entry)
 {
@@ -399,11 +438,11 @@ policy_identity_matches (const product_flow_entry_t *entry,
          && entry->policy_snapshot_hash == policy->snapshot_hash;
 }
 
-product_flow_entry_status_t
-product_flow_entry_observe (
+static product_flow_entry_status_t
+product_flow_entry_observe_impl (
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_flow_entry_packet_t *packet, uint8_t stage_verdict,
-  product_flow_entry_observation_t *observation)
+  product_flow_entry_observation_t *observation, uint64_t expected_incarnation)
 {
   product_flow_entry_t *entry;
 
@@ -453,6 +492,15 @@ product_flow_entry_observe (
               || packet->facts->icmp_identifier != assignment->key.transport.query.identifier)))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   uint32_t slot = find_entry (pool, assignment);
+  if (expected_incarnation)
+    {
+      if (slot == NO_SLOT)
+        return PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND;
+      const product_flow_entry_t *current = &pool->slots[slot].entry;
+      if ((current->deadline_us && current->deadline_us <= packet->timestamp)
+          || current->incarnation != expected_incarnation)
+        return PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND;
+    }
   uint64_t previous_incarnation = 0;
   if (slot != NO_SLOT && pool->slots[slot].entry.deadline_us &&
       pool->slots[slot].entry.deadline_us <= packet->timestamp)
@@ -499,6 +547,8 @@ product_flow_entry_observe (
         }
       else if (tcp_result.create_replacement)
         {
+          if (expected_incarnation)
+            return PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND;
           previous_incarnation = pool->slots[slot].entry.incarnation;
           product_flow_entry_status_t close_status = product_flow_runtime_close (
             pool, slot, pool->stats.generation, previous_incarnation,
@@ -535,6 +585,8 @@ product_flow_entry_observe (
     }
   if (slot == NO_SLOT)
     {
+      if (expected_incarnation)
+        return PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND;
       slot = pool->free_head;
       if (slot == NO_SLOT)
         {
@@ -621,6 +673,27 @@ product_flow_entry_observe (
       observation->tracker = icmp_result;
     }
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
+
+product_flow_entry_status_t
+product_flow_entry_observe (
+  product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
+  const product_flow_entry_packet_t *packet, uint8_t stage_verdict,
+  product_flow_entry_observation_t *observation)
+{
+  return product_flow_entry_observe_impl (pool, assignment, packet,
+                                          stage_verdict, observation, 0);
+}
+
+product_flow_entry_status_t
+product_flow_entry_observe_existing (
+  product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
+  const product_flow_entry_packet_t *packet, uint8_t stage_verdict,
+  uint64_t expected_incarnation, product_flow_entry_observation_t *observation)
+{
+  return product_flow_entry_observe_impl (pool, assignment, packet,
+                                          stage_verdict, observation,
+                                          expected_incarnation ? expected_incarnation : UINT64_MAX);
 }
 
 product_flow_entry_status_t

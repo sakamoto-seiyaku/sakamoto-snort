@@ -4,6 +4,7 @@ import android.net.VpnService;
 import android.os.ParcelFileDescriptor;
 
 import java.io.IOException;
+import java.net.InetAddress;
 
 /**
  * Owns the Android VpnService TUN fd establishment seam for the product VPN Adapter.
@@ -31,6 +32,11 @@ public final class VpnTunPlatformSession implements AutoCloseable {
     }
 
     static EstablishResult establish(VpnService service, boolean enableIpv6, boolean graphValidation) {
+        return establish(service, enableIpv6, graphValidation, new InetAddress[0]);
+    }
+
+    static EstablishResult establish(VpnService service, boolean enableIpv6,
+                                     boolean graphValidation, InetAddress[] dnsServers) {
         if (service == null) {
             return EstablishResult.error("vpn_service_missing",
                     "VpnService instance is unavailable");
@@ -50,6 +56,8 @@ public final class VpnTunPlatformSession implements AutoCloseable {
                 builder = builder.addAddress(IPV6_ADDRESS, 128)
                         .addRoute("::", 0);
             }
+            if (dnsServers != null) for (InetAddress server : dnsServers)
+                if (server != null) builder.addDnsServer(server);
             descriptor = builder.establish();
             if (descriptor == null) {
                 return EstablishResult.error("vpn_establish_returned_null",

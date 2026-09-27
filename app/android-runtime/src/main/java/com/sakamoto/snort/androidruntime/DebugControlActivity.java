@@ -1055,6 +1055,15 @@ public class DebugControlActivity extends Activity {
                 .append(" · protection=").append(runtime.optString("protectionRunning", "unknown"))
                 .append(" · generation=").append(runtime.optString("generation", "unknown"))
                 .append(" · error=").append(runtime.optString("errorCode", "none")).append('\n');
+        if (runtime != null && runtime.has("underlayAvailable"))
+            text.append(runtime.optBoolean("underlayAvailable")
+                    ? "Underlying network: selected"
+                    : "Underlying network: unavailable")
+                    .append("; VPN protection ")
+                    .append(runtime.optBoolean("protectionRunning")
+                            ? "active\n" : "not running\n");
+        if (runtime != null && runtime.optBoolean("dnsRestartRequired"))
+            text.append("Underlying network or DNS changed: restart VPN to refresh DNS configuration\n");
         JSONObject vpp = reply.optJSONObject("vpp");
         if (vpp == null || vpp.has("error"))
             text.append("VPP: unavailable ").append(vpp == null ? "" : vpp.optString("error")).append('\n');

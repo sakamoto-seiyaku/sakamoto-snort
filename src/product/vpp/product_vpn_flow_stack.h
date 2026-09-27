@@ -36,7 +36,8 @@ typedef enum {
 typedef product_vpn_flow_stack_output_result_t (*product_vpn_flow_stack_output_fn)(
   void *opaque, const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
-  uint64_t generation, uint64_t serial, uint64_t underlay_epoch);
+  uint64_t generation, uint64_t serial, uint64_t underlay_epoch,
+  uint64_t flow_incarnation);
 
 typedef struct {
   uint32_t quanta, runnable;
@@ -89,7 +90,8 @@ const char *product_vpn_flow_stack_fault_name(product_vpn_flow_stack_fault_t fau
  * is retained; return network facts come from the actual socket binding. */
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
   product_vpn_flow_stack_t *stack, const uint8_t *l3, size_t length,
-  const product_platform_packet_facts_t *platform, uint64_t generation);
+  const product_platform_packet_facts_t *platform, uint64_t generation,
+  uint64_t flow_incarnation);
 
 /* Each turn consumes bounded real transport work, including while draining.
  * timeout_ms is a transport timer, not the FlowRuntime Conntrack deadline. */

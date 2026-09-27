@@ -147,7 +147,7 @@ product_core_adapter_available (void)
 {
   if (product_core_profile_is_root ())
     return product_root_nfqueue_adapter_available ();
-  return 0;
+  return product_vpn_tun_product_ready ();
 }
 
 static int
@@ -155,7 +155,7 @@ product_core_protection_running (void)
 {
   if (product_core_profile_is_root ())
     return product_root_nfqueue_adapter_available ();
-  return 0;
+  return product_vpn_tun_product_ready ();
 }
 
 static u32
@@ -970,7 +970,7 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
   product_core_main_t *pcm = &product_core_main;
   f64 deadline = vlib_time_now (vm) + 1.0;
   (void)node; (void)frame;
-  if (!product_core_profile_is_root () && !product_vpn_tun_validation_enabled ())
+  if (!product_core_profile_is_root () && !product_vpn_tun_enabled ())
     return 0;
   while (clib_atomic_load_acq_n (&product_core_worker_ready_mask) != 3)
     {

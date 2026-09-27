@@ -249,6 +249,24 @@ product_flow_entry_observe (product_flow_runtime_t *pool,
                             uint8_t stage_verdict,
                             product_flow_entry_observation_t *observation);
 
+/* Observe only the exact flow incarnation carried by its HEV return token.
+ * A retired transport cannot create or mutate a replacement application flow. */
+product_flow_entry_status_t product_flow_entry_observe_existing (
+  product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
+  const product_flow_entry_packet_t *packet, uint8_t stage_verdict,
+  uint64_t expected_incarnation, product_flow_entry_observation_t *observation);
+
+/* Read only a currently linked, unexpired entry on its canonical owner. */
+uint64_t product_flow_entry_current_incarnation (product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, uint64_t generation,
+  uint64_t timestamp_us);
+
+/* Owner-local enrichment of an already admitted incarnation. A policy drop
+ * never allocates an entry. A different known UID retires the old flow. */
+int product_flow_entry_enrich_uid (product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, uint64_t generation,
+  uint64_t incarnation, uint32_t uid, uint64_t timestamp_us);
+
 /* Current owner only; synchronous payload borrow, never retained. Stale
  * generation/incarnation or ended entries reject before feature mutation. */
 product_flow_entry_status_t product_flow_entry_identify (

@@ -14,6 +14,7 @@ typedef struct {
   uint32_t uid;
   uint32_t network_context;
   uint64_t underlay_epoch;
+  uint64_t flow_incarnation; /* admitted Product flow, zero if unavailable */
   uint8_t availability;
 } hev_owner_facts_t;
 

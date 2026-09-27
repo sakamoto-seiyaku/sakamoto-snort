@@ -54,7 +54,8 @@ static hev_owner_output_result_t output(void *opaque,
   if (facts->availability & HEV_OWNER_CONTEXT_KNOWN)
     platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
   switch (stack->config.output(stack->config.opaque, borrowed, count, total,
-                              &platform, generation, serial, facts->underlay_epoch)) {
+                              &platform, generation, serial, facts->underlay_epoch,
+                              facts->flow_incarnation)) {
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED: return HEV_OWNER_OUTPUT_ACCEPTED;
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY: return HEV_OWNER_OUTPUT_NO_MEMORY;
   default: return HEV_OWNER_OUTPUT_REJECTED;
@@ -99,13 +100,15 @@ product_vpn_flow_stack_t *product_vpn_flow_stack_create(
 
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
   product_vpn_flow_stack_t *stack, const uint8_t *l3, size_t length,
-  const product_platform_packet_facts_t *platform, uint64_t generation)
+  const product_platform_packet_facts_t *platform, uint64_t generation,
+  uint64_t flow_incarnation)
 {
   if (!stack || !platform) return PRODUCT_VPN_FLOW_STACK_FAILED;
   if (platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
       platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT)
     return PRODUCT_VPN_FLOW_STACK_UNSUPPORTED;
-  hev_owner_facts_t facts = {.uid = platform->uid};
+  hev_owner_facts_t facts = {.uid = platform->uid,
+    .flow_incarnation = flow_incarnation};
   if (platform->availability & PRODUCT_PLATFORM_UID_KNOWN)
     facts.availability |= HEV_OWNER_UID_KNOWN;
   switch (hev_owner_input_copy(stack->owner, l3, length, &facts, generation)) {

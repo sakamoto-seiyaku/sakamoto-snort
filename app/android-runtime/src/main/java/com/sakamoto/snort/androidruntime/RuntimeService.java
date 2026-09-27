@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ApplicationInfo;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.VpnService;
@@ -29,6 +30,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -37,6 +40,7 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.ArrayList;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.UUID;
@@ -196,6 +200,11 @@ public final class RuntimeService extends VpnService {
     private boolean vpnGraphValidation;
     private boolean requestedVpnHevValidation;
     private boolean vpnHevValidation;
+    private boolean vpnProductFlowStack;
+    /* Builder DNS is fixed when Android establishes this VPN generation. */
+    private Network vpnDnsEstablishedUnderlay;
+    private InetAddress[] vpnDnsEstablishedServers = new InetAddress[0];
+    private boolean vpnDnsIpv6Enabled;
     private boolean requestedHevUnknownIdentity, requestedHevUnknownContext;
     private boolean hevUnknownIdentity, hevUnknownContext;
     private String requestedHevLimits, hevLimits;
@@ -204,9 +213,34 @@ public final class RuntimeService extends VpnService {
     // Matches the frozen native W2 layout; registration must succeed for both
     // independent channels before the TUN can be attached.
     private final VpnSocketBroker[] vpnSocketBrokers = new VpnSocketBroker[2];
+    private final VpnUidBroker[] vpnUidBrokers = new VpnUidBroker[2];
 
     private boolean hasVpnSocketBrokers() {
         for (VpnSocketBroker broker : vpnSocketBrokers) if (broker != null) return true;
+        return false;
+    }
+
+    private boolean hasVpnUidBrokers() {
+        for (VpnUidBroker broker : vpnUidBrokers) if (broker != null) return true;
+        return false;
+    }
+
+    private boolean vpnDnsRestartRequired() {
+        if (vpnDnsEstablishedUnderlay == null || platformNetworkSnapshots == null) return false;
+        PlatformNetworkSnapshots.Underlay current = platformNetworkSnapshots.currentUnderlay();
+        if (current == null) return false; // The separate underlay status reports offline.
+        if (!vpnDnsEstablishedUnderlay.equals(current.network)) return true;
+        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+        LinkProperties properties = connectivity == null ? null
+                : connectivity.getLinkProperties(current.network);
+        if (properties == null) return true;
+        ArrayList<InetAddress> currentServers = new ArrayList<>();
+        for (InetAddress server : properties.getDnsServers())
+            if (server instanceof Inet4Address || vpnDnsIpv6Enabled
+                    && server instanceof Inet6Address) currentServers.add(server);
+        if (currentServers.size() != vpnDnsEstablishedServers.length) return true;
+        for (InetAddress server : vpnDnsEstablishedServers)
+            if (!currentServers.contains(server)) return true;
         return false;
     }
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
@@ -430,6 +464,15 @@ public final class RuntimeService extends VpnService {
                     if (current != null) {
                         platform = new JSONObject(current.encode());
                         platform.put("source", "runtime_service");
+                        if (vpnProductFlowStack && current.profile == RuntimeProfile.VPN
+                                && RuntimeSnapshot.STATE_RUNNING.equals(current.state)) {
+                            boolean underlayAvailable = platformNetworkSnapshots != null
+                                    && platformNetworkSnapshots.currentUnderlay() != null;
+                            platform.put("underlayAvailable", underlayAvailable);
+                            platform.put("egressState", underlayAvailable
+                                    ? "underlay_selected" : "no_underlay");
+                            platform.put("dnsRestartRequired", vpnDnsRestartRequired());
+                        }
                     } else {
                         platform = new JSONObject().put("source", "runtime_service")
                                 .put("error", "runtime_snapshot_unavailable");
@@ -925,6 +968,7 @@ public final class RuntimeService extends VpnService {
         initializeProfilePaths(selected);
         vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
         vpnHevValidation = vpnGraphValidation && requestedVpnHevValidation;
+        vpnProductFlowStack = selected == RuntimeProfile.VPN && !vpnGraphValidation;
         hevUnknownIdentity = vpnHevValidation && requestedHevUnknownIdentity;
         hevUnknownContext = vpnHevValidation && requestedHevUnknownContext;
         hevLimits = vpnHevValidation ? requestedHevLimits : null;
@@ -1059,9 +1103,13 @@ public final class RuntimeService extends VpnService {
             if (vpnGraphValidation) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
             }
-            if (vpnHevValidation) {
+            if (vpnProductFlowStack) {
+                builder.environment().put("SAKAMOTO_PRODUCT_VPN_PRODUCT", "1");
+            }
+            if (vpnHevValidation || vpnProductFlowStack) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV", "1");
-                builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_TRACE", "1");
+                if (vpnHevValidation)
+                    builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_TRACE", "1");
                 if (hevLimits != null && !hevLimits.isEmpty())
                     builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_LIMITS", hevLimits);
             }
@@ -1166,7 +1214,7 @@ public final class RuntimeService extends VpnService {
                         "Flow observation ingestion could not start");
                 return;
             }
-            if (selected == RuntimeProfile.ROOT || vpnGraphValidation) {
+            if (selected == RuntimeProfile.ROOT || vpnGraphValidation || vpnProductFlowStack) {
                 final long networkGeneration = generation;
                 platformNetworkSnapshots = new PlatformNetworkSnapshots(
                         getSystemService(ConnectivityManager.class), session,
@@ -1179,18 +1227,49 @@ public final class RuntimeService extends VpnService {
                         }));
                 platformNetworkSnapshots.start();
             }
-            pendingVpnTunSession = establishPacketAdapterSession(adapter);
+            InetAddress[] vpnDnsServers = new InetAddress[0];
+            Network vpnDnsUnderlay = null;
+            if (vpnProductFlowStack) {
+                PlatformNetworkSnapshots.Underlay underlay = platformNetworkSnapshots == null
+                        ? null : platformNetworkSnapshots.currentUnderlay();
+                if (underlay == null) {
+                    failProductCoreGeneration("vpn_underlay_unavailable",
+                            "No subscribed underlay is available for VPN DNS and socket handoff");
+                    return;
+                }
+                ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+                LinkProperties properties = connectivity == null ? null
+                        : connectivity.getLinkProperties(underlay.network);
+                ArrayList<InetAddress> servers = new ArrayList<>();
+                if (properties != null) for (InetAddress server : properties.getDnsServers()) {
+                    if (server instanceof Inet4Address || adapter.enableIpv6
+                            && server instanceof Inet6Address) servers.add(server);
+                }
+                if (servers.isEmpty()) {
+                    failProductCoreGeneration("vpn_dns_unavailable",
+                            "The selected underlay has no DNS server for protected VPN resolution");
+                    return;
+                }
+                vpnDnsServers = servers.toArray(new InetAddress[0]);
+                vpnDnsUnderlay = underlay.network;
+            }
+            pendingVpnTunSession = establishPacketAdapterSession(adapter, vpnDnsServers);
             if (adapter.requiresVpnPlatformSession && pendingVpnTunSession == null) {
                 failProductCoreGeneration("vpn_tun_establish_failed", "VPN platform session is unavailable");
                 return;
+            }
+            if (vpnProductFlowStack) {
+                vpnDnsEstablishedUnderlay = vpnDnsUnderlay;
+                vpnDnsEstablishedServers = vpnDnsServers;
+                vpnDnsIpv6Enabled = adapter.enableIpv6;
             }
             if (selected == RuntimeProfile.ROOT && !installProductRootNfqueueHook()) {
                 failProductCoreGeneration("root_nfqueue_hook_install_failed",
                         "Root NFQUEUE INPUT/OUTPUT hooks could not be installed");
                 return;
             }
-            if (selected == RuntimeProfile.VPN && vpnGraphValidation) {
-                if (vpnHevValidation) {
+            if (selected == RuntimeProfile.VPN && (vpnGraphValidation || vpnProductFlowStack)) {
+                if (vpnHevValidation || vpnProductFlowStack) {
                     if (platformNetworkSnapshots == null || platformNetworkSnapshots.currentUnderlay() == null)
                         throw new IOException("No subscribed underlay is available for Direct VPN handoff");
                     final long brokerGeneration = generation;
@@ -1198,7 +1277,8 @@ public final class RuntimeService extends VpnService {
                         vpnSocketBrokers[shard] = VpnSocketBroker.start(this, runtime.getPath(), generation, shard,
                                 hevUnknownContext,
                                 () -> enqueueLifecycle(() -> {
-                                    if (generation == brokerGeneration && vpnHevValidation
+                                    if (generation == brokerGeneration
+                                            && (vpnHevValidation || vpnProductFlowStack)
                                             && currentMayBeActive()) {
                                         failProductCoreGeneration("vpn_socket_broker_failed",
                                                 "Native socket authorization channel failed");
@@ -1210,11 +1290,24 @@ public final class RuntimeService extends VpnService {
                         for (VpnSocketBroker broker : generationBrokers)
                             broker.updateUnderlay(selectedUnderlay, invalidatedEpoch);
                     });
+                    if (vpnProductFlowStack) {
+                        for (int owner = 0; owner < vpnUidBrokers.length; ++owner) {
+                            vpnUidBrokers[owner] = VpnUidBroker.start(this, runtime.getPath(),
+                                    generation, owner,
+                                    () -> enqueueLifecycle(() -> {
+                                        if (generation == brokerGeneration && vpnProductFlowStack
+                                                && currentMayBeActive()) {
+                                            failProductCoreGeneration("vpn_uid_broker_failed",
+                                                    "Android application identity channel failed");
+                                        }
+                                    }));
+                        }
+                    }
                 }
                 vpnTunSession = pendingVpnTunSession;
                 pendingVpnTunSession = null;
                 if (vpnTunSession == null) throw new IOException("TUN validation session missing");
-                if (hevUnknownIdentity) {
+                if (hevUnknownIdentity || vpnProductFlowStack) {
                     NativeTunFdClient.attachUnknownIdentity(runtime.getPath(), generation, vpnTunSession.releaseFd());
                 } else {
                     NativeTunFdClient.attach(runtime.getPath(), generation,
@@ -1222,7 +1315,9 @@ public final class RuntimeService extends VpnService {
                 }
                 closeVpnTunSessionAfterNativeHandoff();
                 status = session.query();
-                if (status.vpnTunFdAttached != 1 || status.adapterAvailable || status.protectionRunning) {
+                if (status.vpnTunFdAttached != 1
+                        || status.adapterAvailable != vpnProductFlowStack
+                        || status.protectionRunning != vpnProductFlowStack) {
                     throw new IOException("TUN graph handoff/readiness mismatch");
                 }
             } else if (selected == RuntimeProfile.VPN) {
@@ -1566,7 +1661,8 @@ public final class RuntimeService extends VpnService {
             } else {
                 validation = ProductCoreLifecycle.validate(generation, productArtifactId,
                         productApiIdentity, productVppRevision, productAbiVersion,
-                        productApiVersion, status, adapter.adapterReadyAfterHandoff);
+                        productApiVersion, status, adapter.adapterReadyAfterHandoff
+                                && !vpnGraphValidation);
             }
             if (!validation.isEmpty()) {
                 appendProductCoreValidationFailureLog(validation, status);
@@ -2618,6 +2714,14 @@ public final class RuntimeService extends VpnService {
                         + "adapterAvailable=" + status.adapterAvailable + "\n"
                         + "protectionRunning=" + status.protectionRunning + "\n"
                         + "uidSource=CONTROLLED_TEST_PROVIDER\n");
+                return true;
+            }
+            if (activeProfile == RuntimeProfile.VPN && vpnProductFlowStack) {
+                writeBestEffortEvidenceFile("product-state/vpn-product-ready.properties",
+                        "generation=" + generation + "\n"
+                        + "tunAttached=" + status.vpnTunFdAttached + "\n"
+                        + "adapterAvailable=" + status.adapterAvailable + "\n"
+                        + "protectionRunning=" + status.protectionRunning + "\n");
                 return true;
             }
             writeS180VpnUdp4DirectEgressStatus(status);
@@ -5103,7 +5207,8 @@ public final class RuntimeService extends VpnService {
      * timer merely enqueues work; all restart side effects stay serialized. */
     private boolean recoverVpnFlowStackAfterFailure(boolean clean, String code, String message) {
         final long requestEpoch = generationRequestEpoch;
-        if (!clean || activeProfile != RuntimeProfile.VPN || !vpnHevValidation
+        if (!clean || activeProfile != RuntimeProfile.VPN
+                || !(vpnHevValidation || vpnProductFlowStack)
                 || !recoveryPolicy.vpnFlowStackRecoverable(code)
                 || stopRequested || destroying || !isCurrentServiceInstance()
                 || requestEpoch == 0 || requestEpoch != explicitRequestEpoch.get()
@@ -5181,7 +5286,8 @@ public final class RuntimeService extends VpnService {
             archiveHevNativeLog("s242-last-stop.log");
         }
         for (VpnSocketBroker broker : vpnSocketBrokers) if (broker != null) broker.expectStop();
-        if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation
+        for (VpnUidBroker broker : vpnUidBrokers) if (broker != null) broker.expectStop();
+        if (activeProfile == RuntimeProfile.VPN && (vpnGraphValidation || vpnProductFlowStack)
                 && processAlive(vppProcess) && productCoreSession != null
                 && productCoreSession.isConnected()) {
             RuntimeControlNative.Status status = productCoreSession.query();
@@ -5202,11 +5308,19 @@ public final class RuntimeService extends VpnService {
                         + " native_tun_drain=" + tunClosed);
             } else appendLog("s243 network_subscription_close_deadline_exceeded=1");
         }
+        vpnDnsEstablishedUnderlay = null;
+        vpnDnsEstablishedServers = new InetAddress[0];
         for (int owner = 0; owner < vpnSocketBrokers.length; ++owner) {
             VpnSocketBroker broker = vpnSocketBrokers[owner];
             if (broker == null) continue;
             if (broker.closeAndWait()) vpnSocketBrokers[owner] = null;
             else appendLog("s237 broker_close_deadline_exceeded=1 owner=" + owner);
+        }
+        for (int owner = 0; owner < vpnUidBrokers.length; ++owner) {
+            VpnUidBroker broker = vpnUidBrokers[owner];
+            if (broker == null) continue;
+            if (broker.closeAndWait()) vpnUidBrokers[owner] = null;
+            else appendLog("s289 uid_broker_close_deadline_exceeded=1 owner=" + owner);
         }
         RuntimeControlNative.Session session = productCoreSession;
         if (session != null) {
@@ -5215,6 +5329,8 @@ public final class RuntimeService extends VpnService {
                     closed, "Android network subscription remains live");
             if (hasVpnSocketBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
                     closed, "Android socket broker thread remains live");
+            if (hasVpnUidBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
+                    closed, "Android UID broker thread remains live");
             if (!rootClosed) return RuntimeControlNative.Status.adapterCloseFailure(
                     closed, "native Root bounded drain failed");
             return tunClosed ? closed : RuntimeControlNative.Status.adapterCloseFailure(
@@ -5224,6 +5340,8 @@ public final class RuntimeService extends VpnService {
                 null, "Android network subscription remains live");
         if (hasVpnSocketBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
                 null, "Android socket broker thread remains live");
+        if (hasVpnUidBrokers()) return RuntimeControlNative.Status.adapterCloseFailure(
+                null, "Android UID broker thread remains live");
         if (!rootClosed) return RuntimeControlNative.Status.adapterCloseFailure(
                 null, "native Root bounded drain failed");
         return null;
@@ -6332,7 +6450,7 @@ public final class RuntimeService extends VpnService {
     }
 
     private VpnTunPlatformSession establishPacketAdapterSession(
-            ProductPacketAdapterContract adapter) {
+            ProductPacketAdapterContract adapter, InetAddress[] dnsServers) {
         if (adapter == null || !adapter.requiresVpnPlatformSession) {
             return null;
         }
@@ -6347,7 +6465,8 @@ public final class RuntimeService extends VpnService {
             return null;
         }
         VpnTunPlatformSession.EstablishResult result =
-                VpnTunPlatformSession.establish(this, adapter.enableIpv6, vpnGraphValidation);
+                VpnTunPlatformSession.establish(this, adapter.enableIpv6,
+                        vpnGraphValidation, dnsServers);
         if (!result.ok) {
             failSelectedProfileWithoutRuntime(result.errorCode, result.errorMessage);
             return null;
@@ -6477,7 +6596,8 @@ public final class RuntimeService extends VpnService {
             } else {
                 validation = ProductCoreLifecycle.validate(generation, productArtifactId,
                         productApiIdentity, productVppRevision, productAbiVersion,
-                        productApiVersion, status, adapter.adapterReadyAfterHandoff);
+                        productApiVersion, status, adapter.adapterReadyAfterHandoff
+                                && !vpnGraphValidation);
             }
             if (validation.isEmpty()) {
                 return status;

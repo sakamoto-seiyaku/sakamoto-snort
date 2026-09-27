@@ -18,6 +18,7 @@
 #include "product_root_nfqueue_adapter.h"
 #include "product_vpn_tun_adapter.h"
 #include "product_vpn_flow_stack_driver.h"
+#include "product_vpn_uid_resolver.h"
 #include "product_network_snapshot.h"
 #include "product_diagnostic_hex.h"
 
@@ -1656,6 +1657,28 @@ VLIB_NODE_FN (product_packet_policy_node)
         }
       else
         {
+          if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE &&
+              lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+              (!product_vpn_tun_product_mode() ||
+               lease.platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT))
+            {
+              product_vpn_uid_resolver_lookup(vm,
+                graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
+                &lease.assignment, &lease.facts, &lease.platform,
+                metadata.generation);
+              product_packet_graph_set_platform_facts(buffer, &lease.platform,
+                                                      metadata.generation);
+              if ((lease.platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
+                  && lease.assignment.valid)
+                product_flow_entry_enrich_uid(
+                  graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
+                  &lease.assignment, metadata.generation,
+                  product_flow_entry_current_incarnation(
+                    graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
+                    &lease.assignment, metadata.generation,
+                    (u64)(vlib_time_now(vm) * 1000000.0)), lease.platform.uid,
+                  (u64)(vlib_time_now(vm) * 1000000.0));
+            }
           if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
             {
               lease.policy_owner_ready = 1;
@@ -1782,7 +1805,11 @@ VLIB_NODE_FN(product_vpn_egress_node)
         product_vpn_flow_stack_driver_enabled()) {
       product_vpn_flow_stack_input_result_t result = product_vpn_flow_stack_driver_input(
         vm, vlib_buffer_get_current(buffer), buffer->current_length,
-        &lease.platform, metadata.generation);
+        &lease.platform, metadata.generation,
+        product_vpn_tun_product_mode() ? product_flow_entry_current_incarnation(
+          product_packet_graph_main.flow_pools[vlib_get_worker_index(vm->thread_index)],
+          &lease.assignment, metadata.generation,
+          (u64)(vlib_time_now(vm) * 1000000.0)) : 0);
       metadata.flow_stack_result = 1 + result;
       product_metadata_store(buffer, &metadata);
       if (metadata.state_bits & PRODUCT_META_TRACE)
@@ -2293,7 +2320,9 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   product_fragment_start (vm);
 #endif
   graph->trace_packets = 0;
-  graph->trace_limit = 256;
+  /* Controlled probes retain their bounded wire trace. Ordinary VPN must
+   * never copy user packet payloads into the VPP diagnostic log. */
+  graph->trace_limit = product_vpn_tun_product_mode () ? 0 : 256;
   clib_memset (graph->policy_hold_next_us, 0, sizeof (graph->policy_hold_next_us));
   graph->lifecycle_completion_frames = 0;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -2342,7 +2371,7 @@ product_packet_graph_stop_external (vlib_main_t *vm)
 uint32_t
 product_packet_graph_trace_limit (void)
 {
-  return product_packet_graph_main.trace_limit ? product_packet_graph_main.trace_limit : 256;
+  return product_packet_graph_main.trace_limit;
 }
 
 uint32_t
@@ -2666,8 +2695,25 @@ product_packet_graph_flow_observe (
     ? PRODUCT_FLOW_ENTRY_VERDICT_DROP : PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT;
   if (stage_verdict == PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT)
     product_flow_end_before_observe (vm);
-  product_flow_entry_status_t status = product_flow_entry_observe (
-    pool, &lease->assignment, &packet, stage_verdict, &observation);
+  /* A HEV return can arrive after its old app's FlowEntry was retired.
+   * It can still reach TUN, but it cannot create a new app flow; only a
+   * device-origin packet may establish the replacement incarnation. */
+  int existing_only = product_vpn_tun_product_mode () &&
+    lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
+    lease->platform.direction == PRODUCT_PACKET_DIRECTION_INPUT;
+  u64 return_incarnation = 0;
+  if (existing_only &&
+      (!product_vpn_tun_return_incarnation(evaluation->generation,
+          lease->origin_obligation_id, &return_incarnation) ||
+       !return_incarnation))
+    return;
+  product_flow_entry_status_t status = existing_only
+    ? product_flow_entry_observe_existing (pool, &lease->assignment,
+        &packet, stage_verdict, return_incarnation, &observation)
+    : product_flow_entry_observe (pool, &lease->assignment,
+        &packet, stage_verdict, &observation);
+  if (existing_only && status == PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND)
+    return;
   if (status == PRODUCT_FLOW_ENTRY_STATUS_OK || status == PRODUCT_FLOW_ENTRY_STATUS_CAPACITY_EXCEEDED)
     product_flow_expiry_observed (vm, &observation, packet.timestamp);
   const product_flow_entry_t *entry = observation.entry;
@@ -3956,6 +4002,20 @@ product_packet_graph_policy_on_owner (
         product_observation_blocked (vm, &lease->assignment, context.uid, context.network,
           lease->platform.direction, lease->facts.packet_length, &context);
     }
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  if (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+      lease->platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT &&
+      lease->assignment.valid && result == PRODUCT_PACKET_OK) {
+    product_flow_runtime_t *pool = graph->flow_pools[vlib_get_worker_index(vm->thread_index)];
+    u64 incarnation = observation.entry ? observation.entry->incarnation
+      : product_flow_entry_current_incarnation(pool, &lease->assignment,
+          graph->generation, (u64)(vlib_time_now(vm) * 1000000.0));
+    /* A new lookup follows admission. A pre-policy DROP may refresh only an
+     * already admitted flow; it must not create ownership state itself. */
+    product_vpn_uid_resolver_refresh(vm, pool, &lease->assignment,
+      &lease->facts, graph->generation, incarnation);
+  }
+#endif
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
   if (worker)
     {
@@ -4327,6 +4387,8 @@ product_policy_hold_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   u32 worker, us;
   (void) command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return (0, "policy hold is unavailable in Product VPN mode");
   if (!unformat (input, "%u %u", &worker, &us) || worker >= PRODUCT_GRAPH_WORKERS
       || us > 500000 || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     return clib_error_return (0, "expected worker 0..1 and hold 0..500000 us");
@@ -4345,6 +4407,8 @@ product_packet_trace_limit_cli (vlib_main_t *vm, unformat_input_t *input,
   product_packet_graph_main_t *g = &product_packet_graph_main;
   u32 limit;
   (void) command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return (0, "packet tracing is unavailable in Product VPN mode");
   if (!unformat (input, "%u", &limit) || limit < 256 || limit > 4096
       || (g->trace_packets && limit < g->trace_limit)
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)

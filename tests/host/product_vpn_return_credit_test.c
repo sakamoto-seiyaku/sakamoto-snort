@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_vpn_return_credit.h"
+#include "product_vpn_return_stamp.h"
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -7,6 +8,38 @@
 
 enum { CAPACITY = 128, GENERATION = 239, ROUNDS = 100000 };
 static product_vpn_return_credit_t credits[2];
+
+static void return_lineage(void)
+{
+  product_vpn_return_stamp_t ledger = {.generation = GENERATION};
+  uint64_t tokens[CAPACITY], incarnation;
+  /* Holding the oldest token cannot make modulo reuse corrupt its lineage. */
+  for (unsigned i = 0; i < CAPACITY; ++i) {
+    int slot = product_vpn_return_stamp_find_free(&ledger, i);
+    assert(slot == (int)i);
+    tokens[i] = (UINT64_C(1) << 63) | (uint64_t)((i + 1) << 7) | i;
+    assert(product_vpn_return_stamp_publish(&ledger, GENERATION, tokens[i],
+                                            UINT64_C(0x100000000) + i));
+  }
+  assert(product_vpn_return_stamp_find_free(&ledger, 0) == -1);
+  assert(!product_vpn_return_stamp_empty(&ledger));
+  assert(!product_vpn_return_stamp_publish(&ledger, GENERATION, tokens[0] + 128, 1));
+  assert(!product_vpn_return_stamp_lookup(&ledger, GENERATION + 1, tokens[0], &incarnation));
+  assert(!product_vpn_return_stamp_lookup(&ledger, GENERATION, tokens[0] + 128, &incarnation));
+  for (unsigned i = 1; i < CAPACITY; ++i) {
+    assert(product_vpn_return_stamp_lookup(&ledger, GENERATION, tokens[i], &incarnation));
+    assert(incarnation == UINT64_C(0x100000000) + i);
+    assert(product_vpn_return_stamp_release(&ledger, GENERATION, tokens[i]));
+    assert(!product_vpn_return_stamp_release(&ledger, GENERATION, tokens[i]));
+  }
+  assert(product_vpn_return_stamp_lookup(&ledger, GENERATION, tokens[0], &incarnation));
+  assert(incarnation == UINT64_C(0x100000000));
+  assert(product_vpn_return_stamp_find_free(&ledger, 0) == 1);
+  assert(!product_vpn_return_stamp_release(&ledger, GENERATION - 1, tokens[0]));
+  assert(product_vpn_return_stamp_release(&ledger, GENERATION, tokens[0]));
+  assert(product_vpn_return_stamp_find_free(&ledger, 0) == 0);
+  assert(product_vpn_return_stamp_empty(&ledger));
+}
 
 static void isolation(unsigned exhausted)
 {
@@ -58,6 +91,7 @@ static void *consumer(void *opaque)
 
 int main(void)
 {
+  return_lineage();
   for (unsigned i = 0; i < 2; ++i) {
     assert(product_vpn_return_credit_init(&credits[i], 0, CAPACITY) == -1);
     assert(product_vpn_return_credit_init(&credits[i], GENERATION, 0) == -1);

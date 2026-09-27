@@ -57,8 +57,8 @@ static void trace(void *opaque, const hev_owner_event_t *event)
   if (!strcmp(event->event, "uid_conflict")) ++f->conflicts;
 }
 
-static hev_owner_input_result_t inject(hev_owner_t *owner, uint16_t port,
-                                      uint32_t uid, int known)
+static hev_owner_input_result_t inject_incarnation(hev_owner_t *owner, uint16_t port,
+                                      uint32_t uid, int known, uint64_t incarnation)
 {
   unsigned char packet[29] = {
     0x45, 0, 0, 29, 0, 1, 0, 0, 64, 17, 0, 0,
@@ -69,9 +69,14 @@ static hev_owner_input_result_t inject(hev_owner_t *owner, uint16_t port,
   uint16_t checksum = inet_chksum(packet, 20);
   memcpy(packet + 10, &checksum, 2);
   hev_owner_facts_t facts = {.uid = uid,
+    .flow_incarnation = incarnation,
     .availability = known ? HEV_OWNER_UID_KNOWN : 0};
   return hev_owner_input_copy(owner, packet, sizeof(packet), &facts, 7);
 }
+
+static hev_owner_input_result_t inject(hev_owner_t *owner, uint16_t port,
+                                      uint32_t uid, int known)
+{ return inject_incarnation(owner, port, uid, known, 0); }
 
 static void step(hev_owner_t *owner)
 {
@@ -180,6 +185,65 @@ int main(void)
   assert(snapshot.sessions_created == snapshot.sessions_closed);
   assert(snapshot.sockets_created == snapshot.sockets_closed);
   assert(snapshot.lwip_heap_live == 2); /* owner UDP and TCP listeners remain */
+  assert(!hev_owner_destroy(owner));
+  /* The Product owner retires its UDP socket before the shortest VPP UDP
+   * FlowEntry timeout. A same-UID packet with the next full-width flow
+   * incarnation must create a fresh session on that triggering packet. */
+  fixture_t rollover = {0};
+  config.opaque = &rollover;
+  config.udp_idle_timeout_ms = 50;
+  owner = hev_owner_create(&config);
+  assert(owner);
+  assert(inject_incarnation(owner, port, 10001, 1,
+                            UINT64_C(0x100000001)) == HEV_OWNER_INPUT_ACCEPTED);
+  step(owner);
+  assert(rollover.requests == 1);
+  assert(!hev_owner_broker_complete(owner, 7, rollover.session, 1, &binding));
+  echo(owner, endpoint, rollover.original_fd);
+  assert(rollover.returned.flow_incarnation == UINT64_C(0x100000001));
+  usleep(80000);
+  for (unsigned attempt = 0; attempt < 8 && hev_owner_snapshot(owner).sessions; ++attempt)
+    step(owner);
+  assert(!hev_owner_snapshot(owner).sessions);
+  assert(inject_incarnation(owner, port, 10001, 1,
+                            UINT64_C(0x100000002)) == HEV_OWNER_INPUT_ACCEPTED);
+  step(owner);
+  assert(rollover.requests == 2);
+  assert(!hev_owner_broker_complete(owner, 7, rollover.session, 1, &binding));
+  echo(owner, endpoint, rollover.original_fd);
+  assert(rollover.returned.flow_incarnation == UINT64_C(0x100000002));
+  hev_owner_quiesce(owner);
+  step(owner);
+  assert(!hev_owner_snapshot(owner).sessions);
+  assert(!hev_owner_destroy(owner));
+  /* If an overdue old transport is still live when VPP opens the next
+   * FlowEntry, the trigger is rejected once; after bounded cleanup the next
+   * datagram creates a new session. Old outputs retain their old lineage. */
+  fixture_t delayed = {0};
+  config.opaque = &delayed;
+  config.udp_idle_timeout_ms = 1000;
+  owner = hev_owner_create(&config);
+  assert(owner);
+  assert(inject_incarnation(owner, port, 10001, 1,
+                            UINT64_C(0x100000003)) == HEV_OWNER_INPUT_ACCEPTED);
+  step(owner);
+  assert(!hev_owner_broker_complete(owner, 7, delayed.session, 1, &binding));
+  echo(owner, endpoint, delayed.original_fd);
+  assert(delayed.returned.flow_incarnation == UINT64_C(0x100000003));
+  assert(inject_incarnation(owner, port, 10001, 1,
+                            UINT64_C(0x100000004)) == HEV_OWNER_INPUT_FAILED);
+  step(owner);
+  assert(!hev_owner_snapshot(owner).sessions);
+  assert(inject_incarnation(owner, port, 10001, 1,
+                            UINT64_C(0x100000004)) == HEV_OWNER_INPUT_ACCEPTED);
+  step(owner);
+  assert(delayed.requests == 2);
+  assert(!hev_owner_broker_complete(owner, 7, delayed.session, 1, &binding));
+  echo(owner, endpoint, delayed.original_fd);
+  assert(delayed.returned.flow_incarnation == UINT64_C(0x100000004));
+  hev_owner_quiesce(owner);
+  step(owner);
+  assert(!hev_owner_snapshot(owner).sessions);
   assert(!hev_owner_destroy(owner));
   close(endpoint);
   return 0;

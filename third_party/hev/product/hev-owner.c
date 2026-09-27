@@ -365,6 +365,18 @@ static void receive_input(void *opaque, struct udp_pcb *pcb, struct pbuf *packet
     close_session(session, "uid_conflict");
     goto rejected;
   }
+  if (session->facts.flow_incarnation && facts->flow_incarnation &&
+      session->facts.flow_incarnation != facts->flow_incarnation) {
+    close_session(session, "flow_incarnation_conflict");
+    goto rejected;
+  }
+  if (!session->facts.flow_incarnation)
+    session->facts.flow_incarnation = facts->flow_incarnation;
+  if (!(session->facts.availability & HEV_OWNER_UID_KNOWN) &&
+      (facts->availability & HEV_OWNER_UID_KNOWN)) {
+    session->facts.uid = facts->uid;
+    session->facts.availability |= HEV_OWNER_UID_KNOWN;
+  }
   if (owner->lwip.pbuf_live[HEV_LWIP_PBUF_POOL] > owner->config.max_input_packets) {
     pbuf_free(packet);
     owner->input_result = HEV_OWNER_INPUT_NO_CAPACITY;
@@ -677,6 +689,16 @@ static err_t guard_tcp_input(void *opaque, struct tcp_pcb *pcb)
   if ((session->facts.availability & owner->input_facts.availability & HEV_OWNER_UID_KNOWN) &&
       session->facts.uid != owner->input_facts.uid)
     close_session(session, "uid_conflict");
+  if (session->facts.flow_incarnation && owner->input_facts.flow_incarnation &&
+      session->facts.flow_incarnation != owner->input_facts.flow_incarnation)
+    close_session(session, "flow_incarnation_conflict");
+  if (!session->facts.flow_incarnation)
+    session->facts.flow_incarnation = owner->input_facts.flow_incarnation;
+  if (!(session->facts.availability & HEV_OWNER_UID_KNOWN) &&
+      (owner->input_facts.availability & HEV_OWNER_UID_KNOWN)) {
+    session->facts.uid = owner->input_facts.uid;
+    session->facts.availability |= HEV_OWNER_UID_KNOWN;
+  }
   if (session->closing) {
     /* This hook must not mutate PCB lists. The task/next owner step aborts
      * after tcp_input returns, even for a detached TIME_WAIT record. */

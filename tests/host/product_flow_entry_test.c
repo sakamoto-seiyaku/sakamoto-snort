@@ -104,7 +104,110 @@ static void mixed_capacity(void) {
   product_flow_runtime_destroy(runtime);
 }
 
+static uint32_t ended_slot;
+static uint64_t ended_incarnation;
+static void record_uid_replacement(void *context,const product_flow_entry_t *entry,
+                                   uint32_t slot,product_flow_end_reason_t reason) {
+  (void)context;assert(reason==PRODUCT_FLOW_END_REPLACED);
+  ended_slot=slot;ended_incarnation=entry->incarnation;
+}
+
+static void unknown_uid_enrichment(void) {
+  product_packet_facts_t f=facts(4,17,32111);
+  product_owner_assignment_t a=assign(f);
+  product_flow_runtime_t *pool=NULL;
+  product_flow_entry_observation_t o;
+  assert(product_flow_runtime_create(&pool,a.execution_owner,2,1,16)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_set_end_callback(pool,record_uid_replacement,NULL)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  product_flow_entry_packet_t p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,72,10);
+  p.uid=PRODUCT_FLOW_ENTRY_UID_UNKNOWN;p.facts=&f;
+  assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_DROP,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
+  assert(!product_flow_entry_enrich_uid(pool,&a,1,1,12345,11));
+  assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(o.created && o.entry->uid==PRODUCT_FLOW_ENTRY_UID_UNKNOWN);
+  const product_flow_entry_t *entry=o.entry;
+  uint64_t incarnation=entry->incarnation;
+  product_packet_facts_t reply=f;
+  unsigned char address[16];memcpy(address,reply.source_address,16);
+  memcpy(reply.source_address,reply.destination_address,16);
+  memcpy(reply.destination_address,address,16);
+  unsigned port=reply.source_port;reply.source_port=reply.destination_port;
+  reply.destination_port=port;
+  product_owner_assignment_t reverse=assign(reply);
+  product_flow_entry_packet_t returned=packet(PRODUCT_FLOW_ENTRY_DIRECTION_INPUT,72,10);
+  returned.uid=PRODUCT_FLOW_ENTRY_UID_UNKNOWN;returned.facts=&reply;
+  assert(product_flow_entry_observe_existing(pool,&reverse,&returned,
+      PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,incarnation,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(o.reused && o.entry->incarnation==incarnation && entry->side_packets[1]==1);
+  assert(product_flow_entry_current_incarnation(pool,&a,1,11)==incarnation);
+  assert(!product_flow_entry_enrich_uid(pool,&a,2,incarnation,12345,11));
+  assert(!product_flow_entry_enrich_uid(pool,&a,1,incarnation+1,12345,11));
+  assert(product_flow_entry_enrich_uid(pool,&a,1,incarnation,12345,11)==1);
+  assert(entry->uid==12345 && entry->packets==2 && entry->bytes==144);
+  assert(product_flow_entry_enrich_uid(pool,&a,1,incarnation,23456,12)==2);
+  assert(entry->uid==12345);
+  assert(!product_flow_entry_current_incarnation(pool,&a,1,12));
+  assert(ended_incarnation==incarnation);
+  assert(product_flow_runtime_release_end(pool,ended_slot,1,incarnation,
+      PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  product_flow_runtime_flush(pool);
+  product_flow_runtime_destroy(pool);
+}
+
+static void stale_return_after_uid_replacement(void) {
+  product_packet_facts_t outbound=facts(4,17,45774);
+  product_packet_facts_t reply=outbound;
+  unsigned char address[16];memcpy(address,reply.source_address,16);
+  memcpy(reply.source_address,reply.destination_address,16);
+  memcpy(reply.destination_address,address,16);
+  unsigned port=reply.source_port;reply.source_port=reply.destination_port;
+  reply.destination_port=port;
+  product_owner_assignment_t a=assign(outbound),r=assign(reply);
+  product_flow_runtime_t *pool=NULL;
+  product_flow_entry_observation_t o;
+  assert(product_flow_runtime_create(&pool,a.execution_owner,2,1,16)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_set_end_callback(pool,record_uid_replacement,NULL)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  product_flow_entry_packet_t p=packet(PRODUCT_FLOW_ENTRY_DIRECTION_OUTPUT,72,10);
+  p.uid=PRODUCT_FLOW_ENTRY_UID_UNKNOWN;p.facts=&outbound;
+  assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(o.created);
+  uint64_t old=o.entry->incarnation;
+  assert(product_flow_entry_enrich_uid(pool,&a,1,old,12630,10)==1);
+  assert(product_flow_entry_enrich_uid(pool,&a,1,old,12631,11)==2);
+  assert(!product_flow_entry_current_incarnation(pool,&a,1,11));
+  product_flow_entry_packet_t returned=packet(PRODUCT_FLOW_ENTRY_DIRECTION_INPUT,72,11);
+  returned.uid=12630;returned.facts=&reply;
+  assert(product_flow_entry_observe_existing(pool,&r,&returned,
+      PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,old,&o)==PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND);
+  assert(!product_flow_entry_current_incarnation(pool,&a,1,11));
+  assert(product_flow_runtime_release_end(pool,ended_slot,1,old,
+      PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  p.timestamp=12;
+  assert(product_flow_entry_observe(pool,&a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(o.created && o.entry->uid==PRODUCT_FLOW_ENTRY_UID_UNKNOWN && o.entry->incarnation!=old);
+  uint64_t current=o.entry->incarnation;
+  returned.timestamp=13;
+  assert(product_flow_entry_observe_existing(pool,&r,&returned,
+      PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,old,&o)==PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND);
+  assert(product_flow_entry_current_incarnation(pool,&a,1,13)==current);
+  assert(product_flow_entry_enrich_uid(pool,&a,1,current,12631,12)==1);
+  assert(product_flow_entry_observe_existing(pool,&r,&returned,
+      PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,old,&o)==PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND);
+  returned.uid=12631;
+  assert(product_flow_entry_observe_existing(pool,&r,&returned,
+      PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,current,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(o.reused && o.entry->incarnation==current && o.entry->uid==12631);
+  assert(product_flow_runtime_close(pool,o.slot,1,current,
+      PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_release_end(pool,ended_slot,1,current,
+      PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert(product_flow_runtime_flush(pool)==PRODUCT_FLOW_ENTRY_STATUS_OK);
+  product_flow_runtime_destroy(pool);
+}
+
 int main(void) {
+  unknown_uid_enrichment();
+  stale_return_after_uid_replacement();
   product_flow_runtime_t *invalid=NULL;
   assert(product_flow_runtime_create(&invalid,0,2,1,0)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT && !invalid);
   assert(product_flow_runtime_create(&invalid,0,2,1,UINT32_MAX)==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT && !invalid);

@@ -147,6 +147,9 @@ static void runtime(void)
   p.tcp_flags=SYN; p.tcp_sequence=500;
   assert(product_flow_entry_observe(pool,&key,&observed,1,&o)==PRODUCT_FLOW_ENTRY_STATUS_EARLY_DROP);
   assert(product_flow_runtime_snapshot(pool).protocol[0].closed==0);
+  assert(product_flow_entry_observe_existing(pool,&key,&observed,0,incarnation,&o)==PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND);
+  assert(product_flow_runtime_snapshot(pool).protocol[0].closed==0);
+  assert(product_flow_entry_current_incarnation(pool,&key,1,0)==incarnation);
   assert(product_flow_entry_observe(pool,&key,&observed,0,&o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
   assert(o.created && !o.reused && o.previous_incarnation==incarnation);
   assert(o.entry->incarnation>incarnation && o.entry->packets==1);

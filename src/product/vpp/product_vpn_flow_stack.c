@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_vpn_flow_stack_driver.h"
+#include "product_flow_timeout.h"
 #include "product_vpn_flow_stack_private.h"
 #include "product_vpn_socket_broker.h"
 #include "product_vpn_tun_adapter.h"
@@ -92,13 +93,15 @@ static void unsubscribe(u32 *file)
 static product_vpn_flow_stack_output_result_t output(void *opaque,
   const product_vpn_flow_stack_span_t *spans, unsigned count, size_t total,
   const product_platform_packet_facts_t *platform,
-  uint64_t generation, uint64_t serial, uint64_t epoch)
+  uint64_t generation, uint64_t serial, uint64_t epoch,
+  uint64_t flow_incarnation)
 {
   product_vpn_stack_owner_t *owner = opaque;
   if (__atomic_load_n(&owner->stop_requested, __ATOMIC_ACQUIRE))
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_REJECTED;
   return product_vpn_tun_submit_return(vlib_get_main(), spans, count, total,
-                                       platform, generation, serial, epoch);
+                                       platform, generation, serial, epoch,
+                                       flow_incarnation);
 }
 
 static int request(void *opaque, uint64_t generation, uint64_t session, int fd)
@@ -149,6 +152,16 @@ static int start_owner(uint64_t generation, u32 index)
 {
   product_vpn_stack_owner_t *owner = &owners[index];
   product_vpn_flow_stack_config_t config = limits;
+  if (product_vpn_tun_product_mode()) {
+    /* A bidirectional UDP FlowEntry expires after 30 s. Retire its HEV
+     * socket before that deadline so the next packet cannot encounter an
+     * old session carrying the previous FlowEntry incarnation. The guard
+     * allows the owner timer turn to run before the FlowEntry deadline. */
+    u64 minimum_flow_ms =
+      product_flow_timeout_us(PRODUCT_CT_TIMEOUT_OTHER_BIDIR) / 1000;
+    if (minimum_flow_ms <= 5000 || minimum_flow_ms > UINT32_MAX) return 0;
+    config.idle_timeout_ms = (u32)(minimum_flow_ms - 5000);
+  }
   owner->index = index;
   owner->generation = generation;
   owner->broker.fd = -1;
@@ -193,7 +206,7 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
   if (configured && *configured) {
     u32 values[5], maximum[] = {256, 258, 256, 1024, 8192};
     const char *cursor = configured;
-    if (!product_vpn_tun_validation_enabled()) return 0;
+    if (!product_vpn_tun_enabled()) return 0;
     for (unsigned i = 0; i < 5; ++i) {
       char *end;
       if (*cursor < '0' || *cursor > '9') return 0;
@@ -281,7 +294,8 @@ int product_vpn_flow_stack_driver_reject_after(uint32_t index, uint32_t packets)
 
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   vlib_main_t *vm, const uint8_t *l3, size_t length,
-  const product_platform_packet_facts_t *platform, uint64_t generation)
+  const product_platform_packet_facts_t *platform, uint64_t generation,
+  uint64_t flow_incarnation)
 {
   if (!vm || !vm->thread_index ||
       vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS)
@@ -297,7 +311,8 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
     return PRODUCT_VPN_FLOW_STACK_NO_CAPACITY;
   }
   product_vpn_flow_stack_input_result_t result =
-    product_vpn_flow_stack_input_copy(owner->stack, l3, length, platform, generation);
+    product_vpn_flow_stack_input_copy(owner->stack, l3, length, platform,
+      generation, flow_incarnation);
   schedule(vm); /* Admission and rejection-with-close can both wake HEV tasks. */
   return result;
 }
@@ -409,10 +424,12 @@ static clib_error_t *hold(vlib_main_t *vm, unformat_input_t *input,
                           vlib_cli_command_t *command)
 {
   (void)command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return(0, "flow-stack hold is unavailable in Product VPN mode");
   u32 ms;
   u32 index = 0;
   (void)unformat(input, "owner %u", &index);
-  if (!product_vpn_tun_validation_enabled() || !product_vpn_flow_stack_driver_ready() ||
+  if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
       index >= PRODUCT_VPN_RETURN_WORKERS ||
       !unformat(input, "%u", &ms) || ms > 5000 ||
       unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
@@ -430,8 +447,10 @@ static clib_error_t *broker_fault(vlib_main_t *vm, unformat_input_t *input,
                                  vlib_cli_command_t *command)
 {
   (void)command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return(0, "broker faults are unavailable in Product VPN mode");
   u32 index, after, operation;
-  if (!product_vpn_tun_validation_enabled() || !product_vpn_flow_stack_driver_ready() ||
+  if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
       !unformat(input, "owner %u", &index) || index >= PRODUCT_VPN_RETURN_WORKERS)
     return clib_error_return(0, "active HEV validation owner required");
   if (unformat(input, "protect after %u", &after)) operation = PRODUCT_VPN_BROKER_ERROR_PROTECT;

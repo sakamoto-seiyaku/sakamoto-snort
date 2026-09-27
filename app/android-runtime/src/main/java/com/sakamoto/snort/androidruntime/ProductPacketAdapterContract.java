@@ -65,18 +65,18 @@ public final class ProductPacketAdapterContract {
         RuntimeProfile selected = profile == null ? RuntimeProfile.ROOT : profile;
         if (selected == RuntimeProfile.VPN) {
             return new ProductPacketAdapterContract(selected, VPN_ADAPTER,
-                    "VpnService TUN with owner-local HEV/lwIP (not implemented)",
+                    "VpnService TUN with owner-local HEV/lwIP",
                     "single-writer TUN completion",
                     TRANSPORT_OUTCOME_SEPARATE,
                     UID_MISS_UNKNOWN_APPLICATION_NO_HOLD,
                     true,
                     false,
                     false,
-                    false,
                     true,
-                    false,
-                    "vpn_flow_stack_not_ready",
-                    "VPN protection is not available in this build.");
+                    true,
+                    true,
+                    "",
+                    "");
         }
         return new ProductPacketAdapterContract(selected, ROOT_ADAPTER,
                 "Root NFQUEUE lanes",

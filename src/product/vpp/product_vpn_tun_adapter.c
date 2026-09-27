@@ -8,7 +8,9 @@
 #include "product_packet_graph.h"
 #include "product_network_snapshot.h"
 #include "product_vpn_flow_stack_driver.h"
+#include "product_vpn_uid_resolver.h"
 #include "product_vpn_return_credit.h"
+#include "product_vpn_return_stamp.h"
 #include <vlib/file.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -38,16 +40,22 @@ static u64 trace_monotonic_ns(void)
 #define TUN_CONTROL_STOP 2U
 #define TUN_CONTROL_BROKER 3U
 #define TUN_CONTROL_ATTACH_UNKNOWN 4U
+#define TUN_CONTROL_UID_BROKER 5U
 
 typedef struct { u64 token; u32 buffer; u8 active; } tun_pending_t;
 typedef struct { u32 file; int fd; } tun_control_t;
-/* Producer-private counters and token sequence; only the credit scalar is
- * updated by the TUN completion lane. No return packet enters a slot table. */
+/* Producer-private counters and token sequence. Each credited in-flight
+ * return holds only its FlowEntry incarnation in the bounded stamp slots;
+ * the TUN completion lane releases that token after native buffer free. */
 typedef struct {
   product_vpn_return_credit_t credit;
+  product_vpn_return_stamp_t stamps;
   u64 next_token, packets, submitted, output_calls, copy_calls, copy_bytes;
+  u32 next_stamp_slot;
   u64 fault_allocate_at, fault_reject_at, fault_stale_at;
 } __attribute__((aligned(CLIB_CACHE_LINE_BYTES))) tun_return_owner_t;
+_Static_assert(PRODUCT_VPN_RETURN_STAMP_SLOTS == PRODUCT_VPN_RETURN_CAPACITY,
+               "return stamps share the return-credit bound");
 static tun_return_owner_t returns[PRODUCT_VPN_RETURN_WORKERS];
 /* Written only with workers at the control barrier; workers only read. */
 static f64 return_hold_until[PRODUCT_VPN_RETURN_WORKERS];
@@ -69,13 +77,26 @@ static struct {
 } tun = { .tun_fd = -1, .listener_fd = -1,
           .tun_file = ~0U, .listener_file = ~0U };
 
-int product_vpn_tun_validation_enabled (void) {
+int product_vpn_tun_product_mode (void) {
+  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
+  const char *product = getenv ("SAKAMOTO_PRODUCT_VPN_PRODUCT");
+  return profile && !strcmp (profile, "vpn") && product && !strcmp (product, "1");
+}
+int product_vpn_tun_enabled (void) {
   const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
   const char *validation = getenv ("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION");
-  return profile && !strcmp (profile, "vpn") && validation && !strcmp (validation, "1");
+  return product_vpn_tun_product_mode () ||
+    (profile && !strcmp (profile, "vpn") && validation && !strcmp (validation, "1"));
 }
 u64 product_vpn_tun_attached (void) { return tun.tun_fd >= 0; }
 u64 product_vpn_tun_captured (void) { return tun.captured; }
+int product_vpn_tun_product_ready (void) {
+  return product_vpn_tun_product_mode () && tun.enabled && tun.tun_fd >= 0 &&
+    !__atomic_load_n (&tun.draining, __ATOMIC_ACQUIRE) &&
+    product_vpn_uid_resolver_ready () &&
+    product_vpn_flow_stack_driver_ready () && product_packet_graph_enabled () &&
+    product_packet_graph_accepting ();
+}
 
 int product_vpn_tun_return_held(vlib_main_t *vm,
   const product_packet_completion_frame_t *completion)
@@ -91,7 +112,8 @@ int product_vpn_tun_return_held(vlib_main_t *vm,
 product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   vlib_main_t *vm, const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
-  uint64_t generation, uint64_t serial, uint64_t epoch)
+  uint64_t generation, uint64_t serial, uint64_t epoch,
+  uint64_t flow_incarnation)
 {
   if (!vm || !vm->thread_index ||
       vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS)
@@ -127,10 +149,18 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   /* Disjoint token ranges make traces unambiguous without a global allocator.
    * packet_id is VPN-private credit-owner identity, not an NFQUEUE packet ID.
    * Origin placement remains the sole TUN lane, never the generating owner. */
-  if (owner->next_token == ((1ULL << 62) - 1) ||
+  if (owner->next_token == ((1ULL << 55) - 1) ||
       !product_vpn_return_credit_take(&owner->credit, generation))
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
-  u64 token = (1ULL << 63) | ((u64)owner_index << 62) | ++owner->next_token;
+  int stamp_index = product_vpn_return_stamp_find_free(&owner->stamps,
+    owner->next_stamp_slot);
+  if (stamp_index < 0) {
+    if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
+    return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
+  }
+  owner->next_stamp_slot = (stamp_index + 1) & (PRODUCT_VPN_RETURN_STAMP_SLOTS - 1);
+  u64 token = (1ULL << 63) | ((u64)owner_index << 62) |
+    (++owner->next_token << 7) | (u64)stamp_index;
   u32 bi;
   if (vlib_buffer_alloc(vm, &bi, 1) != 1) {
     if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
@@ -152,6 +182,8 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   product_adapter_obligation_t obligation = {.token = token,
     .queue_generation = generation, .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
     .origin_worker = 0, .origin_lane = 0, .packet_id = owner_index + 1};
+  if (!product_vpn_return_stamp_publish(&owner->stamps, generation, token,
+                                         flow_incarnation)) abort();
   if (serial <= product_packet_graph_trace_limit()) {
     fprintf(stderr, "s237 event=return_copy thread=%u tls=%u generation=%llu serial=%llu buffer=%u token=%llu spans=%u bytes=%zu uid=%u availability=%u context=%u epoch=%llu\n",
       vm->thread_index, vlib_get_thread_index(), (unsigned long long)generation,
@@ -175,6 +207,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   }
   if (rejected || !product_packet_graph_submit_external(vm, bi, platform, &obligation)) {
     vlib_buffer_free(vm, &bi, 1);
+    if (!product_vpn_return_stamp_release(&owner->stamps, generation, token)) abort();
     if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
     fprintf(stderr, "s237 event=return_rejected_free generation=%llu serial=%llu buffer=%u token=%llu\n",
       (unsigned long long)generation, (unsigned long long)serial, bi, (unsigned long long)token);
@@ -183,6 +216,16 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   /* Native scheduling now owns the independent buffer; never touch it again. */
   ++owner->submitted;
   return PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED;
+}
+
+int product_vpn_tun_return_incarnation (u64 generation, u64 token,
+  u64 *incarnation)
+{
+  if (!(token & (1ULL << 63))) return 0;
+  u32 owner_index = (u32)((token >> 62) & 1U);
+  if (owner_index >= PRODUCT_VPN_RETURN_WORKERS) return 0;
+  return product_vpn_return_stamp_lookup(&returns[owner_index].stamps,
+    generation, token, incarnation);
 }
 
 int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
@@ -265,6 +308,8 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
   if (vm->thread_index != vlib_get_worker_thread_index(0) ||
       o->packet_id > PRODUCT_VPN_RETURN_WORKERS ||
       (frame->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ||
+      !product_vpn_return_stamp_release(&returns[o->packet_id - 1].stamps,
+                                         o->queue_generation, o->token) ||
       product_vpn_return_credit_release(&returns[o->packet_id - 1].credit,
                                          o->queue_generation)) abort();
   if (frame->flags & PRODUCT_COMPLETION_TRACE)
@@ -383,12 +428,15 @@ static int tun_stop (void) {
   product_packet_graph_quiesce (tun.vm);
   for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
     if (product_vpn_return_credit_used(&returns[i].credit)) return 1;
+  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+    if (!product_vpn_return_stamp_empty(&returns[i].stamps)) abort();
   if (tun.pending || product_packet_graph_buffer_debt ()
       || product_packet_graph_obligation_debt ()
       || product_packet_graph_completion_frame_debt ()
       || !product_vpn_flow_stack_driver_stopped()) return 1;
   if (tun.tun_file != ~0U) clib_file_del_by_index (&file_main, tun.tun_file);
   tun.tun_file = ~0U; tun.tun_fd = -1;
+  product_vpn_uid_resolver_stop ();
   product_network_snapshot_stop ();
   tun.snapshot_interface = 0;
   product_packet_graph_stop_external (tun.vm);
@@ -440,6 +488,13 @@ static clib_error_t *tun_control_read (clib_file_t *file) {
       (void)send(client->fd, &reply, sizeof(reply), MSG_DONTWAIT | MSG_NOSIGNAL);
       reply_sent = 1;
     }
+    else if (command == TUN_CONTROL_UID_BROKER && n_fds == 0) {
+      int duplicate = fcntl(client->fd, F_DUPFD_CLOEXEC, 0);
+      if (duplicate >= 0 && !product_vpn_uid_resolver_attach(duplicate, uid)) result = 0;
+      u32 reply = htonl(result);
+      (void)send(client->fd, &reply, sizeof(reply), MSG_DONTWAIT | MSG_NOSIGNAL);
+      reply_sent = 1;
+    }
     vlib_worker_thread_barrier_release (tun.vm);
   }
   for (int i = 0; i < n_fds; ++i) if (fds[i] >= 0) close (fds[i]);
@@ -475,11 +530,16 @@ static clib_error_t *tun_control_accept (clib_file_t *file) {
 
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   const char *runtime = getenv ("SAKAMOTO_VPP_RUNTIME_DIR");
-  if (!product_vpn_tun_validation_enabled () || !runtime || tun.enabled || !generation) return 0;
+  if (!product_vpn_tun_enabled () || !runtime || tun.enabled || !generation) return 0;
   if (product_packet_graph_worker_count() != PRODUCT_VPN_RETURN_WORKERS) return 0;
   for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
-    if (product_vpn_return_credit_init(&returns[i].credit, generation,
-                                       PRODUCT_VPN_RETURN_CAPACITY)) return 0;
+    {
+      if (product_vpn_return_credit_init(&returns[i].credit, generation,
+                                         PRODUCT_VPN_RETURN_CAPACITY)) return 0;
+      clib_memset(&returns[i].stamps, 0, sizeof(returns[i].stamps));
+      returns[i].stamps.generation = generation;
+      returns[i].next_stamp_slot = 0;
+    }
   int n = snprintf (tun.path, sizeof (tun.path), "%s/tun-control.sock", runtime);
   if (n <= 0 || (size_t) n >= sizeof (tun.path)) return 0;
   int fd = socket (AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -496,6 +556,7 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
     product_packet_graph_stop_external(vm);
     close(fd); unlink(tun.path); return 0;
   }
+  if (product_vpn_tun_product_mode()) product_vpn_uid_resolver_start(generation);
   product_network_snapshot_start (generation);
   tun.vm = vm; tun.generation = generation; tun.enabled = 1; tun.listener_fd = fd;
   for (u32 i = 0; i < TUN_CONTROL_SLOTS; ++i) tun.controls[i] = (tun_control_t){ .file = ~0U, .fd = -1 };
@@ -552,6 +613,8 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
                                vlib_cli_command_t *command)
 {
   (void)command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return(0, "TUN faults are unavailable in Product VPN mode");
   u32 after = 0;
   u32 owner_index = 0;
   (void)unformat(input, "owner %u", &owner_index);
@@ -559,7 +622,7 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
     return clib_error_return(0, "invalid return owner");
   tun_return_owner_t *owner = &returns[owner_index];
   u64 *target = NULL, current = 0;
-  if (!product_vpn_tun_validation_enabled() || !product_vpn_flow_stack_driver_ready())
+  if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready())
     return clib_error_return(0, "HEV validation must be active");
   if (unformat(input, "output-alloc %u", &after)) {
     target = &owner->fault_allocate_at; current = owner->packets;
@@ -591,8 +654,10 @@ static clib_error_t *tun_return_hold(vlib_main_t *vm, unformat_input_t *input,
                                     vlib_cli_command_t *command)
 {
   (void)command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return(0, "return hold is unavailable in Product VPN mode");
   u32 owner = ~0U, milliseconds = 0;
-  if (!product_vpn_tun_validation_enabled() || !product_vpn_flow_stack_driver_ready() ||
+  if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
       tun.draining || !unformat(input, "%u %u", &owner, &milliseconds) ||
       owner >= PRODUCT_VPN_RETURN_WORKERS || milliseconds > 10000 ||
       unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
@@ -609,6 +674,8 @@ VLIB_CLI_COMMAND(product_tun_return_hold_command, static) = {
 static clib_error_t *tun_stop_cli (vlib_main_t *vm, unformat_input_t *input,
                                   vlib_cli_command_t *command) {
   (void) input; (void) command;
+  if (product_vpn_tun_product_mode())
+    return clib_error_return (0, "TUN stop is unavailable in Product VPN mode");
   if (!tun.enabled) return clib_error_return (0, "TUN validation is inactive");
   int result = tun_stop ();
   vlib_cli_output (vm, "tun.stop result=%d pending=%u fd=%d", result, tun.pending, tun.tun_fd);

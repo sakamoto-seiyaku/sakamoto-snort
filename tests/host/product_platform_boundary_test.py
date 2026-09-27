@@ -126,21 +126,39 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
         self.require(body(network, "product_network_snapshot_stop"),
                      "network_generation = 0", "clib_memset (&product_network_snapshot, 0")
 
-    def test_vpn_validation_is_not_product_protection(self):
+    def test_vpn_product_readiness_requires_native_handoff(self):
         service = source(JAVA + "RuntimeService.java")
         start = body(service, "startProductCoreRuntime")
         self.ordered(start, "!adapter.productLaunchAllowed && !vpnGraphValidation",
                      "builder.start()")
-        self.assertNotIn("establishPacketAdapterSession(adapter)", start)
+        self.require(start, 'builder.environment().put("SAKAMOTO_PRODUCT_VPN_PRODUCT", "1")',
+                     'builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV", "1")')
+        self.assertNotIn("establishPacketAdapterSession(adapter, vpnDnsServers)", start)
         capture = body(service, "continueProductCoreStartup")
         self.ordered(capture, "awaitInitialPolicy(session, process)",
                      "reconcileProductEmptyPolicy(session",
-                     "establishPacketAdapterSession(adapter)", "NativeTunFdClient.attach(")
+                     "establishPacketAdapterSession(adapter, vpnDnsServers)", "NativeTunFdClient.attach(")
+        self.require(capture, "properties.getDnsServers()", '"vpn_dns_unavailable"',
+                     "vpnDnsServers = servers.toArray(new InetAddress[0])")
         self.require(capture, "vpnTunSession.releaseFd(), getApplicationInfo().uid",
-                     "status.vpnTunFdAttached != 1 || status.adapterAvailable || status.protectionRunning",
+                     "NativeTunFdClient.attachUnknownIdentity",
+                     "status.adapterAvailable != vpnProductFlowStack",
+                     "status.protectionRunning != vpnProductFlowStack",
                      'throw new IOException("TUN graph handoff/readiness mismatch")')
+        plugin = source(VPP + "product_core_plugin.c")
+        self.require(body(plugin, "product_core_adapter_available"),
+                     "product_vpn_tun_product_ready ()")
+        self.require(body(plugin, "product_core_protection_running"),
+                     "product_vpn_tun_product_ready ()")
+        ready = body(source(VPP + "product_vpn_tun_adapter.c"),
+                     "product_vpn_tun_product_ready")
+        self.require(ready, "product_vpn_tun_product_mode ()", "tun.tun_fd >= 0",
+                     "product_vpn_uid_resolver_ready ()",
+                     "product_vpn_flow_stack_driver_ready ()",
+                     "product_packet_graph_accepting ()")
         platform = source(JAVA + "VpnTunPlatformSession.java")
         self.assertRegex(platform, r"if \(graphValidation\)\s*\{\s*builder\.addAllowedApplication\(service\.getPackageName\(\)\);")
+        self.assertIn("builder.addDnsServer(server)", platform)
         tun = body(source(VPP + "product_vpn_tun_adapter.c"), "tun_read_ready")
         self.require(tun, ".availability = tun.test_uid_known ? PRODUCT_PLATFORM_UID_KNOWN : 0",
                      ".direction = PRODUCT_PACKET_DIRECTION_OUTPUT",
@@ -171,7 +189,7 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
              "generation != network_generation", "0"),
             ("test_network_publication_is_generation_bound_and_whole",
              "snapshot->revision <= product_network_snapshot.revision", "0"),
-            ("test_vpn_validation_is_not_product_protection",
+            ("test_vpn_product_readiness_requires_native_handoff",
              "!adapter.productLaunchAllowed && !vpnGraphValidation", "false"),
         )
         original_source = source

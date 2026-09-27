@@ -590,7 +590,9 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
 }
 
 int product_vpn_udp4_adapter_available (void) { return 0; }
-int product_vpn_tun_validation_enabled (void) { return 0; }
+int product_vpn_tun_enabled (void) { return 0; }
+int product_vpn_tun_product_mode (void) { return 0; }
+int product_vpn_tun_product_ready (void) { return 0; }
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   (void) vm; (void) generation; return 0;
 }

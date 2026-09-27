@@ -115,6 +115,12 @@ target_link_libraries(sakamoto-product-host-fixture-abi-test PRIVATE
 
 enable_testing()
 add_test(NAME sakamoto-product-blocked-observation-test COMMAND sakamoto-product-blocked-observation-test)
+add_executable(sakamoto-product-vpn-return-credit-test
+  tests/host/product_vpn_return_credit_test.c)
+target_include_directories(sakamoto-product-vpn-return-credit-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-vpn-return-credit-test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sakamoto-product-vpn-return-credit-test PRIVATE pthread)
+add_test(NAME sakamoto-product-vpn-return-credit-test COMMAND sakamoto-product-vpn-return-credit-test)
 add_executable(sakamoto-product-domains-test tests/host/product_domains_test.c)
 target_link_libraries(sakamoto-product-domains-test PRIVATE sakamoto_product_domains)
 target_link_options(sakamoto-product-domains-test PRIVATE -Wl,--wrap=product_domains_memory_alloc -Wl,--wrap=product_domains_memory_free)

@@ -18,10 +18,12 @@ static int broker(void *opaque, uint64_t generation, uint64_t session, int fd)
 static product_vpn_flow_stack_output_result_t output(void *opaque,
     const product_vpn_flow_stack_span_t *spans, unsigned count, size_t total,
     const product_platform_packet_facts_t *platform,
-    uint64_t generation, uint64_t serial, uint64_t epoch)
+    uint64_t generation, uint64_t serial, uint64_t epoch,
+    uint64_t flow_incarnation)
 {
   fixture_t *f = opaque;
   assert(count && spans && total == (f->ipv6 ? 49U : 29U) && generation == 9 && serial && epoch == 13);
+  assert(flow_incarnation == UINT64_C(0x100000007));
   unsigned char returned[49];
   size_t offset = 0;
   for (unsigned i = 0; i < count; ++i) {
@@ -119,14 +121,14 @@ int main(int argc, char **argv)
     .availability = PRODUCT_PLATFORM_UID_KNOWN,
     .direction = PRODUCT_PACKET_DIRECTION_INPUT,
     .provenance = PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN};
-  assert(product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 9)
+  assert(product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 9, UINT64_C(0x100000007))
     == PRODUCT_VPN_FLOW_STACK_UNSUPPORTED);
   platform.direction = PRODUCT_PACKET_DIRECTION_OUTPUT;
   platform.provenance = PRODUCT_PACKET_PROVENANCE_VPN_TUN;
-  assert(product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 8)
+  assert(product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 8, UINT64_C(0x100000007))
     == PRODUCT_VPN_FLOW_STACK_INVALID_GENERATION);
   product_vpn_flow_stack_input_result_t result =
-    product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 9);
+    product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 9, UINT64_C(0x100000007));
   if (malformed) {
     assert(result != PRODUCT_VPN_FLOW_STACK_ACCEPTED);
     product_vpn_flow_stack_quiesce(stack);

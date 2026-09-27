@@ -1253,9 +1253,9 @@ public final class AndroidRuntimeContractTest {
 
         ProductPacketAdapterContract vpn =
                 ProductPacketAdapterContract.forProfile(RuntimeProfile.VPN);
-        check(!vpn.productLaunchAllowed && !vpn.adapterReadyOnStart
-                        && !vpn.adapterReadyAfterHandoff,
-                "VPN cannot launch or claim readiness before the real Flow Stack exists");
+        check(vpn.productLaunchAllowed && !vpn.adapterReadyOnStart
+                        && vpn.adapterReadyAfterHandoff,
+                "VPN launches through native TUN/Flow Stack and becomes ready after handoff");
         check(ProductPacketAdapterContract.VPN_ADAPTER.equals(vpn.adapterName),
                 "VPN Adapter name is stable");
         check(vpn.platformInterface.contains("VpnService TUN"),
@@ -1267,8 +1267,8 @@ public final class AndroidRuntimeContractTest {
         check(ProductPacketAdapterContract.UID_MISS_UNKNOWN_APPLICATION_NO_HOLD
                         .equals(vpn.uidMissHandling),
                 "VPN UID miss uses Unknown Application without hold/cache/replay");
-        check("vpn_flow_stack_not_ready".equals(vpn.unavailableErrorCode),
-                "VPN adapter unavailable has a stable error code");
+        check(vpn.unavailableErrorCode.isEmpty(),
+                "VPN product launch has no fixed unavailable error");
     }
 
     private static void coreHealthDoesNotClaimAdapterReadiness() {
