@@ -65,7 +65,7 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
   }
   if (s->sequence == UINT64_MAX) return; /* explicit lifetime cannot wrap */
   product_observation_record_t r = {
-    .length = entry->key.ip_family == 4 ? 424 : 448,
+    .length = entry->key.ip_family == 4 ? 456 : 480,
     .version = PRODUCT_OBSERVATION_VERSION,
     .flags = flags | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
     .owner = owner, .slot = slot, .uid = entry->uid,
@@ -118,15 +118,18 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
   }
   unsigned side = entry->last_flow_direction == PRODUCT_FLOW_ENTRY_FLOW_DIRECTION_REPLY;
   product_observation_attribution_t *a = &s->attribution[side];
+  product_observation_attribution_t current = *context;
+  current.protocol_set = entry->lpi.protocols;
+  current.protocols_available = entry->lpi.available;
   /* The Flow tracker already processed this packet to produce policy inputs.
    * Observation accounting is independent: export its exact previous cumulative
    * boundary before adding this packet under its final logical winner. */
-  int changed = !a->segment || memcmp (&a->policy_generation, &context->policy_generation,
+  int changed = !a->segment || memcmp (&a->policy_generation, &current.policy_generation,
     sizeof (*a) - offsetof (product_observation_attribution_t, policy_generation));
   if (changed) {
     if (a->segment) export_record (owner, entry, slot, 0);
     uint64_t next = a->segment == UINT64_MAX ? UINT64_MAX : a->segment + 1;
-    *a = *context;
+    *a = current;
     a->segment = next;
     a->start_packets = s->packets[side]; a->start_bytes = s->bytes[side];
     if (next == UINT64_MAX) a->valid = 0; /* no identifier reuse at exhaustion */

@@ -23,7 +23,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 448]);
+    struct RawRecord([u8; 480]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -183,7 +183,7 @@ mod live {
                         let mut records = Vec::new();
                         for channel in 0..4 {
                             for _ in 0..128 {
-                                let mut raw = RawRecord([0; 448]);
+                                let mut raw = RawRecord([0; 480]);
                                 let rv = unsafe {
                                     product_observation_receive(handle, channel, &mut raw)
                                 };
@@ -375,7 +375,7 @@ mod live {
             let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
             line.clear(); output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "CONNECTED");
-            writeln!(input, "emit 0 1 424 1 10 0").unwrap(); input.flush().unwrap();
+            writeln!(input, "emit 0 1 456 1 10 0").unwrap(); input.flush().unwrap();
             line.clear(); output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "EMITTED 1");
             thread::sleep(Duration::from_millis(1300));
@@ -383,7 +383,7 @@ mod live {
             assert_eq!(first["query_fresh"], true);
             assert_eq!(first["persistent"]["persistence"]["packets"], serde_json::json!([1, 0]));
             std::fs::write(&arm, b"delay next WAL sync").unwrap();
-            writeln!(input, "emit 0 1 424 2 10 0").unwrap(); input.flush().unwrap();
+            writeln!(input, "emit 0 1 456 2 10 0").unwrap(); input.flush().unwrap();
             line.clear(); output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "EMITTED 1");
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -434,7 +434,7 @@ mod live {
             line.clear();
             output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "CONNECTED");
-            writeln!(input, "emit 0 1 424 1 10 0").unwrap();
+            writeln!(input, "emit 0 1 456 1 10 0").unwrap();
             input.flush().unwrap();
             line.clear();
             output.read_line(&mut line).unwrap();
@@ -463,7 +463,7 @@ mod live {
                 }
             });
             service.pause(false);
-            writeln!(input, "emit 0 1 424 2 10 1").unwrap();
+            writeln!(input, "emit 0 1 456 2 10 1").unwrap();
             input.flush().unwrap();
             line.clear();
             output.read_line(&mut line).unwrap();
@@ -483,6 +483,77 @@ mod live {
             input.flush().unwrap();
             assert!(child.wait().unwrap().success());
             drop(service);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        #[ignore = "requires the actual Product C transport producer executable"]
+        fn native_protocol_labels_survive_transport_query_commit_and_restart() {
+            let root = std::env::temp_dir().join(format!("t25-native-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs"))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "protocol").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "PROTOCOL 5");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let q = loop {
+                let value = service.snapshot();
+                if value["persistent"]["ended"] == 1
+                    && value["persistent"]["persistence"]["pending"] == false {
+                    break value["persistent"].clone();
+                }
+                assert!(Instant::now() < deadline, "{value}");
+                thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(q["packets"], serde_json::json!([5, 2]));
+            let rows = q["protocol_windows"].as_object().unwrap();
+            let count = |layer: &str, id: u64| rows.values()
+                .find(|v| v["layer"] == layer && v["protocol_id"] == id)
+                .unwrap()["counts"]["packets"].clone();
+            assert_eq!(count("l4", 17), serde_json::json!([5, 2]));
+            assert_eq!(count("l7", 1001), serde_json::json!([4, 1]));
+            assert_eq!(count("l7", 1006), serde_json::json!([2, 0]));
+            assert_eq!(count("l7_none", 0), serde_json::json!([0, 1]));
+            assert_eq!(count("l7_unavailable", 0), serde_json::json!([1, 0]));
+            assert_eq!(q["rejected"], 1);
+            writeln!(input, "protocol-gap").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "PROTOCOL-GAP 2");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let gap = loop {
+                let value = service.snapshot();
+                if value["persistent"]["packets"] == serde_json::json!([10, 2])
+                    && value["persistent"]["persistence"]["pending"] == false {
+                    break value["persistent"].clone();
+                }
+                assert!(Instant::now() < deadline, "{value}");
+                thread::sleep(Duration::from_millis(5));
+            };
+            assert!(gap["coverage"]["gaps"].as_u64().unwrap() >= 1);
+            assert_eq!(gap["coverage"]["incomplete"], true);
+            assert_eq!(gap["l4_unknown"]["packets"], serde_json::json!([2, 0]));
+            assert_eq!(gap["l7_unknown"]["packets"], serde_json::json!([3, 0]));
+            let rows = gap["protocol_windows"].as_object().unwrap();
+            let count = |id: u64| rows.values().find(|v| v["layer"] == "l7" && v["protocol_id"] == id)
+                .unwrap()["counts"]["packets"].clone();
+            assert_eq!(count(1001), serde_json::json!([7, 1]));
+            assert_eq!(count(1006), serde_json::json!([4, 0]));
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            drop(service);
+            let reopened = ObservationStore::open(&root.join("overall.json")).unwrap();
+            assert_eq!(reopened.query()["protocol_windows"], gap["protocol_windows"]);
+            drop(reopened);
             std::fs::remove_dir_all(root).unwrap();
         }
 
@@ -652,7 +723,7 @@ mod live {
             output.read_line(&mut line).unwrap();
             assert_eq!(line.trim(), "CONNECTED");
             service.pause(true);
-            writeln!(input, "emit 0 1 424 1 10 1").unwrap();
+            writeln!(input, "emit 0 1 456 1 10 1").unwrap();
             input.flush().unwrap();
             line.clear();
             output.read_line(&mut line).unwrap();
@@ -717,24 +788,24 @@ mod live {
                     thread::sleep(Duration::from_millis(5));
                 }
             };
-            assert_eq!(emit("emit 0 2 424 1 10 0"), 2);
+            assert_eq!(emit("emit 0 2 456 1 10 0"), 2);
             wait(&|s| s["overview"]["packets"][0] == 2);
             service.pause(true);
-            assert_eq!(emit("emit 1 600 424 1 10 0"), 512);
-            assert_eq!(emit("emit 0 600 424 3 10 0"), 512);
-            assert_eq!(emit("emit 2 125 448 1 20 0"), 125);
+            assert_eq!(emit("emit 1 600 456 1 10 0"), 512);
+            assert_eq!(emit("emit 0 600 456 3 10 0"), 512);
+            assert_eq!(emit("emit 2 125 480 1 20 0"), 125);
             assert_eq!(service.snapshot()["overview"]["packets"][0], 2);
             service.pause(false);
             let s = wait(&|s| s["overview"]["packets"][0] == 639);
             assert_eq!(s["overview"]["bytes"][0], 38340);
             assert_eq!(s["overview"]["active"], 2);
             assert_eq!(s["overview"]["incomplete"], true);
-            assert_eq!(emit("emit 0 1 448 515 10 1"), 1);
+            assert_eq!(emit("emit 0 1 480 515 10 1"), 1);
             let s = wait(&|s| s["overview"]["ended"] == 1);
             assert_eq!(s["overview"]["packets"][0], 640);
             assert_eq!(s["overview"]["bytes"][0], 38400);
-            assert_eq!(emit("emit 0 1 424 514 10 0"), 1);
-            assert_eq!(emit("emit 0 1 448 515 10 1"), 1);
+            assert_eq!(emit("emit 0 1 456 514 10 0"), 1);
+            assert_eq!(emit("emit 0 1 480 515 10 1"), 1);
             let s = wait(&|s| s["overview"]["rejected"] == 2);
             assert_eq!(s["overview"]["active"], 1);
             assert_eq!(s["overview"]["packets"][0], 640);

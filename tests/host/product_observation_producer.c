@@ -15,7 +15,7 @@
  * a missing old boundary, a new application's NoMatch tail and duplicate END. */
 static unsigned attribution_fixture (product_observation_transport_t *t) {
   product_observation_record_t r = {
-    .length = 424, .version = PRODUCT_OBSERVATION_VERSION, .owner = 0, .slot = 7,
+    .length = 456, .version = PRODUCT_OBSERVATION_VERSION, .owner = 0, .slot = 7,
     .generation = 77, .incarnation = 30, .sequence = 1, .first_seen = 100, .last_seen = 101,
     .packets = {2, 1}, .bytes = {120, 80}, .activity_utc_us = 61000000,
     .family = 4, .protocol = 17, .address = {10, 1, 2, 3, 10, 4, 5, 6},
@@ -52,7 +52,7 @@ static unsigned attribution_fixture (product_observation_transport_t *t) {
 }
 static unsigned blocked_fixture (product_observation_transport_t *t) {
   product_observation_record_t flow = {
-    .length = 424, .version = PRODUCT_OBSERVATION_VERSION,
+    .length = 456, .version = PRODUCT_OBSERVATION_VERSION,
     .owner = 0, .slot = 7, .generation = 77, .incarnation = 1, .sequence = 1,
     .first_seen = 100, .last_seen = 100, .activity_utc_us = 61000000,
     .family = 4, .protocol = 17, .packets = {1, 0}, .bytes = {60, 0},
@@ -87,6 +87,66 @@ static unsigned blocked_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 1, &blocked, blocked.length) == 1;
   return n;
 }
+static unsigned protocol_fixture (product_observation_transport_t *t) {
+  /* Bits 0 and 5 are stable catalog DNS and supplemental mDNS. The packet
+   * producer uses the generated catalog; this transport fixture pins ABI. */
+  product_observation_attribution_t a = {
+    .segment=1, .activity_utc_us=61000000, .policy_generation=77,
+    .policy_revision=1, .policy_hash=88, .winner=65537, .uid=42,
+    .declared_action=1, .actual_action=1, .valid=1, .name="same winner"
+  };
+  product_observation_record_t r = {
+    .length=456, .version=PRODUCT_OBSERVATION_VERSION,
+    .owner=0, .slot=11, .generation=77, .incarnation=1,
+    .sequence=1, .first_seen=1, .last_seen=1,
+    .activity_utc_us=61000000, .family=4, .protocol=17,
+    .packets={1,1}, .bytes={60,80},
+    .address={10,1,2,3,10,4,5,6},
+    .attribution={a,a},
+  };
+  r.attribution[1].protocols_available=1;
+  r.attribution[1].protocol_set=UINT64_C(1);
+  unsigned n = product_observation_publish (t, 0, &r, r.length) == 1;
+  r.sequence=2; r.last_seen=2; r.packets[0]=3; r.bytes[0]=180;
+  r.attribution[0].segment=2; r.attribution[0].start_packets=1;
+  r.attribution[0].start_bytes=60; r.attribution[0].protocols_available=1;
+  r.attribution[0].protocol_set=UINT64_C(1);
+  n += product_observation_publish (t, 0, &r, r.length) == 1;
+  r.sequence=3; r.last_seen=3; r.packets[0]=5; r.bytes[0]=300;
+  r.attribution[0].segment=3; r.attribution[0].start_packets=3;
+  r.attribution[0].start_bytes=180;
+  r.attribution[0].protocol_set=UINT64_C(1) | (UINT64_C(1)<<5);
+  n += product_observation_publish (t, 0, &r, r.length) == 1;
+  r.sequence=4; r.last_seen=4; r.packets[1]=2; r.bytes[1]=160;
+  r.attribution[1].segment=2; r.attribution[1].start_packets=1;
+  r.attribution[1].start_bytes=80; r.attribution[1].protocol_set=0;
+  r.flags=PRODUCT_OBSERVATION_END;
+  n += product_observation_publish (t, 0, &r, r.length) == 1;
+  n += product_observation_publish (t, 0, &r, r.length) == 1;
+  return n;
+}
+static unsigned protocol_gap_fixture (product_observation_transport_t *t) {
+  product_observation_record_t r = {
+    .length=456, .version=PRODUCT_OBSERVATION_VERSION,
+    .owner=0, .slot=12, .generation=77, .incarnation=1,
+    .sequence=1, .first_seen=1, .last_seen=1,
+    .activity_utc_us=61000000, .family=4, .protocol=17,
+    .packets={1,0}, .bytes={60,0}, .address={10,1,2,3,10,4,5,6},
+    .attribution={{.segment=1,.activity_utc_us=61000000,.policy_generation=77,
+      .policy_revision=1,.policy_hash=88,.winner=65537,.uid=42,
+      .declared_action=1,.actual_action=1,.valid=1,.name="same winner",
+      .protocol_set=UINT64_C(1),.protocols_available=1}},
+  };
+  unsigned n = product_observation_publish (t, 0, &r, r.length) == 1;
+  /* The sequence 2/3 boundary messages were lost. Only packets 4/5 are
+   * provably covered by the current two-label set. */
+  r.sequence=4; r.last_seen=5; r.packets[0]=5; r.bytes[0]=300;
+  r.attribution[0].segment=3; r.attribution[0].start_packets=3;
+  r.attribution[0].start_bytes=180;
+  r.attribution[0].protocol_set=UINT64_C(1) | (UINT64_C(1)<<5);
+  n += product_observation_publish (t, 0, &r, r.length) == 1;
+  return n;
+}
 int main (int argc, char **argv) {
   assert (argc == 2);
   assert (clib_mem_init (NULL, 4 * 1024 * 1024));
@@ -119,7 +179,7 @@ int main (int argc, char **argv) {
           .incarnation = incarnation, .sequence = base + i,
           .activity_utc_us = 1700000000000000ULL + base + i, .first_seen = 100, .last_seen = 100 + base + i,
           .packets = { base + i, 0 }, .bytes = { (base + i) * 60, 0 },
-          .family = length == 424 ? 4 : 6, .protocol = 17,
+          .family = length == 456 ? 4 : 6, .protocol = 17,
           .address = { 10, 1, 2, 3, 10, 4, 5, 6 },
         };
         admitted += product_observation_publish (t, channel, &record, length) == 1;
@@ -130,6 +190,10 @@ int main (int argc, char **argv) {
       printf ("ATTRIBUTION %u\n", attribution_fixture (t));
     } else if (!strncmp (command, "blocked", 7)) {
       printf ("BLOCKED %u\n", blocked_fixture (t));
+    } else if (!strncmp (command, "protocol-gap", 12)) {
+      printf ("PROTOCOL-GAP %u\n", protocol_gap_fixture (t));
+    } else if (!strncmp (command, "protocol", 8)) {
+      printf ("PROTOCOL %u\n", protocol_fixture (t));
     } else if (!strncmp (command, "status", 6)) {
       product_observation_status_t s;
       product_observation_transport_status (t, &s);

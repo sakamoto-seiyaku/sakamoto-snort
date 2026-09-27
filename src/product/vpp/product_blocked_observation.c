@@ -52,7 +52,7 @@ static void export_record (product_blocked_observation_t *o, uint32_t index,
   blocked_slot_t *s = &o->slots[index];
   if (s->sequence == UINT64_MAX) return;
   product_observation_record_t r = {
-    .length = s->key.ip_family == 4 ? 424 : 448,
+    .length = s->key.ip_family == 4 ? 456 : 480,
     .version = PRODUCT_OBSERVATION_VERSION,
     .flags = PRODUCT_OBSERVATION_BLOCKED | flags
       | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
@@ -169,12 +169,16 @@ void product_blocked_observation_observe (
   blocked_slot_t *s = &o->slots[index];
   unsigned side = assignment->source_is_a != s->origin_is_a;
   product_observation_attribution_t *a = &s->attribution[side];
-  int changed = !a->segment || memcmp (&a->policy_generation, &context->policy_generation,
+  product_observation_attribution_t current = *context;
+  /* PRE drops never enter the Flow/LPI producer. */
+  current.protocol_set = 0;
+  current.protocols_available = 0;
+  int changed = !a->segment || memcmp (&a->policy_generation, &current.policy_generation,
     sizeof (*a) - offsetof (product_observation_attribution_t, policy_generation));
   if (changed) {
     if (a->segment) export_record (o, index, 0);
     uint64_t segment = a->segment == UINT64_MAX ? UINT64_MAX : a->segment + 1;
-    *a = *context;
+    *a = current;
     a->segment = segment; a->start_packets = s->packets[side];
     a->start_bytes = s->bytes[side];
     if (segment == UINT64_MAX) a->valid = 0;

@@ -9,6 +9,7 @@ import struct
 import select
 import subprocess
 import time
+from helpers.t25_observation_client import ObservationClient
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
@@ -19,6 +20,7 @@ parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--fixtures',type=Path,required=True)
 parser.add_argument('--dependencies',type=Path,required=True)
 parser.add_argument('--mdns',action='store_true')
+parser.add_argument('--observation',action='store_true')
 args = parser.parse_args()
 udp_port=5353 if args.mdns else 53
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
@@ -33,7 +35,7 @@ runtime = ROOT/('build-output/product-vpp-runtime-'+runtime_tag)
 generation = 26301
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
-              mdns=args.mdns, cases=[], started_ns=time.time_ns(), artifact=str(artifact),
+              mdns=args.mdns, observation=args.observation, cases=[], started_ns=time.time_ns(), artifact=str(artifact),
               manifest_sha256=hashlib.sha256((artifact/'product-vpp-artifact.properties').read_bytes()).hexdigest())
 build_path=args.build.resolve()
 build=json.loads(build_path.read_text())
@@ -44,6 +46,10 @@ result.update(build=str(build_path),build_sha256=hashlib.sha256(build_path.read_
               source_sha256=build['source_sha256'],runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               policy_uids=[12001])
 (output/'runner.py').write_bytes(Path(__file__).read_bytes())
+if args.observation:
+    helper_source = ROOT/'tests/device/helpers/t25_observation_client.py'
+    (output/'observation-client.py').write_bytes(helper_source.read_bytes())
+    result['observation_client_sha256'] = hashlib.sha256(helper_source.read_bytes()).hexdigest()
 
 def command(*argv, check=True):
     p = subprocess.run(list(map(str, argv)), env=env, text=True, stdout=subprocess.PIPE,
@@ -100,9 +106,20 @@ hooks = [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--u
           flag,port,'-j','NFQUEUE','--queue-num','176']
          for protocol,port in [('tcp','40610'),('udp',str(udp_port))] for flag in ['--sport','--dport']]
 clients=[]
-process = None; log = None; hooked = []
+process = None; log = None; hooked = []; observer = None
+def resource_sample(label):
+    def proc(pid):
+        path=Path('/proc')/str(pid)
+        stat=(path/'stat').read_text().rsplit(')',1)[1].split()
+        status=dict(line.split(':',1) for line in (path/'status').read_text().splitlines() if ':' in line)
+        io=dict(line.split(':',1) for line in (path/'io').read_text().splitlines() if ':' in line)
+        return dict(pid=pid,cpu_ticks=int(stat[11])+int(stat[12]),
+            rss_kib=int(status['VmRSS'].split()[0]),hwm_kib=int(status['VmHWM'].split()[0]),
+            write_bytes=int(io['write_bytes'].strip()))
+    result.setdefault('resources',[]).append(dict(label=label,mono_ns=time.monotonic_ns(),
+        ticks_per_second=os.sysconf('SC_CLK_TCK'),vpp=proc(process.pid),rust=proc(observer.process.pid)))
 def start(label):
-    global process, log, runtime, generation
+    global process, log, runtime, generation, observer
     generation = 26301 if label == "first" else 25602
     runtime = ROOT/("build-output/product-vpp-runtime-"+runtime_tag+"-"+label)
     launch.update(PRODUCT_RUNTIME_DIR=str(runtime), PRODUCT_GENERATION=str(generation))
@@ -122,14 +139,21 @@ def start(label):
     save(label+'-process.txt', 'pid='+str(process.pid)+'\nexe='+os.readlink(f'/proc/{process.pid}/exe')
          +'\ncmd='+Path(f'/proc/{process.pid}/cmdline').read_bytes().replace(b'\0',b' ').decode())
     cli(label+'-startup', 'product packet-trace limit 4096', 'show product root lanes', 'show threads')
+    if args.observation:
+        observer=ObservationClient(artifact/'bin/sakamoto-product-core-host', runtime,
+                                   generation, output/'observation/overall.json', output, env)
+        observer.query('baseline');resource_sample('baseline')
     for hook in hooks: command(*hook); hooked.append(hook)
     return status
 
 def stop(label):
-    global process, log
+    global process, log, observer
     for hook in hooked:
         removal=hook.copy(); removal[3]='-D'; command(*removal)
     hooked.clear()
+    if observer is not None:
+        observer.close()
+    observer=None
     if process is not None:
         if process.poll() is None and (runtime/'cli.sock').exists():
             drain(label+'-drain'); assert 'root.stop=ok' in cli(label+'-stop','product root stop')
@@ -184,9 +208,11 @@ class Client:
     def capture(self,label,status,phase):
         time.sleep(.1);drain(label+'-drain')
         api(label+'-query','rule-query');cli(label+'-flow','show product flows')
+        if args.observation:
+            observer.query(label);resource_sample(label)
         result['cases'].append(dict(label=label,client=self.label,protocol=self.protocol,port=self.port,nonce=self.nonce,
             phase=phase,revision=int(status['config.active_revision']),query=label+'-query.txt',flow=label+'-flow.txt',
-            generation=generation))
+            generation=generation,observation=(label+'-observation.json' if args.observation else None)))
     def close(self):
         if self.process.poll() is None:
             self.execute('close','closed');self.process.wait(timeout=5)
@@ -214,6 +240,8 @@ try:
     client.execute('repeat','received');client.capture('unavailable-budget',status,'unavailable')
     client.close()
     cache=cli('final-counters','show product flows','show product completion')
+    if args.observation:
+        observer.query('final');resource_sample('final')
     result['status']='RAW_COMPLETE'
 except Exception as error:
     result['error']=repr(error);raise

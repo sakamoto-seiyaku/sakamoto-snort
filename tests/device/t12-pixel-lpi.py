@@ -24,6 +24,7 @@ p.add_argument('--output', type=Path, required=True)
 p.add_argument('--fixtures',type=Path,required=True)
 p.add_argument('--python',default='/tmp/t12-quic-venv/bin/python')
 p.add_argument('--mdns',action='store_true')
+p.add_argument('--observation',action='store_true')
 args = p.parse_args()
 udp_port=5353 if args.mdns else 40611
 SERIAL = args.serial or (json.loads(args.serial_from.read_text())['serial'] if args.serial_from else None) or subprocess.check_output([str(ROOT/'dev/adb'),'get-serialno'],text=True).strip()
@@ -36,7 +37,8 @@ def save(name, text): (output/name).write_text(text); return text
 def props(text): return dict(line.split('=',1) for line in text.splitlines() if '=' in line and not line.startswith('#'))
 result = dict(status='HOLD', profile='root', source='NFQ_CAPTURED+TUN_ORIGIN', serial=SERIAL,
               build=str(build_path), build_sha256=digest(build_path), source_sha256=build['source_sha256'],
-              runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[], mdns=args.mdns)
+              runner_sha256=digest(__file__), started_ns=time.time_ns(), cases=[], mdns=args.mdns,
+              observation=args.observation)
 save('runner.py',Path(__file__).read_text())
 adb_prefix = [str(ROOT/'dev/adb'), '-s', SERIAL]
 def adb(*argv, check=True, timeout=35):
@@ -119,8 +121,8 @@ def query(label):
 def start(label,profile):
     global BASE,started
     BASE='/data/user/0/'+PKG+'/files/profiles/'+profile+'/vpp'
-    args=['--ez','debugVpnHevValidation','true'] if profile=='vpn' else ['--ez','runtimeStart','true','--es','runtimeProfile','root']
-    save(label+'-start.txt',action(*args));started=True
+    action_args=['--ez','debugVpnHevValidation','true'] if profile=='vpn' else ['--ez','runtimeStart','true','--es','runtimeProfile','root']
+    save(label+'-start.txt',action(*action_args));started=True
     running=wait_state(label+'-running','running');assert running['profile']==profile,running
     assert running['protectionRunning']==('true' if profile=='root' else 'false')
     cli(label+'-startup','product packet-trace limit 4096','show threads','show product completion')
@@ -132,7 +134,9 @@ def start(label,profile):
     save(label+'-process.txt',root('cat /proc/'+str(pid)+'/status; readlink /proc/'+str(pid)+'/exe'))
     save(label+'-owner.properties',app('files/profiles/'+profile+'/vpp/owner.properties'))
     result.setdefault('lifetimes',[]).append(dict(label=label,profile=profile,generation=int(running['generation']),pid=pid))
-    return query(label)
+    status=query(label)
+    if args.observation:observation(label+'-baseline')
+    return status
 def stop(label,profile):
     global started
     save(label+'-before-stop.log',app('files/profiles/'+profile+'/vpp/logs/vpp-stdout.log'))
@@ -193,17 +197,69 @@ def phase(case,wanted):
 def release(case,name):
     adb('shell','run-as',PKG,'touch','files/product-state/t12-release-'+case['nonce']+'-'+name)
 
+def observation(label):
+    end=time.monotonic()+15
+    while time.monotonic()<end:
+        nonce='t25-query-'+str(time.time_ns())
+        save(label+'-observation-action.txt',action('--es','observationNonce',nonce,'--ei','observationOperation',0))
+        response_end=time.monotonic()+5
+        while time.monotonic()<response_end:
+            text=app('files/product-state/observation-'+nonce+'.json',check=False)
+            try:value=json.loads(text)
+            except json.JSONDecodeError:value={}
+            if value.get('consumer',{}).get('query_fresh') is True:break
+            if value.get('error'):raise RuntimeError('observation query: '+str(value['error']))
+            time.sleep(.15)
+        else:raise RuntimeError('observation query response deadline '+label)
+        if (all(not channel['occupancy'] for channel in value['health']['channels'])
+            and not value['consumer']['persistent']['persistence']['pending']):
+            save(label+'-observation.json',text)
+            return value
+        time.sleep(.15)
+    raise RuntimeError('observation query deadline '+label)
+
+def restore_empty(label,prior):
+    nonce='t25-restore-'+str(time.time_ns())
+    local=output/(label+'-restore-input.json')
+    local.write_text(json.dumps(dict(format='sakamoto-config-v1',rules=[],groups=[],edges=[],bindings=[],lists=[])))
+    remote='/data/local/tmp/'+nonce+'.json'
+    try:
+        adb('push',local,remote)
+        adb('shell','run-as',PKG,'mkdir','-p','files/product-import')
+        adb('shell','run-as',PKG,'cp',remote,'files/product-import/'+nonce+'.json')
+        action('--es','ruleImportNonce',nonce,'--ei','ruleOperation',1,
+               '--el','expectedSavedRevision',prior['savedRevision'])
+        end=time.monotonic()+15
+        while time.monotonic()<end:
+            text=app('files/product-state/rule-import-'+nonce+'.json',check=False)
+            try:value=json.loads(text)
+            except json.JSONDecodeError:value={}
+            if value.get('stage')=='vpp':
+                assert value['result']==0,value
+                save(label+'-restore.json',text)
+                return value
+            time.sleep(.15)
+        raise RuntimeError('configuration restoration deadline '+label)
+    finally:
+        adb('shell','rm','-f',remote,check=False)
+        adb('shell','run-as',PKG,'rm','-f','files/product-import/'+nonce+'.json',check=False)
+
 def evidence(case,status,phase_name):
     label=case['label']+'-'+phase_name
     query(label);cli(label+'-flow','show product flows')
+    if args.observation:observation(label)
     result['cases'].append(dict(label=label,client=case['label'],profile=case['profile'],protocol=case['protocol'],
         port=case['port'],nonce=case['nonce'],phase=phase_name,revision=int(status['activeRevision']),
-        query=label+'-query.properties',flow=label+'-flow.txt',generation=case['generation']))
+        query=label+'-query.properties',flow=label+'-flow.txt',generation=case['generation'],
+        observation=(label+'-observation.json' if args.observation else None)))
 
 try:
     before=state();assert before.get('state')=='stopped' and before.get('mayBeActive')=='false',before
     assert digest(build['apk'])==build['apk_sha256']
     save('install.txt',adb('install','-r',build['apk'],timeout=60))
+    if args.observation:
+        grant=save('root-grant.txt',adb('shell','run-as',PKG,'su','-c','id',check=False))
+        assert 'uid=0' in grant,'restore KernelSU Superuser grant for this install'
     package=save('package.txt',adb('shell','dumpsys','package',PKG));native=re.search(r'codePath=(\S+)',package)[1]+'/lib/arm64'
     installed=save('installed-native.txt',adb('shell','sha256sum',*[native+'/'+n for n in sorted(build['native_sha256'])]))
     assert {Path(line.split()[1]).name:line.split()[0] for line in installed.splitlines()}==build['native_sha256']
@@ -241,6 +297,9 @@ try:
             release(case,'budget_done');value=phase(case,'finished');assert not value.get('error'),value
             case['completed_ns']=time.time_ns();held=None
         cli(profile+'-final','show product flows','show product completion')
+        if args.observation:
+            restore_empty(profile,status)
+            observation(profile+'-restored')
         stop(profile,profile)
     result['status']='RAW_COMPLETE';result['process_absent']=True
 except Exception as error:
@@ -249,6 +308,9 @@ finally:
     if held:
         for gate in ('http_ready','dns_ready','tls_ready','quic_ready','blocked','budget_done'):release(held,gate)
     if started:
+        if args.observation:
+            try:restore_empty('failure-'+result['lifetimes'][-1]['profile'],config())
+            except Exception as error:result['restoration_error']=repr(error)
         save('failure-vpp.log',app('files/profiles/'+result['lifetimes'][-1]['profile']+'/vpp/logs/vpp-stdout.log'))
         action('--ez','runtimeStop','true')
         try:wait_state('cleanup-stopped','stopped')

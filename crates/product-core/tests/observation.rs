@@ -115,8 +115,8 @@ fn blocked_shape_uses_its_own_capacity_and_drop_provenance() {
 
 #[test]
 fn wire_record_is_length_and_version_checked() {
-    let mut bytes = [0u8; 448];
-    bytes[0..4].copy_from_slice(&[168, 1, 4, 2]);
+    let mut bytes = [0u8; 480];
+    bytes[0..4].copy_from_slice(&[200, 1, 5, 2]);
     bytes[16] = 7; // generation
     bytes[24] = 11; // incarnation
     bytes[32] = 1; // update
@@ -124,7 +124,7 @@ fn wire_record_is_length_and_version_checked() {
     bytes[80] = 80; // REPLY bytes
     bytes[112] = 4;
     bytes[113] = 17;
-    bytes[416..424].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
+    bytes[448..456].copy_from_slice(&[10, 1, 2, 3, 10, 4, 5, 6]);
     bytes[128] = 1; // ORIG segment
     bytes[128 + 24] = 61; // activity UTC
     bytes[128 + 32] = 7; // policy generation
@@ -134,11 +134,15 @@ fn wire_record_is_length_and_version_checked() {
     bytes[128 + 64] = 42; // UID
     bytes[128 + 72..128 + 76].copy_from_slice(&[2, 1, 1, 1]);
     bytes[128 + 76..128 + 79].copy_from_slice(b"old");
+    bytes[128 + 144..128 + 152].copy_from_slice(&(1u64 << 5).to_le_bytes());
+    bytes[128 + 152] = 1;
     let r = FlowRecord::decode(&bytes).unwrap();
     assert_eq!(r.attribution[0].name, "old");
     assert_eq!(r.attribution[0].winner, 65537);
     assert_eq!(r.attribution[0].declared_action, 2);
     assert_eq!(r.attribution[0].actual_action, 1);
+    assert_eq!(r.attribution[0].protocol_set, 1u64 << 5);
+    assert!(r.attribution[0].protocols_available);
     assert!(!r.attribution[1].valid);
     assert_eq!(r.generation, 7);
     assert_eq!(r.incarnation, 11);
@@ -148,6 +152,8 @@ fn wire_record_is_length_and_version_checked() {
     bytes[3] |= 8; // same record is invalid as blocked/actual ALLOW
     assert!(FlowRecord::decode(&bytes).is_none());
     bytes[128 + 73] = 2; // valid blocked/actual DROP
+    assert!(FlowRecord::decode(&bytes).is_none()); // PRE cannot publish L7
+    bytes[128 + 144..128 + 153].fill(0);
     assert!(FlowRecord::decode(&bytes).unwrap().blocked);
     bytes[117] = 2; // live blocked record cannot claim idle END reason
     assert!(FlowRecord::decode(&bytes).is_none());
@@ -158,7 +164,7 @@ fn wire_record_is_length_and_version_checked() {
     bytes[3] &= !8;
     bytes[0] = 127;
     assert!(FlowRecord::decode(&bytes).is_none());
-    bytes[0] = 168;
+    bytes[0] = 200;
     bytes[2] = 1;
     assert!(FlowRecord::decode(&bytes).is_none());
 }

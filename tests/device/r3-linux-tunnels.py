@@ -9,6 +9,7 @@ import struct
 import select
 import subprocess
 import time
+from helpers.t25_observation_client import ObservationClient
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
@@ -17,6 +18,7 @@ parser.add_argument('--stage', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--build', type=Path, required=True)
 parser.add_argument('--fixtures',type=Path,required=True)
+parser.add_argument('--observation',action='store_true')
 
 
 args = parser.parse_args()
@@ -33,7 +35,7 @@ runtime = ROOT/('build-output/product-vpp-runtime-'+runtime_tag)
 generation = 28501
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
-              cases=[], started_ns=time.time_ns(), artifact=str(artifact),
+              cases=[], observation=args.observation, started_ns=time.time_ns(), artifact=str(artifact),
               manifest_sha256=hashlib.sha256((artifact/'product-vpp-artifact.properties').read_bytes()).hexdigest())
 build_path=args.build.resolve()
 build=json.loads(build_path.read_text())
@@ -44,6 +46,10 @@ result.update(build=str(build_path),build_sha256=hashlib.sha256(build_path.read_
               source_sha256=build['source_sha256'],runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               policy_uids=[12001])
 (output/'runner.py').write_bytes(Path(__file__).read_bytes())
+if args.observation:
+    helper=ROOT/'tests/device/helpers/t25_observation_client.py'
+    (output/'observation-helper.py').write_bytes(helper.read_bytes())
+    result['observation_helper_sha256']=hashlib.sha256(helper.read_bytes()).hexdigest()
 
 def command(*argv, check=True):
     p = subprocess.run(list(map(str, argv)), env=env, text=True, stdout=subprocess.PIPE,
@@ -104,9 +110,9 @@ hooks = [['iptables','-t','mangle','-A','OUTPUT','-p',protocol,'-m','owner','--u
           flag,str(port),'-j','NFQUEUE','--queue-num','176']
          for protocol,port in [('udp',1195),('tcp',1196),('udp',51821),('tcp',1084),('tcp',1085),('tcp',3390),('udp',3389)] for flag in ['--sport','--dport']]
 clients=[]
-process = None; log = None; hooked = []
+process = None; log = None; hooked = []; observer = None
 def start(label):
-    global process, log, runtime, generation
+    global process, log, runtime, generation, observer
     generation = 28501 if label == "first" else 25602
     runtime = ROOT/("build-output/product-vpp-runtime-"+runtime_tag+"-"+label)
     launch.update(PRODUCT_RUNTIME_DIR=str(runtime), PRODUCT_GENERATION=str(generation))
@@ -126,14 +132,19 @@ def start(label):
     save(label+'-process.txt', 'pid='+str(process.pid)+'\nexe='+os.readlink(f'/proc/{process.pid}/exe')
          +'\ncmd='+Path(f'/proc/{process.pid}/cmdline').read_bytes().replace(b'\0',b' ').decode())
     cli(label+'-startup', 'product packet-trace limit 4096', 'show product root lanes', 'show threads')
+    if args.observation:
+        observer=ObservationClient(artifact/'bin/sakamoto-product-core-host',runtime,generation,
+            output/'observation/overall.json',output,env)
+        observer.query('baseline')
     for hook in hooks: command(*hook); hooked.append(hook)
     return status
 
 def stop(label):
-    global process, log
+    global process, log, observer
     for hook in hooked:
         removal=hook.copy(); removal[3]='-D'; command(*removal)
     hooked.clear()
+    if observer is not None:observer.close();observer=None
     if process is not None:
         if process.poll() is None and (runtime/'cli.sock').exists():
             drain(label+'-drain'); assert 'root.stop=ok' in cli(label+'-stop','product root stop')
@@ -191,9 +202,10 @@ class Client:
     def capture(self,label,status,phase):
         time.sleep(.1);drain(label+'-drain')
         api(label+'-query','rule-query');cli(label+'-flow','show product flows')
+        if args.observation:observer.query(label)
         result['cases'].append(dict(label=label,client=self.label,protocol=self.protocol,port=self.port,nonce=self.nonce,
             phase=phase,application=self.application,revision=int(status['config.active_revision']),query=label+'-query.txt',flow=label+'-flow.txt',
-            generation=generation))
+            generation=generation,observation=(label+'-observation.json' if args.observation else None)))
     def close(self):
         if self.process.poll() is None:
             self.execute('close','closed');self.process.wait(timeout=5)
@@ -217,6 +229,7 @@ try:
         client.execute('repeat','received');client.capture(application+'-budget',status,'budget')
         client.close()
     cache=cli('final-counters','show product flows','show product completion')
+    if args.observation:observer.query('final')
     result['status']='RAW_COMPLETE'
 except Exception as error:
     result['error']=repr(error);raise

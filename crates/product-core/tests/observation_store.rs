@@ -2,6 +2,243 @@ use sakamoto_product_core::observation::{Attribution, FlowRecord};
 use sakamoto_product_core::observation_store::ObservationStore;
 
 #[test]
+fn protocol_windows_follow_directional_publication_without_backfill_or_total_recount() {
+    let root = std::env::temp_dir().join(format!("t25-protocol-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let context = |segment, start_packets, start_bytes, mask, available| Attribution {
+        segment, start_packets, start_bytes, activity_utc_us: 61_000_000,
+        policy_generation: 77, policy_revision: 1, policy_hash: 88,
+        uid: 42, winner: 65537, name: "same winner".into(),
+        declared_action: 1, actual_action: 1, valid: true,
+        protocol_set: mask, protocols_available: available,
+        ..Default::default()
+    };
+    let mut r = FlowRecord {
+        generation: 77, slot: 2, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 17, packets: [1, 1], bytes: [60, 80],
+        attribution: [context(1, 0, 0, 0, false), context(1, 0, 0, 1, true)],
+        ..Default::default()
+    };
+    store.consume(&[r.clone()], 61_000_000).unwrap();
+    r.sequence = 2; r.last_seen = 2; r.packets[0] = 3; r.bytes[0] = 180;
+    r.attribution[0] = context(2, 1, 60, 1, true);
+    store.consume(&[r.clone()], 61_000_001).unwrap();
+    r.sequence = 3; r.last_seen = 3; r.packets[0] = 5; r.bytes[0] = 300;
+    r.attribution[0] = context(3, 3, 180, 1 | (1 << 5), true);
+    store.consume(&[r.clone()], 61_000_002).unwrap();
+    r.sequence = 4; r.last_seen = 4; r.packets[1] = 2; r.bytes[1] = 160;
+    r.attribution[1] = context(2, 1, 80, 0, true);
+    r.ended = true;
+    store.consume(&[r.clone(), r.clone()], 61_000_003).unwrap();
+    let check = |q: serde_json::Value| {
+        assert_eq!(q["packets"], serde_json::json!([5, 2]));
+        assert_eq!(q["application_windows"].as_object().unwrap().len(), 1);
+        assert_eq!(q["rule_windows"].as_object().unwrap().len(), 1);
+        let rows = q["protocol_windows"].as_object().unwrap();
+        let find = |layer: &str, id: u64| rows.values().find(|v| v["layer"] == layer && v["protocol_id"] == id).unwrap();
+        assert_eq!(find("l4", 17)["counts"]["packets"], serde_json::json!([5, 2]));
+        assert_eq!(find("l7", 1001)["counts"]["packets"], serde_json::json!([4, 1]));
+        assert_eq!(find("l7", 1006)["counts"]["packets"], serde_json::json!([2, 0]));
+        assert_eq!(find("l7_unavailable", 0)["counts"]["packets"], serde_json::json!([1, 0]));
+        assert_eq!(find("l7_none", 0)["counts"]["packets"], serde_json::json!([0, 1]));
+        assert_eq!(find("l7", 1001)["share"]["packets"], serde_json::json!([0.8, 0.5]));
+        assert_eq!(find("l7", 1006)["share"]["packets"][0], 0.4);
+        assert_eq!(q["l7_unknown"]["packets"], serde_json::json!([1, 0]));
+        assert_eq!(q["l4_unknown"]["packets"], serde_json::json!([0, 0]));
+        assert_eq!(q["rejected"], 1);
+    };
+    check(store.query());
+    store.flush().unwrap();
+    drop(store);
+    let reopened = ObservationStore::open(&path).unwrap();
+    check(reopened.query());
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_protocol_boundary_counts_only_provable_tail_and_reports_gap() {
+    let root = std::env::temp_dir().join(format!("t25-gap-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    let a = Attribution {
+        segment: 1, activity_utc_us: 61_000_000, policy_generation: 91,
+        policy_revision: 1, policy_hash: 92, uid: 9, winner: 65537,
+        declared_action: 1, actual_action: 1, name: "rule".into(), valid: true,
+        protocols_available: true, protocol_set: 1, ..Default::default()
+    };
+    let mut r = FlowRecord {
+        generation: 91, slot: 1, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 6, packets: [1, 0], bytes: [60, 0],
+        attribution: [a.clone(), Attribution::default()], ..Default::default()
+    };
+    store.consume(&[r.clone()], 61_000_000).unwrap();
+    r.sequence = 4; r.last_seen = 4; r.packets[0] = 5; r.bytes[0] = 300;
+    r.attribution[0] = Attribution { segment: 3, start_packets: 3, start_bytes: 180,
+        protocol_set: 1 | (1 << 5), ..a };
+    store.consume(&[r.clone()], 61_000_001).unwrap();
+    let q = store.query();
+    let rows = q["protocol_windows"].as_object().unwrap();
+    assert_eq!(q["packets"], serde_json::json!([5, 0]));
+    assert_eq!(q["l4_unknown"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(q["l7_unknown"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(rows.values().find(|v| v["layer"] == "l7" && v["protocol_id"] == 1001).unwrap()["counts"]["packets"], serde_json::json!([3, 0]));
+    assert_eq!(rows.values().find(|v| v["layer"] == "l7" && v["protocol_id"] == 1006).unwrap()["counts"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(q["coverage"]["gaps"], 1);
+    let unchanged = q["protocol_windows"].clone();
+    let mut invalid = r.clone(); invalid.sequence = 5; invalid.last_seen = 5;
+    invalid.packets[0] = 6; invalid.bytes[0] = 360;
+    invalid.attribution[0].protocol_set = 1;
+    assert_eq!(store.consume(&[invalid], 61_000_002).unwrap_err(), "observation_inconsistent_segment");
+    assert_eq!(store.query()["protocol_windows"], unchanged);
+    assert_eq!(store.query()["packets"], q["packets"]);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn pre_protocol_sqlite_history_is_retained_and_marked_unavailable() {
+    let root = std::env::temp_dir().join(format!("t25-migrate-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let a = Attribution {
+        segment: 1, activity_utc_us: 61_000_000, policy_generation: 77,
+        policy_revision: 1, policy_hash: 88, uid: 42, winner: 65537,
+        declared_action: 1, actual_action: 1, valid: true, name: "old".into(),
+        protocols_available: true, protocol_set: 1, ..Default::default()
+    };
+    let old = FlowRecord {
+        generation: 77, slot: 1, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 17, packets: [2, 1], bytes: [120, 80],
+        attribution: [a.clone(), a.clone()], ..Default::default()
+    };
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.consume(&[old], 61_000_000).unwrap();
+    store.close().unwrap();
+    drop(store);
+    // Model the exact older SQLite shape: no protocol rows or protocol
+    // metadata, and no protocol fields in committed Flow baselines.
+    let db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    db.execute("DELETE FROM observation WHERE kind=7", []).unwrap();
+    for kind in [0, 1] {
+        let (key, bytes): (String, Vec<u8>) = db.query_row(
+            "SELECT key,value FROM observation WHERE kind=?1 LIMIT 1", [kind],
+            |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if kind == 0 {
+            for field in ["protocol_schema", "legacy_protocol_unavailable", "l4_unknown", "l7_unknown"] {
+                value.as_object_mut().unwrap().remove(field);
+            }
+        } else {
+            for side in value["record"]["attribution"].as_array_mut().unwrap() {
+                side.as_object_mut().unwrap().remove("protocol_set");
+                side.as_object_mut().unwrap().remove("protocols_available");
+            }
+        }
+        db.execute("UPDATE observation SET value=?1 WHERE kind=?2 AND key=?3",
+            rusqlite::params![serde_json::to_vec(&value).unwrap(), kind, key]).unwrap();
+    }
+    drop(db);
+    let mut store = ObservationStore::open(&path).unwrap();
+    let q = store.query();
+    assert_eq!(q["packets"], serde_json::json!([2, 1]));
+    assert_eq!(q["application_windows"].as_object().unwrap().len(), 1);
+    assert_eq!(q["protocol_window_count"], 0);
+    assert_eq!(q["legacy_protocol_unavailable"]["packets"], q["packets"]);
+    let fresh = FlowRecord {
+        generation: 78, slot: 1, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 17, packets: [1, 0], bytes: [60, 0],
+        attribution: [Attribution { policy_generation: 78, protocol_set: 1 | (1 << 5),
+            ..a }, Attribution::default()], ..Default::default()
+    };
+    store.consume(&[fresh], 61_000_001).unwrap();
+    assert_eq!(store.query()["packets"], serde_json::json!([3, 1]));
+    assert_eq!(store.query()["legacy_protocol_unavailable"]["packets"], serde_json::json!([2, 1]));
+    assert_eq!(store.query()["protocol_window_count"], 3);
+    store.close().unwrap();
+    drop(store);
+    let reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["protocol_window_count"], 3);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reserved_catalog_tombstone_and_old_mask_do_not_block_history_reopen() {
+    let root = std::env::temp_dir().join(format!("t25-tombstone-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("overall.json");
+    let attribution = Attribution {
+        segment: 1, activity_utc_us: 61_000_000, policy_generation: 77,
+        policy_revision: 1, policy_hash: 88, uid: 42, winner: 65537,
+        declared_action: 1, actual_action: 1, valid: true, name: "old".into(),
+        protocols_available: true, protocol_set: 1, ..Default::default()
+    };
+    let record = FlowRecord {
+        generation: 77, slot: 1, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 17, packets: [1, 0], bytes: [60, 0],
+        attribution: [attribution.clone(), Attribution::default()], ..Default::default()
+    };
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.consume(&[record], 61_000_000).unwrap();
+    store.close().unwrap();
+    drop(store);
+    // The generated catalog's reserved ID 1000 stands in for an old released
+    // label that became a tombstone. Old masks are historical record details;
+    // only newly received V5 masks use the current active bit positions.
+    let db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    let (key, bytes): (String, Vec<u8>) = db.query_row(
+        "SELECT key,value FROM observation WHERE kind=7 AND key LIKE '%:l7:1001'", [],
+        |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let mut row: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    row["protocol_id"] = 1000.into();
+    row["key"] = "reserved-1000".into();
+    db.execute("DELETE FROM observation WHERE kind=7 AND key=?1", [&key]).unwrap();
+    db.execute("INSERT INTO observation(kind,key,value) VALUES(7,?1,?2)",
+        rusqlite::params![key.replace(":l7:1001", ":l7:1000"), serde_json::to_vec(&row).unwrap()]).unwrap();
+    let baseline: Vec<u8> = db.query_row("SELECT value FROM observation WHERE kind=1 LIMIT 1", [],
+        |r| r.get(0)).unwrap();
+    let mut baseline: serde_json::Value = serde_json::from_slice(&baseline).unwrap();
+    baseline["record"]["attribution"][0]["protocol_set"] = (1u64 << 63).into();
+    db.execute("UPDATE observation SET value=?1 WHERE kind=1",
+        [serde_json::to_vec(&baseline).unwrap()]).unwrap();
+    drop(db);
+    let mut store = ObservationStore::open(&path).unwrap();
+    let q = store.query();
+    assert_eq!(q["packets"], serde_json::json!([1, 0]));
+    assert!(q["protocol_windows"].as_object().unwrap().values().any(|row|
+        row["layer"] == "l7" && row["protocol_id"] == 1000 && row["key"] == "reserved-1000"));
+    let current = FlowRecord {
+        generation: 78, slot: 1, incarnation: 1, sequence: 1,
+        first_seen: 1, last_seen: 1, activity_utc_us: 61_000_000,
+        protocol: 17, packets: [1, 0], bytes: [60, 0],
+        attribution: [Attribution { policy_generation: 78, ..attribution }, Attribution::default()],
+        ..Default::default()
+    };
+    let mut invalid = current.clone();
+    invalid.generation = 79;
+    invalid.attribution[0].protocol_set = 1u64 << 63;
+    store.consume(&[invalid], 61_000_001).unwrap();
+    assert_eq!(store.query()["packets"], serde_json::json!([1, 0]));
+    store.consume(&[current], 61_000_002).unwrap();
+    store.close().unwrap();
+    drop(store);
+    let reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["packets"], serde_json::json!([2, 0]));
+    assert_eq!(reopened.query()["protocol_window_count"], 3);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn blocked_and_flow_share_windows_without_sharing_identity_or_recounting() {
     let root = std::env::temp_dir().join(format!("t24-store-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

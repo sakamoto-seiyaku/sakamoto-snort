@@ -2,6 +2,35 @@
 use crate::{ffi, ErrorCode, ProductCore, ProductError, Status};
 use serde::{Deserialize, Serialize};
 
+#[path = "../../../generated/rust/application_protocol_catalog.rs"]
+#[allow(dead_code)] // This module shares the generated catalog with other languages.
+mod protocol_catalog;
+
+pub fn protocol_label(bit: u32) -> Option<(u32, &'static str)> {
+    protocol_catalog::APPLICATION_PROTOCOL_CATALOG
+        .iter()
+        .filter(|entry| entry.status == "active")
+        .nth(bit as usize)
+        .map(|entry| (entry.id, entry.key))
+}
+
+/// Stored windows retain released identities even after a later catalog
+/// marks an ID reserved. Live bit positions still use active entries only.
+pub fn historical_protocol_label(id: u32) -> Option<&'static str> {
+    protocol_catalog::APPLICATION_PROTOCOL_CATALOG
+        .iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.key)
+}
+
+pub fn protocol_mask() -> u64 {
+    let count = protocol_catalog::APPLICATION_PROTOCOL_CATALOG
+        .iter()
+        .filter(|entry| entry.status == "active")
+        .count();
+    if count == 64 { u64::MAX } else { (1u64 << count) - 1 }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct ChannelHealth {
@@ -54,6 +83,10 @@ pub struct Attribution {
     pub mode: u8,
     pub valid: bool,
     pub name: String,
+    #[serde(default)]
+    pub protocol_set: u64,
+    #[serde(default)]
+    pub protocols_available: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -99,7 +132,7 @@ impl FlowRecord {
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 424 {
+        if data.len() < 456 {
             return None;
         }
         let u16_at = |n| u16::from_le_bytes([data[n], data[n + 1]]);
@@ -111,9 +144,9 @@ impl FlowRecord {
             6 => 32,
             _ => return None,
         };
-        if length != 416 + address_bytes
+        if length != 448 + address_bytes
             || data.len() < length
-            || data[2] != 4
+            || data[2] != 5
             || data[3] & !15 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
@@ -125,6 +158,8 @@ impl FlowRecord {
             let end = name.iter().position(|b| *b == 0)?;
             if name[end..].iter().any(|b| *b != 0)
                 || data[offset + 140..offset + 144] != [0; 4]
+                || data[offset + 152] > 1
+                || data[offset + 153..offset + 160] != [0; 7]
                 || data[offset + 75] > 1
             {
                 return None;
@@ -145,6 +180,8 @@ impl FlowRecord {
                 mode: data[offset + 74],
                 valid: data[offset + 75] != 0,
                 name: std::str::from_utf8(&name[..end]).ok()?.into(),
+                protocol_set: u64_at(offset + 144),
+                protocols_available: data[offset + 152] != 0,
             })
         };
         let record = Self {
@@ -170,12 +207,18 @@ impl FlowRecord {
             last_flow_direction: data[116],
             end_reason: data[117],
             ports: [u16_at(108), u16_at(110)],
-            addresses: data[416..length].to_vec(),
+            addresses: data[448..length].to_vec(),
             policy_revision: u64_at(88),
             winner: u64_at(96),
-            attribution: [decode_attribution(128)?, decode_attribution(272)?],
+            attribution: [decode_attribution(128)?, decode_attribution(288)?],
         };
-        record.kind_attribution_valid().then_some(record)
+        (record.kind_attribution_valid()
+            && record.attribution.iter().all(|a| {
+                a.protocol_set & !protocol_mask() == 0
+                    && (a.protocols_available || a.protocol_set == 0)
+                    && (!record.blocked || (!a.protocols_available && a.protocol_set == 0))
+            }))
+        .then_some(record)
     }
 }
 

@@ -26,7 +26,8 @@ result = dict(started_ns=time.time_ns(),status="HOLD",commands=[],
               host_artifact=str(artifact),android_stage=str(android))
 sources = ["src/product/native/product_observation_transport.c", "src/product/include/sakamoto_product_observation.h",
            "crates/product-core/src/observation.rs", "crates/product-core/src/observation_service.rs",
-           "crates/product-core/src/observation_store.rs", "tests/host/product_observation_transport_test.c",
+           "crates/product-core/src/observation_store.rs", "generated/rust/application_protocol_catalog.rs",
+           "crates/product-core/tests/observation_store.rs", "tests/host/product_observation_transport_test.c",
            "tests/host/product_observation_handshake_test.c", "tests/host/product_observation_producer.c", "tests/host/t23_query_delay.c"]
 result["source_hashes"] = {name:digest(ROOT/name) for name in sources}
 for name in sources:

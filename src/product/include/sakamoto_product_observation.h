@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PRODUCT_OBSERVATION_VERSION 4
+#define PRODUCT_OBSERVATION_VERSION 5
 #define PRODUCT_OBSERVATION_OWNERS 2
 #define PRODUCT_OBSERVATION_CHANNELS 4
 #define PRODUCT_OBSERVATION_END 1
@@ -12,7 +12,7 @@
 #define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 448
+#define PRODUCT_OBSERVATION_MAX_RECORD 480
 
 /* Direction-local provenance; no pointers, source conditions or packet bytes.
  * A segment starts at the counters immediately preceding its first packet. */
@@ -22,8 +22,12 @@ typedef struct {
   uint32_t uid, network;
   uint8_t declared_action, actual_action, mode, valid;
   uint8_t name[64], padding[4];
+  /* Stable catalog bits at the time this segment's packets were counted.
+   * Availability distinguishes no published label from no recognition fact. */
+  uint64_t protocol_set;
+  uint8_t protocols_available, protocol_padding[7];
 } product_observation_attribution_t;
-_Static_assert (sizeof (product_observation_attribution_t) == 144, "attribution ABI");
+_Static_assert (sizeof (product_observation_attribution_t) == 160, "attribution ABI");
 
 /* Local little-endian x86-64/ARM64 wire ABI; no pointer or packet payload.
  * IPv4 omits the final 24 bytes and places its two addresses in address[0..8]. */
@@ -44,8 +48,8 @@ typedef struct {
   product_observation_attribution_t attribution[2];
   uint8_t address[32];
 } product_observation_record_t;
-_Static_assert (sizeof (product_observation_record_t) == 448, "observation record ABI");
-_Static_assert (offsetof (product_observation_record_t, address) == 416, "record addresses");
+_Static_assert (sizeof (product_observation_record_t) == 480, "observation record ABI");
+_Static_assert (offsetof (product_observation_record_t, address) == 448, "record addresses");
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;

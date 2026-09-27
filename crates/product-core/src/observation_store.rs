@@ -1,5 +1,5 @@
 //! Minimal transactional overall-window store. No raw event log or repository framework.
-use crate::observation::{Attribution, FlowRecord};
+use crate::observation::{historical_protocol_label, protocol_label, protocol_mask, Attribution, FlowRecord};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +16,7 @@ const MAX_RECENT: usize = 32768;
 const MAX_MINUTES: usize = 262144;
 const MAX_DIRTY: usize = 4096;
 const MAX_EFFECT_WINDOWS: usize = 65536;
+const MAX_PROTOCOL_WINDOWS: usize = 65536;
 const FLUSH_ROWS: usize = 2048;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 // The 256 MiB owner budget includes the retained <=64 MiB predecessor,
@@ -90,6 +91,37 @@ struct RuleWindow {
     attribution: RuleReference,
     counts: Counts,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum ProtocolLayer {
+    #[serde(rename = "l4")]
+    L4,
+    #[serde(rename = "l7")]
+    L7,
+    #[serde(rename = "l7_none")]
+    L7None,
+    #[serde(rename = "l7_unavailable")]
+    L7Unavailable,
+}
+impl ProtocolLayer {
+    fn key(self) -> &'static str {
+        match self {
+            Self::L4 => "l4",
+            Self::L7 => "l7",
+            Self::L7None => "l7_none",
+            Self::L7Unavailable => "l7_unavailable",
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct ProtocolWindow {
+    minute: u64,
+    uid: u32,
+    actual_action: u8,
+    layer: ProtocolLayer,
+    protocol_id: u32,
+    key: String,
+    counts: Counts,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Baseline {
@@ -107,6 +139,8 @@ struct State {
     applications: BTreeMap<String, ApplicationWindow>,
     #[serde(default)]
     rules: BTreeMap<String, RuleWindow>,
+    #[serde(default)]
+    protocols: BTreeMap<String, ProtocolWindow>,
     #[serde(flatten)]
     meta: Metadata,
 }
@@ -119,6 +153,14 @@ struct Metadata {
     attribution_unknown: Counts,
     #[serde(default)]
     legacy_unattributed: Counts,
+    #[serde(default)]
+    protocol_schema: u32,
+    #[serde(default)]
+    legacy_protocol_unavailable: Counts,
+    #[serde(default)]
+    l4_unknown: Counts,
+    #[serde(default)]
+    l7_unknown: Counts,
     totals: Counts,
     #[serde(default)]
     blocked_totals: Counts,
@@ -141,6 +183,10 @@ impl Default for Metadata {
             attribution_schema: 1,
             attribution_unknown: Counts::default(),
             legacy_unattributed: Counts::default(),
+            protocol_schema: 1,
+            legacy_protocol_unavailable: Counts::default(),
+            l4_unknown: Counts::default(),
+            l7_unknown: Counts::default(),
             totals: Counts::default(),
             blocked_totals: Counts::default(),
             blocked_ended: 0,
@@ -165,6 +211,7 @@ impl Default for State {
             unknown_minutes: BTreeMap::new(),
             applications: BTreeMap::new(),
             rules: BTreeMap::new(),
+            protocols: BTreeMap::new(),
             meta: Metadata::default(),
         }
     }
@@ -177,6 +224,7 @@ struct Dirty {
     unknown_minutes: BTreeSet<u64>,
     applications: BTreeSet<String>,
     rules: BTreeSet<String>,
+    protocols: BTreeSet<String>,
     meta: bool,
 }
 impl Dirty {
@@ -186,6 +234,7 @@ impl Dirty {
             + self.minutes.len()
             + self.applications.len()
             + self.rules.len()
+            + self.protocols.len()
             + self.unknown_minutes.len()
     }
 }
@@ -200,6 +249,52 @@ fn identity_key(record: &FlowRecord) -> String {
     } else {
         format!("{}:{}:{}", record.generation, record.owner, record.slot)
     }
+}
+
+fn l4_key(id: u32) -> Option<&'static str> {
+    match id {
+        1 => Some("icmp"),
+        6 => Some("tcp"),
+        17 => Some("udp"),
+        58 => Some("icmpv6"),
+        _ => None,
+    }
+}
+
+fn stage_protocol_window(
+    existing: &BTreeMap<String, ProtocolWindow>,
+    staged: &mut BTreeMap<String, ProtocolWindow>,
+    minute: u64,
+    attribution: &Attribution,
+    layer: ProtocolLayer,
+    protocol_id: u32,
+    key: &str,
+    contribution: &Counts,
+) -> Result<(), String> {
+    let window_key = format!("{minute:020}:{}:{}:{}:{protocol_id}",
+        attribution.uid, attribution.actual_action, layer.key());
+    let window = staged.entry(window_key.clone()).or_insert_with(|| {
+        existing.get(&window_key).cloned().unwrap_or(ProtocolWindow {
+            minute, uid: attribution.uid, actual_action: attribution.actual_action,
+            layer, protocol_id, key: key.into(), counts: Counts::default(),
+        })
+    });
+    if window.layer != layer || window.protocol_id != protocol_id || window.key != key
+        || window.minute != minute || window.uid != attribution.uid
+        || window.actual_action != attribution.actual_action {
+        return Err("observation_protocol_reference_conflict".into());
+    }
+    window.counts.add(contribution)
+}
+
+fn protocol_share(counts: &Counts, denominator: &Counts) -> serde_json::Value {
+    let ratio = |numerator: u64, total: u64| (total != 0).then(|| numerator as f64 / total as f64);
+    serde_json::json!({
+        "packets": [ratio(counts.packets[0], denominator.packets[0]),
+                    ratio(counts.packets[1], denominator.packets[1])],
+        "bytes": [ratio(counts.bytes[0], denominator.bytes[0]),
+                  ratio(counts.bytes[1], denominator.bytes[1])],
+    })
 }
 
 fn put_row(
@@ -350,6 +445,12 @@ impl ObservationStore {
                             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
                         );
                     }
+                    7 => {
+                        state.protocols.insert(
+                            key,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+                        );
+                    }
                     _ => return Err("observation_store_schema".into()),
                 }
                 Self::validate_bounds(&state)?;
@@ -388,6 +489,14 @@ impl ObservationStore {
             state.meta.attribution_unknown = state.meta.totals;
             state.meta.legacy_unattributed = state.meta.totals;
             state.meta.attribution_schema = 1;
+        }
+        if state.meta.protocol_schema == 0 {
+            // V4 and earlier records cannot prove which labels covered their
+            // historical increments. Preserve totals and mark that boundary.
+            state.meta.legacy_protocol_unavailable = state.meta.totals;
+            state.meta.l4_unknown = state.meta.totals;
+            state.meta.l7_unknown = state.meta.totals;
+            state.meta.protocol_schema = 1;
         }
         let mut store = Self {
             path: database,
@@ -445,6 +554,9 @@ impl ObservationStore {
             for (key, value) in &self.state.unknown_minutes {
                 put_row(&mut put, 6, &key.to_string(), value)?;
             }
+            for (key, value) in &self.state.protocols {
+                put_row(&mut put, 7, key, value)?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         let count: i64 = tx
@@ -467,6 +579,7 @@ impl ObservationStore {
                 + self.state.applications.len()
                 + self.state.rules.len()
                 + self.state.unknown_minutes.len()
+                + self.state.protocols.len()
             || meta != serde_json::to_vec(&self.state.meta).map_err(|e| e.to_string())?
             || integrity != "ok"
         {
@@ -488,6 +601,7 @@ impl ObservationStore {
             || state.unknown_minutes.len() > MAX_MINUTES
             || state.applications.len() > MAX_EFFECT_WINDOWS
             || state.rules.len() > MAX_EFFECT_WINDOWS
+            || state.protocols.len() > MAX_PROTOCOL_WINDOWS
         {
             return Err("observation_state_capacity".into());
         }
@@ -554,6 +668,48 @@ impl ObservationStore {
         {
             return Err("observation_attribution_schema".into());
         }
+        if state.meta.protocol_schema > 1 {
+            return Err("observation_protocol_schema".into());
+        }
+        if state.meta.protocol_schema == 0 {
+            if !state.protocols.is_empty() {
+                return Err("observation_protocol_schema".into());
+            }
+        } else {
+            let mut l4 = state.meta.l4_unknown;
+            for (row_key, window) in &state.protocols {
+                if window.minute % 60 != 0 || !(1..=3).contains(&window.actual_action) {
+                    return Err("observation_invalid_protocol_window".into());
+                }
+                if row_key != &format!("{:020}:{}:{}:{}:{}", window.minute, window.uid,
+                    window.actual_action, window.layer.key(), window.protocol_id) {
+                    return Err("observation_invalid_protocol_window".into());
+                }
+                let app_key = format!("{:020}:{}:{}", window.minute, window.uid, window.actual_action);
+                let Some(app) = state.applications.get(&app_key) else {
+                    return Err("observation_protocol_without_application".into());
+                };
+                if (0..2).any(|side| window.counts.packets[side] > app.counts.packets[side]
+                    || window.counts.bytes[side] > app.counts.bytes[side]) {
+                    return Err("observation_protocol_exceeds_application".into());
+                }
+                match window.layer {
+                    ProtocolLayer::L4 if l4_key(window.protocol_id) == Some(window.key.as_str()) => {
+                        l4.add(&window.counts)?;
+                    }
+                    ProtocolLayer::L7 if historical_protocol_label(window.protocol_id)
+                        == Some(window.key.as_str()) => {}
+                    ProtocolLayer::L7None | ProtocolLayer::L7Unavailable
+                        if window.protocol_id == 0 && window.key.is_empty() => {}
+                    _ => return Err("observation_invalid_protocol_window".into()),
+                }
+            }
+            if l4.packets != totals.packets || l4.bytes != totals.bytes
+                || (0..2).any(|side| state.meta.l7_unknown.packets[side] > totals.packets[side]
+                    || state.meta.l7_unknown.bytes[side] > totals.bytes[side]) {
+                return Err("observation_inconsistent_protocol".into());
+            }
+        }
         for (key, baseline) in &state.baselines {
             let r = &baseline.record;
             if key != &identity_key(r)
@@ -612,7 +768,9 @@ impl ObservationStore {
                         || (a.segment == b.segment
                             && (a.start_packets != b.start_packets
                                 || a.start_bytes != b.start_bytes
-                                || RuleReference::from(a) != RuleReference::from(b)))
+                                || RuleReference::from(a) != RuleReference::from(b)
+                                || a.protocol_set != b.protocol_set
+                                || a.protocols_available != b.protocols_available))
                         || (a.segment > b.segment
                             && (a.start_packets < old.packets[side]
                                 || a.start_bytes < old.bytes[side])))
@@ -631,6 +789,8 @@ impl ObservationStore {
             && record.owner < 2
             && record.slot < 65536
             && record.kind_attribution_valid()
+            && record.attribution.iter().all(|a| (a.protocols_available || a.protocol_set == 0)
+                && (!record.blocked || (!a.protocols_available && a.protocol_set == 0)))
             && record.last_seen >= record.first_seen
             && record.activity_utc_us != 0
             && record.addresses.len() <= 32
@@ -638,6 +798,11 @@ impl ObservationStore {
                 .attribution
                 .iter()
                 .all(|a| a.name.len() <= 63 && !a.name.as_bytes().contains(&0))
+    }
+
+    fn valid_current_record(record: &FlowRecord) -> bool {
+        Self::valid_record(record)
+            && record.attribution.iter().all(|a| a.protocol_set & !protocol_mask() == 0)
     }
 
     pub fn has_pending(&self) -> bool {
@@ -724,6 +889,9 @@ impl ObservationStore {
                     &self.state.unknown_minutes[key],
                 )?;
             }
+            for key in &self.dirty.protocols {
+                put_row(&mut put, 7, key, &self.state.protocols[key])?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         tx.commit().map_err(|e| e.to_string())
@@ -780,7 +948,9 @@ impl ObservationStore {
                     flush_error = Some(error);
                 }
             }
-            if self.dirty.len() + 10 > MAX_DIRTY {
+            // One record may touch every stable L7 label in both directions,
+            // plus its L4, application, rule and baseline rows.
+            if self.dirty.len() + 64 > MAX_DIRTY {
                 self.mark_gap();
                 self.save_error = Some("observation_dirty_capacity".into());
                 return Err("observation_dirty_capacity".into());
@@ -802,7 +972,7 @@ impl ObservationStore {
 
     fn consume_one(&mut self, record: &FlowRecord, received_us: u64) -> Result<(), String> {
         self.dirty.meta = true;
-        if !Self::valid_record(record) {
+        if !Self::valid_current_record(record) {
             self.state.meta.rejected = self.state.meta.rejected.saturating_add(1);
             self.state.meta.gaps = self.state.meta.gaps.saturating_add(1);
             return Ok(());
@@ -863,7 +1033,10 @@ impl ObservationStore {
         // record can touch two application and two rule rows, never history.
         let mut applications = BTreeMap::<String, ApplicationWindow>::new();
         let mut rules = BTreeMap::<String, RuleWindow>::new();
+        let mut protocols = BTreeMap::<String, ProtocolWindow>::new();
         let mut unknown = self.state.meta.attribution_unknown;
+        let mut l4_unknown = self.state.meta.l4_unknown;
+        let mut l7_unknown = self.state.meta.l7_unknown;
         let mut unattributed = Counts::default();
         let mut minutes = BTreeMap::<u64, Counts>::new();
         let mut activity_times = [0; 3];
@@ -882,6 +1055,11 @@ impl ObservationStore {
             }
             unattributed.packets[side] = delta.packets[side] - contribution.packets[side];
             unattributed.bytes[side] = delta.bytes[side] - contribution.bytes[side];
+            let mut unclassified = Counts::default();
+            unclassified.packets[side] = unattributed.packets[side];
+            unclassified.bytes[side] = unattributed.bytes[side];
+            l4_unknown.add(&unclassified)?;
+            l7_unknown.add(&unclassified)?;
             if contribution.packets[side] == 0 && contribution.bytes[side] == 0 {
                 continue;
             }
@@ -905,6 +1083,31 @@ impl ObservationStore {
                     })
             });
             window.counts.add(&contribution)?;
+            if let Some(key) = l4_key(record.protocol as u32) {
+                stage_protocol_window(&self.state.protocols, &mut protocols, minute, a,
+                    ProtocolLayer::L4, record.protocol as u32, key, &contribution)?;
+            } else {
+                l4_unknown.add(&contribution)?;
+            }
+            if a.protocols_available {
+                if a.protocol_set == 0 {
+                    stage_protocol_window(&self.state.protocols, &mut protocols, minute, a,
+                        ProtocolLayer::L7None, 0, "", &contribution)?;
+                } else {
+                    let mut remaining = a.protocol_set;
+                    while remaining != 0 {
+                        let bit = remaining.trailing_zeros();
+                        let (id, key) = protocol_label(bit).ok_or("observation_invalid_protocol")?;
+                        stage_protocol_window(&self.state.protocols, &mut protocols, minute, a,
+                            ProtocolLayer::L7, id, key, &contribution)?;
+                        remaining &= remaining - 1;
+                    }
+                }
+            } else {
+                l7_unknown.add(&contribution)?;
+                stage_protocol_window(&self.state.protocols, &mut protocols, minute, a,
+                    ProtocolLayer::L7Unavailable, 0, "", &contribution)?;
+            }
             if a.winner != 0 {
                 let rule_key = format!(
                     "{minute:020}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
@@ -945,8 +1148,11 @@ impl ObservationStore {
                 + rules
                     .keys()
                     .filter(|k| !self.state.rules.contains_key(*k))
-                    .count()
+                .count()
                 > MAX_EFFECT_WINDOWS
+            || self.state.protocols.len()
+                + protocols.keys().filter(|k| !self.state.protocols.contains_key(*k)).count()
+                > MAX_PROTOCOL_WINDOWS
         {
             return Err("observation_effect_window_capacity".into());
         }
@@ -1022,6 +1228,8 @@ impl ObservationStore {
             );
         }
         self.state.meta.attribution_unknown = unknown;
+        self.state.meta.l4_unknown = l4_unknown;
+        self.state.meta.l7_unknown = l7_unknown;
         for (key, window) in applications {
             self.dirty.applications.insert(key.clone());
             self.state.applications.insert(key, window);
@@ -1029,6 +1237,10 @@ impl ObservationStore {
         for (key, window) in rules {
             self.dirty.rules.insert(key.clone());
             self.state.rules.insert(key, window);
+        }
+        for (key, window) in protocols {
+            self.dirty.protocols.insert(key.clone());
+            self.state.protocols.insert(key, window);
         }
         let baseline = Baseline {
             record: record.clone(),
@@ -1091,6 +1303,19 @@ impl ObservationStore {
             .rev()
             .take(MAX_QUERY_MINUTES)
             .collect();
+        let protocols: BTreeMap<_, _> = self.state.protocols.iter().rev()
+            .take(MAX_QUERY_MINUTES)
+            .map(|(key, window)| {
+                let app_key = format!("{:020}:{}:{}", window.minute, window.uid, window.actual_action);
+                let denominator = &self.state.applications[&app_key].counts;
+                (key, serde_json::json!({
+                    "minute": window.minute, "uid": window.uid,
+                    "actual_action": window.actual_action, "layer": window.layer,
+                    "protocol_id": window.protocol_id, "key": window.key,
+                    "counts": window.counts, "denominator": denominator,
+                    "share": protocol_share(&window.counts, denominator),
+                }))
+            }).collect();
         let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128).collect();
         let mut response = serde_json::json!({ "schema": 1, "storage": "sqlite", "visibility": "live_including_pending",
             "persistence": { "packets": self.committed.totals.packets, "bytes": self.committed.totals.bytes,
@@ -1124,6 +1349,20 @@ impl ObservationStore {
                 "first_activity_us": self.state.meta.first_activity_us,
                 "last_activity_us": self.state.meta.last_activity_us },
             "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
+        response["protocol_windows"] = serde_json::json!(protocols);
+        response["protocol_window_count"] = serde_json::json!(self.state.protocols.len());
+        response["protocol_query_truncated"] =
+            serde_json::json!(self.state.protocols.len() > MAX_QUERY_MINUTES);
+        response["l4_unknown"] = serde_json::json!(self.state.meta.l4_unknown);
+        response["l7_unknown"] = serde_json::json!(self.state.meta.l7_unknown);
+        response["legacy_protocol_unavailable"] =
+            serde_json::json!(self.state.meta.legacy_protocol_unavailable);
+        response["coverage"]["protocol_incomplete"] = serde_json::json!(
+            self.state.meta.l4_unknown.packets != [0; 2]
+                || self.state.meta.l4_unknown.bytes != [0; 2]
+                || self.state.meta.l7_unknown.packets != [0; 2]
+                || self.state.meta.l7_unknown.bytes != [0; 2]
+        );
         response["blocked"] = serde_json::json!({
             "packets": self.state.meta.blocked_totals.packets,
             "bytes": self.state.meta.blocked_totals.bytes,
