@@ -252,7 +252,7 @@ public final class RuntimeControlBackend {
                 .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)
                 .putExtra(RuntimeControlProtocol.EXTRA_ACTION, RuntimeControlProtocol.ACTION_OBSERVATION_QUERY)
                 .putExtra("observationNonce", nonce).putExtra("observationOperation", operation)
-                .putExtra("observationCursor", cursor));
+                .putExtra(RuntimeControlProtocol.EXTRA_OBSERVATION_CURSOR, cursor));
     }
 
     public void ruleConfig(Context context, int operation, long expectedSaved, RuleConfiguration.Rule rule) {

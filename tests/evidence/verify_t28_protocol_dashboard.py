@@ -15,6 +15,12 @@ supplemental=load('supplemental',ROOT/'tests/evidence/verify_t25_supplemental.py
 windows=load('protocol_catalog_oracle',ROOT/'tests/evidence/verify_t25_protocol_windows.py')
 catalog=windows.catalog()
 active=list(catalog.items())
+STOP_SAMPLES={
+    'r1':('tcp-budget-live-dashboard.json',1002,1,3),
+    'r2':('smtp-budget-live-dashboard.json',1007,1,3),
+    'r3':('openvpn_tcp-budget-live-dashboard.json',1011,1,3),
+    'r4':('stun_udp-budget-live-dashboard.json',1016,1,6),
+}
 
 def check(run_path,scope):
     run_path=Path(run_path).resolve()
@@ -24,7 +30,7 @@ def check(run_path,scope):
     assert result['source_sha256']==build['source_sha256']
     files=sorted(run_path.glob('*-live-dashboard.json'))
     assert files,'no typed live dashboard captures'
-    facts=set();checked=0;page_samples=[]
+    facts=set();checked=0;page_samples=[];stop_sample=None
     for path in files:
         reply=json.loads(path.read_text())
         assert reply['health']['generation']==reply['vpp']['generation']==result['generation']
@@ -46,6 +52,14 @@ def check(run_path,scope):
             expected=[{'id':id,'key':key} for bit,(id,key) in enumerate(active) if mask & (1<<bit)]
             assert entry['protocol_labels']==expected,(path,entry['protocol_labels'],expected)
             assert entry['protocols_available'] or mask==0
+            assert entry['lpi_stop'] in range(5) and entry['sni_stop'] in range(13)
+            assert entry['sni_result'] in range(3)
+            sample_name,protocol,lpi_stop,sni_stop=STOP_SAMPLES[scope]
+            if path.name==sample_name and protocol in (row['id'] for row in expected):
+                assert entry['lpi_stop']==lpi_stop and entry['sni_stop']==sni_stop
+                assert entry['protocols_available']
+                stop_sample={'file':path.name,'protocol':protocol,
+                    'lpi_stop':lpi_stop,'sni_stop':sni_stop}
             for item in entry['attribution']:
                 if not item['available']:continue
                 assert item['winner'].isdigit() and item['policy_hash'].isdigit()
@@ -57,11 +71,12 @@ def check(run_path,scope):
         page_samples.append(path.name)
     required={1002,1003,1004,1006} if scope=='r1' else supplemental.SCOPE[scope][1]
     assert required<=facts,('exercised catalog labels missing from live typed Flow',sorted(required-facts))
+    assert stop_sample is not None,('missing stopped live Flow',scope)
     return dict(status='VALID',scope=scope,source_sha256=build['source_sha256'],
         actual_packet_paths=packet['total_packets'],actual_policy_drops=packet['actual_drops'],
         live_entries=checked,live_labels=sorted(facts),dashboard_pages=len(files),
         packet_oracle=packet,verifier_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        samples=page_samples)
+        samples=page_samples,stop_sample=stop_sample)
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()

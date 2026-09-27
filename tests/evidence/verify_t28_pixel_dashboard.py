@@ -90,6 +90,7 @@ def verify(build_file,root_path,vpn_path):
         assert 'Flow '+str(live['worker'])+':'+str(live['slot']) in projection
         assert 'allow-request' in projection and 'allow-reply' in projection
         assert 'Store space:' in projection and 'allocated bytes=' in projection
+        assert 'LPI stop=' in projection and 'SNI result=' in projection
         for side in (0,1):assert 'winner='+live['attribution'][side]['winner'] in projection
         assert (path/'ui-allow-result.png').stat().st_size>1000
         assert ui_raw['vpp']['policy_active_revision']==sampled['vpp']['policy_active_revision']

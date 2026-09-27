@@ -27,6 +27,8 @@ public final class RuntimeControlProtocol {
 
     public static final String EXTRA_PROTOCOL_VERSION = "runtimeControlProtocolVersion";
     public static final String EXTRA_ACTION = "runtimeControlAction";
+    /** Starting slot for the bounded current-flow page in an observation query. */
+    public static final String EXTRA_OBSERVATION_CURSOR = "observationCursor";
     public static final String EXTRA_PROFILE = "runtimeProfile";
     /** Optional START-only experimental placement: worker 0, then worker 1. */
     public static final String EXTRA_WORKER_CPU_IDS = "runtimeWorkerCpuIds";

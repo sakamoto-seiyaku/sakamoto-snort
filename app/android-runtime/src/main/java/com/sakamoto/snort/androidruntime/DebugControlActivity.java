@@ -299,7 +299,7 @@ public class DebugControlActivity extends Activity {
         if (debuggable && intent.hasExtra("observationNonce")) {
             backend.observationQuery(this, intent.getStringExtra("observationNonce"),
                     intent.getIntExtra("observationOperation", 0),
-                    intent.getIntExtra("observationCursor", 0));
+                    intent.getIntExtra(RuntimeControlProtocol.EXTRA_OBSERVATION_CURSOR, 0));
             handled = true;
         }
         if (debuggable && intent.hasExtra("t12ProbePlan")) {
@@ -969,30 +969,11 @@ public class DebugControlActivity extends Activity {
         new Thread(() -> {
             String display = "History query unavailable";
             try {
-                for (int attempt = 0; attempt < 50; ++attempt) {
-                    if (result.isFile() && result.length() > 0 && result.length() <= 4 * 1024 * 1024) {
-                        try (FileInputStream input = new FileInputStream(result)) {
-                            byte[] bytes = new byte[(int) result.length()];
-                            int count = 0;
-                            while (count < bytes.length) {
-                                int read = input.read(bytes, count, bytes.length - count);
-                                if (read < 0) break;
-                                count += read;
-                            }
-                            if (count == bytes.length) {
-                                display = renderHistory(new JSONObject(new String(bytes, StandardCharsets.UTF_8)));
-                                break;
-                            }
-                        } catch (IOException | JSONException ignored) {
-                            // The service may still be writing the development query file.
-                        }
-                    }
-                    try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
-                }
-            } finally {
-                if (result.exists() && !result.delete()) display = "History query unavailable";
-                historyQueryRunning.set(false);
-            }
+                JSONObject reply = takeObservationResult(result);
+                if (reply != null) display = renderHistory(reply);
+            } catch (IOException ignored) {
+                display = "History query unavailable";
+            } finally { historyQueryRunning.set(false); }
             String finalDisplay = display;
             main.post(() -> { if (historyView != null) historyView.setText(finalDisplay); });
         }, "history-query").start();
@@ -1014,34 +995,16 @@ public class DebugControlActivity extends Activity {
             String display = "Health query unavailable";
             int next = 0;
             try {
-                for (int attempt = 0; attempt < 50; ++attempt) {
-                    if (result.isFile() && result.length() > 0 && result.length() <= 4 * 1024 * 1024) {
-                        try (FileInputStream input = new FileInputStream(result)) {
-                            byte[] bytes = new byte[(int) result.length()];
-                            int count = 0;
-                            while (count < bytes.length) {
-                                int read = input.read(bytes, count, bytes.length - count);
-                                if (read < 0) break;
-                                count += read;
-                            }
-                            if (count == bytes.length) {
-                                JSONObject reply = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
-                                display = renderDashboard(reply);
-                                JSONObject flows = reply.optJSONObject("current_flows");
-                                if (flows != null && !flows.has("error"))
-                                    next = flows.optInt("next_cursor", 0);
-                                break;
-                            }
-                        } catch (IOException | JSONException ignored) {
-                            // The service may still be writing the query file.
-                        }
-                    }
-                    try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
+                JSONObject reply = takeObservationResult(result);
+                if (reply != null) {
+                    display = renderDashboard(reply);
+                    JSONObject flows = reply.optJSONObject("current_flows");
+                    if (flows != null && !flows.has("error"))
+                        next = flows.optInt("next_cursor", 0);
                 }
-            } finally {
-                if (result.exists() && !result.delete()) display = "Health query unavailable";
-                dashboardQueryRunning.set(false);
-            }
+            } catch (IOException ignored) {
+                display = "Health query unavailable";
+            } finally { dashboardQueryRunning.set(false); }
             final String shown = display;
             final int following = next;
             main.post(() -> {
@@ -1049,6 +1012,37 @@ public class DebugControlActivity extends Activity {
                 if (dashboardView != null) dashboardView.setText(shown);
             });
         }, "dashboard-query").start();
+    }
+
+    /** Read one nonce response within five seconds and remove it even if parsing fails. */
+    private static JSONObject takeObservationResult(File result) throws IOException {
+        JSONObject reply = null;
+        try {
+            for (int attempt = 0; attempt < 50; ++attempt) {
+                long size = result.length();
+                if (result.isFile() && size > 0 && size <= 4 * 1024 * 1024) {
+                    try (FileInputStream input = new FileInputStream(result)) {
+                        byte[] bytes = new byte[(int) size];
+                        int count = 0;
+                        while (count < bytes.length) {
+                            int read = input.read(bytes, count, bytes.length - count);
+                            if (read < 0) break;
+                            count += read;
+                        }
+                        if (count == bytes.length) {
+                            reply = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+                            break;
+                        }
+                    } catch (IOException | JSONException ignored) {
+                        // The service may still be writing the response file.
+                    }
+                }
+                try { Thread.sleep(100); } catch (InterruptedException ignored) { break; }
+            }
+        } finally {
+            if (result.exists() && !result.delete()) throw new IOException("Cannot remove query response");
+        }
+        return reply;
     }
 
     private static String renderDashboard(JSONObject reply) {
@@ -1152,6 +1146,9 @@ public class DebugControlActivity extends Activity {
                         .append(" · packets ").append(flow.optJSONArray("packets"))
                         .append(" · L7 ").append(flow.optBoolean("protocols_available")
                                 ? flow.optJSONArray("protocol_labels") : "unavailable")
+                        .append(" · LPI stop=").append(lpiStopName(flow.optInt("lpi_stop", -1)))
+                        .append(" · SNI result=").append(sniResultName(flow.optInt("sni_result", -1)))
+                        .append(" stop=").append(sniStopName(flow.optInt("sni_stop", -1)))
                         .append('\n');
                 JSONArray attribution = flow.optJSONArray("attribution");
                 if (attribution != null) for (int side = 0; side < Math.min(2, attribution.length()); ++side) {
@@ -1166,6 +1163,33 @@ public class DebugControlActivity extends Activity {
             }
         }
         return text.toString();
+    }
+
+    private static String lpiStopName(int code) {
+        switch (code) {
+            case 0: return "running";
+            case 1: return "packet_budget";
+            case 2: return "byte_budget";
+            case 3: return "flow_end";
+            case 4: return "unsupported";
+            default: return "unknown(" + code + ")";
+        }
+    }
+
+    private static String sniResultName(int code) {
+        switch (code) {
+            case 0: return "unavailable";
+            case 1: return "name";
+            case 2: return "absent";
+            default: return "unknown(" + code + ")";
+        }
+    }
+
+    private static String sniStopName(int code) {
+        String[] names = {"running", "complete", "malformed", "unsupported", "sequence",
+                "byte_budget", "packet_budget", "timeout", "flow_end", "quic_version",
+                "quic_auth", "quic_incomplete", "crypto_error"};
+        return code >= 0 && code < names.length ? names[code] : "unknown(" + code + ")";
     }
 
     private static void appendHistoryLine(StringBuilder text, String label,

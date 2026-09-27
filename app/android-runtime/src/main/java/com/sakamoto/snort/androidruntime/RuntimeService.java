@@ -408,7 +408,7 @@ public final class RuntimeService extends VpnService {
         if (RuntimeControlProtocol.ACTION_OBSERVATION_QUERY.equals(action)) {
             final String nonce = intent.getStringExtra("observationNonce");
             final int operation = intent.getIntExtra("observationOperation", 0);
-            final int cursor = intent.getIntExtra("observationCursor", 0);
+            final int cursor = intent.getIntExtra(RuntimeControlProtocol.EXTRA_OBSERVATION_CURSOR, 0);
             enqueueLifecycle(() -> {
                 if (nonce == null || !nonce.matches("[a-zA-Z0-9_-]{1,100}")
                         || operation < 0 || operation > 2 || cursor < 0 || cursor > 131072

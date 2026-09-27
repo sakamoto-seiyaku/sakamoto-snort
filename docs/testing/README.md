@@ -31,6 +31,8 @@ and [build commands](../tooling/README.md) for Host checks.
 | Pre-Flow Blocked observations and independent windows | [T24](2026-09-27_T24_BLOCKED_OBSERVATION_RESULTS.md) |
 | L4 and multi-label L7 protocol windows, Root/VPN and R1–R4 integration | [T25](2026-09-27_T25_PROTOCOL_WINDOWS_RESULTS.md) |
 | Recent rule identity, names, actions and counts across edit/delete/restart | [T26](2026-09-27_T26_RECENT_RULE_HISTORY_RESULTS.md) |
+| Bounded observation retention across minute/hour/day tiers and restarts | [T27](2026-09-27_T27_OBSERVATION_RETENTION_RESULTS.md) |
+| Live Flow pages and separate runtime, VPP, producer and consumer health | [T28](2026-09-27_T28_DASHBOARD_RESULTS.md) |
 | SQLite observation migration, bounded live batching and matched Host/Pixel costs | [E02](2026-09-26_E02_SQLITE_RESULTS.md) |
 | TLS/QUIC exact and descendant domain lists, real packet winners and bounded matcher | [T18](2026-09-26_T18_DOMAIN_LISTS.md) |
 | Ordinary network-disable rules, scoped switches and shared observe behavior | [T05](2026-09-25_T05_NETWORK_DISABLE.md) |
