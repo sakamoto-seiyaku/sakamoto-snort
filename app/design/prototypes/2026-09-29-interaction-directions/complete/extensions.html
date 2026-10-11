@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>探索工具 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="extensions"
+    data-title="探索工具"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>再深入一点</h1>
+            <p>看见去向，检查想法，找到原因。</p>
+          </header>
+          <div class="stack-lg">
+            <a class="card" data-page="map.html"
+              ><span class="tile-icon"><span data-icon="globe"></span></span>
+              <div class="between" style="margin-top: 18px">
+                <h2>连接地图</h2>
+                <span data-icon="arrow-up-right"></span>
+              </div>
+              <p class="help" style="margin-top: 8px">
+                把访问放到地图上，与具体的连接相互核对。
+              </p></a
+            ><a class="card" data-page="preview.html"
+              ><span class="tile-icon"
+                ><span data-icon="flask-conical"></span
+              ></span>
+              <div class="between" style="margin-top: 18px">
+                <h2>规则预演</h2>
+                <span data-icon="arrow-up-right"></span>
+              </div>
+              <p class="help" style="margin-top: 8px">
+                描述一次访问，检查匹配过程与不足的事实。
+              </p></a
+            ><a class="card" data-page="debug.html"
+              ><span class="tile-icon"><span data-icon="bug"></span></span>
+              <div class="between" style="margin-top: 18px">
+                <h2>诊断会话</h2>
+                <span data-icon="arrow-up-right"></span>
+              </div>
+              <p class="help" style="margin-top: 8px">
+                围绕一个对象观察过程，完成后停止并查看报告。
+              </p></a
+            >
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+Date: 2026-10-08
+Local source HEAD: d5f014d9346ebe8f9426192f0d49884626ed6ff4
+Compiler: cc (Debian 12.2.0-14+deb12u1) 12.2.0, x86-64
+
+Command: rtk proxy python3 tests/host/product_static_reference_test.py
+Exit code: 0
+T06–T18 independent ordered, split, cold/hot and fact-change reference (three plans): 55470 complete winner comparisons PASS
+
+Command: rtk proxy cc -std=c11 -Wall -Wextra -Werror -O2 -Isrc/product/vpp docs/reviews/assets/2026-10-08-rule-engine-source/local-probe.c src/product/vpp/product_l4_policy.c -o /tmp/sakamoto-rule-source-probe
+Exit code: 0
+Command: rtk proxy /tmp/sakamoto-rule-source-probe
+Exit code: 0
+layout view=63512 source_rule=216 compiled_rule=232 subtable=78 entry=46 packet=88 result=64 cache_guard=128 cache_entry=200 owner_cache=25632
+representation query_state=916 compile_scratch=21376 publication_peak=386932 publication_limit=393216 publication_margin=6284
+same-mask-exact-miss rules=128 masks=1 entries=128 winner=0 rank=0 subject_probes=1 subtable_probes=1 key_probes=8 residual_probes=0 bound=273
+same-mask-exact-hit rules=128 masks=1 entries=128 winner=64 rank=64 subject_probes=1 subtable_probes=1 key_probes=4 residual_probes=1 bound=273
+128-mask-miss rules=128 masks=128 entries=128 winner=0 rank=0 subject_probes=1 subtable_probes=128 key_probes=20 residual_probes=0 bound=400
+128-mask-first-winner rules=128 masks=128 entries=128 winner=1 rank=1 subject_probes=1 subtable_probes=128 key_probes=20 residual_probes=1 bound=400
+
+The source probe exercises current standalone production C interfaces; it is not a latency or throughput benchmark. The generated cases do not establish remote-engine correctness, ARM64 performance, device packet delivery, or new product acceptance.

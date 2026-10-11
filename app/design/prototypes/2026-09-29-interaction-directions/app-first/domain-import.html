@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>导入域名 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="domain-import"
+    data-title="导入域名"
+    data-nav="rules"
+    data-back="domains.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>带入已有的名单</h1>
+            <p>只导入支持的条目；不静默忽略额外条件。</p>
+          </header>
+          <div class="field">
+            <label for="domain-import-name">新列表名称</label
+            ><input id="domain-import-name" type="text" value="工作域名" />
+          </div>
+          <div class="field">
+            <label for="domain-format">输入格式</label
+            ><select id="domain-format">
+              <option value="plain">每行一个精确域名</option>
+              <option value="native">exact / descendants 条目</option>
+              <option value="adblock">Adblock 域名子集</option>
+              <option value="clash">Clash DOMAIN / DOMAIN-SUFFIX 子集</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="domain-import-text">域名内容</label
+            ><textarea id="domain-import-text" spellcheck="false">
+docs.example.com
+work.example.org</textarea>
+            <p class="help" id="domain-format-help">
+              每行一个域名。导入后可以修改匹配范围。
+            </p>
+          </div>
+          <button class="btn full" id="review-domain-import">预览条目</button>
+          <div id="domain-import-review"></div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-domain-import">
+          保存为新列表
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

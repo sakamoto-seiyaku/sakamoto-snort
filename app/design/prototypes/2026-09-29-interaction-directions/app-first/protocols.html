@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>协议目录 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="protocols"
+    data-title="协议目录"
+    data-nav="activity"
+    data-back="stats.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>读懂连接的语言</h1>
+            <p>协议来自已识别的事实，同一连接可有多个标签。</p>
+          </header>
+          <label class="search"
+            ><span data-icon="search"></span
+            ><input
+              id="protocol-search"
+              placeholder="搜索协议"
+              aria-label="搜索协议"
+          /></label>
+          <div class="desktop-grid">
+            <div class="inset-list" id="protocol-list"></div>
+            <aside class="desktop-detail">
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  协议识别用于描述连接特征，不代表身份认证或连接成功。QUIC
+                  不自动等同于 HTTP/3。
+                </p>
+              </div>
+              <a class="list-row" data-page="rule-edit.html?protocol=TLS"
+                ><span class="tile-icon"
+                  ><span data-icon="sliders-horizontal"></span></span
+                ><span class="grow"
+                  ><span class="title">创建协议规则</span
+                  ><span class="subtitle">使用同一套规则与分配方式</span></span
+                ><span class="value"></span
+                ><span data-icon="chevron-right"></span
+              ></a>
+            </aside>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

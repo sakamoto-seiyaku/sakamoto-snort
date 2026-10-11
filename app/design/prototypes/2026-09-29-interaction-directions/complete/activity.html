@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>访问记录 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="activity" data-title="访问记录" data-nav="activity">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>连接的来龙去脉</h1>
+            <p>查看访问结果，以及做出决定的规则。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <label class="search"
+                ><span data-icon="search"></span
+                ><input
+                  id="activity-search"
+                  placeholder="搜索目标、应用或协议"
+                  aria-label="搜索访问记录"
+              /></label>
+              <div class="between" style="margin-bottom: 17px">
+                <div class="chips" style="margin: 0">
+                  <button class="chip active" data-result="all">全部</button
+                  ><button class="chip" data-result="drop">已阻止</button
+                  ><button class="chip" data-result="observe">仅观察</button>
+                </div>
+                <a
+                  class="icon-button"
+                  data-page="activity-filter.html"
+                  aria-label="筛选记录"
+                  ><span data-icon="sliders-horizontal"></span
+                ></a>
+              </div>
+              <div class="between">
+                <span class="caption" id="activity-summary">最近 1 小时</span
+                ><a class="text-link" data-page="stats.html">统计</a>
+              </div>
+              <div id="activity-list"></div>
+              <p class="source-line">
+                记录为有限保留的明细。结果描述当时的访问，不会随当前规则改变。
+              </p>
+            </section>
+            <aside class="desktop-detail" id="activity-side-detail"></aside>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

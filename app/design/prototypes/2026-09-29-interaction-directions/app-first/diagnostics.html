@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>本地诊断报告 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="diagnostics"
+    data-title="本地诊断报告"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>分享前，先看清楚</h1>
+            <p>报告只在你导出时生成文件。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div class="card">
+                <dl class="detail-pairs" id="diagnostic-facts"></dl>
+              </div>
+              <div class="section-heading"><h2>报告范围</h2></div>
+              <div class="inset-list">
+                <div class="list-row">
+                  <span class="grow"
+                    ><span class="title">运行状态与配置版本</span
+                    ><span class="subtitle">用于定位运行与生效问题</span></span
+                  ><span data-icon="check"></span>
+                </div>
+                <div class="list-row">
+                  <span class="grow"
+                    ><span class="title">会话元信息</span
+                    ><span class="subtitle">可能含对象、地址与域名</span></span
+                  ><span data-icon="check"></span>
+                </div>
+              </div>
+            </section>
+            <section>
+              <div class="notice warn">
+                <span data-icon="info"></span>
+                <p>
+                  导出文件不是匿名报告。请在分享前检查内容；它不会自动上传或发送给任何人。
+                </p>
+              </div>
+              <details class="advanced">
+                <summary>查看完整报告内容</summary>
+                <pre
+                  id="diagnostic-json"
+                  style="
+                    white-space: pre-wrap;
+                    overflow-wrap: anywhere;
+                    font-size: 11px;
+                    line-height: 1.8;
+                  "
+                ></pre>
+              </details>
+            </section>
+          </div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="export-diagnostic">导出本地诊断</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

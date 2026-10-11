@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>数据与存储 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="storage"
+    data-title="数据与存储"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>保留有用的，放下多余的</h1>
+            <p>配置与访问记录分别管理。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div class="card">
+                <div class="metric-label">本地记录使用量</div>
+                <div class="metric-value" id="storage-size">
+                  2.4 <small>MB</small>
+                </div>
+                <div class="mini-progress"><span style="width: 8%"></span></div>
+                <p class="note">
+                  包括访问明细、统计与本地诊断。此处为样例用量。
+                </p>
+              </div>
+              <h2 class="section-label">明细保留范围</h2>
+              <div class="field">
+                <label for="retention">保留最近</label
+                ><select id="retention">
+                  <option value="1">1 天</option>
+                  <option value="7">7 天</option>
+                  <option value="30">30 天</option>
+                </select>
+              </div>
+              <p class="note">
+                保留期影响后续的本地记录整理；空间不足时可能提前回收。
+              </p>
+            </section>
+            <section>
+              <h2 class="section-label">导出与清理</h2>
+              <div class="inset-list">
+                <button class="list-row" id="export-history">
+                  <span class="tile-icon"
+                    ><span data-icon="download"></span></span
+                  ><span class="grow"
+                    ><span class="title">导出已保留的访问</span
+                    ><span class="subtitle"
+                      >包含对象、目标与当时结果</span
+                    ></span
+                  ><span data-icon="chevron-right"></span></button
+                ><button class="list-row" id="clear-history">
+                  <span class="tile-icon neutral"
+                    ><span data-icon="trash-2"></span></span
+                  ><span class="grow"
+                    ><span class="title">清空访问记录</span
+                    ><span class="subtitle">规则配置保持不变</span></span
+                  ><span data-icon="chevron-right"></span>
+                </button>
+              </div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  导出的记录可能包含应用、地址和域名。分享前，请确认文件中包含的信息。
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

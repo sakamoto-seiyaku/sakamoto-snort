@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sakamoto · 决定与结果 · 阶段四</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/gallery.css" />
+    <style>
+      .stage-tag {
+        display: inline-block;
+        padding: 7px 11px;
+        border-radius: 9px;
+        background: #e6eef9;
+        color: #365a80;
+        font-size: 12px;
+        margin-bottom: 19px;
+      }
+      .demo-controls {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 12px 2px;
+        font-size: 11px;
+        color: #718296;
+        min-height: 32px;
+      }
+      .demo-controls button {
+        background: #fff;
+        border: 1px solid #d7e0ec;
+        border-radius: 7px;
+        min-height: 32px;
+        padding: 5px 9px;
+        font-size: 11px;
+        color: #476688;
+      }
+      .advanced-links {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 12px;
+      }
+      .advanced-links a {
+        padding: 14px;
+        background: white;
+        border-radius: 10px;
+        font-size: 13px;
+      }
+      .stage-note {
+        font-size: 13px;
+        color: #718296;
+        line-height: 1.8;
+        max-width: 850px;
+        margin-top: 15px;
+      }
+
+      .demo-controls {
+        flex-wrap: wrap;
+      }
+    </style>
+    <script defer src="js/gallery.js"></script>
+  </head>
+  <body>
+    <header class="gallery-head">
+      <div class="eyebrow">SAKAMOTO / UNDERSTAND AND DECIDE</div>
+      <span class="stage-tag">阶段四 · 决定与结果</span>
+      <h1>看清改变，再作决定。</h1>
+      <p>把状态、作用范围和更新后果接起来，沿着同一件事继续操作。</p>
+      <div class="gallery-actions">
+        <a
+          class="primary"
+          href="home.html?platform=android&amp;scope=trust4-live-home"
+          target="_blank"
+          >从我的网络开始 ↗</a
+        ><a
+          href="config-review.html?configcase=expanded-scope&amp;platform=android&amp;scope=trust4-live-import"
+          target="_blank"
+          >审阅导入样例 ↗</a
+        ><a
+          href="domain-detail.html?id=d1&amp;subscription=update&amp;localcase=modified&amp;review=update&amp;platform=android&amp;scope=trust4-live-subscription"
+          target="_blank"
+          >核对订阅更新 ↗</a
+        ><a href="README.md">范围与说明</a>
+      </div>
+      <p class="stage-note">
+        全部为本地前端样例。订阅地址不会被实际访问；更新响应和计划时间通过画面外的工具模拟。原有应用、连接与DNS路径继续可操作，历史记录保持原样。
+      </p>
+    </header>
+    <nav class="gallery-nav">
+      <button class="active" data-filter="all">全部</button
+      ><button data-filter="path">手机路径与状态</button
+      ><button data-filter="responsive">平板与桌面</button
+      ><button data-filter="reference">所有独立页面</button>
+    </nav>
+    <main>
+      <section class="gallery-section" data-group="path">
+        <header>
+          <h2>决定之前看清楚，改变之后核对清楚。</h2>
+          <p>
+            393 × 852 实际视口。每个画面均可继续操作；样例工具位于产品画面外。
+          </p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>等待授权时，事实清楚</h3>
+              </div>
+              <a
+                href="runtime.html?scenario=permission&amp;platform=android&amp;scope=trust4-live-0"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-0"
+                src="runtime.html?scenario=permission&amp;platform=android&amp;scope=trust4-frame-0&amp;embed=1"
+                title="等待授权时，事实清楚"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>从这里进入恢复与诊断，状态和下一步保持一致。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>恢复页接住同一状态</h3>
+              </div>
+              <a
+                href="recovery.html?scenario=permission&amp;platform=android&amp;scope=trust4-live-1"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-1"
+                src="recovery.html?scenario=permission&amp;platform=android&amp;scope=trust4-frame-1&amp;embed=1"
+                title="恢复页接住同一状态"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>先授权，再由你开始运行。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>确认前，看见范围变化</h3>
+              </div>
+              <a
+                href="config-review.html?configcase=expanded-scope&amp;platform=android&amp;scope=trust4-live-2"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-2"
+                src="config-review.html?configcase=expanded-scope&amp;platform=android&amp;scope=trust4-frame-2&amp;embed=1"
+                title="确认前，看见范围变化"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>同名、同数量的规则，条件和涉及应用仍可核对。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>规则实际怎样执行</h3>
+              </div>
+              <a
+                href="rule-detail.html?id=r4&amp;platform=android&amp;scope=trust4-live-3"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-3"
+                src="rule-detail.html?id=r4&amp;platform=android&amp;scope=trust4-frame-3&amp;embed=1"
+                title="规则实际怎样执行"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>仅观察、实际允许前置；规则定义继续可查。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>管理订阅来源</h3>
+              </div>
+              <a
+                href="domain-detail.html?id=d1&amp;platform=android&amp;scope=trust4-live-4"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-4"
+                src="domain-detail.html?id=d1&amp;platform=android&amp;scope=trust4-frame-4&amp;embed=1"
+                title="管理订阅来源"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>版本、检查状态、更新方式与使用范围各自清楚。</span>
+            </div>
+            <div class="demo-controls">
+              <button
+                data-subscription-frame="stage-frame-4"
+                data-outcome="failure"
+              >
+                准备一次失败</button
+              ><button
+                data-subscription-frame="stage-frame-4"
+                data-outcome="update"
+              >
+                准备样例新版本</button
+              ><span class="sample-status">原型工具：准备后，在画面内检查</span>
+            </div>
+            <div class="demo-controls">
+              <button
+                data-subscription-frame="stage-frame-4"
+                data-outcome="update"
+                data-scheduled="true"
+              >
+                模拟到达检查时间</button
+              ><span class="sample-status"
+                >先在管理来源中选择自动采用，可试完整自动更新</span
+              >
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>06</span>
+                <h3>更新失败，现有资料保留</h3>
+              </div>
+              <a
+                href="domain-detail.html?id=d1&amp;subscription=failed&amp;platform=android&amp;scope=trust4-live-5"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-5"
+                src="domain-detail.html?id=d1&amp;subscription=failed&amp;platform=android&amp;scope=trust4-frame-5&amp;embed=1"
+                title="更新失败，现有资料保留"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>可以重试，也可暂停检查或停止订阅。</span>
+            </div>
+            <div class="demo-controls">
+              <button
+                data-subscription-frame="stage-frame-5"
+                data-outcome="failure"
+              >
+                准备一次失败</button
+              ><button
+                data-subscription-frame="stage-frame-5"
+                data-outcome="update"
+              >
+                准备样例新版本</button
+              ><span class="sample-status">原型工具：准备后，在画面内检查</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>07</span>
+                <h3>更新前核对本地修改</h3>
+              </div>
+              <a
+                href="domain-detail.html?id=d1&amp;subscription=update&amp;localcase=modified&amp;review=update&amp;platform=android&amp;scope=trust4-live-6"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-6"
+                src="domain-detail.html?id=d1&amp;subscription=update&amp;localcase=modified&amp;review=update&amp;platform=android&amp;scope=trust4-frame-6&amp;embed=1"
+                title="更新前核对本地修改"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>新增与移除分开；本地补充与排除保持不变。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>08</span>
+                <h3>补充与排除属于你</h3>
+              </div>
+              <a
+                href="domain-edit.html?id=d1&amp;localcase=modified&amp;platform=android&amp;scope=trust4-live-7"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-7"
+                src="domain-edit.html?id=d1&amp;localcase=modified&amp;platform=android&amp;scope=trust4-frame-7&amp;embed=1"
+                title="补充与排除属于你"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>排除只作用于本列表，其他规则继续独立判断。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>09</span>
+                <h3>只回答所选时段</h3>
+              </div>
+              <a
+                href="contributions.html?window=15%2C20&amp;platform=android&amp;scope=trust4-live-8"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-8"
+                src="contributions.html?window=15%2C20&amp;platform=android&amp;scope=trust4-frame-8&amp;embed=1"
+                title="只回答所选时段"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>09:21–09:26 的应用贡献与当前状态分开。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>10</span>
+                <h3>长连接仍可见</h3>
+              </div>
+              <a
+                href="location.html?app=s3&amp;region=tokyo&amp;window=15%2C20&amp;platform=android&amp;scope=trust4-live-9"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-9"
+                src="location.html?app=s3&amp;region=tokyo&amp;window=15%2C20&amp;platform=android&amp;scope=trust4-frame-9&amp;embed=1"
+                title="长连接仍可见"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>本时段 0 B、最新速率与整条累计分别给出。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>11</span>
+                <h3>筛选意图连续保留</h3>
+              </div>
+              <a
+                href="activity-filter.html?result=blocked&amp;window=15%2C20&amp;platform=android&amp;scope=trust4-live-10"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-10"
+                src="activity-filter.html?result=blocked&amp;window=15%2C20&amp;platform=android&amp;scope=trust4-frame-10&amp;embed=1"
+                title="筛选意图连续保留"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>与活动页筛选面板使用同一套定义。</span>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>12</span>
+                <h3>保留连接透视主线</h3>
+              </div>
+              <a
+                href="connection.html?id=s3-c0&amp;platform=android&amp;scope=trust4-live-11"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                id="stage-frame-11"
+                src="connection.html?id=s3-c0&amp;platform=android&amp;scope=trust4-frame-11&amp;embed=1"
+                title="保留连接透视主线"
+              ></iframe>
+            </div>
+            <div class="demo-controls">
+              <span>应用、去向、近期收发、经过与调整继续相连。</span>
+            </div>
+            <div class="demo-controls">
+              <button data-sample-frame="stage-frame-11">
+                加入一条样例新活动</button
+              ><span class="sample-status">原型评审工具</span>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="responsive">
+        <header>
+          <h2>相同任务，在不同窗口里继续。</h2>
+          <p>
+            Android 820 × 1180；Linux 1440 × 900 与 640 ×
+            760。平台身份与窗口布局分别处理。
+          </p>
+        </header>
+        <div class="wide-grid">
+          <article>
+            <div class="tile-caption">
+              <h3>Android 平板 · 数值与单位保持完整</h3>
+              <a
+                href="home.html?platform=android&amp;scope=trust4-wide-live-0"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="tablet-frame">
+              <iframe
+                src="home.html?platform=android&amp;scope=trust4-wide-0&amp;embed=1"
+                title="Android 平板 · 数值与单位保持完整"
+              ></iframe>
+            </div>
+          </article>
+          <article>
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 前后变化并排核对</h3>
+              <a
+                href="config-review.html?configcase=expanded-scope&amp;platform=linux&amp;scope=trust4-wide-live-1"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="desktop-frame">
+              <iframe
+                src="config-review.html?configcase=expanded-scope&amp;platform=linux&amp;scope=trust4-wide-1&amp;embed=1"
+                title="Linux 桌面 · 前后变化并排核对"
+              ></iframe>
+            </div>
+          </article>
+          <article>
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 来源与使用规则并排</h3>
+              <a
+                href="domain-detail.html?id=d1&amp;subscription=update&amp;localcase=modified&amp;platform=linux&amp;scope=trust4-wide-live-2"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="desktop-frame">
+              <iframe
+                src="domain-detail.html?id=d1&amp;subscription=update&amp;localcase=modified&amp;platform=linux&amp;scope=trust4-wide-2&amp;embed=1"
+                title="Linux 桌面 · 来源与使用规则并排"
+              ></iframe>
+            </div>
+          </article>
+          <article>
+            <div class="tile-caption">
+              <h3>Linux 窄窗 · 时间口径保持分层</h3>
+              <a
+                href="location.html?app=s3&amp;region=tokyo&amp;window=15%2C20&amp;platform=linux&amp;scope=trust4-wide-live-3"
+                target="_blank"
+                >↗</a
+              >
+            </div>
+            <div class="window-frame">
+              <iframe
+                src="location.html?app=s3&amp;region=tokyo&amp;window=15%2C20&amp;platform=linux&amp;scope=trust4-wide-3&amp;embed=1"
+                title="Linux 窄窗 · 时间口径保持分层"
+              ></iframe>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="reference">
+        <header>
+          <h2>所有独立页面</h2>
+          <p>47 个产品页面。结果页从相应操作进入时，才能看到完整提交结果。</p>
+        </header>
+        <div class="advanced-links">
+          <a
+            href="home.html?platform=android&amp;scope=trust4-reference-home"
+            target="_blank"
+            >我的网络</a
+          ><a
+            href="contributions.html?platform=android&amp;scope=trust4-reference-contributions"
+            target="_blank"
+            >这段活动</a
+          ><a
+            href="apps.html?platform=android&amp;scope=trust4-reference-apps"
+            target="_blank"
+            >全部应用</a
+          ><a
+            href="app-detail.html?platform=android&amp;scope=trust4-reference-app-detail"
+            target="_blank"
+            >应用</a
+          ><a
+            href="app-networks.html?platform=android&amp;scope=trust4-reference-app-networks"
+            target="_blank"
+            >网络限制</a
+          ><a
+            href="app-selection.html?platform=android&amp;scope=trust4-reference-app-selection"
+            target="_blank"
+            >批量控制</a
+          ><a
+            href="activity.html?platform=android&amp;scope=trust4-reference-activity"
+            target="_blank"
+            >详细活动</a
+          ><a
+            href="activity-filter.html?platform=android&amp;scope=trust4-reference-activity-filter"
+            target="_blank"
+            >筛选访问</a
+          ><a
+            href="connection.html?platform=android&amp;scope=trust4-reference-connection"
+            target="_blank"
+            >活动详情</a
+          ><a
+            href="stats.html?platform=android&amp;scope=trust4-reference-stats"
+            target="_blank"
+            >联网统计</a
+          ><a
+            href="protocols.html?platform=android&amp;scope=trust4-reference-protocols"
+            target="_blank"
+            >协议目录</a
+          ><a
+            href="rules.html?platform=android&amp;scope=trust4-reference-rules"
+            target="_blank"
+            >规则</a
+          ><a
+            href="rule-detail.html?platform=android&amp;scope=trust4-reference-rule-detail"
+            target="_blank"
+            >规则详情</a
+          ><a
+            href="rule-edit.html?platform=android&amp;scope=trust4-reference-rule-edit"
+            target="_blank"
+            >编辑规则</a
+          ><a
+            href="rule-scope.html?platform=android&amp;scope=trust4-reference-rule-scope"
+            target="_blank"
+            >作用对象</a
+          ><a
+            href="groups.html?platform=android&amp;scope=trust4-reference-groups"
+            target="_blank"
+            >规则组</a
+          ><a
+            href="group-detail.html?platform=android&amp;scope=trust4-reference-group-detail"
+            target="_blank"
+            >规则组详情</a
+          ><a
+            href="group-edit.html?platform=android&amp;scope=trust4-reference-group-edit"
+            target="_blank"
+            >编辑规则组</a
+          ><a
+            href="binding-edit.html?platform=android&amp;scope=trust4-reference-binding-edit"
+            target="_blank"
+            >规则分配</a
+          ><a
+            href="domains.html?platform=android&amp;scope=trust4-reference-domains"
+            target="_blank"
+            >域名列表</a
+          ><a
+            href="domain-detail.html?platform=android&amp;scope=trust4-reference-domain-detail"
+            target="_blank"
+            >域名列表详情</a
+          ><a
+            href="domain-edit.html?platform=android&amp;scope=trust4-reference-domain-edit"
+            target="_blank"
+            >编辑域名列表</a
+          ><a
+            href="domain-import.html?platform=android&amp;scope=trust4-reference-domain-import"
+            target="_blank"
+            >导入域名</a
+          ><a
+            href="config.html?platform=android&amp;scope=trust4-reference-config"
+            target="_blank"
+            >配置管理</a
+          ><a
+            href="config-import.html?platform=android&amp;scope=trust4-reference-config-import"
+            target="_blank"
+            >导入配置</a
+          ><a
+            href="config-review.html?platform=android&amp;scope=trust4-reference-config-review"
+            target="_blank"
+            >审阅导入</a
+          ><a
+            href="config-result.html?platform=android&amp;scope=trust4-reference-config-result"
+            target="_blank"
+            >保存结果</a
+          ><a
+            href="runtime.html?platform=android&amp;scope=trust4-reference-runtime"
+            target="_blank"
+            >运行状态</a
+          ><a
+            href="setup.html?platform=android&amp;scope=trust4-reference-setup"
+            target="_blank"
+            >运行方式</a
+          ><a
+            href="permissions.html?platform=android&amp;scope=trust4-reference-permissions"
+            target="_blank"
+            >权限与后台</a
+          ><a
+            href="recovery.html?platform=android&amp;scope=trust4-reference-recovery"
+            target="_blank"
+            >恢复运行</a
+          ><a
+            href="network.html?platform=android&amp;scope=trust4-reference-network"
+            target="_blank"
+            >网络与 DNS</a
+          ><a
+            href="settings.html?platform=android&amp;scope=trust4-reference-settings"
+            target="_blank"
+            >设置</a
+          ><a
+            href="appearance.html?platform=android&amp;scope=trust4-reference-appearance"
+            target="_blank"
+            >外观</a
+          ><a
+            href="storage.html?platform=android&amp;scope=trust4-reference-storage"
+            target="_blank"
+            >数据与存储</a
+          ><a
+            href="notifications.html?platform=android&amp;scope=trust4-reference-notifications"
+            target="_blank"
+            >通知与后台</a
+          ><a
+            href="about.html?platform=android&amp;scope=trust4-reference-about"
+            target="_blank"
+            >关于</a
+          ><a
+            href="extensions.html?platform=android&amp;scope=trust4-reference-extensions"
+            target="_blank"
+            >探索工具</a
+          ><a
+            href="map.html?platform=android&amp;scope=trust4-reference-map"
+            target="_blank"
+            >连接地图</a
+          ><a
+            href="location.html?platform=android&amp;scope=trust4-reference-location"
+            target="_blank"
+            >地区详情</a
+          ><a
+            href="preview.html?platform=android&amp;scope=trust4-reference-preview"
+            target="_blank"
+            >规则预演</a
+          ><a
+            href="preview-result.html?platform=android&amp;scope=trust4-reference-preview-result"
+            target="_blank"
+            >预演结果</a
+          ><a
+            href="debug.html?platform=android&amp;scope=trust4-reference-debug"
+            target="_blank"
+            >诊断会话</a
+          ><a
+            href="debug-session.html?platform=android&amp;scope=trust4-reference-debug-session"
+            target="_blank"
+            >诊断进行中</a
+          ><a
+            href="diagnostics.html?platform=android&amp;scope=trust4-reference-diagnostics"
+            target="_blank"
+            >本地诊断报告</a
+          ><a
+            href="app-controls.html?platform=android&amp;scope=trust4-reference-app-controls"
+            target="_blank"
+            >联网设置</a
+          ><a
+            href="domain-subscription.html?platform=android&amp;scope=trust4-reference-domain-subscription"
+            target="_blank"
+            >订阅来源</a
+          >
+        </div>
+      </section>
+    </main>
+    <footer class="gallery-footer">
+      交互原型 ·
+      用户先认出应用，再理解事实、决定与结果。所有数据和变更仅在当前前端样例中。
+    </footer>
+  </body>
+</html>

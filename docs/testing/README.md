@@ -27,6 +27,8 @@ and [build commands](../tooling/README.md) for Host checks.
 
 | Scope | Record |
 | --- | --- |
+| User-confirmed B0 (2026-10-11): Pixel 6a Root/ordinary VPN eight-cell quick baseline, 105.9-second run and exact-window CPU flamegraphs | [B0 and hotspots](2026-10-09_PIXEL6A_QUICK_BASELINE_AND_HOTSPOTS.md) |
+| Pixel 6a batching experiment, withdrawn (2026-10-11): per-step results retained; separate Root recovery correction retained; rollback verification and VPP mechanism audit | [Incremental batch results](2026-10-11_PIXEL6A_INCREMENTAL_BATCH.md) |
 | Combined rule/protocol/observation CPU, memory, wakeup and storage calibration | [T30](2026-09-27_T30_COMBINED_COST_RESULTS.md) |
 | Combined Root/VPN protocol, CT, rule publication, observation stress and debug writer regression | [T29](2026-09-27_T29_COMBINED_RESULTS.md) |
 | Directional Flow effects and query freshness | [T23](2026-09-27_T23_DIRECTIONAL_ATTRIBUTION_RESULTS.md) |

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>规则预演 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="preview"
+    data-title="规则预演"
+    data-nav="rules"
+    data-back="extensions.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>先问一次“如果”</h1>
+            <p>不发送请求，也不更改正在使用的规则。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div class="field">
+                <label for="preview-subject">控制对象</label
+                ><select id="preview-subject"></select>
+              </div>
+              <div class="field">
+                <label for="preview-target">目标域名或 IP</label
+                ><input
+                  id="preview-target"
+                  type="text"
+                  value="metrics.example.net"
+                />
+              </div>
+              <div class="form-row">
+                <div class="field">
+                  <label for="preview-port">目的端口</label
+                  ><input
+                    id="preview-port"
+                    type="number"
+                    value="443"
+                    min="1"
+                    max="65535"
+                  />
+                </div>
+                <div class="field">
+                  <label for="preview-transport">传输协议</label
+                  ><select id="preview-transport">
+                    <option value="TCP">TCP</option>
+                    <option value="UDP">UDP</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="preview-protocol">已知应用协议</label
+                ><select id="preview-protocol">
+                  <option value="TLS">TLS</option>
+                  <option value="QUIC">QUIC</option>
+                  <option value="SSH">SSH</option>
+                  <option value="unknown">未知 / 事实不足</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="preview-network">网络类型</label
+                ><select id="preview-network">
+                  <option value="Wi-Fi">Wi-Fi</option>
+                  <option value="Mobile">移动网络</option>
+                  <option value="Wired">有线网络</option>
+                  <option value="VPN">VPN 网络</option>
+                </select>
+              </div>
+            </section>
+            <section>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  预演使用你明确提供的合成事实。缺失事实将显示“不足以判断”，不会当作已经匹配。
+                </p>
+              </div>
+              <div class="card">
+                <h3>将检查当前已保存的规则</h3>
+                <p class="help" style="margin-top: 9px">
+                  结果包含预计动作、匹配原因与规则顺序。它不证明真实网络流量的执行结果。
+                </p>
+              </div>
+              <div class="form-error" id="form-error" role="alert"></div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="run-preview">预演这次访问</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

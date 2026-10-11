@@ -2,17 +2,19 @@
 
 Sakamoto Snort is a local-endpoint firewall project for Android and Linux, providing DNS/domain policy, IP packet policy, and bounded observability. This glossary captures project-specific language used across the current docs so agents do not drift back to legacy or OpenSpec-era terminology.
 
+Accepted rule/observation terminology was synchronized on 2026-09-24 with [ADR-0009](docs/adr/0009-unified-rules-and-vpp-owned-configuration.md) and the [unified rule specification](docs/product/UNIFIED_RULE_ENGINE_SPEC.md). These definitions express the accepted target; current code and dated evidence remain the authority for implemented capability. Explicitly historical terms do not add requirements to the new design.
+
 ## Language
 
 ### Architecture Surfaces
 
 **vNext control plane**:
-The current daemon control surface for policy mutation, configuration, metrics, streams, telemetry, and checkpoint commands.
-_Avoid_: legacy control, `60606` as the current surface
+Historical name for the retired daemon command surface. Current product control is defined by the typed Interfaces and accepted VPP-native rule-management design.
+_Avoid_: current API name, C++ compatibility surface
 
 **Control Plane**:
-The configuration and debug surface for immediate daemon operations. It does not own long-term storage, high-cardinality analytics, or dashboard history.
-_Avoid_: analytics backend, history store
+The product configuration, status and diagnostic surface. VPP owns online rule management and its persistent configuration source; Rust adapts requests and separately maintains observation history.
+_Avoid_: packet worker, shared analytics database, UI-owned policy
 
 **QUIT**:
 The vNext control-plane command for ending the current control session after its response is written. It is not Daemon lifecycle and must not be used as the native daemon process shutdown signal.
@@ -27,8 +29,8 @@ The Android-side lifecycle owner of the active Runtime Profile's supervised VPP 
 _Avoid_: UI directly managing the native dataplane, generic runtime owner
 
 **VPP Runtime**:
-The sole RuntimeService-supervised native dataplane instance for the active Runtime Profile. It owns the shared VPP graph, Worker Layout, live VPP buffers, and active VPP-native Packet I/O Adapter.
-_Avoid_: bare Runtime, surrounding C++ daemon, HEV runtime, parallel Root/VPN dataplanes
+The single supervised native instance for the active Runtime Profile, owning the VPP graph, worker state and online rule management. Management availability is distinct from policy and Adapter readiness to capture product traffic.
+_Avoid_: surrounding C++ daemon, parallel Root/VPN dataplanes, process alive means protection running
 
 **Retired C++ Mainline**:
 The removed Snort C++ daemon, host model, tests, NDK artifact, and archived source. It is not a product implementation option, compatibility fallback, or design input; only its explicitly recorded evidence may be cited.
@@ -51,8 +53,16 @@ The sole first-release VPN forwarding mode, in which allowed IPv4/IPv6 TCP and U
 _Avoid_: built-in relay, mandatory SOCKS5 dependency, proxy bypass fallback, treating the TCP prototype as release-complete
 
 **Direct DNS Handling**:
-The Direct Egress treatment of DNS as its original TCP or UDP traffic sent to the packet's original destination. It does not introduce a separate resolver, redirect DNS to a product-selected server, or bypass normal policy and transport accounting.
-_Avoid_: built-in DNS proxy, silent resolver replacement, treating DNS as outside Direct Egress
+The original forwarding baseline where DNS remains TCP or UDP traffic sent to its original destination. Forwarding alone does not establish the selected Application DNS Filtering, association collection or optional upstream-relay behavior.
+_Avoid_: treating forwarding alone as complete DNS filtering, assuming application filtering requires resolver replacement
+
+**VPN DNS Relay**:
+The optional product-managed resolution path within VPN DNS handling, distinct from filtering ordinary queries on their original resolver path. Its user-selected upstream can use ordinary UDP/TCP DNS or explicitly enabled DoT/DoH; DoQ is excluded.
+_Avoid_: automatic resolver replacement, mandatory encrypted upstream, all DNS must use the relay, complete recursive resolver, cached permission reused across applications, replacing the general VPN forwarding mode
+
+**DNS Upstream Bootstrap**:
+Product-generated address acquisition used to connect to a configured DoT/DoH service, using configured connection IPs or system/original-network resolution of the service hostname. Its scope is separate from application DNS queries and ordinary-DNS fallback after an encrypted-upstream failure.
+_Avoid_: application-query fallback, hostname-based permission exemption for other apps, silently chosen public bootstrap resolver
 
 **POC Performance Guardrail**:
 A feasibility-stage stop rule used to detect architecture-level cliffs before importing a POC finding into main-stack design. It is not a release SLO, product performance promise, or optimization target. Historical POC arms may satisfy the guardrail by proving correctness, cleanup, bounded CPU, and absence of repeated severe tail regressions for their registered scope, while broader throughput, power, thermal, and soak budgets remain deferred until the real product Direct Egress seam exists.
@@ -171,16 +181,20 @@ The thin shared Tauri user experience for Android first and later Linux, backed 
 _Avoid_: VPP control panel, frontend-owned policy backend, platform-specific duplicate UI
 
 **Local Product Backend**:
-The on-device, cross-platform control and persistence layer that exposes product state to Product UI and adapts it to the packet runtime. On Android it is owned by the RuntimeService side and remains available while protection runs even if the Tauri Activity is absent; Linux later hosts the same product-core responsibilities in its native product process. It is shared product code, not a remote account, cloud API, or server.
-_Avoid_: remote backend server, Compose-owned database, UI-process lifecycle owner, VPP-owned product database, UI calling VPP internals
+The on-device product boundary adapting frontend requests and maintaining normal observations and query projections. Its Rust responsibilities do not duplicate the editable rule model owned by VPP, and Android ingestion remains under RuntimeService rather than UI lifecycle.
+_Avoid_: remote backend, UI-owned history, second editable rule database
 
 **App-first Control**:
 The product control model where network access, L4 rules, activity, and statistics remain organized around a platform application. Android preserves multi-user identity through complete Linux UID; Linux resolves its own application identity through the Application Identity Provider. It does not prescribe which screen opens first.
 _Avoid_: rule-inventory-first control model, device-wide expert console, UID-only Linux application identity, treating launch destination as control ownership
 
 **Progressive Control Disclosure**:
-The single Product UI model where common app controls appear first and L4 rules, evidence, and diagnostics appear as the user drills into context. It does not divide users or policy into global simple and advanced modes.
-_Avoid_: simple mode, expert mode, duplicated beginner and advanced UI
+The contextual disclosure of controls, evidence and diagnostics within the selected Product Protection Mode. Modes may have different default tasks and screens; ordinary protection does not require full rule authoring.
+_Avoid_: identical default work for every mode, mandatory expert authoring for ordinary users
+
+**Product Protection Mode**:
+The user's choice of filtering strategy and control responsibility: Standard is the intended everyday mode for most users, providing maintained conventional rules and advertising filters; Enhanced provides stronger application filtering and broader lists; Custom/Advanced enables full rule authoring. Ordinary use follows authorization, mode selection and background protection, with guided diagnosis and exceptions for misblocking; the Custom/Advanced label, exact presets and switching semantics remain undecided, and this product choice is distinct from Runtime Profile and rule binding mode.
+_Avoid_: Root/VPN privilege level, rule execution mode, all users as rule authors
 
 **Daemon lifecycle**:
 Whether the native daemon process is running under the Android-side service owner. It is separate from daemon feature gates such as policy or observability switches.
@@ -191,8 +205,8 @@ The Android RuntimeService policy for an unexpected active VPP runtime exit: cle
 _Avoid_: infinite crash loop, silent permanent stop after one fault, restarting without cleanup, UI Activity as restart owner
 
 **Protection Pause**:
-A user-requested clean stop of the active Android Runtime Profile. Pausing stops VPP and releases all profile-owned packet-capture resources: Root removes its NFQUEUE hooks and VPN closes its TUN and releases the system VPN slot. The selected profile, Authoring Policy Bundle, and last successfully applied policy state remain persisted for a later restart. Pause is not a live VPP pass-through mode and produces no packet Activity; observe-only behavior belongs to policy, not lifecycle.
-_Avoid_: VPP kept alive while paused, pass-through pause, collecting Activity while paused, treating an unexpected runtime exit as a user pause
+A user-requested clean stop of the active Runtime Profile and its packet-capture resources, with selected profile and saved configuration retained for restart. It differs from a healthy VPP management process awaiting correction of a startup policy error.
+_Avoid_: pass-through pause, collecting packet activity while paused, guaranteed retained in-memory snapshot
 
 **packet-pass-through**:
 The base runtime capability that means the daemon can receive hooked IPv4 and IPv6 packets through its current packet capture Adapter and fail-open accept them. It is not an NFQUEUE Implementation name, listener-thread-started signal, or best-effort hook state; hook installation failure or unavailable setup for either family means the capability is not ready.
@@ -220,17 +234,37 @@ _Avoid_: old phase labels such as p0/p1/p2
 
 ### Domain Policy
 
+**Application DNS Filtering / 按应用 DNS 过滤**:
+The application-scoped domain-control behavior shared by Root and VPN, combining policy checks on reliably attributed DNS queries and their available CNAME answer evidence with subsequent connection checks using the connection's own application identity and available domain/address evidence. Query denial and connection denial are separate control outcomes.
+_Avoid_: promising every lookup is intercepted before its answer, treating DNS allow as permanent connection permission, a separate rule-priority system
+
+**DNS Query Decision**:
+An actual allow/deny policy decision about forwarding a handled DNS request or delivering its answer, distinct from upstream resolution success and the verdict of a subsequent business connection.
+_Avoid_: reporting connection denial as DNS denial, inventing a decision for a lookup that never reached product ingress
+
+**Local DNS Resolution Exception**:
+An explicit hostname or name-and-descendants routing selection that preserves the network-original or selected local resolver view while the configured default upstream applies elsewhere. Its routing role is distinct from permission to resolve a query or establish a connection.
+_Avoid_: domain allowlist, complete automatic private-domain classifier, upstream-failure fallback, a second policy priority system
+
 **DomainPolicy**:
-Domain-level allow/block policy at app or device scope, using literal domains and references to reusable domain rules.
-_Avoid_: conflating it with IPRULES or packet verdict policy
+Historical terminology for domain allow/block configuration at app or device scope. The current Application DNS Filtering model uses unified Policy Rules and DomainLists.
+_Avoid_: a separate editable domain-policy model, stage-owned priority
 
 **DomainRules**:
-Reusable domain, wildcard, or regex rules referenced by DomainPolicy payloads.
-_Avoid_: treating every domain rule as a DomainList entry
+Historical domain-specific rules referenced by DomainPolicy payloads. Current domain conditions and lists belong to the unified Policy Rule/RuleGroup model.
+_Avoid_: treating old wildcard/regex syntax as a current support promise, equating a DomainList entry with a policy rule
 
 **DomainLists**:
-Managed allow/block domain-list imports or subscriptions with metadata and imported domains.
-_Avoid_: BlockingList, `BLOCKLIST.*`
+A reusable named collection of domains that can be maintained by the user, imported as a snapshot, or refreshed from a subscription. A list may be consumed by DNS filtering or referenced by policy rules; its source and maintenance mode are distinct from the context that uses it.
+_Avoid_: treating every domain list as a blocklist, equating a domain list with a policy rule, `BLOCKLIST.*`
+
+**Domain List Import**:
+A one-time addition of domain-list content from a file or another supported source, without establishing an automatic update relationship.
+_Avoid_: subscription, automatic refresh
+
+**Domain List Subscription**:
+A maintained source relationship through which domain-list content can be refreshed from a subscribed file according to the user's update settings.
+_Avoid_: one-time import, policy action, treating refreshed content as proof that a consuming policy is active
 
 **policySource**:
 A stable DNS-domain attribution enum that explains which DomainPolicy branch produced a DNS verdict.
@@ -245,18 +279,26 @@ The final DomainPolicy fallback that decides from the app mask and domain mask w
 _Avoid_: default allow, global fallback
 
 **Domain-IP Association**:
-The optional association layer that records learned domain-to-IP relationships for enrichment, debug evidence, and features such as IP leak handling. Its data sources are separate from DomainPolicy and may include DNS observation paths that do not block or modify DNS requests.
-_Avoid_: DomainPolicy itself, Basic IPRULES matcher, RDNS, Host cache
+Evidence relating a DNS-learned domain to returned IP addresses within its network/resolver context, with known or unknown application provenance and validity independent of DNS answer-cache TTL. Only one admissible candidate supplies a fallback name for the selected TLS/QUIC/DTLS path or an HTTP/SOCKS request's IP target; multiple candidates remain observation evidence without establishing the actual flow domain or an unknown original DNS caller.
+_Avoid_: DomainPolicy itself, Basic IPRULES matcher, RDNS, Host cache, direct SNI, guaranteed unique domain attribution
+
+**HTTP Target Domain**:
+A protocol-visible hostname identifying the effective target of one HTTP request, taken from the request target or Host as HTTP semantics require. It is a request-level direct fact distinct from earlier requests on the same connection, TLS SNI and DNS-derived association.
+_Avoid_: Host as SNI, an email or authentication domain as the HTTP target, one name necessarily identifying every request in a flow
+
+**SOCKS Target Domain**:
+A direct hostname carried by a visible SOCKS4a or domain-address SOCKS5 request, identifying the requested remote destination separately from the proxy server. A DNS-derived name for an IP-only request is association evidence rather than this direct protocol fact.
+_Avoid_: the proxy server's hostname as the requested target, protocol identification as target-name evidence
 
 **Resolved-IP Policy**:
-An optional packet enforcement capability that uses DNS-learned Domain-IP Association data to apply domain-derived policy to resolved IP traffic.
-_Avoid_: ip-leak, IP link, Basic IPRULES, DomainPolicy itself
+Historical terminology for connection enforcement using DNS-learned Domain-IP Association evidence. The current Application DNS Filtering direction uses applicable unified Policy Rules rather than an independent enforcement or priority system.
+_Avoid_: ip-leak, IP link, Basic IPRULES, a separate DomainPolicy engine
 
 ### IP And L4 Policy
 
 **IPRULES**:
-The per-app L3/L4 IP rule engine for IPv4 and IPv6 packet policy, per-rule stats, and packet attribution.
-_Avoid_: IPv4 rules, firewall rules without the IPRULES scope
+Historical product terminology for IP packet rules. Use L4 Traffic Rule and Policy Rule for the current unified rule model; old IPRULES command shapes are not current API requirements.
+_Avoid_: IPv4-only rules, mandatory legacy command compatibility
 
 **NetworkContextId**:
 The bounded platform-provided network category used by Network Gate: Android supplies Wi-Fi, Mobile, and VPN; Linux supplies Wired, Wi-Fi, Mobile, and VPN from reliable facts about the packet's actual interface, with unavailable classification remaining explicitly unknown. This category is separate from concrete interface matching and Runtime Profile, and the shared Product UI presents the platform's available categories.
@@ -267,40 +309,92 @@ The event-driven platform facts used to associate a packet with a reliable Netwo
 _Avoid_: synchronous per-packet platform query, UI Activity state, VPN Runtime Profile as network context, guessing an unavailable context, treating every virtual interface as VPN
 
 **Unknown Network Context**:
-The explicit absence of a reliable NetworkContextId for the current packet. Network-specific Gate and L4 predicates no-match, while every rule that can be evaluated from the remaining facts continues normally; if no stage drops the packet, the normal default is allow.
+The explicit absence of a reliable NetworkContextId for the current packet. Network-dependent conditions are unavailable rather than false; other sufficient Boolean branches remain evaluable under the ordinary rule-availability contract.
 _Avoid_: guessing Wi-Fi/Mobile/VPN, holding the packet for a platform query, skipping all policy, infrastructure bypass
 
 **Network Gate**:
-The per-ApplicationSubjectId and NetworkContextId access control exposed as the common app-level firewall action, with Android's Wi-Fi/Mobile/VPN categories and Linux's Wired/Wi-Fi/Mobile/VPN categories. It is a dedicated rule family inside the Authoring Policy Bundle: blocked returns `DROP` ahead of L4 rules, while open returns `PASS_NEXT` into applicable later policy.
-_Avoid_: frontend-owned gate database, terminal allow on an open gate, L4 allow exception, Root/VPN mode selector, device-wide firewall mode
+The application/network disabling control, represented in the unified model by a highest-priority ordinary DROP rule maintained by its configuration entrypoint. It has no independent matcher privilege or priority space.
+_Avoid_: special backend Gate branch, separate policy family, Root/VPN selector
 
 **L4 Traffic Rule**:
-A per-app Basic IPRULES rule over IPv4/IPv6 source and destination CIDR, source and destination port or range, IP protocol, packet direction, and optional interface context. It uses packet-local facts and does not imply Stateful Conntrack.
-_Avoid_: Network Gate, full CT rule, protocol-identification rule
+A policy rule using packet and available platform facts such as addresses, ports, protocol, direction and network context. Its physical execution position is chosen by the compiler in the complete effective rule set, not by its name.
+_Avoid_: ACL as the user rule name, necessarily pre-flow, separate priority space
 
 **Protocol Rule**:
-A later-stage compound policy rule that requires an exact Application Protocol Identity or Application Protocol Category and may also constrain application subject plus normalized, flow-stable ORIG/REPLY endpoint CIDRs, ports, and IP protocol retained by the FlowEntry. Protocol Policy chooses one current winner from every rule satisfied by the FlowEntry's currently accumulated supported stable facts using stage-local priority, explicit order, and stable rule ID; newly learned facts participate in the next current-winner selection rather than receiving an isolated verdict. Winner cache, candidate index, epoch, cursor, matched-set, full-scan, and incremental-update representations remain implementation and benchmark decisions.
-_Avoid_: AppID-only rule, current-packet direction predicate, isolated verdict per newly recognized protocol, required incremental winner cache, `evaluatedResultCount`, generic MAAT clone, per-packet Protocol Policy replay, duplicating the early L4 matcher as a separate product rule, cross-stage allow override, MAAT dependency, fields from unimplemented decoders
+A policy rule whose expression uses currently published application-protocol facts, optionally combined with other available facts. It competes under the same complete ordering as other applicable rules rather than in a separate protocol priority space.
+_Avoid_: isolated verdict per recognized protocol, mandatory AppID-only template, flow termination action
+
+**Policy Rule**:
+A versioned logical condition with explicit precedence and a declared packet action, applied through an effective binding mode. Its full Boolean expression and whole-rule applicability determine matching; physical execution position adds no priority.
+_Avoid_: compiler fragment, group winner, stage-owned verdict
+
+**Rule Group (规则组)**:
+A reusable collection of Policy Rules and child Rule Groups that can expose common conditions and whose overall observed effects can be inspected separately from individual members. Nesting is limited to three group levels, counting the outermost group as level one and excluding individual rules from that count; a group does not introduce an independent policy winner.
+_Avoid_: Application Group, domain list, independent group verdict
+
+**Rule Group Condition (规则组公共条件)**:
+A group-level expression or editing facility for conditions shared by member rules. Whether it continuously constrains group use or only edits current member conditions remains under discussion in the [product baseline](docs/product/NETWORK_CONTROL_PRODUCT_VISION.md#2026-10-02-规则组公共条件与设计依据).
+_Avoid_: application-group membership, silently replacing a member rule's own condition, a new independent group verdict
+
+**Rule Effects (规则执行效果)**:
+Observed activity actually handled under a Policy Rule, interpreted within the selected time span and usage scope. These effects are distinct from whether the rule is currently in use and from merely satisfying its conditions.
+_Avoid_: enabled status as execution evidence, candidate-match count, packet hits relabeled as connections
+
+**Rule Group Effects (规则组整体效果)**:
+Observed activity attributable to the use of a Rule Group within the selected time span and scope, including its nested members without counting duplicate references as additional executions. It is distinct from each member rule's effects across all of that rule's uses.
+_Avoid_: sum of members' unrestricted totals, independent group verdict, application-group effects
+
+**Application Group (应用组)**:
+A collection of applications that can be selected as the common target of a Policy Rule or rule group. It represents which applications receive shared policy; naming, membership-change and overlap semantics remain under discussion in [the product baseline](docs/product/NETWORK_CONTROL_PRODUCT_VISION.md#2026-10-01-用户确认的交互基线).
+_Avoid_: rule group, domain list, merged application identity
+
+**Application-specific Rule (应用专属规则)**:
+A rule whose intended scope is one application. A change initiated inside that application applies only to it; sharing with other applications or an application group is a subsequent explicit choice.
+_Avoid_: silently editing shared content for other applications, equating the editing entrypoint with shared scope
+
+**Shared Rule (共用规则)**:
+A rule jointly used by multiple applications or an application group. Shared and application-specific rules coexist in the product; they are not mutually exclusive operating modes.
+_Avoid_: replacing all application-specific rules, requiring all rule work to start from a single entrypoint
+
+**Effective Rule Set**:
+The applicable rules for one application after group expansion and same-source, same-mode deduplication. All entries compete under one complete order regardless of their eventual execution position.
+_Avoid_: one winner per group, duplicated multi-path occurrences, global cross-application verdict
+
+**Match Result**:
+A completed logical Match carrying winner identity, Rank, declared action, effective mode and attribution, or a completed NoMatch. It is reusable only under the matching input and snapshot guards.
+_Avoid_: partial conjunction, infrastructure error as NoMatch, action-only cache
+
+**Confirmed No SNI**:
+An available fact from a valid completed SNI parse that found no SNI, within a flow already recognized as TLS, QUIC or DTLS with the applicable producer. Missing data, an unattempted parse, failure or exhaustion does not establish this fact.
+_Avoid_: unrelated protocol traffic, empty string for every failure, timeout as absence
+
+**Blocked Observation**:
+A bounded observation instance for actual pre-flow policy drops, with cumulative accounting and attribution and its own idle-ended lifecycle. It is independent of FlowEntry and never causes CT/LPI or stream processing for a dropped packet.
+_Avoid_: flow allocation, rule identity as instance identity, upgrading the object into a Flow
+
+**Policy Readiness**:
+The presence of a successfully compiled and published policy snapshot required before product traffic capture can begin. A healthy rule-management API may remain available for user repair when this condition is false; platform and Adapter readiness are separate requirements.
+_Avoid_: process alive equals protection, compiler failure ends all management, old snapshot survives process restart
 
 **Policy Rule Family**:
-A typed rule collection inside one Authoring Policy Bundle. Network Gate, L4 Traffic Rules, protocol-identification rules, and future metadata rules may share subject identity, revision, source attribution, and one apply transaction while retaining stage-owned predicates and priority spaces.
-_Avoid_: universal rule AST, product-wide priority comparison, frontend-owned Gate/IP/DPI databases
+A descriptive grouping by predicate capability within the unified policy model. Such grouping does not create independent precedence, default actions or separately applied policy.
+_Avoid_: stage-owned priority, special Gate privilege, separate frontend databases
 
 **Enforcement Stage**:
-A dataplane point with a bounded set of available facts and one stage-owned rule family, such as Network Gate, packet/L4, or Protocol Policy. A later stage may combine its newly available fact with facts retained from earlier stages; stage separation determines when a rule is evaluable and which priority space owns it, not that earlier facts become unavailable. Stages acquire expensive facts only when active consumers require them. An earlier `DROP` is terminal; `PASS_NEXT` continues to the next active stage.
-_Avoid_: Product UI mode, global priority space, discarding earlier facts at a later stage, unconditional CT/DPI work
+A physical rule-execution position before or after the required flow/fact processing. Position constrains available inputs but does not add priority or permit splitting a logical rule across positions.
+_Avoid_: user-selected rule type, independent winner space, partial-rule continuation
 
 **Compiled Policy View**:
-An immutable, stage-specific runtime projection produced from one Authoring Policy Bundle and published as part of one Runtime Snapshot. Gate, packet/L4, protocol-identification, and future metadata views may use different indexes and stage-owned ordering while preserving policy revision and source attribution.
-_Avoid_: authoritative policy source, independently edited stage table, frontend policy database
+An immutable execution projection belonging to a complete Runtime Snapshot. Different pre-flow and post-flow representations preserve the same effective-rule ordering, source attribution and snapshot identity.
+_Avoid_: authoritative source configuration, independently edited stage table, local re-ranking
 
 **Stage Verdict**:
-The result emitted by an enforcement stage. `DROP` terminates the packet path; `PASS_NEXT` continues to the next active stage. An allow rule at an early stage therefore means `PASS_NEXT`, not product-wide terminal allow.
-_Avoid_: global `FinalAllow`, later rules reopening an earlier `DROP`, cache hits changing stage order
+Historical DROP/PASS_NEXT stage outcome. The unified rule design instead preserves a complete Match or NoMatch result, with an early winner retaining its logical precedence through later required processing.
+_Avoid_: early ALLOW loses its winner, lower-ranked post-flow rule overrides a proven early winner
 
 **Policy Verdict**:
-The attributable product-policy result after the active enforcement stages have either produced a terminal `DROP` or all completed without one. It records why policy allowed or blocked traffic and remains independent of whether runtime or platform execution succeeded; if an earlier runtime fault prevents evaluation, no Policy Verdict exists and product evidence reports `NOT_EVALUATED`.
-_Avoid_: NFQUEUE verdict send result, VPN forwarding result, infrastructure drop, Adapter completion
+The actual packet-policy ALLOW or DROP produced from the logical winner and effective mode, or default ALLOW after a complete NoMatch. It is separate from runtime failure and transport outcome; policy not evaluated remains distinguishable.
+_Avoid_: NFQUEUE completion result, delivery guarantee, infrastructure bypass as policy ALLOW
 
 **Runtime Disposition**:
 The shared dataplane's terminal handling of a packet after accounting for both Policy Verdict and runtime faults. A runtime fault may discard a packet without creating a policy `DROP`.
@@ -379,15 +473,15 @@ A startup-fixed, worker-local, bounded set of VPP-owned ingress buffers reserved
 _Avoid_: one shared contended reserve, whole-frame reservation, general-purpose packet pool, policy evaluation on reserve packets, unbounded emergency allocation, blocking for reserve capacity, claiming guaranteed fail-open delivery
 
 **L4 Priority Level**:
-The ordering band used only by the stateless L4 classifier. Lower numeric values are evaluated before higher values. Within one level, lower explicit rule order wins, followed by lower stable rule ID. Rules may be compiled into multiple mask/hash partitions, but partition traversal must not alter this precedence.
-_Avoid_: comparing L4 priority with Protocol Policy priority, mask specificity as hidden priority, one lookup context per product stage
+The user-defined priority value retained in the unified effective rule ordering, with lower values preceding higher values. Explicit order and stable logical rule identity resolve ties across all applicable rule conditions.
+_Avoid_: separate L4/protocol priority spaces, mask specificity as hidden priority, physical stage priority
 
 **L4 WinnerRank**:
-A compact consecutive integer assigned by the L4 compiler to preserve `(priority ascending, explicit order ascending, stable rule ID ascending)` inside one compiled subject/view. Mask subtables may record `bestPossibleRank` and stop lookup when remaining tables cannot beat the current winner. WinnerRank is a runtime optimization, not persisted authoring priority and not a cross-stage rank.
-_Avoid_: computing specificity on the packet path, exposing WinnerRank in the UI, comparing WinnerRank across enforcement stages
+The compact ordering of an effective application rule set by priority, explicit order and stable logical rule identity. Pre-flow and post-flow programs preserve that same order.
+_Avoid_: stage-local re-ranking, match specificity, persisted authoring priority
 
 **L4 SubjectView**:
-The compiled outer policy bucket selected once by the platform-optimized runtime subject key: complete Linux UID on Android or Runtime Subject Handle on Linux. It contains the subject's bounded NetworkContextId blocked-bit mask and separate IPv4/IPv6 L4 classifiers. Direction, concrete network/interface facts, protocol, CIDRs, and ports remain matcher dimensions inside those classifiers. A missing SubjectView contributes no Gate or L4 decision.
+The compiled effective policy view selected by the platform's application subject identity. Its compatible pre-flow and post-flow programs preserve one logical ordering; other packet and network facts remain matching inputs rather than independent policy authorities.
 _Avoid_: package-name partition, subject multiplied by Network/Direction/Protocol contexts, wildcard-rule replication across outer buckets
 
 **L4PolicyMatcher**:
@@ -395,12 +489,12 @@ The deep Module Interface that compiles and evaluates the Packet/L4 Compiled Pol
 _Avoid_: VPP ACL as the product policy schema, UI selecting a matcher, matcher-owned authoring rules
 
 **Basic IPRULES**:
-IP packet rules that use packet facts without requiring L4 Conntrack state.
-_Avoid_: stateful rules, `ct.*` rules
+Historical term for policy using packet facts without CT-dependent conditions. In the current vocabulary this is expressed by L4 Traffic Rules within the unified effective rule set.
+_Avoid_: independent policy priority space, necessarily early execution
 
 **Stateful IPRULES**:
-Advanced IP packet rules that use L4 Conntrack state such as `ct.state` or `ct.direction`.
-_Avoid_: ordinary IP rules, baseline packet policy
+Historical term for policy using CT facts such as state and flow direction. The current model treats these as conditions in ordinary policy expressions.
+_Avoid_: separate CT verdict stage, fixed priority over protocol conditions
 
 **PacketFacts**:
 Packet-local facts derived once by the shared VPP packet parser from the original L3 packet, then shared by packet policy and observation consumers. PacketFacts do not contain platform ingress facts, domain hints, Conntrack state, DPI identification results, or Adapter-specific transport handles.
@@ -479,12 +573,12 @@ The canonical rule match identity used for duplicate-match warnings, explicit co
 _Avoid_: treating `clientRuleId`, `ruleId`, or priority as part of the match identity
 
 **clientRuleId**:
-The caller-provided stable rule identity used to correlate an apply payload with committed rule mappings.
-_Avoid_: treating it as the daemon-assigned `ruleId`
+Historical caller-side correlation identifier from older authoring contracts. The current rule-version model uses a stable logical identity and a complete version identity without requiring a second daemon-assigned identity scheme.
+_Avoid_: second authoritative rule identity, mandatory remapping layer
 
 **ruleId**:
-The daemon-assigned committed rule identity used in stats, packet attribution, and print output.
-_Avoid_: assuming it is stable across every whole-policy apply unless the specific contract says so
+The complete identifier of a particular rule version, containing a stable logical-rule portion and a revision portion. A complete identifier cannot be rebound to different rule content; compiled indexes and Rank are separate execution details.
+_Avoid_: array index, reusable version number, latest rule contents as historical contents
 
 **Policy Binding Mode**:
 The `enforce|observe` choice on a direct complete-Linux-UID binding to a rule or rule group. Rule-group internal references are structural and do not carry an observe/enforce choice.
@@ -503,8 +597,8 @@ The effective packet-side mode of a rule occurrence, inherited from the complete
 _Avoid_: treating shadow evaluation as only an external debug session
 
 **Rule hit counters**:
-Low-cost per-rule counters owned by packet-side rules. An active rule occurrence that wins the normal scan increments its own hit counter whether its effective mode is enforce or observe; record exports, when present, should use the same winner attribution fields rather than a separate observe-only model.
-_Avoid_: separate shadow stats model, per-packet allocation, Debug Stream
+Packet-side counts attributed once to the final logical winning rule, with its version and effective mode. Cache reuse and compiler fragments do not multiply hits, and default ALLOW has no invented winner.
+_Avoid_: candidate count, fragment hits, exported messages as packet hits
 
 **wouldRuleId / wouldDrop**:
 Legacy would-match fields from the old packet stream model. The refactored packet-side rule model should use `ruleId` plus effective rule execution mode instead of a parallel would-match attribution shape.
@@ -527,8 +621,8 @@ An active policy or observation consumer that makes a packet subject pay the L4 
 _Avoid_: unconditional per-packet CT, per-rule CT gate, ordinary Basic IPRULES
 
 **CT acquisition gate**:
-The subject/app-level decision that eligible packets should enter L4 Conntrack before stateful or DPI-dependent facts are used. It keeps ordinary subjects off CT while avoiding per-rule packet-by-packet CT gating inside an advanced subject.
-_Avoid_: global CT enable for all packets, single-rule prefilter deciding CT entry
+Eligibility for necessary flow/CT maintenance on the actual packet path. It does not override true pre-flow DROP or impose an additional application-wide observation requirement on automatic rule placement.
+_Avoid_: observe dropped packets to reconstruct full CT history, global CT enable
 
 **Unified CT entry**:
 The single flow/session state record owned by L4 Conntrack for a given observed flow. Flow Telemetry counters, DPI state/results, debug/export state, and other flow-level attachments hang from this entry rather than creating separate per-consumer CT tables.
@@ -607,7 +701,7 @@ The internal end-of-flow signal that lets consumers finish processing an unlinke
 _Avoid_: immediate slot reuse on unlink, NFQ verdict, TUN output packet
 
 **FlowEntry**:
-A bounded worker-owned record created only after early Network Gate/L4 policy returns `PASS_NEXT`. Its creating packet establishes Flow Direction `ORIG`, reversed endpoints are `REPLY`, and it records the creating packet's Device Packet Direction as `flowOriginDir`. It also holds flow identity, attribution, allowed-flow activity, the last evaluated policy revision, decision state, and optional later facts. On revision mismatch it preserves reusable flow facts but discards cached winner/verdict state and lazily re-evaluates on the next packet. The first product version's FlowEntry is not a full Stateful Conntrack promise. Packets dropped before creation have no Flow Direction.
+The bounded owner-local flow instance carrying identity, direction, protocol facts and cumulative accounting for packets that reach flow processing. True pre-flow DROP does not query, create or update it; policy changes invalidate decisions without resetting its lifecycle or established facts.
 _Avoid_: accepted-flow ledger, full TCP state machine, separate DPI flow table
 
 **Flow Expiry**:
@@ -615,12 +709,12 @@ The point at which a FlowEntry's protocol deadline makes it logically expired, s
 _Avoid_: extending protocol timeout to accommodate cleanup, treating an expired entry as valid until a background sweep, equating logical expiry with immediate memory release
 
 **ActivityAccumulator**:
-A fixed-capacity, worker-private, loss-tolerant coalescing table for product Activity evidence when Network Gate or L4 policy drops before FlowEntry creation. It is keyed by bounded packet attribution such as complete UID, network/direction, five-tuple, winner rule reference, and policy revision, and stores first/last time plus packet/byte totals. Eviction may lose UI detail but never changes verdicts or exact app/rule counters.
-_Avoid_: FlowEntry, policy cache, authoritative history, unbounded per-blocked-flow allocation, exact counter source
+Historical bounded coalescing evidence for traffic blocked before flow creation. The accepted Blocked Observation model defines its replacement lifecycle and attribution semantics.
+_Avoid_: current record ABI, authoritative history, rule identity as observation identity
 
 **DPI / L7 Policy**:
-Future advanced policy based on flow/session protocol identification. It depends on stable per-worker flow identity; protocol-identification facts attach to the existing FlowEntry or later unified Session rather than requiring a separate DPI flow table or making full Conntrack a prerequisite for the Protocol Identification Release.
-_Avoid_: packet-local DPI result, Traffic Windows protocol counters, replacing L3/L4 IPRULES
+Policy using published flow-local application-protocol and supported domain facts within the unified rule expression model. Fact production does not create an independent verdict priority stage.
+_Avoid_: independent flow table, arbitrary deep decoder coverage, automatic flow termination
 
 **l4Status**:
 The packet parser classification for known L4, legal other terminal protocol, fragment, or invalid/unavailable L4. For a valid L3 packet, unavailable or unsupported deeper facts cause predicates that require those facts to no-match while other evaluable policy stages continue; this status does not override a VPP validation node that has classified the packet itself as invalid.
@@ -679,8 +773,8 @@ The bounded record export layer for persistent or queryable flow facts consumed 
 _Avoid_: event system, Debug Stream, metrics
 
 **Flow Telemetry**:
-The consumer-driven telemetry mode that exports `FLOW` and `DNS_DECISION` records through a bounded shared-memory channel.
-_Avoid_: always-on dashboard source, Debug Stream
+Normal cumulative observations of Flow instances, complemented by independent Blocked Observations for pre-flow drops. The records carry accounting, attribution and lifecycle facts for Rust consumption without end-to-end delivery guarantees.
+_Avoid_: per-packet trace, mandatory old shared-memory ABI, DNS records in the current packet scope
 
 **Flow Record**:
 A telemetry record for flow begin, update, or end facts, including cumulative counters and final execution metadata.
@@ -699,8 +793,8 @@ Dry-run policy evaluation that reports what a candidate or non-enforcing policy 
 _Avoid_: executed verdict, fact records, explain evidence
 
 **Safe Policy Change Workflow**:
-The user-facing workflow for changing packet policy with a clear recovery path: observe-mode apply for trying a policy, Packet Diagnostics for explaining behavior, and component gates plus Checkpoint Restore for rescue. It is a frontend/product workflow over daemon primitives, not a separate daemon policy mode.
-_Avoid_: standalone Try/Diagnose/Rescue daemon modules, global safety mode, global dry-run, shadow engine, diagnostics as a rescue prerequisite
+Policy modification with distinct saved and active outcomes and an available correction path. Detailed UI workflows, simulation and checkpoint-based rescue are not requirements of the current backend specification.
+_Avoid_: mandatory Try/Diagnose/Rescue UI, automatic saved-config rollback, separate shadow engine
 
 **DNS_DECISION record**:
 A telemetry record for blocked DNS decisions and DomainPolicy attribution. It is separate from packet and flow records.
@@ -715,36 +809,36 @@ The Local Product Backend component that opens runtime telemetry, reads bounded 
 _Avoid_: daemon-side Top-K or history database, root-owned database writer, WebView telemetry consumer, UI-lifecycle data loss
 
 **Product Store**:
-The first-release Local Product Backend persistence implementation: one simple embedded store with one backend-side writer. Policy/configuration and bounded Activity use distinct tables and repository APIs because their durability semantics differ, but v1 does not pre-build separate database services, multiple physical stores, event sourcing, or an analytics pipeline. Physical isolation is introduced only when measured contention, capacity, or reliability evidence requires it.
-_Avoid_: remote database, database microservice, speculative multi-store topology, event-sourced policy, UI-owned schema
+An umbrella term for product persistence, not one physical database. Rule configuration is the VPP-owned source file; normal observation history and summaries belong to a separate Rust-owned store.
+_Avoid_: single shared policy/history database, remote storage service, UI-owned schema
 
 **Activity Store**:
-The bounded Activity portion of Product Store for product facts and derived queries. It continues ingest while the Android UI is closed, stores no packet payload, and applies age and storage-budget retention. Product UI only queries projections and keeps transient presentation caches. Exact embedded database engine, retention limits, and compaction schedule are implementation and release-testing choices.
-_Avoid_: frontend history database, VPP writing SQLite, raw packet archive, unbounded history, one writer per UI client
+The bounded Rust-owned normal observation store containing recent overview/attribution and longer-lived traffic aggregates. It is separate from rule configuration, excludes packet payloads and remains independent of frontend lifecycle.
+_Avoid_: VPP-written analytics database, raw packet archive, complete permanent configuration archive
 
 **Metrics**:
 Pull-style low-cardinality counters and health/performance summaries.
 _Avoid_: using metrics for Top-K, history, timeline, or high-cardinality destination analytics
 
 **Traffic Windows**:
-Bounded relative-time traffic summaries for ordinary UI activity views. Traffic Windows have a basic always-on tier for low-cardinality app/device/window/direction counters and app ranking, and an optional detail tier for heavier Top-K summaries. Both tiers share the same device-scope configured windows. Per-app Traffic Windows are keyed by complete Linux UID, so the same appId in different Android users/profiles has separate counts. New windows only accumulate from the time they become active.
-_Avoid_: separate Traffic Accounting concept, blocked bytes as usage, full history store, arbitrary time-range query, Flow Telemetry records, Debug Stream
+Predefined overall, application, per-application protocol and rule-effect views incrementally maintained by Rust from normal observations. Queries use maintained summaries and expose their temporal granularity and coverage gaps.
+_Avoid_: VPP-owned historical windows, arbitrary analytics cube, full raw-record rescan per query
 
 **Traffic Windows Top-K**:
-The optional detail tier inside Traffic Windows: bounded heavy-hitter summaries such as remote IP, protocol, and protocol-port leaders. Remote IP leaders may be approximate; small ordering differences near the tail are not audit-grade facts.
-_Avoid_: exact destination ledger, unbounded per-destination map, full dimensional cube
+Historical terminology for optional heavy-hitter detail. It does not add dimensions or an independent input pipeline to the four accepted normal views.
+_Avoid_: current exact destination ledger, mandatory fifth normal view
 
 **Diagnostic Focus**:
-The single active, session-owned per-app or per-UID diagnostic focus gate that allows heavier packet/IPRULES explain, diagnostic streams, and focused diagnostic metrics for the selected subject.
-_Avoid_: Traffic Windows, Flow Telemetry, ordinary observability, global debug mode, persistent app configuration
+Historical name for session-scoped diagnostic targeting. Specific target selection and interaction modes remain deferred under the current debug design boundary.
+_Avoid_: confirmed single-app UI, persistent normal-observation setting
 
 **Debug Stream**:
 A legacy / generic name for short-window debug evidence streams. In the refactored packet-side model, use Packet Diagnostics and Diagnostic Focus; the old DNS stream remains a frozen DNS-line capability until the Domain/DNS line is reopened.
 _Avoid_: long-term telemetry, normal dashboard API, new packet diagnostics API name
 
 **Packet Diagnostics**:
-The user-facing packet/IPRULES diagnostic mode opened by a diagnostics session. It is session-owned, targets one app or UID, emits JSON diagnostic events with full explain evidence, and is not part of normal telemetry records.
-_Avoid_: Flow Telemetry, Traffic Windows, persistent app setting, developer internal trace
+Detailed evidence serving one explicit debugging session, with temporary interpretation data and truthful attribution to actual execution when tracing. Concrete capture, simulation and UI modes are deferred; normal history does not become a debug archive.
+_Avoid_: normal cumulative observations, long-term debug history, settled JSON or UI contract
 
 **tracked**:
 Legacy name for the old app-level Debug Stream gate. The refactored packet diagnostics model should use Diagnostic Focus instead.
@@ -901,20 +995,24 @@ The revisable working contract that freezes accepted product and architecture in
 _Avoid_: immutable final-release specification, historical POC checklist, implementation blueprint, silent gate relaxation
 
 **Protocol Identification Release**:
-The next stage release that adds libprotoident application protocol facts and protocol rules to the same worker-owned FlowEntry and existing Product UI. A libprotoident result is final and immediately actionable within this release's recognition capability; it is not a provisional hint awaiting scanner or protocol-decoder confirmation.
-_Avoid_: full NGFW, stream reassembly release, separate DPI product, candidate/decoded split, decoder confirmation requirement
+The stage release that adds project-mapped base and supplemental application-protocol facts and protocol rules to the same worker-owned FlowEntry and existing Product UI. A published result is immediately actionable within this release's recognition capability; it is not a provisional hint awaiting scanner or protocol-decoder confirmation.
+_Avoid_: full NGFW, stream reassembly release, separate DPI product, raw provider guess as published fact, candidate/decoded split, decoder confirmation requirement
+
+**Supplemental Protocol Recognition**:
+The protocol-identification rules that complement the base recognizer, using nDPI detection logic as the primary reference and selected reference-fork heuristics and useful protocol distinctions as supplements for personal endpoints. These are recognition rules, distinct from user firewall rules; a heuristic classification does not imply a completed handshake or cryptographic validation.
+_Avoid_: upstream-library-only recognition, wholesale fork-rule compatibility, firewall rule priority, protocol label as proof of a valid session
 
 **LpiRecognitionState**:
-The bounded libprotoident lifecycle state attached to the worker-owned FlowEntry. It records `detecting`, `done`, or `exhausted` plus an ordered, duplicate-free sequence of exact final `ApplicationProtocolId` results and the payload-packet sequence where each first appeared. Tunnelling, NAT, STARTTLS, and other continue-recognition cases may append more than one final result; Protocol Policy incrementally maintains one winner over all rules satisfied by the current accumulated result set, and rebuilds that winner from retained results after a policy-revision or application-subject change. Only a current winning protocol `DROP` terminates the flow; the latest exact result is the default UI summary, while the full sequence remains Activity detail rather than rule precedence.
-_Avoid_: first-result-only state, last-result-only history, treating an earlier result as provisional, isolated verdict per appended result, any-matched-deny-wins semantics, result discovery order as rule priority, decoder evidence fields in this release
+Bounded recognition state and the deduplicated sequence of published application-protocol results belonging to one owner-local FlowEntry. Available results participate immediately; later results do not erase earlier facts or retroactively rewrite completed packet decisions.
+_Avoid_: latest-result-only policy, recognition order as priority, winning DROP terminates the flow
 
 **LPI Recognition Budget**:
-The fixed internal upper bound on payload-bearing packets offered to libprotoident for one FlowEntry. Empty-payload packets do not consume it. The state becomes `done` when libprotoident stops normally and `exhausted` when the budget is consumed; neither state retries recognition for that flow. Only results mapped into the release's curated Application Protocol Catalog enter the result sequence; a terminal flow with no mapped result is product-level `unidentified`, while any non-empty sequence remains `identified` even if later continue-recognition exhausted its budget. The first default is benchmarked with the inspected fork's 20-payload-packet limit as a baseline and is not a first-release UI setting.
-_Avoid_: unbounded per-flow detection, counting ACK-only packets, retry after exhaustion, user-facing expert tuning, treating 20 as validated without measurement
+The bounded work and lifetime permitted for one recognition attempt. Exhaustion retains published facts while unavailable facts remain unavailable; it is not proof of a final Unknown result.
+_Avoid_: unbounded retries, budget exhaustion means no protocol, validated upstream numeric defaults
 
 **Recognize-then-enforce**:
-The Protocol Identification Release behavior where an early L4 allow returns `PASS_NEXT` and packets are never held waiting for recognition. A fact produced synchronously in the current VPP graph before Adapter completion may immediately drive Protocol Policy for that same packet; a fact arriving only after completion affects later packets. Earlier completed verdicts never change. A protocol rule cannot reopen a packet already dropped by Network Gate or L4 policy, so default-deny-and-allow-only-after-identification requires a future controlled-probe design and is outside the first two releases.
-_Avoid_: pre-identification block, early-flow hold, intentionally delaying enforcement by one packet, strict first-packet enforcement, retroactive verdict change, later allow overriding an earlier deny
+Packet decisions use facts available by the current decision cutoff without holding original packets for future recognition. Later facts affect later decisions, while a proven early logical winner retains its precedence for its already-bound packet.
+_Avoid_: automatic first-N-packets allow, lower-priority late-stage override, retroactive verdict change
 
 **Packet Decision Cutoff**:
 The Adapter completion boundary for facts affecting one packet. Packet-local parsing, synchronous application evidence, and protocol facts produced before completion may participate in the current verdict without constituting a hold; asynchronous attribution or identification received afterward can update worker-owned flow state but affects only later packets.
@@ -923,44 +1021,44 @@ _Avoid_: waiting for future facts, next-packet-only rule for synchronous facts, 
 ### Runtime State
 
 **Authoring Policy Bundle**:
-The persisted control-plane policy source graph containing typed Policy Rule Families, reusable rule groups, bounded group nesting, and ApplicationSubjectId applicability bindings with binding mode. GateMatrix, L4RuleList, and later ProtocolRuleList share this bundle and its transaction history without becoming one universal rule type or priority space. Platform application metadata may be retained for display, but persisted policy identity is the tagged ApplicationSubjectId; Android Apply still compiles it to the optimized complete-Linux-UID `byUid` view. v1 rule-group nesting is capped at 3 group levels. The frontend edits this model through daemon commands; it is not a frontend-owned database and is not a compiled hot-path view.
-_Avoid_: Runtime Snapshot, packet rule table, frontend-only state
+The complete source configuration of reusable rules, groups and application bindings managed by VPP. It is saved independently of the immutable Runtime Snapshot compiled from a particular saved version.
+_Avoid_: frontend database, worker-mutable rule graph, stage-owned priority families
 
 **Stale UID Binding**:
 An Authoring Policy Bundle binding whose complete Linux UID is not currently present on the device. It is valid saved configuration, not a commit validation failure. It remains user configuration for control-plane display and cleanup, but does not contribute runtime rules or capability summaries while stale.
 _Avoid_: automatic deletion, package-name identity, runtime subject
 
 **Draft**:
-The editable Authoring Policy Bundle working state. It may contain uncommitted changes and is not an apply or restore source until committed.
-_Avoid_: committed policy, runtime policy, checkpoint, hot-path snapshot
+Editing state while preparing a complete source configuration. A particular persisted-draft lifecycle or UI workflow is not fixed by the current rule backend specification.
+_Avoid_: active Runtime Snapshot, mandatory independent persisted draft store
 
 **Policy Commit / Committed Policy Revision**:
-A persisted Authoring Policy Bundle revision produced from the draft after policy validation succeeds. It is the source for apply, but committing it never changes the datapath by itself; failed apply does not roll it back. It can be reset by restoring a checkpoint, including when it has not yet been applied.
-_Avoid_: editable draft, checkpoint, runtime snapshot
+A fully saved source configuration version that can be compiled and applied. Saving does not establish that the version is active, and a compilation failure preserves it for user correction.
+_Avoid_: successful publication, automatic rollback after compile rejection, required checkpoint
 
 **Draft Commit**:
-The atomic operation that validates the draft and makes it the current committed policy revision. Failed commit leaves the draft edits available and leaves the committed policy unchanged.
-_Avoid_: policy apply, checkpoint creation, runtime switch
+Historical name for committing an authoring draft. The current backend requires complete saving before compilation without freezing a separate draft-command or UI workflow.
+_Avoid_: mandatory multi-step editor contract, worker publication
 
 **Checkpoint / Policy Bundle Checkpoint**:
-One retained full Authoring Policy Bundle snapshot from a successful apply, including the source rules, rule groups, ApplicationSubjectId bindings, and per-rule apply status from that apply. A checkpoint may record both active and inactive rules, but it is not an editable draft, not an uncommitted policy revision, not a diff chain, and not the in-memory hot-path runtime view.
-_Avoid_: Draft, uncommitted policy revision, frontend history database, Runtime Snapshot
+Historical name for a retained full source configuration from an earlier authoring design. The current specification permits explanation from retained configuration material but does not require a checkpoint product, fixed retention count or complete old-rule archive.
+_Avoid_: Runtime Snapshot, guaranteed current restore feature, normal observation record
 
 **Runtime Snapshot**:
-The in-memory datapath view compiled from the selected checkpoint, including all Compiled Policy Views, hot-path capability summaries, one policy revision, and source attribution needed to explain a winner. Packet execution reads this atomic snapshot, not the draft or checkpoint storage; stage-specific rule families are published as one runtime revision rather than separately applied policies. The concrete worker publication primitive remains an implementation decision.
-_Avoid_: persisted checkpoint, editable policy draft, frontend rule group
+The immutable execution state compiled from one identified saved configuration, including compatible programs, effective application views and attribution. A packet uses one protected snapshot throughout policy evaluation; the snapshot is not the persistent source configuration.
+_Avoid_: editable source graph, persistent checkpoint, per-stage independent publication
 
 **Policy Apply**:
-The atomic operation that compiles and validates the current committed Authoring Policy Bundle off-path, publishes one complete Runtime Snapshot revision, then records success and its source checkpoint. Apply returns success only after publication. Failed apply leaves the committed policy unchanged, creates no checkpoint, and does not change the runtime snapshot; Apply never scans all FlowEntries or proactively terminates flows.
-_Avoid_: draft commit, partial runtime switch, checkpoint restore
+Compilation of an identified saved configuration and publication of its complete Runtime Snapshot. Failure retains the saved edits and any existing active snapshot, with saved and applied outcomes reported separately.
+_Avoid_: save equals active, half publication, resetting every flow, automatic saved-config rollback
 
 **Policy Revision Re-evaluation**:
 The lazy existing-flow behavior after Runtime Snapshot publication. On the next packet, a FlowEntry whose stored policy revision differs from the active revision retains reusable identity, counters, CT state, and protocol facts, but clears decision caches, winner attribution, and allow/drop fast-path state before evaluating the new snapshot. Facts are not reconstructed from missed historical packets.
 _Avoid_: grandfathering verdicts until flow expiry, eager full-table scan, retaining cached verdicts across revisions, replaying early payload
 
 **Checkpoint Restore**:
-The atomic operation that makes a selected checkpoint's Authoring Policy Bundle snapshot the current committed policy and runtime source. It is not a new apply, does not rewrite the checkpoint's apply-time status, and fails if the runtime snapshot cannot be rebuilt from that checkpoint. It requires no uncommitted draft changes; failed restore leaves the draft, committed policy, selected checkpoint, and runtime snapshot unchanged.
-_Avoid_: draft save, partial rollback, best-effort restore, recomputed apply status
+Historical authoring operation for selecting a retained source snapshot. Automatic last-known-good recovery and a dedicated checkpoint-restore workflow are not promises of the current initial rule-engine specification.
+_Avoid_: startup error silently publishes empty policy, guaranteed configuration history
 
 **RESETALL**:
 The full reset pipeline that returns daemon memory state, observation state, configuration state, and persisted save tree to a clean baseline while the native daemon process remains under RuntimeService lifecycle ownership.
@@ -968,8 +1066,8 @@ If an active runtime owner cannot return its state to the clean baseline, the RE
 _Avoid_: daemon restart, daemon shutdown, process recycle, partial config reset, per-feature clear command, best-effort success
 
 **Policy state**:
-Verdict-affecting daemon state such as DomainPolicy, DomainLists, IPRULES, config gates, and checkpoint contents.
-_Avoid_: mixing it with observational session buffers
+Source configuration and derived active execution state that determine packet-rule behavior. Saved configuration and active Runtime Snapshot are distinct identities rather than interchangeable copies.
+_Avoid_: observation buffers, historical traffic summaries
 
 **Observability session state**:
 Runtime state for diagnostics sessions, telemetry consumers, frozen legacy streams, and record assembly. RESETALL or checkpoint restore may force clients to reopen sessions.

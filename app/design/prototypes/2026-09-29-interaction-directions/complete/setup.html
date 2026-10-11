@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>运行方式 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="setup"
+    data-title="运行方式"
+    data-nav="settings"
+    data-back="runtime.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>选择适合你的方式</h1>
+            <p>规则保持一致，授权与运行承载各有不同。</p>
+          </header>
+          <div class="progress-steps">
+            <span class="active"></span><span></span><span></span>
+          </div>
+          <div id="runtime-mode-options"></div>
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>
+              切换时先停止并清理当前运行，再启动新方式。短暂中断期间不会继续记录。
+            </p>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="continue-setup">继续，检查授权</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

@@ -1,5 +1,12 @@
 # NFQUEUE / DNS / Datapath 模块边界工作决策
 
+**2026-09-24 supersession:** [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)
+and the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md)
+replace this record's separate policy priority spaces, Gate privilege, fixed
+Draft/Commit/Apply/checkpoint workflow and earlier normal-observation design.
+The dated text below is lineage, not an additional implementation obligation.
+Current owner, packet-resource and platform constraints retain their authority.
+
 更新时间：2026-07-19
 状态：部分被取代。PacketFacts、consumer-driven fact、stage、bounded observability 等边界
 仍有效；全局共享 CT A++ 与 owner/handoff 仅作未来实验的结论，已由

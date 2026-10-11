@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>规则组 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="groups" data-title="规则组" data-nav="rules">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>组合一次，多处使用</h1>
+            <p>把一起使用的规则，整理成一个整体。</p>
+          </header>
+          <nav class="segmented" aria-label="规则资产">
+            <a data-page="rules.html" class="">规则</a
+            ><a data-page="groups.html" class="active">规则组</a
+            ><a data-page="domains.html" class="">域名列表</a>
+          </nav>
+          <div class="section-heading">
+            <h2>我的规则组</h2>
+            <a class="text-link" data-page="group-edit.html"
+              ><span data-icon="plus"></span>新建</a
+            >
+          </div>
+          <div class="desktop-grid">
+            <div id="groups-list"></div>
+            <aside class="desktop-detail">
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  规则组可以嵌套。组内规则继续使用各自的优先顺序，不会产生另一套顺序。
+                </p>
+              </div>
+              <h2 class="section-label">当前分配</h2>
+              <div id="group-bindings"></div>
+            </aside>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,826 @@
+{
+  "original_findings": [
+    {
+      "name": "recovery",
+      "passed": true
+    },
+    {
+      "name": "import-diff",
+      "passed": true
+    },
+    {
+      "name": "observe",
+      "passed": true
+    },
+    {
+      "name": "subscription",
+      "passed": true
+    },
+    {
+      "name": "time-scope",
+      "passed": true
+    },
+    {
+      "name": "filter",
+      "passed": true
+    },
+    {
+      "name": "tablet",
+      "passed": true
+    },
+    {
+      "name": "sample",
+      "passed": true
+    }
+  ],
+  "flows": [
+    {
+      "name": "subscription-preservation",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "subscription-failure-and-pending",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "subscription-save-retry",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "subscription-create-and-automatic",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "pending-update-to-automatic",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "import-effective-differences",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "import-error-locate-and-no-change",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "permission-recovery",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "filter-roundtrip",
+      "platform": "android",
+      "passed": true
+    },
+    {
+      "name": "historical-connection-and-decision",
+      "platform": "linux",
+      "passed": true
+    }
+  ],
+  "layouts": [
+    {
+      "page": "home",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-home.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "time",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-time.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "location",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-location.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "rules",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-rules.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "observe",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-observe.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "controls",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-controls.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "import",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-import.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "recovery",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-recovery.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-subscription.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-failed",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-subscription-failed.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-update",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-subscription-update.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "source",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-source.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "local-edit",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-local-edit.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "filter",
+      "platform": "android",
+      "size": "phone",
+      "screenshot": "phone-filter.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "home",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-home.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "time",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-time.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "location",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-location.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "rules",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-rules.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "observe",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-observe.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "controls",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-controls.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "import",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-import.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "recovery",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-recovery.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-subscription.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-failed",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-subscription-failed.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-update",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-subscription-update.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "source",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-source.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "local-edit",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-local-edit.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "filter",
+      "platform": "android",
+      "size": "tablet",
+      "screenshot": "tablet-filter.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "home",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-home.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "time",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-time.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "location",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-location.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "rules",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-rules.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "observe",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-observe.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "controls",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-controls.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "import",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-import.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "recovery",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-recovery.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-subscription.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-failed",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-subscription-failed.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-update",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-subscription-update.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "source",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-source.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "local-edit",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-local-edit.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "filter",
+      "platform": "linux",
+      "size": "desktop",
+      "screenshot": "desktop-filter.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "home",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-home.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "time",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-time.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "location",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-location.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "rules",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-rules.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "observe",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-observe.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "controls",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-controls.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "import",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-import.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "recovery",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-recovery.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-subscription.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-failed",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-subscription-failed.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "subscription-update",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-subscription-update.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "source",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-source.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "local-edit",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-local-edit.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    },
+    {
+      "page": "filter",
+      "platform": "linux",
+      "size": "narrow",
+      "screenshot": "narrow-filter.png",
+      "errors": [],
+      "overflow": false,
+      "failedImages": 0
+    }
+  ],
+  "mainline_regression": {
+    "layouts": [
+      {
+        "name": "phone",
+        "path": "home.html"
+      },
+      {
+        "name": "phone",
+        "path": "app-detail.html?id=s3"
+      },
+      {
+        "name": "phone",
+        "path": "app-detail.html?id=s4"
+      },
+      {
+        "name": "phone",
+        "path": "activity.html?app=s3&type=connection"
+      },
+      {
+        "name": "phone",
+        "path": "activity.html?app=all&type=connection"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s3-c0"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s4-c1"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s3-c2"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s1-c2"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s5-c3&period=today"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=unattributed-c"
+      },
+      {
+        "name": "phone",
+        "path": "connection.html?id=s4-blocked-0"
+      },
+      {
+        "name": "tablet",
+        "path": "home.html"
+      },
+      {
+        "name": "tablet",
+        "path": "app-detail.html?id=s3"
+      },
+      {
+        "name": "tablet",
+        "path": "app-detail.html?id=s4"
+      },
+      {
+        "name": "tablet",
+        "path": "activity.html?app=s3&type=connection"
+      },
+      {
+        "name": "tablet",
+        "path": "activity.html?app=all&type=connection"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s3-c0"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s4-c1"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s3-c2"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s1-c2"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s5-c3&period=today"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=unattributed-c"
+      },
+      {
+        "name": "tablet",
+        "path": "connection.html?id=s4-blocked-0"
+      },
+      {
+        "name": "desktop",
+        "path": "home.html"
+      },
+      {
+        "name": "desktop",
+        "path": "app-detail.html?id=s3"
+      },
+      {
+        "name": "desktop",
+        "path": "app-detail.html?id=s4"
+      },
+      {
+        "name": "desktop",
+        "path": "activity.html?app=s3&type=connection"
+      },
+      {
+        "name": "desktop",
+        "path": "activity.html?app=all&type=connection"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s3-c0"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s4-c1"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s3-c2"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s1-c2"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s5-c3&period=today"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=unattributed-c"
+      },
+      {
+        "name": "desktop",
+        "path": "connection.html?id=s4-blocked-0"
+      },
+      {
+        "name": "narrow",
+        "path": "home.html"
+      },
+      {
+        "name": "narrow",
+        "path": "app-detail.html?id=s3"
+      },
+      {
+        "name": "narrow",
+        "path": "app-detail.html?id=s4"
+      },
+      {
+        "name": "narrow",
+        "path": "activity.html?app=s3&type=connection"
+      },
+      {
+        "name": "narrow",
+        "path": "activity.html?app=all&type=connection"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s3-c0"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s4-c1"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s3-c2"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s1-c2"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s5-c3&period=today"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=unattributed-c"
+      },
+      {
+        "name": "narrow",
+        "path": "connection.html?id=s4-blocked-0"
+      }
+    ],
+    "flows": [
+      "app preview, held filtering, target search, record and restored filter",
+      "wide inspector follows selected existing connection",
+      "active, idle, ended, rule-blocked and allowed-but-failed are distinct",
+      "unestablished categories and fixture chronology/direction/rate consistency",
+      "unknown attribution remains explicit and unassigned",
+      "rule update leaves snapshot immutable, waits for evidence and restores period",
+      "save failure and inactive recovery preserve original connection task",
+      "same target history remains scoped to app and time",
+      "quiet fixture keeps ended semantics"
+    ],
+    "errors": []
+  },
+  "focused": {
+    "galleryFrames": 16,
+    "subscriptionTool": "prepare/check/review/adopt passed",
+    "addressMeaningCases": 6,
+    "phoneFirstScreen": {
+      "entry": 730.46875,
+      "use": 247.1875,
+      "nav": 770
+    },
+    "sourceAddressAccessible": true,
+    "errors": [],
+    "externalRequests": [],
+    "configurationWording": [
+      "normal passed",
+      "paused passed",
+      "startup passed"
+    ]
+  },
+  "compatibility": {
+    "manualList": "created and retained manual maintenance",
+    "oneTimeImport": "previewed/saved/returned with two entries",
+    "pendingAutoAdoption": "explicit choice and in-use result captured",
+    "errors": []
+  }
+}

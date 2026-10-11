@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>通知与后台 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="notifications"
+    data-title="通知与后台"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>只在需要时，提醒你</h1>
+            <p>保持运行可见，也让重要变化被注意。</p>
+          </header>
+          <div class="inset-list" id="notification-controls"></div>
+          <h2 class="section-label">通知预览</h2>
+          <div class="card">
+            <div class="row">
+              <span class="tile-icon neutral"
+                ><span data-icon="shield"></span
+              ></span>
+              <div>
+                <h3>Sakamoto 正在运行</h3>
+                <p class="caption" style="margin-top: 3px">
+                  规则已生效 · 点击查看状态
+                </p>
+              </div>
+            </div>
+          </div>
+          <p class="note" id="background-explanation"></p>
+          <a class="text-link" data-page="permissions.html">查看运行权限</a>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

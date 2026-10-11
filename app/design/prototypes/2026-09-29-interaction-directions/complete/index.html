@@ -1,0 +1,1240 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sakamoto · 完整交互原型</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/gallery.css" />
+    <script defer src="js/gallery.js"></script>
+  </head>
+  <body>
+    <header class="gallery-head">
+      <div class="eyebrow">SAKAMOTO / INTERACTION STUDY 02</div>
+      <h1>让每一步，都有着落。</h1>
+      <p>44 个独立页面，一套连续的体验。手机、平板和桌面各得其所。</p>
+      <div class="gallery-actions">
+        <a class="primary" href="home.html?platform=android" target="_blank"
+          >开始 Android 连续体验 ↗</a
+        ><a href="home.html?platform=linux" target="_blank">打开 Linux 桌面 ↗</a
+        ><a href="README.md">文件与模拟范围</a>
+      </div>
+      <div class="review-note">
+        本地设计原型 · 不连接真实设备 · 手机视口 393 × 852 · 平板 820 × 1180 ·
+        桌面 1440 × 900
+      </div>
+    </header>
+    <nav class="gallery-nav" aria-label="总览分组">
+      <button class="active" data-filter="all">全部页面</button
+      ><button data-filter="01 · 概览与控制">概览与控制</button
+      ><button data-filter="02 · 活动与统计">活动与统计</button
+      ><button data-filter="03 · 规则与复用">规则与复用</button
+      ><button data-filter="04 · 配置与运行">配置与运行</button
+      ><button data-filter="05 · 设置与偏好">设置与偏好</button
+      ><button data-filter="06 · 探索与诊断">探索与诊断</button
+      ><button data-filter="responsive">平板与桌面</button
+      ><button data-filter="states">关键状态</button>
+    </nav>
+    <main>
+      <section class="gallery-section" data-group="01 · 概览与控制">
+        <header>
+          <h2>01 · 概览与控制</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>概览</h3>
+              </div>
+              <a
+                href="home.html?platform=android"
+                target="_blank"
+                aria-label="单独打开概览"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="home.html?platform=android&embed=1&scope=gallery-home"
+                title="概览"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>home.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>控制对象</h3>
+              </div>
+              <a
+                href="apps.html?platform=android"
+                target="_blank"
+                aria-label="单独打开控制对象"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="apps.html?platform=android&embed=1&scope=gallery-apps"
+                title="控制对象"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>apps.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>对象详情</h3>
+              </div>
+              <a
+                href="app-detail.html?platform=android"
+                target="_blank"
+                aria-label="单独打开对象详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="app-detail.html?platform=android&embed=1&scope=gallery-app-detail"
+                title="对象详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>app-detail.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>网络限制</h3>
+              </div>
+              <a
+                href="app-networks.html?platform=android"
+                target="_blank"
+                aria-label="单独打开网络限制"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="app-networks.html?platform=android&embed=1&scope=gallery-app-networks"
+                title="网络限制"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>app-networks.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>批量控制</h3>
+              </div>
+              <a
+                href="app-selection.html?platform=android"
+                target="_blank"
+                aria-label="单独打开批量控制"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="app-selection.html?platform=android&embed=1&scope=gallery-app-selection"
+                title="批量控制"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>app-selection.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="02 · 活动与统计">
+        <header>
+          <h2>02 · 活动与统计</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>访问记录</h3>
+              </div>
+              <a
+                href="activity.html?platform=android"
+                target="_blank"
+                aria-label="单独打开访问记录"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="activity.html?platform=android&embed=1&scope=gallery-activity"
+                title="访问记录"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>activity.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>筛选访问</h3>
+              </div>
+              <a
+                href="activity-filter.html?platform=android"
+                target="_blank"
+                aria-label="单独打开筛选访问"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="activity-filter.html?platform=android&embed=1&scope=gallery-activity-filter"
+                title="筛选访问"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>activity-filter.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>访问详情</h3>
+              </div>
+              <a
+                href="connection.html?platform=android"
+                target="_blank"
+                aria-label="单独打开访问详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="connection.html?platform=android&embed=1&scope=gallery-connection"
+                title="访问详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>connection.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>连接统计</h3>
+              </div>
+              <a
+                href="stats.html?platform=android"
+                target="_blank"
+                aria-label="单独打开连接统计"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="stats.html?platform=android&embed=1&scope=gallery-stats"
+                title="连接统计"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>stats.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>协议目录</h3>
+              </div>
+              <a
+                href="protocols.html?platform=android"
+                target="_blank"
+                aria-label="单独打开协议目录"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="protocols.html?platform=android&embed=1&scope=gallery-protocols"
+                title="协议目录"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>protocols.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="03 · 规则与复用">
+        <header>
+          <h2>03 · 规则与复用</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>规则</h3>
+              </div>
+              <a
+                href="rules.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="rules.html?platform=android&embed=1&scope=gallery-rules"
+                title="规则"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>rules.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>规则详情</h3>
+              </div>
+              <a
+                href="rule-detail.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="rule-detail.html?platform=android&embed=1&scope=gallery-rule-detail"
+                title="规则详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>rule-detail.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>编辑规则</h3>
+              </div>
+              <a
+                href="rule-edit.html?platform=android"
+                target="_blank"
+                aria-label="单独打开编辑规则"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="rule-edit.html?platform=android&embed=1&scope=gallery-rule-edit&id=r1"
+                title="编辑规则"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>rule-edit.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>作用对象</h3>
+              </div>
+              <a
+                href="rule-scope.html?platform=android"
+                target="_blank"
+                aria-label="单独打开作用对象"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="rule-scope.html?platform=android&embed=1&scope=gallery-rule-scope"
+                title="作用对象"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>rule-scope.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>规则组</h3>
+              </div>
+              <a
+                href="groups.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则组"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="groups.html?platform=android&embed=1&scope=gallery-groups"
+                title="规则组"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>groups.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>06</span>
+                <h3>规则组详情</h3>
+              </div>
+              <a
+                href="group-detail.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则组详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="group-detail.html?platform=android&embed=1&scope=gallery-group-detail"
+                title="规则组详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>group-detail.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>07</span>
+                <h3>编辑规则组</h3>
+              </div>
+              <a
+                href="group-edit.html?platform=android"
+                target="_blank"
+                aria-label="单独打开编辑规则组"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="group-edit.html?platform=android&embed=1&scope=gallery-group-edit"
+                title="编辑规则组"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>group-edit.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>08</span>
+                <h3>规则分配</h3>
+              </div>
+              <a
+                href="binding-edit.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则分配"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="binding-edit.html?platform=android&embed=1&scope=gallery-binding-edit"
+                title="规则分配"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>binding-edit.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>09</span>
+                <h3>域名列表</h3>
+              </div>
+              <a
+                href="domains.html?platform=android"
+                target="_blank"
+                aria-label="单独打开域名列表"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="domains.html?platform=android&embed=1&scope=gallery-domains"
+                title="域名列表"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>domains.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>10</span>
+                <h3>域名列表详情</h3>
+              </div>
+              <a
+                href="domain-detail.html?platform=android"
+                target="_blank"
+                aria-label="单独打开域名列表详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="domain-detail.html?platform=android&embed=1&scope=gallery-domain-detail"
+                title="域名列表详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>domain-detail.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>11</span>
+                <h3>编辑域名列表</h3>
+              </div>
+              <a
+                href="domain-edit.html?platform=android"
+                target="_blank"
+                aria-label="单独打开编辑域名列表"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="domain-edit.html?platform=android&embed=1&scope=gallery-domain-edit"
+                title="编辑域名列表"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>domain-edit.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>12</span>
+                <h3>导入域名</h3>
+              </div>
+              <a
+                href="domain-import.html?platform=android"
+                target="_blank"
+                aria-label="单独打开导入域名"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="domain-import.html?platform=android&embed=1&scope=gallery-domain-import"
+                title="导入域名"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>domain-import.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="04 · 配置与运行">
+        <header>
+          <h2>04 · 配置与运行</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>配置管理</h3>
+              </div>
+              <a
+                href="config.html?platform=android"
+                target="_blank"
+                aria-label="单独打开配置管理"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="config.html?platform=android&embed=1&scope=gallery-config"
+                title="配置管理"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>config.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>导入配置</h3>
+              </div>
+              <a
+                href="config-import.html?platform=android"
+                target="_blank"
+                aria-label="单独打开导入配置"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="config-import.html?platform=android&embed=1&scope=gallery-config-import"
+                title="导入配置"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>config-import.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>审阅导入</h3>
+              </div>
+              <a
+                href="config-review.html?platform=android"
+                target="_blank"
+                aria-label="单独打开审阅导入"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="config-review.html?platform=android&embed=1&scope=gallery-config-review"
+                title="审阅导入"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>config-review.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>保存结果</h3>
+              </div>
+              <a
+                href="config-result.html?platform=android"
+                target="_blank"
+                aria-label="单独打开保存结果"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="config-result.html?platform=android&embed=1&scope=gallery-config-result&example=saved"
+                title="保存结果"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>config-result.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>运行状态</h3>
+              </div>
+              <a
+                href="runtime.html?platform=android"
+                target="_blank"
+                aria-label="单独打开运行状态"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="runtime.html?platform=android&embed=1&scope=gallery-runtime"
+                title="运行状态"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>runtime.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>06</span>
+                <h3>运行方式</h3>
+              </div>
+              <a
+                href="setup.html?platform=android"
+                target="_blank"
+                aria-label="单独打开运行方式"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="setup.html?platform=android&embed=1&scope=gallery-setup"
+                title="运行方式"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>setup.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>07</span>
+                <h3>权限与后台</h3>
+              </div>
+              <a
+                href="permissions.html?platform=android"
+                target="_blank"
+                aria-label="单独打开权限与后台"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="permissions.html?platform=android&embed=1&scope=gallery-permissions"
+                title="权限与后台"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>permissions.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>08</span>
+                <h3>恢复运行</h3>
+              </div>
+              <a
+                href="recovery.html?platform=android"
+                target="_blank"
+                aria-label="单独打开恢复运行"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="recovery.html?platform=android&embed=1&scope=gallery-recovery"
+                title="恢复运行"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>recovery.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>09</span>
+                <h3>网络与 DNS</h3>
+              </div>
+              <a
+                href="network.html?platform=android"
+                target="_blank"
+                aria-label="单独打开网络与 DNS"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="network.html?platform=android&embed=1&scope=gallery-network"
+                title="网络与 DNS"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>network.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="05 · 设置与偏好">
+        <header>
+          <h2>05 · 设置与偏好</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>设置</h3>
+              </div>
+              <a
+                href="settings.html?platform=android"
+                target="_blank"
+                aria-label="单独打开设置"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="settings.html?platform=android&embed=1&scope=gallery-settings"
+                title="设置"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>settings.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>外观</h3>
+              </div>
+              <a
+                href="appearance.html?platform=android"
+                target="_blank"
+                aria-label="单独打开外观"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="appearance.html?platform=android&embed=1&scope=gallery-appearance"
+                title="外观"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>appearance.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>数据与存储</h3>
+              </div>
+              <a
+                href="storage.html?platform=android"
+                target="_blank"
+                aria-label="单独打开数据与存储"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="storage.html?platform=android&embed=1&scope=gallery-storage"
+                title="数据与存储"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>storage.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>通知与后台</h3>
+              </div>
+              <a
+                href="notifications.html?platform=android"
+                target="_blank"
+                aria-label="单独打开通知与后台"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="notifications.html?platform=android&embed=1&scope=gallery-notifications"
+                title="通知与后台"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>notifications.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>关于</h3>
+              </div>
+              <a
+                href="about.html?platform=android"
+                target="_blank"
+                aria-label="单独打开关于"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="about.html?platform=android&embed=1&scope=gallery-about"
+                title="关于"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>about.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="06 · 探索与诊断">
+        <header>
+          <h2>06 · 探索与诊断</h2>
+          <p>每个手机都可独立操作，也可以沿导航继续走完整流程。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>01</span>
+                <h3>探索工具</h3>
+              </div>
+              <a
+                href="extensions.html?platform=android"
+                target="_blank"
+                aria-label="单独打开探索工具"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="extensions.html?platform=android&embed=1&scope=gallery-extensions"
+                title="探索工具"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>extensions.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>02</span>
+                <h3>连接地图</h3>
+              </div>
+              <a
+                href="map.html?platform=android"
+                target="_blank"
+                aria-label="单独打开连接地图"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="map.html?platform=android&embed=1&scope=gallery-map"
+                title="连接地图"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>map.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>03</span>
+                <h3>地区详情</h3>
+              </div>
+              <a
+                href="location.html?platform=android"
+                target="_blank"
+                aria-label="单独打开地区详情"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="location.html?platform=android&embed=1&scope=gallery-location"
+                title="地区详情"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>location.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>04</span>
+                <h3>规则预演</h3>
+              </div>
+              <a
+                href="preview.html?platform=android"
+                target="_blank"
+                aria-label="单独打开规则预演"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="preview.html?platform=android&embed=1&scope=gallery-preview"
+                title="规则预演"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>preview.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>05</span>
+                <h3>预演结果</h3>
+              </div>
+              <a
+                href="preview-result.html?platform=android"
+                target="_blank"
+                aria-label="单独打开预演结果"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="preview-result.html?platform=android&embed=1&scope=gallery-preview-result"
+                title="预演结果"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>preview-result.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>06</span>
+                <h3>诊断会话</h3>
+              </div>
+              <a
+                href="debug.html?platform=android"
+                target="_blank"
+                aria-label="单独打开诊断会话"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="debug.html?platform=android&embed=1&scope=gallery-debug"
+                title="诊断会话"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>debug.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>07</span>
+                <h3>诊断进行中</h3>
+              </div>
+              <a
+                href="debug-session.html?platform=android"
+                target="_blank"
+                aria-label="单独打开诊断进行中"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="debug-session.html?platform=android&embed=1&scope=gallery-debug-session&example=1"
+                title="诊断进行中"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>debug-session.html</code>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption">
+              <div>
+                <span>08</span>
+                <h3>本地诊断报告</h3>
+              </div>
+              <a
+                href="diagnostics.html?platform=android"
+                target="_blank"
+                aria-label="单独打开本地诊断报告"
+                >↗</a
+              >
+            </div>
+            <div class="phone-frame">
+              <iframe
+                src="diagnostics.html?platform=android&embed=1&scope=gallery-diagnostics"
+                title="本地诊断报告"
+                loading="eager"
+              ></iframe>
+            </div>
+            <code>diagnostics.html</code>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="responsive">
+        <header>
+          <h2>07 · 同一件事，在不同的屏幕上</h2>
+          <p>
+            平台决定身份与权限，窗口宽度决定布局。原始视口尺寸标注在每个窗口上。
+          </p>
+        </header>
+        <div class="responsive-grid">
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Android 平板 · 820 × 1180 · 控制对象</h3>
+              <a href="apps.html?platform=android" target="_blank">打开 ↗</a>
+            </div>
+            <div class="wide-frame" style="width: 574px; height: 826px">
+              <iframe
+                src="apps.html?platform=android&embed=1&scope=gallery-android-820-apps&id=r1"
+                title="Android 平板 · 820 × 1180 · 控制对象"
+                style="width: 820px; height: 1180px; transform: scale(0.7)"
+              ></iframe>
+            </div>
+          </article>
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Android 平板 · 1180 × 820 · 编辑规则</h3>
+              <a href="rule-edit.html?platform=android" target="_blank"
+                >打开 ↗</a
+              >
+            </div>
+            <div class="wide-frame" style="width: 826px; height: 574px">
+              <iframe
+                src="rule-edit.html?platform=android&embed=1&scope=gallery-android-1180-rule-edit&id=r1"
+                title="Android 平板 · 1180 × 820 · 编辑规则"
+                style="width: 1180px; height: 820px; transform: scale(0.7)"
+              ></iframe>
+            </div>
+          </article>
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 1440 × 900 · 概览</h3>
+              <a href="home.html?platform=linux" target="_blank">打开 ↗</a>
+            </div>
+            <div class="wide-frame" style="width: 864px; height: 540px">
+              <iframe
+                src="home.html?platform=linux&embed=1&scope=gallery-linux-1440-home&id=r1"
+                title="Linux 桌面 · 1440 × 900 · 概览"
+                style="width: 1440px; height: 900px; transform: scale(0.6)"
+              ></iframe>
+            </div>
+          </article>
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 1440 × 900 · 访问记录</h3>
+              <a href="activity.html?platform=linux" target="_blank">打开 ↗</a>
+            </div>
+            <div class="wide-frame" style="width: 864px; height: 540px">
+              <iframe
+                src="activity.html?platform=linux&embed=1&scope=gallery-linux-1440-activity&id=r1"
+                title="Linux 桌面 · 1440 × 900 · 访问记录"
+                style="width: 1440px; height: 900px; transform: scale(0.6)"
+              ></iframe>
+            </div>
+          </article>
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 900 × 760 · 规则</h3>
+              <a href="rules.html?platform=linux" target="_blank">打开 ↗</a>
+            </div>
+            <div class="wide-frame" style="width: 720px; height: 608px">
+              <iframe
+                src="rules.html?platform=linux&embed=1&scope=gallery-linux-900-rules&id=r1"
+                title="Linux 桌面 · 900 × 760 · 规则"
+                style="width: 900px; height: 760px; transform: scale(0.8)"
+              ></iframe>
+            </div>
+          </article>
+          <article class="wide-tile">
+            <div class="tile-caption">
+              <h3>Linux 桌面 · 640 × 760 · 设置</h3>
+              <a href="settings.html?platform=linux" target="_blank">打开 ↗</a>
+            </div>
+            <div class="wide-frame" style="width: 640px; height: 760px">
+              <iframe
+                src="settings.html?platform=linux&embed=1&scope=gallery-linux-640-settings&id=r1"
+                title="Linux 桌面 · 640 × 760 · 设置"
+                style="width: 640px; height: 760px; transform: scale(1)"
+              ></iframe>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section class="gallery-section" data-group="states">
+        <header>
+          <h2>08 · 顺利之外，也有下一步</h2>
+          <p>保留输入、说清影响、提供可以继续的动作。</p>
+        </header>
+        <div class="phone-grid">
+          <article class="page-tile">
+            <div class="tile-caption"><h3>保存失败，保留输入</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="rule-edit.html?platform=android&embed=1&scope=state-save-error&scenario=save-error&id=r1"
+                title="保存失败，保留输入"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>版本冲突，读取后重试</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="rule-edit.html?platform=android&embed=1&scope=state-conflict&scenario=conflict&id=r1"
+                title="版本冲突，读取后重试"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>已保存，未生效</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="config.html?platform=android&embed=1&scope=state-unapplied&scenario=unapplied&id=r1"
+                title="已保存，未生效"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>待授权</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="permissions.html?platform=android&embed=1&scope=state-permission&scenario=permission&id=r1"
+                title="待授权"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>恢复中，可取消</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="recovery.html?platform=android&embed=1&scope=state-recovering&scenario=recovering&id=r1"
+                title="恢复中，可取消"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>恢复停止，人工处理</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="recovery.html?platform=android&embed=1&scope=state-intervention&scenario=intervention&id=r1"
+                title="恢复停止，人工处理"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>启动配置待修复</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="config.html?platform=android&embed=1&scope=state-startup&scenario=startup&id=r1"
+                title="启动配置待修复"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>查询失败，可重试</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="activity.html?platform=android&embed=1&scope=state-error&scenario=error&id=r1"
+                title="查询失败，可重试"
+              ></iframe>
+            </div>
+          </article>
+          <article class="page-tile">
+            <div class="tile-caption"><h3>当前没有记录</h3></div>
+            <div class="phone-frame">
+              <iframe
+                src="activity.html?platform=android&embed=1&scope=state-empty&scenario=empty&id=r1"
+                title="当前没有记录"
+              ></iframe>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+    <footer class="gallery-footer">
+      HTML + 本地编译 Tailwind CSS + 原生
+      JavaScript。所有入口使用独立文件；示例状态仅保存在当前浏览会话。
+    </footer>
+  </body>
+</html>

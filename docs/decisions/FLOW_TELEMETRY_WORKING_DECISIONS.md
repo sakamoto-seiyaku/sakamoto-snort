@@ -1,5 +1,11 @@
 # Flow Telemetry（流记录导出层）：工作决策与原则（收口版）
 
+**2026-09-24 current design:** the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md)
+defines normal Flow / Blocked Observation export, directional attribution,
+Rust-owned windows, loss and retention. This dated document remains historical
+evidence; its old ABI, consumer modes and implementation claims are not the new
+VPP-native product contract. See [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md).
+
 更新时间：2026-04-29
 状态：已落地的设计记录（用于解释 Flow Telemetry 的分层边界与后续扩展原则；对外 ABI 以 `docs/INTERFACE_SPECIFICATION.md` 为准）
 相关既有能力：`docs/decisions/L4_CONNTRACK_WORKING_DECISIONS.md`、`docs/decisions/DOMAIN_POLICY_OBSERVABILITY.md`、`docs/INTERFACE_SPECIFICATION.md`（vNext stream/metrics）

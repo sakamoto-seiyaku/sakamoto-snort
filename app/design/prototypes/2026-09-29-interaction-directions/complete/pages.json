@@ -1,0 +1,310 @@
+[
+  {
+    "id": "home",
+    "title": "概览",
+    "nav": "home",
+    "back": null,
+    "group": "01 · 概览与控制"
+  },
+  {
+    "id": "apps",
+    "title": "控制对象",
+    "nav": "apps",
+    "back": null,
+    "group": "01 · 概览与控制"
+  },
+  {
+    "id": "app-detail",
+    "title": "对象详情",
+    "nav": "apps",
+    "back": "apps.html",
+    "group": "01 · 概览与控制"
+  },
+  {
+    "id": "app-networks",
+    "title": "网络限制",
+    "nav": "apps",
+    "back": "app-detail.html",
+    "group": "01 · 概览与控制"
+  },
+  {
+    "id": "app-selection",
+    "title": "批量控制",
+    "nav": "apps",
+    "back": "apps.html",
+    "group": "01 · 概览与控制"
+  },
+  {
+    "id": "activity",
+    "title": "访问记录",
+    "nav": "activity",
+    "back": null,
+    "group": "02 · 活动与统计"
+  },
+  {
+    "id": "activity-filter",
+    "title": "筛选访问",
+    "nav": "activity",
+    "back": "activity.html",
+    "group": "02 · 活动与统计"
+  },
+  {
+    "id": "connection",
+    "title": "访问详情",
+    "nav": "activity",
+    "back": "activity.html",
+    "group": "02 · 活动与统计"
+  },
+  {
+    "id": "stats",
+    "title": "连接统计",
+    "nav": "activity",
+    "back": "activity.html",
+    "group": "02 · 活动与统计"
+  },
+  {
+    "id": "protocols",
+    "title": "协议目录",
+    "nav": "activity",
+    "back": "stats.html",
+    "group": "02 · 活动与统计"
+  },
+  {
+    "id": "rules",
+    "title": "规则",
+    "nav": "rules",
+    "back": null,
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "rule-detail",
+    "title": "规则详情",
+    "nav": "rules",
+    "back": "rules.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "rule-edit",
+    "title": "编辑规则",
+    "nav": "rules",
+    "back": "rules.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "rule-scope",
+    "title": "作用对象",
+    "nav": "rules",
+    "back": "rule-edit.html?resume=1",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "groups",
+    "title": "规则组",
+    "nav": "rules",
+    "back": null,
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "group-detail",
+    "title": "规则组详情",
+    "nav": "rules",
+    "back": "groups.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "group-edit",
+    "title": "编辑规则组",
+    "nav": "rules",
+    "back": "groups.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "binding-edit",
+    "title": "规则分配",
+    "nav": "rules",
+    "back": "rules.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "domains",
+    "title": "域名列表",
+    "nav": "rules",
+    "back": null,
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "domain-detail",
+    "title": "域名列表详情",
+    "nav": "rules",
+    "back": "domains.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "domain-edit",
+    "title": "编辑域名列表",
+    "nav": "rules",
+    "back": "domains.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "domain-import",
+    "title": "导入域名",
+    "nav": "rules",
+    "back": "domains.html",
+    "group": "03 · 规则与复用"
+  },
+  {
+    "id": "config",
+    "title": "配置管理",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "config-import",
+    "title": "导入配置",
+    "nav": "settings",
+    "back": "config.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "config-review",
+    "title": "审阅导入",
+    "nav": "settings",
+    "back": "config-import.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "config-result",
+    "title": "保存结果",
+    "nav": "rules",
+    "back": "rules.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "runtime",
+    "title": "运行状态",
+    "nav": "home",
+    "back": "home.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "setup",
+    "title": "运行方式",
+    "nav": "settings",
+    "back": "runtime.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "permissions",
+    "title": "权限与后台",
+    "nav": "settings",
+    "back": "runtime.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "recovery",
+    "title": "恢复运行",
+    "nav": "home",
+    "back": "runtime.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "network",
+    "title": "网络与 DNS",
+    "nav": "settings",
+    "back": "runtime.html",
+    "group": "04 · 配置与运行"
+  },
+  {
+    "id": "settings",
+    "title": "设置",
+    "nav": "settings",
+    "back": null,
+    "group": "05 · 设置与偏好"
+  },
+  {
+    "id": "appearance",
+    "title": "外观",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "05 · 设置与偏好"
+  },
+  {
+    "id": "storage",
+    "title": "数据与存储",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "05 · 设置与偏好"
+  },
+  {
+    "id": "notifications",
+    "title": "通知与后台",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "05 · 设置与偏好"
+  },
+  {
+    "id": "about",
+    "title": "关于",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "05 · 设置与偏好"
+  },
+  {
+    "id": "extensions",
+    "title": "探索工具",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "map",
+    "title": "连接地图",
+    "nav": "activity",
+    "back": "extensions.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "location",
+    "title": "地区详情",
+    "nav": "activity",
+    "back": "map.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "preview",
+    "title": "规则预演",
+    "nav": "rules",
+    "back": "extensions.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "preview-result",
+    "title": "预演结果",
+    "nav": "rules",
+    "back": "preview.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "debug",
+    "title": "诊断会话",
+    "nav": "settings",
+    "back": "extensions.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "debug-session",
+    "title": "诊断进行中",
+    "nav": "settings",
+    "back": "debug.html",
+    "group": "06 · 探索与诊断"
+  },
+  {
+    "id": "diagnostics",
+    "title": "本地诊断报告",
+    "nav": "settings",
+    "back": "settings.html",
+    "group": "06 · 探索与诊断"
+  }
+]

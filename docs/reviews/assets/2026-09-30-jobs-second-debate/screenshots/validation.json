@@ -1,0 +1,237 @@
+{
+  "errors": [],
+  "frames": 4,
+  "states": [
+    {
+      "name": "normal",
+      "text": "9:41\n▂▄▆　▰\nSAKAMOTO\n运行中\n我的网络\n最近30分钟⌄\n\n本段记录完整 · 最新至09:41\n\n↓ 本段收到\n9.4 MB\n↑ 本段发出\n1.9 MB\n09:11\n09:26\n09:41\n点时段，看贡献\n当前连接\n统计\n地图\n\n本段20次查询被阻止 →\n\n这段时间的应用\n全部应用⌕\n♪\n音乐\n本段收发\n8.8 MB\n›\n☁\n天气\n本段20次查询被阻止\n1.3 MB\n›\n◉\nFirefox\n本段收发\n844 KB\n›\n?\n归属未确定\n查看原始活动\n98 KB\n›\n⌁\n概览\n≋\n活动\n☷\n联网安排",
+      "bars": [
+        {
+          "height": "75.6px",
+          "hidden": false
+        },
+        {
+          "height": "2.52px",
+          "hidden": false
+        },
+        {
+          "height": "8.4px",
+          "hidden": false
+        },
+        {
+          "height": "0.42px",
+          "hidden": false
+        },
+        {
+          "height": "16.8px",
+          "hidden": false
+        },
+        {
+          "height": "27.3px",
+          "hidden": false
+        },
+        {
+          "height": "33.6px",
+          "hidden": false
+        },
+        {
+          "height": "3.36px",
+          "hidden": false
+        },
+        {
+          "height": "25.2px",
+          "hidden": false
+        },
+        {
+          "height": "2.52px",
+          "hidden": false
+        },
+        {
+          "height": "37.8px",
+          "hidden": false
+        },
+        {
+          "height": "3.78px",
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "name": "quiet",
+      "text": "9:41\n▂▄▆　▰\nSAKAMOTO\n运行中\n我的网络\n最近30分钟⌄\n\n本段记录完整 · 最新至09:41\n\n↓ 本段收到\n0 B\n↑ 本段发出\n0 B\n本段没有传输记录\n09:11\n09:26\n09:41\n点时段，看贡献\n当前连接\n统计\n地图\n\n本段没有查询或连接记录\n\n这段时间的应用\n全部应用⌕\n\n这30分钟没有活动记录。\n可从当前连接或时间范围继续观察。\n\n⌁\n概览\n≋\n活动\n☷\n联网安排",
+      "bars": [
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "name": "dns",
+      "text": "9:41\n▂▄▆　▰\nSAKAMOTO\n运行中\n我的网络\n最近30分钟⌄\n\n本段记录完整 · 最新至09:41\n\n↓ 本段收到\n0 B\n↑ 本段发出\n0 B\n本段没有传输记录\n09:11\n09:26\n09:41\n点时段，看贡献\n当前连接\n统计\n地图\n\n本段20次查询被阻止 · 最近一次09:26\n\n这段时间的应用\n全部应用⌕\n☁\n天气\n本段20次查询被阻止 · 09:26前\n›\n?\n归属未确定\n本段1次名称查询 · 查看事实\n›\n\n最新可用快照未见活动连接；上述查询发生在所选时段。\n\n⌁\n概览\n≋\n活动\n☷\n联网安排",
+      "bars": [
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "name": "gap",
+      "text": "9:41\n▂▄▆　▰\nSAKAMOTO\n运行中\n我的网络\n最近30分钟⌄\n\n记录有缺口：09:21–09:26 · 最新至09:41\n\n↓ 已记录收到\n8.6 MB\n↑ 已记录发出\n0.6 MB\n09:11\n09:26\n09:41\n点时段，看贡献\n当前连接\n统计\n地图\n\n已记录20次查询被阻止 · 这段事实并不完整\n\n这段时间的应用\n全部应用⌕\n♪\n音乐\n本段已记录收发\n8.8 MB\n›\n☁\n天气\n20次查询被阻止 · 部分时间未记录\n›\n?\n归属未确定\n已记录事实，不猜补缺失量\n›\n⌁\n概览\n≋\n活动\n☷\n联网安排",
+      "bars": [
+        {
+          "height": "75.6px",
+          "hidden": false
+        },
+        {
+          "height": "2.52px",
+          "hidden": false
+        },
+        {
+          "height": "8.4px",
+          "hidden": false
+        },
+        {
+          "height": "0.42px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "0px",
+          "hidden": false
+        },
+        {
+          "height": "33.6px",
+          "hidden": false
+        },
+        {
+          "height": "3.36px",
+          "hidden": false
+        },
+        {
+          "height": "25.2px",
+          "hidden": false
+        },
+        {
+          "height": "2.52px",
+          "hidden": false
+        },
+        {
+          "height": "37.8px",
+          "hidden": false
+        },
+        {
+          "height": "3.78px",
+          "hidden": false
+        }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "全部",
+      "text": "9:41\n▂▄▆　▰\n‹ 这段活动\n更多检查\n☁\n天气\n个人 · 这个应用\n09:21–09:26⌄\n当前连接\n现在：跟踪名单中的名称查询受限\n管理 ›\n这一段的活动\n2条连接 · 21次名称查询\n连接传输1.3 MB · 20次查询被阻止\n全部\n查询\n连接\n连接 · 本段有传输\n09:24\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n查询被阻止\n09:23\nmetrics.example.net\n拦截跟踪域名查询\n按时间查看全部活动 →\n⌁\n概览\n≋\n活动\n☷\n联网安排"
+    },
+    {
+      "name": "查询",
+      "text": "9:41\n▂▄▆　▰\n‹ 这段活动\n更多检查\n☁\n天气\n个人 · 这个应用\n09:21–09:26⌄\n当前连接\n现在：跟踪名单中的名称查询受限\n管理 ›\n21次\n这5分钟的名称查询\n20次被阻止 · 1次返回地址\n全部\n查询\n连接\n查询被阻止\n09:24\nmetrics.example.net\n拦截跟踪域名查询\n查询返回地址\n09:23\napi.weather.example\n返回1个地址 · 查看这次事实\n按时间查看全部查询 →\n⌁\n概览\n≋\n活动\n☷\n联网安排"
+    },
+    {
+      "name": "连接",
+      "text": "9:41\n▂▄▆　▰\n‹ 这段活动\n更多检查\n☁\n天气\n个人 · 这个应用\n09:21–09:26⌄\n当前连接\n现在：跟踪名单中的名称查询受限\n管理 ›\n1.3 MB\n这5分钟发出\n本段2条连接 · 收到82 KB\n全部\n查询\n连接\n连接 · 本段有传输\n09:24\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n连接 · 本段有传输\n09:22\nmaps.weather.example\n本段发出100 KB · 收到42 KB\n按时间查看全部连接 →\n⌁\n概览\n≋\n活动\n☷\n联网安排"
+    }
+  ],
+  "rangeAfterToggle": "9:41\n▂▄▆　▰\n‹ 这段活动\n更多检查\n☁\n天气\n个人 · 这个应用\n最近30分钟⌄\n当前连接\n现在：跟踪名单中的名称查询受限\n管理 ›\n1.3 MB\n最近30分钟发出\n本段2条连接 · 收到82 KB\n全部\n查询\n连接\n连接 · 本段有传输\n09:24\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n连接 · 本段有传输\n09:22\nmaps.weather.example\n本段发出100 KB · 收到42 KB\n按时间查看全部连接 →\n⌁\n概览\n≋\n活动\n☷\n联网安排"
+}

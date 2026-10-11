@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>作用对象 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="rule-scope"
+    data-title="作用对象"
+    data-nav="rules"
+    data-back="rule-edit.html?resume=1"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>这条规则交给谁</h1>
+            <p>共享 UID 的应用会使用同一个控制范围。</p>
+          </header>
+          <div id="scope-subjects" class="stack"></div>
+          <h2 class="section-label">执行方式</h2>
+          <label class="choice"
+            ><input type="radio" name="rule-mode" value="enforce" /><span
+              class="grow"
+              ><strong>执行规则</strong
+              ><small>按规则的允许或阻止动作处理访问</small></span
+            ></label
+          ><label class="choice"
+            ><input type="radio" name="rule-mode" value="observe" /><span
+              class="grow"
+              ><strong>仅观察</strong
+              ><small>继续判断和记录；命中时实际允许访问</small></span
+            ></label
+          >
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>仅观察仍参与规则判断。需要停止作用时，请解除分配。</p>
+          </div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-scope">完成选择</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

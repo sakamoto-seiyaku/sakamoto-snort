@@ -3,6 +3,18 @@
 Baseline: 2026-09-13. This is the short implementation entry, not a backlog or a
 release announcement. Current task state belongs to Plane.
 
+Accepted design update, 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)
+and the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md)
+define the next policy/configuration/normal-observation behavior. They do not
+extend the implementation or acceptance claims listed below.
+
+Accepted design extension, 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md)
+aligns application DNS filtering across Root and VPN through query-stage and
+subsequent-connection control. The first-version scope is Root/NFQ and VPN using
+the same DNS core; KSU/libnetd integration is deferred to a future extension.
+This is not evidence that DNS ingress, filtering or association consumption has
+been implemented.
+
 ## What exists
 
 The product packet domain is VPP-native C. Root uses native NFQUEUE lanes; the

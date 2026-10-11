@@ -14,7 +14,9 @@ QSBR 和跨线程共享 entry 的实施前提。那些方案不再是 Product ba
 - [owner-local VPN Flow Stack](../adr/0007-owner-local-lwip-direct-egress.md)
 - [移除旧 C++ 主线](../adr/0008-remove-snort-cpp-mainline.md)
 - [Per-worker Flow Ownership](PER_WORKER_FLOW_OWNERSHIP.md)
-- [stage-owned DROP / PASS_NEXT](../adr/0001-policy-bundle-staged-enforcement.md)
+- [统一规则与 VPP 配置管理](../adr/0009-unified-rules-and-vpp-owned-configuration.md)：
+  新规则编排遵守前置 DROP 不观察、后置 DROP 不回滚；前置已定案 ALLOW 保留赢家，
+  不再由同有效规则集的低排名后置规则重判。本文 Flow 生命周期与容量合同继续有效。
 - [当前实施规格](../testing/2026-09-09_IMPLEMENTATION_SPEC.md)
 
 ## 1. 目标与协议范围

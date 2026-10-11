@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>控制对象 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="apps" data-title="控制对象" data-nav="apps">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>
+              <span
+                data-platform-label
+                data-android="应用"
+                data-linux="控制对象"
+                >应用</span
+              >
+            </h1>
+            <p>让每个连接，都符合你的意愿。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <label class="search"
+                ><span data-icon="search"></span
+                ><input
+                  id="app-search"
+                  aria-label="搜索应用或 UID"
+                  placeholder="搜索名称或 UID"
+              /></label>
+              <div class="between" style="margin-bottom: 16px">
+                <div class="chips" style="margin: 0">
+                  <button class="chip active" data-app-filter="all">全部</button
+                  ><button class="chip" data-app-filter="limited">
+                    有限制
+                  </button>
+                </div>
+                <a class="text-link" data-page="app-selection.html">选择</a>
+              </div>
+              <div class="inset-list" id="apps-list"></div>
+              <p class="source-line" id="identity-note"></p>
+            </section>
+            <aside class="desktop-detail" id="app-side-detail"></aside>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

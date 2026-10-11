@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sakamoto V4 · 规则操作的两种思路</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- V4 concept comparison: two Rules-tab variants, selected by ?variant=A|B.
+       All edits are in-memory examples; this route has no Product API. -->
+  <header class="study-head">
+    <div><a class="study-brand" href="../README.md">SAKAMOTO <span>V4</span></a><p>规则Tab · 两种操作思路</p></div>
+    <div class="study-controls">
+      <label>案例<select id="scenario"><option value="privacy">共同名单误伤</option><option value="priority">还有更优先的禁止</option><option value="inverse">共同允许，个别禁止</option></select></label>
+      <button id="reset" class="study-button">重置此案例</button>
+      <a class="study-button" href="README.md">说明</a>
+    </div>
+  </header>
+  <div class="study-note">可操作的概念样例 · 所有内容留在本页内存中。切换版本保留已提交的修改。</div>
+  <div class="app-shell" id="app"></div>
+  <div id="overlay-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <footer class="prototype-switcher" aria-label="原型版本选择">
+    <button id="prev-variant" aria-label="前一个版本">←</button>
+    <div class="switcher-options"><button data-variant="A">A · 改变结果</button><button data-variant="B">B · 共用与差异</button></div>
+    <button id="next-variant" aria-label="后一个版本">→</button>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>连接统计 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="stats"
+    data-title="连接统计"
+    data-nav="activity"
+    data-back="activity.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>看见变化</h1>
+            <p>从保留的访问中，了解规则的实际效果。</p>
+          </header>
+          <div class="chips">
+            <button class="chip" data-stat-range="15">15 分钟</button
+            ><button class="chip active" data-stat-range="60">1 小时</button
+            ><button class="chip" data-stat-range="1440">今天</button>
+          </div>
+          <div class="desktop-grid">
+            <section>
+              <div class="metrics" id="stats-metrics"></div>
+              <div class="card gap-top">
+                <div class="between" style="margin-bottom: 24px">
+                  <h3>访问趋势</h3>
+                  <span class="caption">访问次数</span>
+                </div>
+                <div id="stats-chart"></div>
+                <div class="bar-legend" style="margin-top: 16px">
+                  <span>已阻止</span><span>已允许</span>
+                </div>
+              </div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  统计仅覆盖已保留记录。停止记录、数据缺口或淘汰都不等于零访问。
+                </p>
+              </div>
+            </section>
+            <section>
+              <div class="section-heading">
+                <h2>分布</h2>
+                <a class="text-link" data-page="protocols.html">协议目录</a>
+              </div>
+              <div class="segmented">
+                <button class="active" data-stat-kind="objects">对象</button
+                ><button data-stat-kind="rules">规则</button
+                ><button data-stat-kind="protocols">协议</button>
+              </div>
+              <div class="inset-list" id="stats-distribution"></div>
+              <p class="source-line" id="stats-note"></p>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

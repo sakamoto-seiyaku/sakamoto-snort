@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>我的网络 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience network-view"
+    data-page="home"
+    data-title="我的网络"
+    data-nav="home"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <header class="experience-head">
+            <div>
+              <p class="eyebrow">这台设备</p>
+              <h1>我的网络</h1>
+            </div>
+            <button class="period-button" id="period-picker">
+              最近 30 分钟
+            </button>
+          </header>
+          <p class="network-status" id="network-status"></p>
+          <div class="network-layout">
+            <section class="network-overview" aria-label="设备整体活动">
+              <div id="network-timeline"></div>
+              <div id="network-outcomes"></div>
+              <a class="open-contributions" id="open-contributions"
+                >查看这段时间的活动 <span aria-hidden="true">→</span></a
+              >
+            </section>
+            <section class="network-applications">
+              <div class="section-heading">
+                <div>
+                  <h2>联网的应用</h2>
+                  <p id="network-app-count"></p>
+                </div>
+                <a class="text-link" id="open-all-apps">全部应用</a>
+              </div>
+              <div id="network-apps"></div>
+            </section>
+          </div>
+          <div class="network-more" id="network-more"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

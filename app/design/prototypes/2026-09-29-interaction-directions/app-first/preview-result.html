@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>预演结果 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="preview-result"
+    data-title="预演结果"
+    data-nav="rules"
+    data-back="preview.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <div id="preview-result-main"></div>
+          <div class="section-heading"><h2>判断过程</h2></div>
+          <div class="timeline" id="preview-steps"></div>
+          <div class="inset-list" id="preview-result-links"></div>
+          <p class="source-line">
+            本原型使用有限的前端匹配模拟。未支持的条件明确显示未知，不作为真实规则引擎的执行证据。
+          </p>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="adjust-preview">
+          调整输入，再试一次
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

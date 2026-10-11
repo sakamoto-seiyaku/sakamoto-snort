@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>联网设置 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience"
+    data-page="app-controls"
+    data-title="联网设置"
+    data-nav="home"
+    data-back="app-detail.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <div id="controls-heading"></div>
+          <div class="controls-layout">
+            <section>
+              <div class="section-heading"><h2>这个应用怎样联网</h2></div>
+              <div class="control-lines" id="basic-controls"></div>
+              <p class="note" id="basic-control-note">
+                解除快捷限制后，其他设置继续适用。
+              </p>
+              <div class="inline-error" id="controls-error" role="alert"></div>
+            </section>
+            <section>
+              <div class="section-heading">
+                <h2>正在使用的设置</h2>
+                <button class="text-link" id="new-app-rule">添加</button>
+              </div>
+              <div id="app-applied-controls"></div>
+              <div id="controls-pending"></div>
+              <div class="section-heading"><h2>需要更精确一些</h2></div>
+              <a id="advanced-app-rules" class="settings-entry"
+                ><span
+                  class="settings-symbol"
+                  data-icon="sliders-horizontal"
+                ></span
+                ><span class="grow"
+                  ><strong>完整规则</strong
+                  ><small>组合条件、优先顺序和共享规则</small></span
+                ><span data-icon="chevron-right"></span
+              ></a>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

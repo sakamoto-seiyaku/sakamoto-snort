@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@source "../*.html";
+@source "../js/*.js";
+@theme {
+  --color-ink: #17212a;
+  --color-muted: #6e7882;
+  --color-paper: #f6f7f9;
+  --color-accent: #2865e8;
+}

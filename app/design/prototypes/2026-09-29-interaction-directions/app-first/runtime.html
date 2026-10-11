@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>运行状态 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="runtime"
+    data-title="运行状态"
+    data-nav="home"
+    data-back="home.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>现在的保护状态</h1>
+            <p>当前状态、影响和下一步，一目了然。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div class="card" id="runtime-summary"></div>
+              <div class="stack gap-top" id="runtime-actions"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h2>运行环境</h2></div>
+              <div class="inset-list">
+                <a class="list-row" data-page="setup.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="shield"></span></span
+                  ><span class="grow"
+                    ><span class="title">运行方式</span
+                    ><span class="subtitle">选择适合这台设备的方式</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="permissions.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="key-round"></span></span
+                  ><span class="grow"
+                    ><span class="title">权限与后台运行</span
+                    ><span class="subtitle">查看授权和通知条件</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="network.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="network"></span></span
+                  ><span class="grow"
+                    ><span class="title">网络与 DNS</span
+                    ><span class="subtitle"
+                      >查看当前网络及需要处理的变化</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="recovery.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="refresh-cw"></span></span
+                  ><span class="grow"
+                    ><span class="title">恢复与诊断</span
+                    ><span class="subtitle">检查故障影响和恢复进度</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p id="runtime-background-note">
+                  关闭界面后，运行服务继续管理连接。暂停会停止保护和新增记录。
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

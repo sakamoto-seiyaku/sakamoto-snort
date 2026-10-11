@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>关于 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="about"
+    data-title="关于"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <div class="result-hero">
+            <span
+              class="result-symbol"
+              style="background: var(--soft); color: var(--accent)"
+              ><span data-icon="shield"></span
+            ></span>
+            <h1>sakamoto</h1>
+            <p>理解连接，掌握自己的网络。<br />交互设计原型 · 2026.09</p>
+          </div>
+          <div class="inset-list">
+            <a class="list-row" data-page="storage.html"
+              ><span class="grow"
+                ><span class="title">数据如何留在本机</span
+                ><span class="subtitle">保留、导出与清理</span></span
+              ><span class="value"></span
+              ><span data-icon="chevron-right"></span></a
+            ><a class="list-row" data-page="protocols.html"
+              ><span class="grow"
+                ><span class="title">协议识别范围</span
+                ><span class="subtitle">标签描述已识别事实</span></span
+              ><span class="value"></span
+              ><span data-icon="chevron-right"></span></a
+            ><a class="list-row" data-page="setup.html"
+              ><span class="grow"
+                ><span class="title">运行方式与边界</span
+                ><span class="subtitle">Android 与 Linux 分别适配</span></span
+              ><span class="value"></span><span data-icon="chevron-right"></span
+            ></a>
+          </div>
+          <div class="card gap-top">
+            <h3>关于这份原型</h3>
+            <p class="help" style="margin-top: 10px">
+              所有操作使用本地模拟状态。不会操作设备、发送网络流量或更改真实规则。关闭标签页后，本次编辑状态结束。
+            </p>
+            <p class="help" style="margin-top: 10px">
+              应用图标仅用于识别示例对象，品牌归各自所有者。界面图标采用
+              Lucide。
+            </p>
+          </div>
+          <a class="text-link gap-top" href="index.html" target="_blank"
+            >打开全部页面总览 <span data-icon="arrow-up-right"></span
+          ></a>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

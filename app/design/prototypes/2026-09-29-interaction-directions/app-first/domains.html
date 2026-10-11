@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>域名列表 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+    <link rel="stylesheet" href="css/experience.css" />
+  </head>
+  <body data-page="domains" data-title="域名列表" data-nav="rules">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>按名字，管理目标</h1>
+            <p>维护一次，供多条规则共享。</p>
+          </header>
+          <nav class="segmented" aria-label="规则资产">
+            <a data-page="rules.html" class="">规则</a
+            ><a data-page="groups.html" class="">规则组</a
+            ><a data-page="domains.html" class="active">域名列表</a>
+          </nav>
+          <div class="section-heading">
+            <h2>我的列表</h2>
+            <a class="text-link" data-page="domain-edit.html"
+              ><span data-icon="plus"></span>新建</a
+            >
+          </div>
+          <div class="desktop-grid">
+            <div id="domain-lists"></div>
+            <aside class="desktop-detail">
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  列表维护名称与匹配范围。查询规则和连接规则分别决定如何使用，来源更新会保留本地补充与排除。
+                </p>
+              </div>
+              <a class="list-row" data-page="domain-import.html"
+                ><span class="tile-icon"><span data-icon="upload"></span></span
+                ><span class="grow"
+                  ><span class="title">导入域名条目</span
+                  ><span class="subtitle"
+                    >预览条目与匹配范围后再保存</span
+                  ></span
+                ><span class="value"></span
+                ><span data-icon="chevron-right"></span
+              ></a>
+            </aside>
+          </div>
+          <a class="btn full gap-top" data-page="domain-import.html"
+            ><span data-icon="upload"></span>导入域名条目</a
+          >
+          <a class="btn soft full gap-top" data-page="domain-subscription.html"
+            ><span data-icon="refresh-cw"></span>添加订阅</a
+          >
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

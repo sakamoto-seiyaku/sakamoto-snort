@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>诊断进行中 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="debug-session"
+    data-title="诊断进行中"
+    data-nav="settings"
+    data-back="debug.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <div id="debug-session-heading"></div>
+          <div class="card">
+            <div class="between">
+              <span class="caption" id="debug-session-state">正在观察</span
+              ><span class="badge blue">本地会话</span>
+            </div>
+            <div class="runtime-large mono" id="session-clock">00:00</div>
+            <p class="help" id="session-scope"></p>
+          </div>
+          <div class="section-heading">
+            <h2>过程记录</h2>
+            <span class="caption" id="session-event-count"></span>
+          </div>
+          <div class="timeline" id="session-events"></div>
+          <div class="stack" id="session-actions"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

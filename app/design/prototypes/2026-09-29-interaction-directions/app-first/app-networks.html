@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>网络限制 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="app-networks"
+    data-title="网络限制"
+    data-nav="apps"
+    data-back="app-detail.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>按网络设置快捷限制</h1>
+            <p>打开开关以限制；关闭后交由其他规则判断。</p>
+          </header>
+          <div id="network-subject"></div>
+          <div class="inset-list" id="network-switches"></div>
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>
+              “VPN 网络”是连接的网络条件，与防火墙的 Root / VPN 运行方式不同。
+            </p>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-networks">保存网络限制</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

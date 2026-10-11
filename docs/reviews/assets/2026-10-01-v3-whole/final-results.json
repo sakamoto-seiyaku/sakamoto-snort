@@ -1,0 +1,27 @@
+{
+  "testedHash": "841dbd6860a5621022143b86736d32141ef36f877a294d23ca397369de335f45",
+  "persisted": {
+    "saved": 45,
+    "active": 44,
+    "work": null,
+    "bindings": [
+      "observe",
+      "enforce"
+    ]
+  },
+  "returned": {
+    "view": "rule",
+    "selected": "r5",
+    "work": null,
+    "saved": 45,
+    "active": 45,
+    "versions": [
+      42,
+      45
+    ]
+  },
+  "stop": {
+    "status": "finished",
+    "unchanged": true
+  }
+}

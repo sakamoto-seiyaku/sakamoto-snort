@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>权限与后台 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="permissions"
+    data-title="权限与后台"
+    data-nav="settings"
+    data-back="runtime.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>准备好，再开始</h1>
+            <p>每项权限都说明用途，也允许你稍后处理。</p>
+          </header>
+          <div class="progress-steps">
+            <span class="active"></span><span class="active"></span
+            ><span></span>
+          </div>
+          <div class="inset-list" id="permission-list"></div>
+          <div id="permission-details"></div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="start-with-permissions">
+          开始运行
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

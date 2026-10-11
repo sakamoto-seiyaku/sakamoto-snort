@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>恢复运行 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="recovery"
+    data-title="恢复运行"
+    data-nav="home"
+    data-back="runtime.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>把连接带回正轨</h1>
+            <p>先看清影响，再决定是否恢复。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div id="recovery-main"></div>
+              <div id="recovery-actions" class="stack gap-top"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h2>最近的运行过程</h2></div>
+              <div class="timeline" id="recovery-timeline"></div>
+              <div class="inset-list">
+                <a class="list-row" data-page="diagnostics.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="file-text"></span></span
+                  ><span class="grow"
+                    ><span class="title">本地诊断报告</span
+                    ><span class="subtitle">查看内容后导出</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="network.html"
+                  ><span class="tile-icon"><span data-icon="wifi"></span></span
+                  ><span class="grow"
+                    ><span class="title">检查网络状态</span
+                    ><span class="subtitle">连接状态与 DNS 更新</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

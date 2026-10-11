@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>设置 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="settings" data-title="设置" data-nav="settings">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>恰如你所需</h1>
+            <p>把注意力留给重要的连接。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <h2 class="section-label">管理</h2>
+              <div class="inset-list">
+                <a class="list-row" data-page="runtime.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="shield"></span></span
+                  ><span class="grow"
+                    ><span class="title">运行与授权</span
+                    ><span class="subtitle">方式、权限与恢复</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="config.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="sliders-horizontal"></span></span
+                  ><span class="grow"
+                    ><span class="title">配置管理</span
+                    ><span class="subtitle">导入、导出与生效状态</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="storage.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="database"></span></span
+                  ><span class="grow"
+                    ><span class="title">数据与存储</span
+                    ><span class="subtitle">保留范围、导出与清理</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+              <h2 class="section-label">偏好</h2>
+              <div class="inset-list">
+                <a class="list-row" data-page="appearance.html"
+                  ><span class="tile-icon"><span data-icon="sun"></span></span
+                  ><span class="grow"
+                    ><span class="title">外观</span
+                    ><span class="subtitle">主题、强调色与字号</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="notifications.html"
+                  ><span class="tile-icon"><span data-icon="bell"></span></span
+                  ><span class="grow"
+                    ><span class="title">通知与后台</span
+                    ><span class="subtitle"
+                      >了解运行状态与需要处理的变化</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+            </section>
+            <section>
+              <h2 class="section-label">深入了解</h2>
+              <div class="inset-list">
+                <a class="list-row" data-page="extensions.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="flask-conical"></span></span
+                  ><span class="grow"
+                    ><span class="title">探索工具</span
+                    ><span class="subtitle"
+                      >地图、规则预演与诊断会话</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="diagnostics.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="file-text"></span></span
+                  ><span class="grow"
+                    ><span class="title">本地诊断报告</span
+                    ><span class="subtitle"
+                      >检查信息，再决定是否导出</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="about.html"
+                  ><span class="tile-icon"><span data-icon="info"></span></span
+                  ><span class="grow"
+                    ><span class="title">关于 Sakamoto</span
+                    ><span class="subtitle">版本、隐私与设计说明</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+              <div class="card gap-top">
+                <span class="tile-icon neutral"
+                  ><span data-icon="lock-keyhole"></span
+                ></span>
+                <h3 style="margin-top: 14px">你的网络记录，留在本机。</h3>
+                <p class="help" style="margin-top: 8px">
+                  只有你主动导出时，才会生成可以分享的文件。
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,96 @@
+{
+  "date": "2026-09-30",
+  "scope": "Root independent front-end reproductions only; no backend or user acceptance",
+  "dns_preview_and_binding_route": [
+    {
+      "stage": "dns-rule",
+      "url": "http://127.0.0.1:4173/app-first/rule-detail.html?id=r5&platform=android&scope=root-debate0930-dns",
+      "text": "9:41\n返回\n规则详情\n运行中\n命中后阻止\n拦截跟踪域名查询\n\n天气：命中后阻止\n\n规则定义：阻止 · 域名查询\n\n匹配范围\n\n（域名列表为跟踪域名）\n\n优先级 10 · 明确顺序 5\n来源：我的隐私设置\n规则 ID：r5 · 当前已保存版本 42\n\n分配与执行方式\n添加\n天气\n执行规则\n复制为新规则\n保留条件，重新选择分配对象\n预演一次访问\n使用明确输入检查预期结果\n删除规则\n同时移除直接分配，历史记录保留\n编辑规则"
+    },
+    {
+      "stage": "preview-input",
+      "url": "http://127.0.0.1:4173/app-first/preview.html?platform=android&scope=root-debate0930-dns&period=recent&window=all&subject=s4",
+      "text": "9:41\n返回\n规则预演\n运行中\n先问一次“如果”\n\n不发送请求，也不更改正在使用的规则。\n\n控制对象\nFirefox\nSignal\n音乐\n天气\n文件\n目标域名或 IP\n目的端口\n传输协议\nTCP\nUDP\n已知应用协议\nTLS\nQUIC\nSSH\n未知 / 事实不足\n网络类型\nWi-Fi\n移动网络\nVPN 网络\n\n预演使用你明确提供的合成事实。缺失事实将显示“不足以判断”，不会当作已经匹配。\n\n将检查当前已保存的规则\n\n结果包含预计动作、匹配原因与规则顺序。它不证明真实网络流量的执行结果。\n\n预演这次访问",
+      "fields": [
+        {
+          "id": "preview-subject",
+          "value": "s4"
+        },
+        {
+          "id": "preview-target",
+          "value": "metrics.example.net"
+        },
+        {
+          "id": "preview-port",
+          "value": "443"
+        },
+        {
+          "id": "preview-transport",
+          "value": "TCP"
+        },
+        {
+          "id": "preview-protocol",
+          "value": "TLS"
+        },
+        {
+          "id": "preview-network",
+          "value": "Wi-Fi"
+        }
+      ]
+    },
+    {
+      "stage": "preview-result",
+      "url": "http://127.0.0.1:4173/app-first/preview-result.html?platform=android&scope=root-debate0930-dns&period=recent&window=all",
+      "text": "9:41\n返回\n预演结果\n运行中\n预计允许。\n\n天气\nmetrics.example.net:443 · TLS\n\n合成输入 · 已保存配置 V42\n\n没有显式规则命中，使用默认允许。\n\n判断过程\n\n此对象尚未分配规则，使用默认允许。\n\n检查作用对象的规则\n天气\n\n本原型使用有限的前端匹配模拟。未支持的条件明确显示未知，不作为真实规则引擎的执行证据。\n\n调整输入，再试一次"
+    },
+    {
+      "stage": "global-bindings-target",
+      "url": "http://127.0.0.1:4173/app-first/groups.html?platform=linux&scope=root-debate0930-bindings&period=recent&window=all",
+      "text": "sakamoto\n网络\n活动\n规则\n设置\n统计\n探索工具\nSAKAMOTO\n运行中\n组合一次，多处使用\n\n把一起使用的规则，整理成一个整体。\n\n规则\n规则组\n域名列表\n我的规则组\n新建\n日常联网\n\n3 条直接规则 · 0 个嵌套组\n\n1 项分配"
+    }
+  ],
+  "app_to_shared_scope": [
+    {
+      "stage": "app-rules",
+      "url": "http://127.0.0.1:4173/app-first/rules.html?platform=android&scope=root-debate0930-context&period=recent&window=all&app=s3&from=%2Fapp-first%2Fapp-controls.html%3Fplatform%3Dandroid%26scope%3Droot-debate0930-context%26app%3Ds3%26period%3Drecent%26window%3Dall",
+      "text": "9:41\nSAKAMOTO\n运行中\n返回音乐\n音乐的规则\n\n当前设置；活动仍保留当时的处理结果。\n\n规则\n规则组\n域名列表\n0 条规则 · 已保存 v42\n新建规则\n让第一条规则开始工作\n\n从具体目标开始，也可以从访问记录创建。\n\n新建规则\n配置与生效状态\n查看正在使用的配置，或导入导出\n网络\n活动\n规则\n设置"
+    },
+    {
+      "stage": "groups",
+      "url": "http://127.0.0.1:4173/app-first/groups.html?platform=android&scope=root-debate0930-context&period=recent&window=all",
+      "text": "9:41\nSAKAMOTO\n运行中\n组合一次，多处使用\n\n把一起使用的规则，整理成一个整体。\n\n规则\n规则组\n域名列表\n我的规则组\n新建\n日常联网\n\n3 条直接规则 · 0 个嵌套组\n\n1 项分配\n网络\n活动\n规则\n设置"
+    }
+  ],
+  "name_scope_reopen": {
+    "initial": {
+      "checked": true,
+      "sentence": "只为音乐阻止这个名称及子域名的查询与可确认关联的连接。"
+    },
+    "first_saved_entries": [
+      {
+        "name": "artwork.example.net",
+        "entries": [
+          {
+            "mode": "descendants",
+            "name": "artwork.example.net"
+          }
+        ]
+      }
+    ],
+    "reopened": {
+      "checked": false,
+      "sentence": "只为音乐阻止这个名称的查询与可确认关联的连接。"
+    },
+    "second_saved_entries": [
+      {
+        "name": "artwork.example.net",
+        "entries": [
+          {
+            "name": "artwork.example.net",
+            "mode": "exact"
+          }
+        ]
+      }
+    ]
+  }
+}

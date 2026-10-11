@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>规则分配 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="binding-edit"
+    data-title="规则分配"
+    data-nav="rules"
+    data-back="rules.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>让已有规则发挥作用</h1>
+            <p>选择内容、控制对象和执行方式。</p>
+          </header>
+          <div class="field">
+            <label for="binding-kind">分配内容类型</label
+            ><select id="binding-kind">
+              <option value="rule">一条规则</option>
+              <option value="group">一个规则组</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="binding-target">选择规则或规则组</label
+            ><select id="binding-target"></select>
+          </div>
+          <div id="binding-subjects" class="stack"></div>
+          <h2 class="section-label">执行方式</h2>
+          <div class="field">
+            <label for="binding-mode">命中后的处理</label
+            ><select id="binding-mode">
+              <option value="enforce">执行规则</option>
+              <option value="observe">仅观察，实际允许</option>
+            </select>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+          <button
+            id="remove-binding"
+            class="text-link"
+            style="color: var(--red)"
+          >
+            解除这项分配
+          </button>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-binding">保存分配</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

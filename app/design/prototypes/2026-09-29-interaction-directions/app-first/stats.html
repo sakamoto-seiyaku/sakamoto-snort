@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>详细活动 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience"
+    data-page="stats"
+    data-title="联网统计"
+    data-nav="activity"
+    data-back="home.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <div id="statistics-heading"></div>
+          <div class="application-layout">
+            <section>
+              <div id="statistics-traffic"></div>
+              <div class="statistics-counts" id="statistics-counts"></div>
+              <p class="note">
+                连接与域名查询分别统计。这里只显示当前保留的活动。
+              </p>
+            </section>
+            <section>
+              <div class="section-heading"><h2>这个范围内的目标</h2></div>
+              <div id="statistics-targets"></div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

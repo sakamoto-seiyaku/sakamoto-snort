@@ -1,0 +1,210 @@
+{
+  "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+  "checkedAt": "2026-09-30T18:01:16.388Z",
+  "scope": "Real browser actions on mock state; no backend, packet enforcement or usability study",
+  "receipts": [
+    {
+      "case": "work UID isolated all-network shortcut",
+      "view": "result",
+      "actor": "work",
+      "saved": 44,
+      "active": 44,
+      "range": "09:11–09:41",
+      "type": "all",
+      "record": "",
+      "quick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "runningQuick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "workExists": false,
+      "stack": [
+        "apps",
+        "app",
+        "change",
+        "review"
+      ],
+      "networkRules": []
+    },
+    {
+      "case": "shared UID WiFi is ordinary scoped rule, work shortcut retained",
+      "view": "result",
+      "actor": "shared",
+      "saved": 45,
+      "active": 45,
+      "range": "09:11–09:41",
+      "type": "all",
+      "record": "",
+      "quick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "runningQuick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "workExists": false,
+      "stack": [
+        "apps",
+        "app",
+        "overview",
+        "apps",
+        "app",
+        "change",
+        "review"
+      ],
+      "networkRules": [
+        {
+          "name": "网络限制 · 个人 · 共享UID10204 · 日历与同步两个成员共同控制",
+          "scopeUID": 10204,
+          "networks": [
+            "Wi-Fi"
+          ],
+          "action": "DROP"
+        }
+      ]
+    },
+    {
+      "case": "shared UID shortcut removal keeps network rule and work state",
+      "view": "app",
+      "actor": "shared",
+      "saved": 47,
+      "active": 47,
+      "range": "09:11–09:41",
+      "type": "all",
+      "record": "",
+      "quick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "runningQuick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": true,
+        "shared": false
+      },
+      "workExists": false,
+      "stack": [
+        "apps",
+        "app",
+        "overview",
+        "apps"
+      ],
+      "networkRules": [
+        {
+          "name": "网络限制 · 个人 · 共享UID10204 · 日历与同步两个成员共同控制",
+          "scopeUID": 10204,
+          "networks": [
+            "Wi-Fi"
+          ],
+          "action": "DROP"
+        }
+      ]
+    },
+    {
+      "case": "Android batch has six canonical identities, work and shared selected once",
+      "batch": [
+        "weather",
+        "music",
+        "firefox",
+        "signal",
+        "shared",
+        "work"
+      ],
+      "text": "本批当前身份 · 未提交\n核对这批联网安排\n\n不会自动覆盖将来新出现的身份。\n\n实际选择\n个人 · 共享UID10204 · 日历与同步两个成员共同控制\n文件 · 工作资料 · UID1010191\n\n设置全部联网快捷限制\n\n写入最高优先级普通DROP，其他规则继续保留。\n\n提交这批明确身份\n回去调整选择\n取消本次批量输入"
+    },
+    {
+      "case": "09:41 current snapshot independent of selected historical period",
+      "currentText": "天气\n当前连接\n\n最新连接快照09:41 · 与历史时段分开\n\napi.weather.example\n仍保持 · 近10秒发出180 B/s\n已取得 TLS SNI · 203.0.113.56\n›\n回原时段、类型与记录",
+      "view": "app",
+      "actor": "weather",
+      "saved": 43,
+      "active": 42,
+      "range": "09:11–09:16",
+      "type": "all",
+      "record": "",
+      "quick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": false,
+        "shared": false
+      },
+      "runningQuick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": false,
+        "shared": false
+      },
+      "workExists": false,
+      "stack": [
+        "overview"
+      ],
+      "networkRules": []
+    },
+    {
+      "case": "explicit basis return and completed local change restore app context",
+      "view": "app",
+      "actor": "weather",
+      "saved": 44,
+      "active": 44,
+      "range": "09:21–09:26",
+      "type": "query",
+      "record": "weather-block",
+      "quick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": false,
+        "shared": false
+      },
+      "runningQuick": {
+        "weather": false,
+        "firefox": false,
+        "signal": false,
+        "music": false,
+        "work": false,
+        "shared": false
+      },
+      "workExists": false,
+      "stack": [
+        "overview"
+      ],
+      "networkRules": []
+    },
+    {
+      "case": "Linux all programs canonical UID",
+      "text": "没有近期活动也可维护\n程序与控制身份\n\n程序名是观察线索；同一用户UID共同控制。\n\njs · UID1000\n此用户全部程序；程序名是观察线索，不能拆为独立控制\n›\n?\n归属未确定\n只有原始事实；尚无可提交的控制身份\n›\n批量选择当前真实身份\n未分配规则与备用内容"
+    }
+  ],
+  "errors": []
+}

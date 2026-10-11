@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>网络与 DNS · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="network"
+    data-title="网络与 DNS"
+    data-nav="settings"
+    data-back="runtime.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>了解当前的连接</h1>
+            <p>网络状态与名称服务分别显示。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div class="card" id="network-current"></div>
+              <div class="section-heading"><h2>网络接口</h2></div>
+              <div class="inset-list" id="network-interfaces"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h2>DNS 状态</h2></div>
+              <div class="card" id="dns-state"></div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>
+                  VPN 使用启动时绑定的 DNS
+                  配置。网络变化后，可能需要重新启动以更新。
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

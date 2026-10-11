@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>活动详情 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience"
+    data-page="connection"
+    data-title="活动详情"
+    data-nav="activity"
+    data-back="activity.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <div id="record-heading"></div>
+          <div class="record-layout">
+            <section id="record-summary"></section>
+            <section id="record-context"></section>
+          </div>
+          <div id="record-decision-status"></div>
+          <div class="record-action">
+            <button class="btn primary full" id="adjust-record">
+              调整以后的访问
+            </button>
+            <p>这条记录保留当时的结果。</p>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

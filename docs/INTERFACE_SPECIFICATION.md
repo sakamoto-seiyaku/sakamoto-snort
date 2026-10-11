@@ -1,5 +1,11 @@
 # Current interface map
 
+The accepted [unified rule specification](product/UNIFIED_RULE_ENGINE_SPEC.md)
+and [ADR-0009](adr/0009-unified-rules-and-vpp-owned-configuration.md) define the
+next rule-management, compilation and observation contracts. The typed sources
+below still describe the current implementation; new source entities, result
+fields and startup-repair behavior are not implied to exist yet.
+
 The former v3.10 vNext/netstring daemon interface is
 [archived intact](archived/pre-vpp/INTERFACE_SPECIFICATION.md). It is not the
 current Product API and must not be restored as a C++ compatibility surface.

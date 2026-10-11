@@ -1,0 +1,243 @@
+{
+  "scope": "Local frontend reference, not a backend or device acceptance",
+  "layouts": [
+    {
+      "mode": "phone",
+      "view": "overview",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "authoring",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "deep",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "map",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "shared",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "list",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "preview",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "phone",
+      "view": "device",
+      "width": 391,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "overview",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "authoring",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "deep",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "map",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "shared",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "list",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "preview",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "tablet",
+      "view": "device",
+      "width": 818,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "overview",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "authoring",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "deep",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "map",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "shared",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "list",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "preview",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-wide",
+      "view": "device",
+      "width": 1273,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "overview",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "authoring",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "deep",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "map",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "shared",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "list",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "preview",
+      "width": 638,
+      "horizontalOverflow": false
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "device",
+      "width": 638,
+      "horizontalOverflow": false
+    }
+  ],
+  "flows": [
+    {
+      "name": "old query -> local change -> publish -> later evidence -> original fact",
+      "saved": 43,
+      "active": 43,
+      "oldFactVersion": 42,
+      "originalRangePreserved": true
+    },
+    {
+      "name": "stop named Firefox group use -> saved/not-active -> retry",
+      "signalPreserved": true,
+      "residualDirectSourceVisible": true
+    },
+    {
+      "name": "observe conflict -> explicit source correction",
+      "conflictRejectedBeforeSave": true,
+      "unselectedSignalModePreserved": true
+    },
+    {
+      "name": "region -> explicit identity/IP pairs -> commit -> return",
+      "pairs": 2,
+      "crossProduct": false,
+      "originalMapSelectionPreserved": true
+    },
+    {
+      "name": "healthy D1 -> 50 added rules -> saved43/active42 -> revise44 -> late42/current44 -> stop D1 -> same input",
+      "newRules": 50,
+      "totalDefinitions": 54,
+      "sourceAndActiveSeparated": true,
+      "recordVersions": [
+        42,
+        42,
+        44
+      ],
+      "readingPauseDoesNotStopCapture": true,
+      "debugStopDoesNotChangePolicy": true,
+      "normalNewFactAfterDebugStop": true,
+      "selectionAndInputPreserved": true
+    },
+    {
+      "name": "DNS-only map projection",
+      "doesNotInventConnections": true,
+      "originalDNSFactVisible": true
+    }
+  ],
+  "errors": []
+}

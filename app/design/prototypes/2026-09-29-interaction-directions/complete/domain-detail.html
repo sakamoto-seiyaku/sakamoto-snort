@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>域名列表详情 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="domain-detail"
+    data-title="域名列表详情"
+    data-nav="rules"
+    data-back="domains.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <div id="domain-detail-main"></div>
+          <div class="desktop-grid">
+            <section>
+              <div class="section-heading">
+                <h2>域名条目</h2>
+                <a id="domain-edit-link" class="text-link">编辑</a>
+              </div>
+              <div class="inset-list" id="domain-entries"></div>
+            </section>
+            <section>
+              <div class="section-heading"><h2>使用这个列表的规则</h2></div>
+              <div id="domain-references"></div>
+              <button
+                class="text-link"
+                id="delete-domain"
+                style="color: var(--red)"
+              >
+                删除列表
+              </button>
+            </section>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="domain-create-rule">
+          用这个列表创建规则
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

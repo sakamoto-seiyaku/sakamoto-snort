@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-08",
+  "scope": "Offline audit of existing profiles and current source. Original inputs unchanged; no product edits/device traffic.",
+  "vpp_pin": "9258530f3804a152578ce11cc7c8a1e9eab88ed0",
+  "profile_plugin_build_id": "ff7e9df8628e8423936c58644e9247f9d59e68ce",
+  "inputs_sha256": {
+    "build-output/vpn-mode-fix-20260928/vpn/tcp25.perf.data": "ef32eae845b533b09f9a92cf197e553e0f7d982dbbdcafd9cddd4b68ba8074c4",
+    "build-output/vpn-mode-fix-20260928/vpn/tcp25-first20-hotspots.json": "80592b8036002043c3af0c23898cea943d8e7593fc59c231c23e26083b88fc2a",
+    "build-output/vpn-mode-fix-20260928/vpn/tcp25-sender.json": "2338957528c1e374465b6460b7a9602d6198b32fd546df11b885e2328dc50289",
+    "build-output/vpn-mode-fix-20260928/vpn/pids.json": "5f56d2f6c861b5e4ca8b7fc8e48697d283ed176ba23de235b3b1be954ef69e55",
+    "build-output/vpn-mode-fix-20260928/flows/vpn-tcp25-warmup/attempt0-page0.json": "7fd09ab8b36edd5c2046457908c005d971f61ae8b175a48436b396252ca04523",
+    "build-output/vpn-mode-fix-20260928/symbols/libproduct_core_plugin.so": "dbdd15e289e9c919e0ddb6e89a6be344a98133763b529504f44b762821e3d615",
+    "build-output/vpn-mode-fix-20260928/elf-identity.json": "9af12da83da255ab13fcdf585737db6c15546c0f660073c4f545c535059b0c4f",
+    "build-output/vpn-throughput-profile-20260928/vpn/udp25-matched22.hotspots.json": "8d7e8c4ad845ad8351666ebeedb378b5de7a29880f282c0347e94a675ad26a88",
+    "build-output/vpn-throughput-profile-20260928/root/udp25-matched22.hotspots.json": "77bd58011ec8b016096338c37c894d7d265246c08f460099a9e29c7253c5e1d5",
+    "src/product/vpp/product_packet_graph.c": "d7fa94d4143020d8e3deeb72a766513313a7960b15a4b924f9f199188886ffb3",
+    "src/product/vpp/product_l4_policy.c": "c840d0910588d11fcb5b483bba1f1fed9f0eca032a313f14e3155a3e08de0320",
+    "src/product/vpp/product_l4_policy.h": "d097310cc160381045da9e41ae1d2972a2059486e6aef6d4174cf76d098386e8",
+    "src/product/vpp/product_root_nfqueue_adapter.c": "a3ca174277cb8ef7b0d5053bcba93349b862e79ed12f23d4a87455181ee0b44b",
+    "src/product/vpp/product_vpn_tun_adapter.c": "4254533d2cc900921b6459608700e9afd927c02f937392586bc64dfeffa4744e",
+    "src/product/vpp/product_vpn_tun_mode.c": "447985bcf389f24a7dc792863c7ca4b6ac398c37b8e0c0833d5e417805cd45c3",
+    "third_party/hev/product/hev-lwip-context.c": "c538b19c40dcc0918393e3ba08dd8e3946d9f645943173cb3ece8f4679d9191f"
+  },
+  "commands": [
+    {
+      "command": "rtk proxy python3 docs/reviews/assets/2026-10-08-vpp-practice-audit/analyze_existing_profile.py --output /tmp/vpp-practice-profile-analysis-root.json",
+      "exit_code": 0
+    },
+    {
+      "command": "rtk proxy /home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump --disassemble-symbols=product_l4_policy_match_cached,product_packet_graph_l4_view_evaluate build-output/vpn-mode-fix-20260928/symbols/libproduct_core_plugin.so",
+      "exit_code": 0
+    },
+    {
+      "command": "rtk proxy /home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -n build-output/vpn-mode-fix-20260928/symbols/libproduct_core_plugin.so",
+      "exit_code": 0
+    }
+  ],
+  "primary_source_files_sha256": {
+    "main.c": "174afcf067798e31b4d6b21ad2ce7016e4660415262f977a20e6e4ea847fa1c6",
+    "buffer_funcs.h": "a2366a87189ed907da2b90d0f0177fc14264d3dc0851a90af0e2bbcc81743bdc",
+    "buffer_node.h": "6ede13aefb2bb131492a5d98f75cd5d7bababaef5051adb9796ae221bb8a1936"
+  }
+}

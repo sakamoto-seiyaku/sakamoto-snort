@@ -1,0 +1,55 @@
+{
+  "date": "2026-10-08",
+  "target": "aarch64-linux-android31",
+  "compiler": "Android NDK 29.0.14206865, Clang 21.0.0, toolchain commit 5e96669f06077099aa41290cdb4c5e6fa0f59349",
+  "source_sha256": {
+    "src/product/vpp/product_l4_policy.c": "c840d0910588d11fcb5b483bba1f1fed9f0eca032a313f14e3155a3e08de0320",
+    "src/product/vpp/product_l4_policy.h": "d097310cc160381045da9e41ae1d2972a2059486e6aef6d4174cf76d098386e8",
+    "src/product/vpp/product_packet_graph.c": "d7fa94d4143020d8e3deeb72a766513313a7960b15a4b924f9f199188886ffb3",
+    "src/product/vpp/CMakeLists.txt": "655c39f0392328cbf76a1f391e63460ca80a2b0d36c0c2f9274bef8a88f32bef",
+    "src/product/vpp/pinned-vpp-revision.txt": "315a258dbfc69f63cab569edcd6da1be9d556c86235f5315a2520f79a7afd77e"
+  },
+  "compiles": [
+    {
+      "optimization": "O2",
+      "command": [
+        "/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/clang",
+        "--target=aarch64-linux-android31",
+        "-std=c11",
+        "-O2",
+        "-Isrc/product/vpp",
+        "-Rpass=loop-vectorize",
+        "-Rpass=slp-vectorizer",
+        "-S",
+        "src/product/vpp/product_l4_policy.c",
+        "-o",
+        "/tmp/sakamoto-policy-arm64-O2.s"
+      ],
+      "stderr_file": "/tmp/sakamoto-policy-arm64-O2-remarks.txt",
+      "exit_code": 0,
+      "assembly_sha256": "598299b4e2038284b82cbbdabd62d0fe2607a7cf9193e5d9e717c556fb3e4875",
+      "match_position_vector_and_count": 5
+    },
+    {
+      "optimization": "O3",
+      "command": [
+        "/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/clang",
+        "--target=aarch64-linux-android31",
+        "-std=c11",
+        "-O3",
+        "-Isrc/product/vpp",
+        "-Rpass=loop-vectorize",
+        "-Rpass=slp-vectorizer",
+        "-S",
+        "src/product/vpp/product_l4_policy.c",
+        "-o",
+        "/tmp/sakamoto-policy-arm64-O3.s"
+      ],
+      "stderr_file": "/tmp/sakamoto-policy-arm64-O3-remarks.txt",
+      "exit_code": 0,
+      "assembly_sha256": "7b46c52a7e7e8962d5b7cbf32e4223dab6d10ff893ab1df859f51b0134b5c63b",
+      "match_position_vector_and_count": 3
+    }
+  ],
+  "scope": "Standalone current C policy translation unit compiled to assembly; no linked product artifact, runtime execution, benchmark or device acceptance."
+}

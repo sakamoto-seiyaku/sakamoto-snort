@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>外观 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="appearance"
+    data-title="外观"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>安静，也清晰</h1>
+            <p>让信息保持清楚，让界面适应你。</p>
+          </header>
+          <h2 class="section-label">主题</h2>
+          <div class="theme-previews">
+            <button class="theme-preview" data-theme="light">
+              <span class="tiny-phone"></span>浅色</button
+            ><button class="theme-preview" data-theme="dark">
+              <span class="tiny-phone dark"></span>深色</button
+            ><button class="theme-preview" data-theme="system">
+              <span class="tiny-phone auto"></span>跟随系统
+            </button>
+          </div>
+          <h2 class="section-label">强调色</h2>
+          <div class="card">
+            <div class="swatches">
+              <button
+                class="swatch"
+                style="--swatch: #2865e8"
+                data-accent="#2865e8"
+                role="radio"
+                aria-label="海蓝"
+              ></button
+              ><button
+                class="swatch"
+                style="--swatch: #42796c"
+                data-accent="#42796c"
+                role="radio"
+                aria-label="松绿"
+              ></button
+              ><button
+                class="swatch"
+                style="--swatch: #8061ad"
+                data-accent="#8061ad"
+                role="radio"
+                aria-label="鸢尾紫"
+              ></button
+              ><button
+                class="swatch"
+                style="--swatch: #9b714e"
+                data-accent="#9b714e"
+                role="radio"
+                aria-label="暖棕"
+              ></button>
+            </div>
+          </div>
+          <h2 class="section-label">文字大小</h2>
+          <div class="segmented">
+            <button data-text="standard">标准</button
+            ><button data-text="large">较大</button>
+          </div>
+          <div class="inset-list">
+            <a class="list-row" data-page="activity.html"
+              ><span class="grow"
+                ><span class="title">一次连接，一目了然。</span
+                ><span class="subtitle">Firefox · TLS · 已允许</span></span
+              ><span class="value"></span><span data-icon="chevron-right"></span
+            ></a>
+          </div>
+          <p class="note">偏好立即应用到本次浏览，不影响规则和连接。</p>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

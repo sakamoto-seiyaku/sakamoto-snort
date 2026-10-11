@@ -5,6 +5,14 @@ date: 2026-07-21
 
 # Tauri UI shell, Android foreground runtime boundary
 
+**2026-09-24 clarification:** [ADR-0009](0009-unified-rules-and-vpp-owned-configuration.md)
+keeps this lifecycle separation while assigning the single rule-configuration
+file and management API to VPP. Rust remains the writer of the separate
+observation store. References below to VPP not writing the product database
+apply to observation/history storage, not the newly selected configuration file.
+Configuration compilation failure also preserves healthy management APIs before
+product traffic capture is enabled; process availability alone is not protection.
+
 Sakamoto uses the standard Tauri 2 mobile shape for its shared Android/Linux Product UI instead of making
 the WebView, Activity, or a Tauri mobile plugin own persistent packet protection. On Android, Tauri compiles
 the Rust mobile entry point as a library loaded by the platform application, and native mobile integration is

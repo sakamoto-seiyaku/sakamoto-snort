@@ -1,0 +1,20 @@
+   7599c: 3869696d     	ldrb	w13, [x11, x9]
+   759a0: 91000529     	add	x9, x9, #0x1
+   759a4: f102013f     	cmp	x9, #0x80
+   759a8: ca0d014a     	eor	x10, x10, x13
+   759ac: 9b0c7d4a     	mul	x10, x10, x12
+   759b0: 54ffff61     	b.ne	0x7599c <product_l4_policy_match_cached+0x184>
+00000000000b505c <product_packet_graph_l4_view_evaluate>:
+   b505c: a9ba7bfd     	stp	x29, x30, [sp, #-0x60]!
+   b5060: a9016ffc     	stp	x28, x27, [sp, #0x10]
+   b5064: a90267fa     	stp	x26, x25, [sp, #0x20]
+   b5068: a9035ff8     	stp	x24, x23, [sp, #0x30]
+   b506c: a90457f6     	stp	x22, x21, [sp, #0x40]
+   b5070: a9054ff4     	stp	x20, x19, [sp, #0x50]
+   b5074: 910003fd     	mov	x29, sp
+   b5078: d1403fff     	sub	sp, sp, #0xf, lsl #12   // =0xf000
+   b507c: d124c3ff     	sub	sp, sp, #0x930
+   b5080: d53bd05b     	mrs	x27, TPIDR_EL0
+   b5084: aa0203f3     	mov	x19, x2
+   b5088: aa0103f4     	mov	x20, x1
+   b508c: f9401768     	ldr	x8, [x27, #0x28]

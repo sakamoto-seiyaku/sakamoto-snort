@@ -1,0 +1,101 @@
+{
+  "errors": [],
+  "steps": [
+    {
+      "name": "android-selected-time-contributions",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=android-landscape&view=overview",
+      "text": "9:41\n▂▄▆　▰\nsakamoto\n⌁\n概览\n≋\n活动\n☷\n联网安排\nAndroid · 平板\n记录保存在本机\n这台设备\n我的网络\n运行中\n我的网络\n\nAndroid · 这台平板\n\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n\n本段记录完整 · 最新至09:41\n\n↓ 本段收到\n800 KB\n↑ 本段发出\n1.3 MB\n4 MB / 5分钟 · 收发同刻度\n09:11\n09:26\n09:41\n当前连接\n统计\n地图\n回最近30分钟\n\n所选09:21–09:26：收到800 KB，发出1.3 MB；查询次数单独计量。\n\n查看这个范围的查询 →\n所选时段的贡献\n全部应用\n♪\n音乐\n个人\n↓ 0 B　↑ 0 B\n0 B\n›\n☁\n天气\n个人\n↓ 82 KB　↑ 1.3 MB\n20次查询被阻止（独立计量）\n1.382 MB\n›\n◉\nFirefox\n个人\n↓ 700 KB　↑ 0 B\n700 KB\n›\n▤\n文件\n工作资料\n↓ 18 KB　↑ 0 B\n18 KB\n›\n◌\nSignal\n个人\n↓ 0 B　↑ 0 B\n0 B\n›\n▦\n日历与同步\n共享UID · 两个成员\n↓ 0 B　↑ 0 B\n0 B\n›\n?\n归属未确定\n保留原始事实\n↓ 0 B　↑ 0 B\n0 B\n›\n\n个人与工作资料分别识别；共享 UID 的成员共同受控。",
+      "scroll": 0
+    },
+    {
+      "name": "android-app-keeps-range",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=android-landscape&view=app",
+      "text": "9:41\n▂▄▆　▰\nsakamoto\n⌁\n概览\n≋\n活动\n☷\n联网安排\nAndroid · 平板\n记录保存在本机\n‹ 回设备概览\n应用活动\n运行中\n☁\n天气\n个人 · UID 10238\n更多检查\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：跟踪名单中的名称查询受限\n查看安排 ›\n1.382 MB\n本范围连接传输\n\n↓ 82 KB · ↑ 1.3 MB · 2条连接\n\n全部\n查询\n连接\n按时间排列\n连接 · 本段有传输\n09:23\napi.weather.example\n本段收到40 KB · 发出1.2 MB\n连接 · 本段有传输\n09:23\nmaps.weather.example\n本段收到42 KB · 发出100 KB\n筛选目标与结果\n所选事实\n\n天气 · 一条连接 · 09:23\n09:21–09:26\n\n连接 · 本段有传输\n\napi.weather.example\n\n当时目的地址\n\n203.0.113.42\n\n本段传输\n\n收到40 KB · 发出1.2 MB\n\n记录时配置\n\nv42\n\n当时资料\n\n此结果未引用名单\n当时的处理依据\n\n没有规则阻止\n\n未找到阻止赢家，不能据此证明网络成功送达。\n\n调整以后的连接\n查看现在的联网安排",
+      "scroll": 0
+    },
+    {
+      "name": "android-query-primary-facts",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=android-landscape&view=app",
+      "text": "9:41\n▂▄▆　▰\nsakamoto\n⌁\n概览\n≋\n活动\n☷\n联网安排\nAndroid · 平板\n记录保存在本机\n‹ 回设备概览\n应用活动\n运行中\n☁\n天气\n个人 · UID 10238\n更多检查\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：跟踪名单中的名称查询受限\n查看安排 ›\n21次\n本范围的名称查询\n\n20次被阻止 · 1次返回地址\n\n全部\n查询\n连接\n按时间排列\n查询被阻止\n09:24\nmetrics.example.net\n当时名单命中 · 仅此名称的查询\n查询返回地址\n09:22\napi.weather.example\n返回1个地址\n筛选目标与结果\n所选事实\n\n天气 · 一次名称查询 · 09:24\n09:21–09:26\n\n查询被阻止\n\nmetrics.example.net\n\n查询类型\n\nA\n\n当时响应\n\n没有返回地址\n\n记录时配置\n\nv42\n\n当时资料\n\n2026.09.29.1\n当时的处理依据\n\n拦截跟踪域名查询\n\n这次事实保留当时的规则与资料。当前修改另在现在安排查看。\n\n查看当时使用的名单依据 →\n调整以后的查询\n查看现在的联网安排",
+      "scroll": 0
+    },
+    {
+      "name": "android-keyboard-selected-record",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=android-landscape&view=app",
+      "text": "9:41\n▂▄▆　▰\nsakamoto\n⌁\n概览\n≋\n活动\n☷\n联网安排\nAndroid · 平板\n记录保存在本机\n‹ 回设备概览\n应用活动\n运行中\n☁\n天气\n个人 · UID 10238\n更多检查\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：跟踪名单中的名称查询受限\n查看安排 ›\n21次\n本范围的名称查询\n\n20次被阻止 · 1次返回地址\n\n全部\n查询\n连接\n按时间排列\n查询被阻止\n09:24\nmetrics.example.net\n当时名单命中 · 仅此名称的查询\n查询返回地址\n09:22\napi.weather.example\n返回1个地址\n筛选目标与结果\n所选事实\n\n天气 · 一次名称查询 · 09:22\n09:21–09:26\n\n查询返回地址\n\napi.weather.example\n\n查询类型\n\nA\n\n当时响应\n\n1个网络地址\n\n记录时配置\n\nv42\n\n当时资料\n\n此结果未引用名单\n当时的处理依据\n\n未被规则阻止\n\n未找到阻止赢家，不能据此证明网络成功送达。\n\n调整以后的查询\n查看现在的联网安排",
+      "scroll": 0
+    },
+    {
+      "name": "linux-narrow-record-detail",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-narrow&view=app",
+      "text": "sakamoto · Linux 本机\n—　□　×\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回活动列表\n应用活动\n运行中\njs\njs\n本机用户 · UID 1000\n更多检查\n\nFirefox、音乐等程序由同一控制身份处理；观察范围：此UID全部活动。程序线索帮助认出记录；改变联网安排会共同影响同UID程序。\n\n所选事实\n‹ 返回列表\n\njs · 一次名称查询 · 09:24\n最近30分钟 · 09:11–09:41\n\n查询被阻止\n\nmetrics.example.net\n\n查询类型\n\nA\n\n当时响应\n\n没有返回地址\n\n记录时配置\n\nv42\n\n当时资料\n\n2026.09.29.1\n当时的处理依据\n\n拦截跟踪域名查询\n\n这次事实保留当时的规则与资料。当前修改另在现在安排查看。\n\n查看当时使用的名单依据 →\n调整以后的查询\n查看现在的联网安排",
+      "scroll": 0
+    },
+    {
+      "name": "linux-narrow-return-list",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-narrow&view=app",
+      "text": "sakamoto · Linux 本机\n—　□　×\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 回设备概览\n应用活动\n运行中\njs\njs\n本机用户 · UID 1000\n更多检查\n\nFirefox、音乐等程序由同一控制身份处理；观察范围：此UID全部活动。程序线索帮助认出记录；改变联网安排会共同影响同UID程序。\n\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：按不同条件处理 · 供同 UID 程序使用\n查看安排 ›\n这一段的活动\n6条连接 · 21次名称查询\n\n↓ 9.4 MB · ↑ 1.802 MB；查询次数独立计量\n\n全部\n查询\n连接\n按时间排列\n查询被阻止\n09:24\nmetrics.example.net\n当时名单命中 · 仅此名称的查询\nFirefox · 程序线索\n连接 · 本段有传输\n09:23\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n天气进程 · 程序线索\n查询返回地址\n09:22\napi.weather.example\n返回1个地址\n天气进程 · 程序线索\n连接 · 本段有传输\n09:21\nmaps.weather.example\n本段发出100 KB · 收到42 KB\n天气进程 · 程序线索\n连接 · 本段有传输\n09:20\nmedia.example.net\n本段收到8.6 MB · 发出200 KB\n音乐进程 · 程序线索\n连接 · 本段记录\n09:19\nstatic.example.org\n本段收到700 KB · 发出144 KB\nFirefox · 程序线索\n连接 · 本段记录\n09:18\nfiles.example.org\n本段收到18 KB · 发出119 KB\n文件程序 · 程序线索\n连接 · 本段记录\n09:17\nchat.example.org\n本段收到0 B · 发出39 KB\nSignal · 程序线索\n筛选目标与结果",
+      "scroll": 0
+    },
+    {
+      "name": "review-before-check",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›",
+      "scroll": 0
+    },
+    {
+      "name": "review-source-check",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n订阅来源\n\n跟踪域名 · 当前资料2026.09.29.1\n候选2026.09.29.2来自同一来源。核对后返回同一次审阅。\n\n订阅文件地址\n文件格式\n每行一个精确域名\n名称及子域范围\n检查安排\n每天检查新资料\n暂停检查；当前内容仍使用\n返回原任务\n保存来源安排",
+      "scroll": 0
+    },
+    {
+      "name": "review-source-return-same-candidate",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›",
+      "scroll": 0
+    },
+    {
+      "name": "review-consumer-check",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›",
+      "scroll": 0
+    },
+    {
+      "name": "review-consumer-return-same-candidate",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›",
+      "scroll": 0
+    },
+    {
+      "name": "review-defer-keeps-current",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=list",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 名单目录\n名单内容\n运行中\n跟踪域名\n\n正在使用的匹配内容\n\n来源 ›\n订阅 · lists.example.org\n正在使用资料 2026.09.29.1\n核对来源\n连接与查询规则供 js（UID1000）共同使用\n新资料可审阅\n审阅变化 →\n匹配内容\n修改内容\nmetrics.example.net\n\n名称及子域名 · 订阅来源\n\n本名单排除 · 仅此名称\napi.metrics.example.net\nevents.example.org\n\n仅此名称 · 订阅来源\n\nlocal.example.net\n\n仅此名称 · 本地补充\n\n排除只作用本名单；其他名单与规则仍独立判断。\n\n使用此名单\n2条规则\n\n名单提供匹配内容；动作、顺序与实际执行来自使用它的规则。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n用此名单创建规则 →",
+      "scroll": 0
+    },
+    {
+      "name": "review-reopen-candidate",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=review",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 返回名单\n采用新资料\n运行中\n\n跟踪域名 · 尚未采用\n\n采用新资料\n核对来源 ›\n正在使用\n2026.09.29.1\n这次候选\n2026.09.29.2\n名单内容的变化\n＋\ncdn-metrics.example.org\n\n新增匹配 · 仅此名称\n\n−\nevents.example.org\n\n移出匹配 · 仅此名称\n\n你的本地修改保持原样\n\n补充 local.example.net · 仅此名称\n排除 api.metrics.example.net · 仅此名称\n\n后续活动由引用规则按新资料判断；增删名单内容不等于保证访问允许或阻止。\n\n使用这份新资料\n暂不采用\n\n资料候选 .2 · 保存配置v42 / 正在使用v42 分别核对\n\n完整用途与实际范围\n2条规则\n\n资料版本与配置版本不同；这是当前候选的使用关系，不改写过去记录。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›",
+      "scroll": 0
+    },
+    {
+      "name": "review-adoption-result",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-touch&view=list",
+      "text": "sakamoto · Linux 本机\n—　□　×\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 名单目录\n名单内容\n运行中\n跟踪域名\n\n正在使用的匹配内容\n\n来源 ›\n订阅 · lists.example.org\n正在使用资料 2026.09.29.2\n核对来源\n连接与查询规则供 js（UID1000）共同使用\n\n新资料已开始使用 · 配置v43\n\n匹配内容\n修改内容\nmetrics.example.net\n\n名称及子域名 · 订阅来源\n\n本名单排除 · 仅此名称\napi.metrics.example.net\ncdn-metrics.example.org\n\n仅此名称 · 订阅来源\n\nlocal.example.net\n\n仅此名称 · 本地补充\n\n排除只作用本名单；其他名单与规则仍独立判断。\n\n使用此名单\n2条规则\n\n名单提供匹配内容；动作、顺序与实际执行来自使用它的规则。\n\n阻止统计域名\n\n连接 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序1\n\njs · UID1000\n\nFirefox、音乐等程序共享此控制身份\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n拦截跟踪域名查询\n\n名称查询 · 执行规则\n命中后阻止；名称来自「跟踪域名」\n优先级10 · 顺序5\n\njs · UID1000\n\n查询来自同一控制身份；程序线索不另开执行范围\n\n核对完整规则与有效顺序 ›\n调整使用对象 ›\n用此名单创建规则 →",
+      "scroll": 0
+    },
+    {
+      "name": "linux-shared-control-scope",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=linux-wide&view=app",
+      "text": "sakamoto · Linux 本机\n—　□　×\nsakamoto\n⌁\n概览\n≋\n活动\n☷\n联网安排\nLinux · 本机\n记录保存在本机\n‹ 回设备概览\n应用活动\n运行中\njs\njs\n本机用户 · UID 1000\n更多检查\n\nFirefox、音乐等程序由同一控制身份处理；观察范围：此UID全部活动。程序线索帮助认出记录；改变联网安排会共同影响同UID程序。\n\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：按不同条件处理 · 供同 UID 程序使用\n查看安排 ›\n这一段的活动\n6条连接 · 21次名称查询\n\n↓ 9.4 MB · ↑ 1.802 MB；查询次数独立计量\n\n全部\n查询\n连接\n按时间排列\n查询被阻止\n09:24\nmetrics.example.net\n当时名单命中 · 仅此名称的查询\nFirefox · 程序线索\n连接 · 本段有传输\n09:23\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n天气进程 · 程序线索\n查询返回地址\n09:22\napi.weather.example\n返回1个地址\n天气进程 · 程序线索\n连接 · 本段有传输\n09:21\nmaps.weather.example\n本段发出100 KB · 收到42 KB\n天气进程 · 程序线索\n连接 · 本段有传输\n09:20\nmedia.example.net\n本段收到8.6 MB · 发出200 KB\n音乐进程 · 程序线索\n连接 · 本段记录\n09:19\nstatic.example.org\n本段收到700 KB · 发出144 KB\nFirefox · 程序线索\n连接 · 本段记录\n09:18\nfiles.example.org\n本段收到18 KB · 发出119 KB\n文件程序 · 程序线索\n连接 · 本段记录\n09:17\nchat.example.org\n本段收到0 B · 发出39 KB\nSignal · 程序线索\n筛选目标与结果\n所选事实\n\njs · 一次名称查询 · 09:24\n最近30分钟 · 09:11–09:41\n\n查询被阻止\n\nmetrics.example.net\n\n查询类型\n\nA\n\n当时响应\n\n没有返回地址\n\n记录时配置\n\nv42\n\n当时资料\n\n2026.09.29.1\n当时的处理依据\n\n拦截跟踪域名查询\n\n这次事实保留当时的规则与资料。当前修改另在现在安排查看。\n\n查看当时使用的名单依据 →\n调整以后的查询\n查看现在的联网安排\n调整以后的查询\n\njs · metrics.example.net · 名称查询\n这一决定作用js（UID1000），会共同影响同身份程序。\n\n以后怎样处理\n允许\n阻止\n包含这个名称及子域名\n\n这是以后使用的规则；不改变09:24的旧事实。\n\n返回原任务\n应用这个有范围的决定",
+      "scroll": 0
+    },
+    {
+      "name": "android-profile-control-scope",
+      "url": "http://127.0.0.1:4174/design-reference-v2-large.html?mode=android-portrait&view=app",
+      "text": "9:41\n▂▄▆　▰\nS\n⌁\n概览\n≋\n活动\n☷\n联网安排\n‹ 回设备概览\n应用活动\n运行中\n☁\n天气\n个人 · UID 10238\n更多检查\n观察范围\n最近30分钟 · 09:11–09:41\n09:11–09:16\n09:16–09:21\n09:21–09:26\n09:26–09:31\n09:31–09:36\n09:36–09:41\n当前连接　观察一段\n现在：跟踪名单中的名称查询受限\n查看安排 ›\n这一段的活动\n2条连接 · 21次名称查询\n\n↓ 82 KB · ↑ 1.3 MB；查询次数独立计量\n\n全部\n查询\n连接\n按时间排列\n查询被阻止\n09:24\nmetrics.example.net\n当时名单命中 · 仅此名称的查询\n连接 · 本段有传输\n09:23\napi.weather.example\n本段发出1.2 MB · 收到40 KB\n查询返回地址\n09:22\napi.weather.example\n返回1个地址\n连接 · 本段有传输\n09:21\nmaps.weather.example\n本段发出100 KB · 收到42 KB\n筛选目标与结果\n所选事实\n\n天气 · 一次名称查询 · 09:24\n最近30分钟 · 09:11–09:41\n\n查询被阻止\n\nmetrics.example.net\n\n查询类型\n\nA\n\n当时响应\n\n没有返回地址\n\n记录时配置\n\nv42\n\n当时资料\n\n2026.09.29.1\n当时的处理依据\n\n拦截跟踪域名查询\n\n这次事实保留当时的规则与资料。当前修改另在现在安排查看。\n\n查看当时使用的名单依据 →\n调整以后的查询\n查看现在的联网安排\n调整以后的查询\n\n天气 · metrics.example.net · 名称查询\n当前作用对象保持所选应用。\n\n以后怎样处理\n允许\n阻止\n包含这个名称及子域名\n\n这是以后使用的规则；不改变09:24的旧事实。\n\n返回原任务\n应用这个有范围的决定",
+      "scroll": 0
+    }
+  ]
+}

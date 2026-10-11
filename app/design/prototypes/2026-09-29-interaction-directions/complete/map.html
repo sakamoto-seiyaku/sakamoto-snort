@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>连接地图 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="map"
+    data-title="连接地图"
+    data-nav="activity"
+    data-back="extensions.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>连接去了哪里</h1>
+            <p>地理位置是线索，不是安全评级。</p>
+          </header>
+          <div class="chips">
+            <button class="chip active" data-map-range="60">最近 1 小时</button
+            ><button class="chip" data-map-range="15">最近 15 分钟</button
+            ><button class="chip" data-map-range="1440">今天</button>
+          </div>
+          <div class="desktop-grid">
+            <section>
+              <div class="map-art" id="world-map"></div>
+              <p class="source-line">
+                位置来自示例标注。私有地址与未知位置单独保留，不推断精确坐标。
+              </p>
+            </section>
+            <section>
+              <div class="section-heading">
+                <h2>目的地区</h2>
+                <span class="caption" id="map-count"></span>
+              </div>
+              <div class="inset-list" id="map-locations"></div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

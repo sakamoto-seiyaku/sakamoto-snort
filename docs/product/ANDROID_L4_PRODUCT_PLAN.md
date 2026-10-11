@@ -1,5 +1,20 @@
 # Android L4 产品计划与 UI 基线
 
+**2026-09-24 设计更新：** [统一规则后端与常态观测规格](UNIFIED_RULE_ENGINE_SPEC.md)及
+[ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)取代本文冲突的
+Gate 特权、分阶段优先级、固定规则族、配置保存职责、单一物理 Product Store 与观测窗口设计。
+TLS / QUIC SNI 和域名条件已列入这次规则后端规格；具体 UI 与 debug 交互仍后置。
+本文保留此前产品和发布语境，不作为新后端已交付的证明，也不以旧界面流程冻结新交互。
+
+**2026-09-29 UI 讨论校准：** 本轮产品与 UI 设计同时覆盖 Android 和 Linux，采用既定的
+共享 Rust 产品能力与 Tauri UI 方向；分别处理平台身份、权限、生命周期以及触控/桌面交互。
+本文较早的 Android-first、Linux 后续等阶段措辞不限制本轮双端设计，也不因此承诺双端同日发布。
+策略 checkpoint 有价值但首版不做；规则预演、面向用户的 debug 模式和地图保留在产品设计范围，
+具体交互与首版深度继续讨论。当前实现与设计目标分别见
+[功能对应清单](../reviews/2026-09-29_UI_FUNCTIONAL_INVENTORY.md)。
+本轮采用 HTML 原型先行：先把确认范围内的功能、交互和状态设计完整，同时审视手机与桌面体验；
+以聚焦、直觉、精确、克制和完成度把控每轮原型，确认后再接真实后端并进入正式实现。
+
 状态：产品目标与 current-head contract 基线；S171-S196 已交付 VPP-native Product Core
 实现与当前 APK/device evidence，release gate 仍以独立准入条件为准。
 
@@ -12,8 +27,8 @@
 
 架构事实和 POC 证据仍以 `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` 为准；per-worker
 flow ownership 以 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 为准；VPN Direct Egress 以
-ADR-0007 及 SAKAMOTO-114..117 evidence frontier 为准；policy stage 边界以
-`docs/adr/0001-policy-bundle-staged-enforcement.md` 为准。本文不定义底层 VPP Interface
+ADR-0007 及 SAKAMOTO-114..117 evidence frontier 为准；新的规则设计以 ADR-0009 和上链规格为准，
+ADR-0001 保留尚未被取代的基础约束与旧实现语境。本文不定义底层 VPP Interface
 字面量，也不是 Plane 工作清单。
 
 ## 1. 产品结果
@@ -319,24 +334,28 @@ Activity 使用不同 tables 和 repository APIs，以表达权威事务数据�
 
 ## 4. UI 怎么设计
 
-当前讨论顺序暂缓详细 UI 设计。此阶段只保留 App-first Control、Progressive Control Disclosure、
-共享 Product Interface、Root/VPN 初始化参考和 UI 不拥有权威数据库等已确认原则；不决定默认
-落点、顶层导航、页面数量、具体布局或视觉样式。旧 `sakamoto-app` 继续作为交互经验和失败
-案例参考。详细 Android/Linux 共享 UI 在核心产品接口与 Android L4 vertical slice 稳定后集中
-设计，但仍属于 Android L4 Product Release 的交付条件，不因讨论后移而移出发布范围。
+2026-09-29 讨论已进入详细 UI 设计准备，用户确认先以可交互 HTML 原型完成本轮功能设计。
+保留 App-first Control、Progressive Control Disclosure、共享 Product Interface、Root/VPN
+初始化参考和 UI 不拥有权威数据库等已确认原则。默认落点、顶层导航、页面数量、具体布局和
+视觉样式通过原型讨论与走查确定。旧 `sakamoto-app` 是 Android 交互经验和失败案例参考；
+新原型同时覆盖 Android 与 Linux 的使用方式。设计流程和评审标准见
+[本轮原型讨论](../reviews/2026-09-29_UI_PROTOTYPE_DESIGN_REVIEW.md)。
 
-顺序是任务与文字优先，视觉润色随后：
+功能、交互与视觉在原型中一起迭代：
 
 1. 确定用户任务、状态和恢复路径；
-2. 为核心流程写低保真线框和真实文案；
-3. 使用 mock product state 做可点击原型，不等待 VPP backend；
+2. 在 HTML 原型中组织核心流程、真实文案和初始视觉层级；
+3. 使用 mock product state 做可点击的 Android/Linux 原型，逐步覆盖确认范围内的全部功能；
 4. 用少量真实用户走查首次启动、建规则、看结果和恢复；
-5. 固定最小 design tokens 和可复用 UI pattern；
-6. 再通过 Tauri Rust Adapter 接入真实 runtime。
+5. 持续验证交互与审美原则，收敛最小 design tokens 和可复用 UI pattern；
+6. 原型确认并形成实施任务后，再通过 Tauri Rust Adapter 接入真实 runtime。
 
-第一版只提供一套 Product UI，采用 **Progressive Control Disclosure**：应用列表承载常用
-控制，应用详情逐步出现 L4 规则、统计、证据和诊断；不提供全局“简单模式/高级模式”，也不
-维护两套功能或文案。
+**2026-10-03用户更新：** 按[标准防护与后台守护场景](NETWORK_CONTROL_PRODUCT_VISION.md#2026-10-03-从标准防护与后台守护重新描述普通用户路径)，
+产品提供标准、增强、自定义／高级三种使用方式，不要求所有用户面对相同的默认任务与界面。
+用户随后明确大致按此方向推进，标准是大多数用户的常用模式；当前先讨论[Android DNS与域名过滤](../reviews/2026-10-03_ANDROID_STANDARD_DNS_DISCUSSION.md)，技术默认和具体加载方式继续核查。
+标准和增强围绕授权、托管过滤、后台守护及几步误伤恢复；完整规则创作供自定义／高级使用。
+**Progressive Control Disclosure** 在相应任务内逐步提供相关控制和证据，原先“不提供全局简单／高级模式”的限制已被取代。
+具体模式名、名单、维护关系、导航和后端适配仍待细化；本节及下方的信息架构保留为能力与此前设计参考，不要求普通用户默认进入规则工作台。
 
 UI 只依赖稳定的 product-facing view model，例如：
 

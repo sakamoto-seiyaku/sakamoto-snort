@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>全部应用 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience"
+    data-page="apps"
+    data-title="全部应用"
+    data-nav="home"
+    data-back="home.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <header class="experience-head">
+            <div>
+              <p class="eyebrow">这台设备</p>
+              <h1>全部应用</h1>
+            </div>
+            <button class="period-button" id="period-picker">今天</button>
+          </header>
+          <label class="search"
+            ><span data-icon="search"></span
+            ><input
+              id="app-search"
+              placeholder="搜索应用"
+              aria-label="搜索应用"
+          /></label>
+          <div class="app-filter">
+            <button class="active" data-app-filter="all">全部</button
+            ><button data-app-filter="active">最近有活动</button
+            ><button data-app-filter="limited">已设置限制</button>
+          </div>
+          <div id="all-apps"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

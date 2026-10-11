@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>对象详情 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="app-detail"
+    data-title="对象详情"
+    data-nav="apps"
+    data-back="apps.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <div id="app-identity"></div>
+          <div class="desktop-grid">
+            <div>
+              <div class="card">
+                <div class="between">
+                  <div>
+                    <h3>限制所有网络访问</h3>
+                    <p
+                      class="help"
+                      id="app-access-note"
+                      style="margin-top: 7px"
+                    >
+                      按已分配的规则处理
+                    </p>
+                  </div>
+                  <button
+                    class="switch"
+                    role="switch"
+                    aria-label="限制所有网络访问"
+                    id="app-access-switch"
+                  ></button>
+                </div>
+              </div>
+              <h2 class="section-label">控制方式</h2>
+              <div class="inset-list">
+                <a class="list-row" data-page="app-networks.html"
+                  ><span class="grow"
+                    ><span class="title">按网络类型控制</span
+                    ><span class="subtitle"
+                      >分别设置 Wi-Fi、移动网络与 VPN</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="binding-edit.html"
+                  ><span class="grow"
+                    ><span class="title">规则与分配</span
+                    ><span class="subtitle"
+                      >复用已有规则，或只观察效果</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>解除快捷限制后，其他适用规则仍会判断这个对象的访问。</p>
+              </div>
+            </div>
+            <div>
+              <div class="section-heading">
+                <h2 id="app-current-rules-title">当前生效规则</h2>
+                <button class="text-link" id="app-create-rule">新建规则</button>
+              </div>
+              <div id="app-rules"></div>
+              <div class="section-heading">
+                <h2>最近访问</h2>
+                <a id="app-all-activity" class="text-link">全部</a>
+              </div>
+              <div id="app-events"></div>
+            </div>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

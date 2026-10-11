@@ -1,0 +1,51 @@
+O2: function product_l4_policy_match_position, vector-AND instructions=5
+
+	ldr	d17, [x10, #32]
+	ldp	d7, d16, [x10, #16]
+	and	v5.8b, v5.8b, v0.8b
+	and	v6.8b, v6.8b, v4.8b
+	and	w12, w12, w9
+
+	ldp	d7, d16, [x10, #16]
+	and	v5.8b, v5.8b, v0.8b
+	and	v6.8b, v6.8b, v4.8b
+	and	w12, w12, w9
+	strb	w12, [sp, #216]
+
+	ldrb	w12, [x10, #41]
+	ldr	w9, [sp, #168]                  // 4-byte Folded Reload
+	and	v7.8b, v7.8b, v1.8b
+	stp	d5, d6, [sp, #176]
+	and	v5.8b, v16.8b, v3.8b
+
+	and	v7.8b, v7.8b, v1.8b
+	stp	d5, d6, [sp, #176]
+	and	v5.8b, v16.8b, v3.8b
+	and	v6.8b, v17.8b, v2.8b
+	and	w12, w12, w9
+
+	stp	d5, d6, [sp, #176]
+	and	v5.8b, v16.8b, v3.8b
+	and	v6.8b, v17.8b, v2.8b
+	and	w12, w12, w9
+	strb	w12, [sp, #217]
+
+O3: function product_l4_policy_match_position, vector-AND instructions=3
+
+	strb	wzr, [sp, #212]
+	ldr	w9, [sp, #172]                  // 4-byte Folded Reload
+	and	v0.16b, v0.16b, v1.16b
+	ldr	q1, [sp, #176]                  // 16-byte Folded Reload
+	strb	wzr, [sp, #214]
+
+	ldur	q0, [x21, #21]
+	and	w8, w8, w6
+	and	v0.16b, v0.16b, v1.16b
+	strb	w8, [sp, #215]
+	ldr	q1, [sp, #112]                  // 16-byte Folded Reload
+
+	strb	w8, [sp, #253]
+	ushll	v0.8h, v0.8b, #0
+	and	v0.8b, v0.8b, v1.8b
+	uzp1	v0.8b, v0.8b, v0.8b
+	stur	s0, [sp, #249]

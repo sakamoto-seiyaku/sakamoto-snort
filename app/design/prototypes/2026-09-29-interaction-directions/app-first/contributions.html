@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>我的网络 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience network-view"
+    data-page="contributions"
+    data-title="这段活动"
+    data-nav="home"
+    data-back="home.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <header class="experience-head">
+            <div>
+              <p class="eyebrow" id="contribution-context"></p>
+              <h1 id="contribution-title" tabindex="-1">这段时间的联网</h1>
+            </div>
+            <button class="period-button" id="period-picker">
+              最近 30 分钟
+            </button>
+          </header>
+          <div class="network-layout">
+            <section class="network-overview">
+              <div id="contribution-timeline"></div>
+              <div id="contribution-outcomes"></div>
+            </section>
+            <section class="contribution-detail">
+              <div class="observation-scope">
+                <span id="contribution-scope"></span
+                ><button id="clear-contribution-time">完整时段</button>
+              </div>
+              <div class="section-heading"><h2>来自哪些应用</h2></div>
+              <div class="contribution-tabs" aria-label="按哪项查看应用贡献">
+                <button class="active" data-contribution-metric="bytes">
+                  收发</button
+                ><button data-contribution-metric="sent">发出</button
+                ><button data-contribution-metric="received">收到</button
+                ><button data-contribution-metric="queries">查询</button>
+              </div>
+              <div id="contribution-list"></div>
+            </section>
+          </div>
+          <div id="contribution-links" class="network-more"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

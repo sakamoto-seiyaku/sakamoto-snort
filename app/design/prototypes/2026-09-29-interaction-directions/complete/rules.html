@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>规则 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="rules" data-title="规则" data-nav="rules">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>清楚表达每个决定</h1>
+            <p>规则可以复用，变化始终可追溯。</p>
+          </header>
+          <nav class="segmented" aria-label="规则资产">
+            <a data-page="rules.html" class="active">规则</a
+            ><a data-page="groups.html" class="">规则组</a
+            ><a data-page="domains.html" class="">域名列表</a>
+          </nav>
+          <div class="between" style="margin-bottom: 17px">
+            <span class="caption" id="rule-count"></span
+            ><a class="text-link" data-page="rule-edit.html?new=1"
+              ><span data-icon="plus"></span>新建规则</a
+            >
+          </div>
+          <div class="desktop-grid">
+            <section id="rules-list"></section>
+            <aside class="desktop-detail" id="rule-side-detail"></aside>
+          </div>
+          <div class="inset-list gap-top">
+            <a class="list-row" data-page="config.html"
+              ><span class="grow"
+                ><span class="title">配置与生效状态</span
+                ><span class="subtitle"
+                  >查看正在使用的配置，或导入导出</span
+                ></span
+              ><span class="value"></span><span data-icon="chevron-right"></span
+            ></a>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

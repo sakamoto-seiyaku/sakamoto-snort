@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>订阅来源 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="domain-subscription"
+    data-title="订阅来源"
+    data-nav="rules"
+    data-back="domains.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow">域名列表</div>
+            <h1>添加订阅</h1>
+            <p>维护来源，与使用这份资料的规则分别安排。</p>
+          </header>
+          <div class="field">
+            <label for="subscription-name">列表名称</label
+            ><input id="subscription-name" placeholder="例如：隐私名单" />
+          </div>
+          <div class="field">
+            <label for="subscription-url">订阅文件地址</label
+            ><input
+              id="subscription-url"
+              type="url"
+              placeholder="https://lists.example.org/privacy.txt"
+            />
+          </div>
+          <div class="field">
+            <label for="subscription-format">文件格式</label
+            ><select id="subscription-format">
+              <option value="plain">每行一个精确域名</option>
+              <option value="native">名称与子域名范围</option>
+              <option value="adblock">Adblock 域名条目</option>
+              <option value="clash">Clash 域名条目</option>
+            </select>
+          </div>
+          <label class="choice"
+            ><span class="grow"
+              ><strong>自动检查更新</strong
+              ><small>暂停检查时，现有资料仍保留。</small></span
+            ><input type="checkbox" id="subscription-automatic"
+          /></label>
+          <div class="field gap-top">
+            <label for="subscription-interval">检查频率</label
+            ><select id="subscription-interval">
+              <option value="6">每 6 小时</option>
+              <option value="12">每 12 小时</option>
+              <option value="24">每天</option>
+              <option value="48">每两天</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="subscription-update-mode">发现新版本时</label
+            ><select id="subscription-update-mode">
+              <option value="review">先让我审阅，再采用</option>
+              <option value="automatic">自动采用更新</option>
+            </select>
+          </div>
+          <p
+            class="subscription-adoption"
+            id="subscription-adoption"
+            hidden
+          ></p>
+          <p class="note">
+            自动采用可能改变引用本列表的规则结果。本地补充与排除始终保留，历史记录保持原样。
+          </p>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-subscription">保存订阅</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

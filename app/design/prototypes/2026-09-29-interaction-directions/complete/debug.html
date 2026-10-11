@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>诊断会话 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="debug"
+    data-title="诊断会话"
+    data-nav="settings"
+    data-back="extensions.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>围绕一个问题，找原因</h1>
+            <p>有范围、有时限，结束后再决定分享什么。</p>
+          </header>
+          <div class="field">
+            <label for="debug-subject">关注的控制对象</label
+            ><select id="debug-subject"></select>
+          </div>
+          <div class="field">
+            <label for="debug-focus">本次关注</label
+            ><select id="debug-focus">
+              <option value="connection">为什么连接未能建立</option>
+              <option value="rule">规则为什么命中或未命中</option>
+              <option value="runtime">运行为何中断</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="debug-duration">最长观察时间</label
+            ><select id="debug-duration">
+              <option value="60">1 分钟</option>
+              <option value="180">3 分钟</option>
+              <option value="300">5 分钟</option>
+            </select>
+          </div>
+          <div class="card">
+            <h3>会话记录哪些信息</h3>
+            <div class="help" style="margin-top: 12px">
+              运行阶段、对象身份、连接元信息和规则判断。<br />不采集连接载荷、密钥或账号密码。
+            </div>
+          </div>
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>
+              停止诊断不会停止防火墙。会话结束后可查看报告，并自行选择导出。
+            </p>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="start-debug">开始诊断会话</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

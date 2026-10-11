@@ -1,0 +1,29 @@
+src/product/vpp/product_l4_policy.c:493:47: remark: Stores SLP vectorized with cost -3 and with tree size 2 [-Rpass=slp-vectorizer]
+  493 |   return (product_l4_policy_compile_budget_t) {
+      |                                               ^
+src/product/vpp/product_l4_policy.c:516:32: remark: Stores SLP vectorized with cost -1 and with tree size 2 [-Rpass=slp-vectorizer]
+  516 |   resources->query_state_bytes = query_state_bytes ();
+      |                                ^
+src/product/vpp/product_l4_policy.c:493:47: remark: Stores SLP vectorized with cost -3 and with tree size 2 [-Rpass=slp-vectorizer]
+  493 |   return (product_l4_policy_compile_budget_t) {
+      |                                               ^
+src/product/vpp/product_l4_policy.c:992:28: remark: Stores SLP vectorized with cost -2 and with tree size 2 [-Rpass=slp-vectorizer]
+  992 |           result->priority = compiled->source.priority;
+      |                            ^
+src/product/vpp/product_l4_policy.c:960:56: remark: Stores SLP vectorized with cost -36 and with tree size 6 [-Rpass=slp-vectorizer]
+  960 |       for (unsigned i = 0; i < sizeof key; ++i) key[i] = packet_key[i] & table->mask[i];
+      |                                                        ^
+src/product/vpp/product_l4_policy.c:960:56: remark: Stores SLP vectorized with cost -58 and with tree size 4 [-Rpass=slp-vectorizer]
+src/product/vpp/product_l4_policy.c:960:56: remark: Stores SLP vectorized with cost -9 and with tree size 4 [-Rpass=slp-vectorizer]
+src/product/vpp/product_l4_policy.c:1112:31: remark: Stores SLP vectorized with cost -1 and with tree size 2 [-Rpass=slp-vectorizer]
+ 1112 |       result->subtable_probes = result->key_probes = 0;
+      |                               ^
+src/product/vpp/product_l4_policy.c:1062:7: remark: Stores SLP vectorized with cost -4 and with tree size 2 [-Rpass=slp-vectorizer]
+ 1062 |       COPY(ct_state); COPY(ct_state_known);
+      |       ^
+src/product/vpp/product_l4_policy.c:1055:20: remark: Stores SLP vectorized with cost -4 and with tree size 2 [-Rpass=slp-vectorizer]
+ 1055 |   COPY(direction); COPY(direction_known); COPY(network_context_id);
+      |                    ^
+src/product/vpp/product_l4_policy.c:1055:43: remark: Stores SLP vectorized with cost -2 and with tree size 2 [-Rpass=slp-vectorizer]
+ 1055 |   COPY(direction); COPY(direction_known); COPY(network_context_id);
+      |                                           ^

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>编辑规则组 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="group-edit"
+    data-title="编辑规则组"
+    data-nav="rules"
+    data-back="groups.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>整理为一个整体</h1>
+            <p>选择规则，也可以包含已有的规则组。</p>
+          </header>
+          <div class="field">
+            <label for="group-name">规则组名称</label
+            ><input
+              id="group-name"
+              type="text"
+              value=""
+              placeholder="例如：日常联网"
+              maxlength="63"
+            />
+          </div>
+          <div class="desktop-grid">
+            <section>
+              <h2 class="section-label">规则</h2>
+              <div id="group-rule-choices" class="stack"></div>
+            </section>
+            <section>
+              <h2 class="section-label">包含的规则组</h2>
+              <div id="group-group-choices" class="stack"></div>
+              <div class="notice">
+                <span data-icon="info"></span>
+                <p>保存时检查引用关系，规则组不能直接或间接包含自身。</p>
+              </div>
+            </section>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-group">保存规则组</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

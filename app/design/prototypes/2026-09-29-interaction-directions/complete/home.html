@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>概览 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body data-page="home" data-title="概览" data-nav="home">
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow">YOUR NETWORK, UNDERSTOOD</div>
+            <h1>每一次连接，<br />心中有数。</h1>
+            <p>我的设备 · 今天，9 月 29 日</p>
+          </header>
+          <div class="desktop-grid">
+            <div>
+              <section class="hero">
+                <svg
+                  class="hero-orbit"
+                  viewBox="0 0 200 200"
+                  aria-hidden="true"
+                >
+                  <g
+                    fill="none"
+                    stroke="#b5cce6"
+                    stroke-width=".8"
+                    opacity=".4"
+                  >
+                    <circle cx="100" cy="100" r="83" />
+                    <circle cx="100" cy="100" r="63" />
+                    <circle cx="100" cy="100" r="43" />
+                    <path d="M17 100h166M100 17v166" />
+                  </g>
+                  <circle cx="141" cy="51" r="4" fill="#a2cbb9" />
+                  <circle cx="56" cy="124" r="3" fill="#fff" />
+                  <path
+                    d="m84 79 16-6 16 6v20c0 11-16 19-16 19s-16-8-16-19z"
+                    stroke="#e4f1ff"
+                    fill="#ffffff0a"
+                    stroke-width="1.8"
+                  />
+                  <path
+                    d="m92 95 6 6 12-13"
+                    stroke="#e4f1ff"
+                    fill="none"
+                    stroke-width="2"
+                  />
+                </svg>
+                <div class="hero-status" id="home-status">● 防火墙正在运行</div>
+                <h2 id="home-headline">你的规则，<br />正在守护连接。</h2>
+                <p id="home-runtime">Root 模式 · 已连续运行 2 小时 18 分钟</p>
+                <a class="btn" data-page="runtime.html"
+                  >查看运行状态 <span data-icon="arrow-right"></span
+                ></a>
+              </section>
+              <div class="metrics gap-top">
+                <a class="metric" data-page="stats.html"
+                  ><div class="metric-label">最近 1 小时 · 访问</div>
+                  <div class="metric-value" id="home-count">7</div>
+                  <div class="metric-foot">查看已保留的访问记录</div></a
+                ><a class="metric" data-page="activity.html?result=drop"
+                  ><div class="metric-label">已阻止</div>
+                  <div class="metric-value" id="home-blocked">
+                    1 <small>次</small>
+                  </div>
+                  <div class="metric-foot">依据你设置的规则</div></a
+                >
+              </div>
+            </div>
+            <div>
+              <div class="section-heading">
+                <h2>最近的连接</h2>
+                <a class="text-link" data-page="activity.html">查看全部</a>
+              </div>
+              <div id="home-events"></div>
+              <div class="section-heading">
+                <h2>连接趋势</h2>
+                <a class="text-link" data-page="stats.html">深入了解</a>
+              </div>
+              <div class="card"><div id="home-chart"></div></div>
+            </div>
+          </div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

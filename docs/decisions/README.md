@@ -9,6 +9,14 @@ not make every historical execution claim current.
 - [Accepted ADRs](../adr/), especially [0006](../adr/0006-vpp-native-packet-io-adapters.md),
   [0007](../adr/0007-owner-local-lwip-direct-egress.md) and
   [0008](../adr/0008-remove-snort-cpp-mainline.md).
+- [Unified rule semantics and VPP-owned configuration](../adr/0009-unified-rules-and-vpp-owned-configuration.md):
+  accepted September redesign, with the [behavior specification](../product/UNIFIED_RULE_ENGINE_SPEC.md);
+  supersedes conflicting policy/observation design lineage, not evidence of implemented capability.
+- [Application DNS filtering across Root and VPN](../adr/0011-application-dns-filtering-root-and-vpn.md):
+  accepted query-stage and subsequent-connection control under the same application
+  policy; preserves attribution/cache limits and shared DNS implementation.
+  The first version targets Root/NFQ and VPN; KSU's system-resolver integration
+  is a future extension. A design decision, not runtime evidence.
 - [Per-worker flow ownership](PER_WORKER_FLOW_OWNERSHIP.md).
 - [VPP packet metadata ownership](VPP_PACKET_METADATA_OWNERSHIP.md).
 - [L4 conntrack working decisions](L4_CONNTRACK_WORKING_DECISIONS.md).

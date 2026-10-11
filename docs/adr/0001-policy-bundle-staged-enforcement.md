@@ -1,9 +1,18 @@
 ---
 status: accepted
 date: 2026-07-20
+superseded_in_part_by: ADR-0009
 ---
 
 # One policy bundle, stage-owned rule families
+
+**2026-09-24 accepted-design update:** [ADR-0009](0009-unified-rules-and-vpp-owned-configuration.md)
+supersedes this record's stage-owned priority spaces, special Network Gate,
+early-ALLOW semantics and the policy/observation choices replaced by the
+[unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md). The body
+below preserves prior rationale and implementation lineage. Unaffected
+worker/steering/packet-resource constraints remain; the new design is not yet
+implementation acceptance.
 
 Sakamoto has one authoritative Authoring Policy Bundle and one transactional policy revision, but it does
 not force Network Gate, L4, protocol-identification, or future decoded-metadata policy into one universal

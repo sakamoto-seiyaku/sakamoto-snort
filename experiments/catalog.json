@@ -196,6 +196,15 @@
       ],
       "classification": "reference_only_opt_in",
       "purpose": "Retained source/corpus inventories, intake gate, external Android library probes and output helpers; no Product provider enablement."
+    },
+    {
+      "id": "t17_domain_matcher_selection",
+      "directories": [
+        "experiments/t17-domain-matcher",
+        "experiments/t17-5-recovery"
+      ],
+      "classification": "completed_selection_evidence",
+      "purpose": "T17 and T17.5 measured candidate selection and recoverable-build evidence. User selected Valkey rax; experimental adapters are not Product source."
     }
   ],
   "retained_references": [

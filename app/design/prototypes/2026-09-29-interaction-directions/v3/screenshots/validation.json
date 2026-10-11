@@ -1,0 +1,1350 @@
+{
+  "kind": "V3 layout verification; no production backend or usability claim",
+  "capturedAt": "2026-09-30T18:01:44.711Z",
+  "rows": [
+    {
+      "mode": "android-phone",
+      "view": "overview",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "app",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "天气",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "rules",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "rule",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "shared",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "list",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "list-update",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-phone",
+      "view": "deep",
+      "dimensions": [
+        393,
+        852
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        393,
+        852
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "overview",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "app",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "天气",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "rules",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "rule",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "shared",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "list",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "list-update",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-portrait",
+      "view": "deep",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "overview",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "app",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "天气",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "rules",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "rule",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "shared",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "list",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "list-update",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "android-landscape",
+      "view": "deep",
+      "dimensions": [
+        1180,
+        820
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1180,
+        820
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "overview",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "app",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "js · UID 1000",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "rules",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "rule",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "shared",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "list",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "list-update",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-wide",
+      "view": "deep",
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        1440,
+        900
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "overview",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "app",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "js · UID 1000",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "rules",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "rule",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "shared",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "list",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "list-update",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-touch",
+      "view": "deep",
+      "dimensions": [
+        820,
+        1180
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        820,
+        1180
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "overview",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "我的网络",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "overview",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "app",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "js · UID 1000",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "app",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "rules",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "联网规则",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rules",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "rule",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "统计域名处理",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "rule",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "shared",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "日常联网",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "shared",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "list",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "跟踪域名",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "list-update",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "审阅跟踪域名的新资料",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "list-update",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    },
+    {
+      "mode": "linux-narrow",
+      "view": "deep",
+      "dimensions": [
+        640,
+        760
+      ],
+      "sourceHash": "505a2b6af6799d33844b36400b851f325cf9e541fc18e1fe91a222461272a219",
+      "intrinsic": [
+        640,
+        760
+      ],
+      "frameHorizontalOverflow": false,
+      "contentHorizontalOverflow": false,
+      "documentHorizontalOverflow": false,
+      "title": "从现在记录实际判断",
+      "nav": [
+        "⌁我的网络",
+        "≡联网规则"
+      ],
+      "state": {
+        "view": "deep",
+        "saved": 43,
+        "active": 42,
+        "workExists": false
+      },
+      "errors": []
+    }
+  ]
+}

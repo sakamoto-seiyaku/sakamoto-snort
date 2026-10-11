@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>编辑规则 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="rule-edit"
+    data-title="编辑规则"
+    data-nav="rules"
+    data-back="rules.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>让规则说清楚</h1>
+            <p>先确定意图，再补充需要的条件。</p>
+          </header>
+          <form id="rule-form">
+            <div class="desktop-grid">
+              <section>
+                <div class="field">
+                  <label for="rule-name">规则名称</label
+                  ><input
+                    id="rule-name"
+                    type="text"
+                    value=""
+                    maxlength="63"
+                    placeholder="例如：阻止统计域名"
+                  />
+                </div>
+                <div class="field">
+                  <label for="rule-action">我希望</label
+                  ><select id="rule-action">
+                    <option value="drop">阻止符合条件的访问</option>
+                    <option value="allow">允许符合条件的访问</option>
+                  </select>
+                </div>
+                <a class="list-row inset-list" id="scope-link"
+                  ><span class="tile-icon"><span data-icon="users"></span></span
+                  ><span class="grow"
+                    ><span class="title">作用对象与执行方式</span
+                    ><span class="subtitle" id="scope-summary"></span></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+                <div class="notice">
+                  <span data-icon="info"></span>
+                  <p>未分配的规则保存在规则库中，不参与任何对象的访问判断。</p>
+                </div>
+                <details class="advanced">
+                  <summary>优先顺序与来源</summary>
+                  <div class="field">
+                    <label for="rule-priority">优先级 · 数值小的先判断</label
+                    ><input
+                      id="rule-priority"
+                      type="number"
+                      value="10"
+                      min="0"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="rule-order">同优先级内的明确顺序</label
+                    ><input id="rule-order" type="number" value="0" min="0" />
+                  </div>
+                  <div class="field">
+                    <label for="rule-source">来源说明</label
+                    ><input id="rule-source" type="text" value="手动创建" />
+                  </div>
+                </details>
+              </section>
+              <section>
+                <div class="between">
+                  <h3>什么时候生效</h3>
+                  <button type="button" class="text-link" id="condition-help">
+                    条件说明
+                  </button>
+                </div>
+                <div id="condition-tree"></div>
+                <div class="card gap-top">
+                  <div class="eyebrow">规则摘要</div>
+                  <p class="help" id="live-summary"></p>
+                </div>
+                <div class="form-error" id="form-error" role="alert"></div>
+              </section>
+            </div>
+          </form>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-rule">保存规则</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

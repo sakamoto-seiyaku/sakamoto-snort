@@ -1,0 +1,11 @@
+{
+  "name": "sakamoto-interaction-study",
+  "private": true,
+  "scripts": {
+    "styles": "tailwindcss -i css/input.css -o css/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "4.3.3",
+    "@tailwindcss/cli": "4.3.3"
+  }
+}

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>筛选访问 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="activity-filter"
+    data-title="筛选访问"
+    data-nav="activity"
+    data-back="activity.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>找到那一次连接</h1>
+            <p></p>
+          </header>
+          <div class="field">
+            <label for="filter-subject">控制对象</label
+            ><select id="filter-subject">
+              <option value="all">全部对象</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filter-result">访问结果</label
+            ><select id="filter-result">
+              <option value="all">全部结果</option>
+              <option value="allow">已允许</option>
+              <option value="drop">已阻止</option>
+              <option value="observe">仅观察，已允许</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filter-kind">记录类型</label
+            ><select id="filter-kind">
+              <option value="all">全部记录</option>
+              <option value="live">当前连接</option>
+              <option value="ended">已结束</option>
+              <option value="blocked">建连前阻止</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="filter-range">时间范围</label
+            ><select id="filter-range">
+              <option value="15">最近 15 分钟</option>
+              <option value="60">最近 1 小时</option>
+              <option value="1440">今天</option>
+            </select>
+          </div>
+          <button id="reset-filters" class="btn full">重置筛选</button>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="apply-filters">查看结果</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

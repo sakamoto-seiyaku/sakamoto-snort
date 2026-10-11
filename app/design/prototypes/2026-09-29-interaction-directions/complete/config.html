@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>配置管理 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="config"
+    data-title="配置管理"
+    data-nav="settings"
+    data-back="settings.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>每次修改，都有着落</h1>
+            <p>区分已保存的内容与当前正在使用的内容。</p>
+          </header>
+          <div class="desktop-grid">
+            <section>
+              <div id="config-state"></div>
+              <div class="inset-list gap-top">
+                <a class="list-row" data-page="config.html?action=export"
+                  ><span class="tile-icon"
+                    ><span data-icon="download"></span></span
+                  ><span class="grow"
+                    ><span class="title">导出配置</span
+                    ><span class="subtitle"
+                      >保存规则、分组、分配和域名列表</span
+                    ></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span></a
+                ><a class="list-row" data-page="config-import.html"
+                  ><span class="tile-icon"
+                    ><span data-icon="upload"></span></span
+                  ><span class="grow"
+                    ><span class="title">导入配置</span
+                    ><span class="subtitle">审阅后完整替换现有配置</span></span
+                  ><span class="value"></span
+                  ><span data-icon="chevron-right"></span
+                ></a>
+              </div>
+            </section>
+            <section>
+              <div class="section-heading"><h2>当前配置</h2></div>
+              <div class="inset-list" id="config-counts"></div>
+              <p class="note">
+                历史记录单独保留，导入规则配置不会替换历史。首版不提供策略历史版本恢复。
+              </p>
+              <button
+                class="text-link"
+                id="clear-config"
+                style="color: var(--red)"
+              >
+                清空规则配置
+              </button>
+            </section>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

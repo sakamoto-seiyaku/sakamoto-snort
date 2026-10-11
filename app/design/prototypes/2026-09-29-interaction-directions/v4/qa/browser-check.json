@@ -1,0 +1,224 @@
+{
+  "results": [
+    {
+      "variant": "A",
+      "width": 1440,
+      "height": 1000,
+      "checks": [
+        "misblock",
+        "unchanged peers/targets/history",
+        "same-state switch",
+        "two priority owners",
+        "partial plan",
+        "finish remaining plan",
+        "inverse action",
+        "precise new source",
+        "checks do not mutate",
+        "keyboard",
+        "layout"
+      ]
+    },
+    {
+      "variant": "B",
+      "width": 1440,
+      "height": 1000,
+      "checks": [
+        "local effect",
+        "shared update preserves explicit diff",
+        "reset follows current base",
+        "pause/list/member dormancy and revival",
+        "new member follows base",
+        "higher winner stays visible",
+        "OR any-app branch",
+        "recursive NOT",
+        "A handles non-TCP winner",
+        "save unused",
+        "App to Rules and return",
+        "historical truth",
+        "nested independent save",
+        "explicit new activity",
+        "layout"
+      ]
+    },
+    {
+      "variant": "A",
+      "width": 820,
+      "height": 1180,
+      "checks": [
+        "misblock",
+        "unchanged peers/targets/history",
+        "same-state switch",
+        "two priority owners",
+        "partial plan",
+        "finish remaining plan",
+        "inverse action",
+        "precise new source",
+        "checks do not mutate",
+        "keyboard",
+        "layout"
+      ]
+    },
+    {
+      "variant": "B",
+      "width": 820,
+      "height": 1180,
+      "checks": [
+        "local effect",
+        "shared update preserves explicit diff",
+        "reset follows current base",
+        "pause/list/member dormancy and revival",
+        "new member follows base",
+        "higher winner stays visible",
+        "OR any-app branch",
+        "recursive NOT",
+        "A handles non-TCP winner",
+        "save unused",
+        "App to Rules and return",
+        "historical truth",
+        "nested independent save",
+        "explicit new activity",
+        "layout"
+      ]
+    },
+    {
+      "variant": "A",
+      "width": 393,
+      "height": 852,
+      "checks": [
+        "misblock",
+        "unchanged peers/targets/history",
+        "same-state switch",
+        "two priority owners",
+        "partial plan",
+        "finish remaining plan",
+        "inverse action",
+        "precise new source",
+        "checks do not mutate",
+        "keyboard",
+        "layout"
+      ]
+    },
+    {
+      "variant": "B",
+      "width": 393,
+      "height": 852,
+      "checks": [
+        "local effect",
+        "shared update preserves explicit diff",
+        "reset follows current base",
+        "pause/list/member dormancy and revival",
+        "new member follows base",
+        "higher winner stays visible",
+        "OR any-app branch",
+        "recursive NOT",
+        "A handles non-TCP winner",
+        "save unused",
+        "App to Rules and return",
+        "historical truth",
+        "nested independent save",
+        "explicit new activity",
+        "layout"
+      ]
+    },
+    {
+      "variant": "A",
+      "width": 640,
+      "height": 800,
+      "checks": [
+        "misblock",
+        "unchanged peers/targets/history",
+        "same-state switch",
+        "two priority owners",
+        "partial plan",
+        "finish remaining plan",
+        "inverse action",
+        "precise new source",
+        "checks do not mutate",
+        "keyboard",
+        "layout"
+      ]
+    },
+    {
+      "variant": "B",
+      "width": 640,
+      "height": 800,
+      "checks": [
+        "local effect",
+        "shared update preserves explicit diff",
+        "reset follows current base",
+        "pause/list/member dormancy and revival",
+        "new member follows base",
+        "higher winner stays visible",
+        "OR any-app branch",
+        "recursive NOT",
+        "A handles non-TCP winner",
+        "save unused",
+        "App to Rules and return",
+        "historical truth",
+        "nested independent save",
+        "explicit new activity",
+        "layout"
+      ]
+    }
+  ],
+  "errors": [],
+  "capture": {
+    "shots": [
+      {
+        "name": "desktop-a",
+        "width": 1440,
+        "height": 1000,
+        "fullPage": true
+      },
+      {
+        "name": "desktop-a-priority-plan",
+        "width": 1440,
+        "height": 1000,
+        "fullPage": false
+      },
+      {
+        "name": "desktop-b",
+        "width": 1440,
+        "height": 1000,
+        "fullPage": true
+      },
+      {
+        "name": "desktop-b-difference",
+        "width": 1440,
+        "height": 1000,
+        "fullPage": true
+      },
+      {
+        "name": "phone-a",
+        "width": 393,
+        "height": 852,
+        "fullPage": true
+      },
+      {
+        "name": "phone-a-plan",
+        "width": 393,
+        "height": 852,
+        "fullPage": false
+      },
+      {
+        "name": "phone-b",
+        "width": 393,
+        "height": 852,
+        "fullPage": true
+      },
+      {
+        "name": "phone-b-priority",
+        "width": 393,
+        "height": 852,
+        "fullPage": false
+      }
+    ],
+    "errors": []
+  },
+  "files": {
+    "index.html": "bc2582b57a140922404b68c2fdcdae8623a9b45569bfb934f23aecaa6011a6ae",
+    "style.css": "a12a65513d2fd79bad9e47b53dfc59b67d6ce4a27e20fb8628829cfe745f9e2b",
+    "app.js": "0f3556fc07a6464a6302391af1cce25fe422accf417865b7e03584d5e2e12de6"
+  },
+  "completedAt": "2026-10-03T09:50:44.475Z"
+}

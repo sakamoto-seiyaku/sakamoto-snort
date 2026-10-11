@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>导入配置 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="config-import"
+    data-title="导入配置"
+    data-nav="settings"
+    data-back="config.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>先看清，再替换</h1>
+            <p>导入包含规则、分组、分配和域名列表。</p>
+          </header>
+          <label class="btn full" for="config-file"
+            ><span data-icon="upload"></span>选择配置文件</label
+          ><input
+            id="config-file"
+            type="file"
+            accept=".json,application/json"
+            class="sr-only"
+          />
+          <p id="import-file-name" class="note">
+            支持本原型导出的 JSON 样例文件。
+          </p>
+          <div class="field">
+            <label for="config-json">或粘贴配置内容</label
+            ><textarea
+              id="config-json"
+              spellcheck="false"
+              placeholder="粘贴配置 JSON"
+            ></textarea>
+          </div>
+          <button class="text-link" id="use-sample-config">
+            载入一份演示配置
+          </button>
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>接下来会显示替换范围。此时还不会修改当前配置。</p>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="review-config-import">
+          检查并审阅
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

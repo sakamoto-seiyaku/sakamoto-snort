@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>访问详情 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    data-page="connection"
+    data-title="访问详情"
+    data-nav="activity"
+    data-back="activity.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-wide">
+          <div id="connection-main"></div>
+          <div class="desktop-grid">
+            <section>
+              <div class="card">
+                <dl class="detail-pairs" id="connection-facts"></dl>
+              </div>
+              <p class="source-line" id="connection-source"></p>
+            </section>
+            <section>
+              <div class="section-heading"><h2>为什么是这个结果？</h2></div>
+              <div id="connection-reason"></div>
+              <div class="inset-list gap-top" id="connection-links"></div>
+            </section>
+          </div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="rule-from-event">
+          以这次访问创建规则
+        </button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

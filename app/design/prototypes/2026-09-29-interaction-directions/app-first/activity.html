@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>详细活动 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/experience.css" />
+    <script type="module" src="js/pages.js"></script>
+  </head>
+  <body
+    class="experience"
+    data-page="activity"
+    data-title="详细活动"
+    data-nav="activity"
+    data-back="home.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="主要导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="experience-content">
+          <div id="activity-heading"></div>
+          <div class="activity-tools">
+            <div class="activity-types">
+              <button class="active" data-record-type="all">全部</button
+              ><button data-record-type="connection">连接</button
+              ><button data-record-type="dns">域名查询</button>
+            </div>
+            <button
+              class="icon-button"
+              id="activity-filter-button"
+              aria-label="筛选活动"
+            >
+              <span data-icon="sliders-horizontal"></span>
+            </button>
+          </div>
+          <div class="activity-counter" id="activity-count"></div>
+          <div id="connection-tools"></div>
+          <div class="activity-layout">
+            <section id="experience-activity-list"></section>
+            <aside id="activity-preview" class="activity-preview"></aside>
+          </div>
+          <div id="new-activity-status" aria-live="polite"></div>
+        </div>
+      </main>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>

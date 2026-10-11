@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>编辑域名列表 · Sakamoto</title>
+    <link rel="stylesheet" href="css/tailwind.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script type="module" src="js/pages.js"></script>
+  <link rel="stylesheet" href="css/experience.css"></head>
+  <body
+    data-page="domain-edit"
+    data-title="编辑域名列表"
+    data-nav="rules"
+    data-back="domains.html"
+  >
+    <div class="device">
+      <div class="statusbar" aria-hidden="true"></div>
+      <aside class="desktop-nav" aria-label="桌面导航"></aside>
+      <header class="topbar"></header>
+      <div class="status-strip"></div>
+      <main class="screen">
+        <div class="desktop-narrow">
+          <header class="page-intro">
+            <div class="eyebrow"></div>
+            <h1>把目标整理好</h1>
+            <p></p>
+          </header>
+          <div class="field">
+            <label for="domain-name">列表名称</label
+            ><input
+              id="domain-name"
+              type="text"
+              value=""
+              placeholder="例如：统计与测量"
+            />
+          </div>
+          <div class="field">
+            <label for="domain-source">来源说明</label
+            ><input id="domain-source" type="text" value="手动维护" />
+          </div>
+          <h2 class="section-label">条目与匹配范围</h2>
+          <div id="domain-edit-entries"></div>
+          <button id="add-domain-entry" class="btn soft full">添加域名</button>
+          <div class="notice">
+            <span data-icon="info"></span>
+            <p>
+              “包含子域名”也包含名称本身。填写域名，不填写网址、路径或通配符。
+            </p>
+          </div>
+          <div class="form-error" id="form-error" role="alert"></div>
+        </div>
+      </main>
+      <div class="footer-action">
+        <button class="btn primary" id="save-domain">保存域名列表</button>
+      </div>
+      <nav class="bottom-nav" aria-label="主要导航"></nav>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </body>
+</html>
