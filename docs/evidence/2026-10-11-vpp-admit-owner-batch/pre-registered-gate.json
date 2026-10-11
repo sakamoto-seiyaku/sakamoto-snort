@@ -1,0 +1,39 @@
+{
+  "baseline_commit": "09f494b7ae46bbe69c442acb44580d712990f43e",
+  "scope": "callback frame formation, frame input preparation/lookahead, native primary owner handoff",
+  "excluded": "policy/Flow/CT/LPI semantics, completion return, capacities, kernel I/O batching",
+  "comparison": "same opt-in ELF, scalar control versus batch mode; fixed UDP tuple cohort in each ordinary Root/VPN lifetime",
+  "load": {
+    "cell_ms": 5000,
+    "threads": 4,
+    "flows_per_thread": 16,
+    "udp_bytes": 1200,
+    "qualification_entry_deadline_seconds": 120,
+    "conditions_per_profile": [
+      "baseline",
+      "batch"
+    ]
+  },
+  "structural_gate": {
+    "batch_admit_vectors_per_call_min": 4,
+    "batch_remote_packets_per_physical_queue_publication_min": 4,
+    "four_packet_preparation_windows_required": true
+  },
+  "effectiveness_gate": {
+    "require_at_least_one_profile": {
+      "admit_clocks_per_vector_reduction_percent_min": 10,
+      "vpp_cpu_seconds_per_admitted_packet_reduction_percent_min": 10
+    },
+    "other_profile_cpu_per_packet_regression_percent_max": 5,
+    "admitted_pps_regression_percent_max": 5,
+    "remote_packet_share_difference_percentage_points_max": 5,
+    "bypass_or_rejection_share_regression_percentage_points_max": 3
+  },
+  "correctness_gate": [
+    "real helper partial/all rejection with ASan/UBSan and Root/VPN exactly-once ownership/credits",
+    "matching APK/source/ELF/helper/rule/UID/worker identity",
+    "ordinary Root and VPN lifecycle; native debts zero and residue clean",
+    "successful native capture progress in every measurement window"
+  ],
+  "decision": "Do not continue to another packet-path optimization unless all gates pass. A single quick comparison is screening evidence, not formal statistical qualification."
+}

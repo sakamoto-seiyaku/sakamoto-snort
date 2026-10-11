@@ -1,0 +1,25 @@
+{
+  "archived_transfer_seam": "PASS",
+  "sanitizers": [
+    "AddressSanitizer",
+    "UBSan"
+  ],
+  "leak_sanitizer": false,
+  "fixed_flow_helper": "PASS",
+  "helper_checks": [
+    "tcp-fixed",
+    "udp-fixed",
+    "tcp-new",
+    "udp-new",
+    "stride1 UDP tuple replay",
+    "stride2 UDP tuple replay",
+    "duplicate accounting",
+    "per-run reset"
+  ],
+  "gate_raw_recheck": "FAIL",
+  "gate_failed_condition": "No profile improved both admit clocks and whole VPP CPU per admitted packet by 10%",
+  "root_error_progress": "PASS",
+  "product_vpp_contract": "PASS",
+  "simultaneous_cpu_replay": "PASS (4 windows)",
+  "retained_hashes_and_links": "PASS"
+}

@@ -161,7 +161,7 @@ static int server(const char *ip, int port) {
 
 typedef struct { int fd, connected, sent, received; uint64_t since; header h, reply; } client_conn;
 typedef struct {
-  int index, threads, flows, mode, id, port; const char *ip; uint64_t begin, end;
+  int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride; const char *ip; uint64_t begin, end;
   uint64_t bytes, packets, attempts, completed, errors, timeouts, cancelled, tuples, exhausted;
   uint64_t samples, hist[HIST];
 } worker;
@@ -232,11 +232,22 @@ static void *udp_worker(void *arg) {
   worker *w = arg; int *fds = calloc((size_t)w->flows, sizeof(int)); if (!fds) die("calloc");
   unsigned char *used = calloc((size_t)w->flows, 1); if (!used) die("calloc");
   struct sockaddr_in dest = address(w->ip, w->port), local = address("0.0.0.0", 0);
-  int probe = sock(SOCK_DGRAM); if (probe < 0 || connect(probe, (void *)&dest, sizeof(dest))) die("probe");
+  int probe = sock(SOCK_DGRAM);
+  if (probe < 0) die("probe");
+  if (w->fixed_port_base) {
+    local.sin_port = htons(w->fixed_port_base + (w->threads * w->flows + w->index) * w->fixed_port_stride);
+    if (bind(probe, (void *)&local, sizeof(local))) die("probe bind");
+  }
+  if (connect(probe, (void *)&dest, sizeof(dest))) die("probe");
   for (int i = 0; i < w->flows; i++) {
     fds[i] = -1;
     if (w->mode == 2) { fds[i] = sock(SOCK_DGRAM); dest.sin_port = htons(w->port + (i + w->index * w->flows) % PORTS);
-      if (fds[i] < 0 || connect(fds[i], (void *)&dest, sizeof(dest))) die("UDP connect");
+      if (fds[i] < 0) die("UDP socket");
+      if (w->fixed_port_base) {
+        local.sin_port = htons(w->fixed_port_base + (w->index * w->flows + i) * w->fixed_port_stride);
+        if (bind(fds[i], (void *)&local, sizeof(local))) die("UDP fixed bind");
+      }
+      if (connect(fds[i], (void *)&dest, sizeof(dest))) die("UDP connect");
     }
   }
   char data[16][1200]; struct iovec io[16]; struct mmsghdr msgs[16];
@@ -275,16 +286,19 @@ static void *udp_worker(void *arg) {
   free(used); free(fds); close(probe); return NULL;
 }
 static int client(int argc, char **argv) {
-  if (argc != 9) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD\n"); return 2; }
+  if (argc < 9 || argc > 11) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [UDP_FIXED_SOURCE_PORT_BASE [UDP_FIXED_SOURCE_PORT_STRIDE]]\n"); return 2; }
   const char *names[] = {"tcp-fixed", "tcp-new", "udp-fixed", "udp-new"}; int mode = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(argv[5], names[i])) mode = i;
   if (mode < 0) return 2;
   int port = number(argv[3], 1024, 65472), id = number(argv[4], 0, CASES - 1), ms = number(argv[6], 100, 10000);
   int threads = number(argv[7], 1, 8), flows = number(argv[8], 1, 256);
+  int fixed_port_stride = argc == 11 ? number(argv[10], 1, 16) : 1;
+  int fixed_port_base = argc >= 10 ? number(argv[9], 1024, 65535 - (threads * flows + threads - 1) * fixed_port_stride) : 0;
+  if (fixed_port_base && mode != 2) return 2;
   address(argv[2], port); signal(SIGPIPE, SIG_IGN);
   worker *w = calloc((size_t)threads, sizeof(*w)); pthread_t ids[8]; if (!w) die("calloc");
   struct rusage before, after; getrusage(RUSAGE_SELF, &before); uint64_t begin = now_ns(), end = begin + (uint64_t)ms * 1000000;
-  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.ip=argv[2],.begin=begin,.end=end}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
+  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.fixed_port_base=fixed_port_base,.fixed_port_stride=fixed_port_stride,.ip=argv[2],.begin=begin,.end=end}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
   worker sum = {0};
   for (int i = 0; i < threads; i++) { pthread_join(ids[i], NULL);
     sum.bytes+=w[i].bytes; sum.packets+=w[i].packets; sum.attempts+=w[i].attempts; sum.completed+=w[i].completed; sum.errors+=w[i].errors; sum.timeouts+=w[i].timeouts; sum.cancelled+=w[i].cancelled; sum.tuples+=w[i].tuples; sum.samples+=w[i].samples; sum.exhausted+=w[i].exhausted;
@@ -295,7 +309,7 @@ static int client(int argc, char **argv) {
   if (sum.samples) for (int j=0;j<HIST;j++) { cumulative+=sum.hist[j]; if (cumulative>=target) { p99=j+1; break; } }
   printf("{\"case\":\"%s\",\"case_id\":%d,\"pid\":%d,\"uid\":%d,\"start_monotonic_ns\":%"PRIu64",\"end_monotonic_ns\":%"PRIu64",\"requested_ms\":%d,\"threads\":%d,\"flows_per_thread\":%d,\"bytes\":%"PRIu64",\"packets\":%"PRIu64",\"attempts\":%"PRIu64",\"completed\":%"PRIu64",\"errors\":%"PRIu64",\"timeouts\":%"PRIu64",\"cancelled_at_deadline\":%"PRIu64",\"input_unique_udp_tuples\":%"PRIu64",\"tuple_space_exhausted\":%"PRIu64",\"latency_samples\":%"PRIu64",\"latency_overflow_samples\":%"PRIu64",\"p99_upper_us\":",names[mode],id,getpid(),getuid(),begin,finished,ms,threads,flows,sum.bytes,sum.packets,sum.attempts,sum.completed,sum.errors,sum.timeouts,sum.cancelled,sum.tuples,sum.exhausted,sum.samples,sum.hist[HIST-1]);
   if (!p99 || p99 >= HIST) printf("null"); else printf("%d",p99*100);
-  printf(",\"generator_cpu_seconds\":%.6f,\"generator_maxrss_kib\":%ld}\n",cpu,after.ru_maxrss); free(w); return 0;
+  printf(",\"generator_cpu_seconds\":%.6f,\"generator_maxrss_kib\":%ld,\"fixed_source_port_base\":%d,\"fixed_source_port_stride\":%d}\n",cpu,after.ru_maxrss,fixed_port_base,fixed_port_stride); free(w); return 0;
 }
 static int monitor(int pid, int ms) {
   uint64_t end=now_ns()+(uint64_t)ms*1000000; char path[128], line[2048];

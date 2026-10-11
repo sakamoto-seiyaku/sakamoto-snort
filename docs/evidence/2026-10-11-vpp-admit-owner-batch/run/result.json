@@ -1,0 +1,1129 @@
+{
+  "status": "COMPLETE",
+  "manifest": {
+    "schema": 1,
+    "serial": "28201JEGR0XPAJ",
+    "model": "Pixel 6a",
+    "uid": 12632,
+    "apk": "/data/app/~~VwhMKIIi1ypGshaXZN9CEA==/com.sakamoto.snort.androidruntime-H2VOGeuFNrUfG9A_N-3e9w==/base.apk",
+    "apk_sha256": "26938cd5cd82549de74d6fbe96be579ee3bf75182f9bc21e1835c40d76efe9b2",
+    "rules_path": "/data/user/0/com.sakamoto.snort.androidruntime/files/rule-configuration/rules.conf",
+    "rules_sha256": "f9e8c4ffef5a6a20b81e4092cc83a7c56b8359605b1a78f35b94fbc284438f0b",
+    "source_sha256": "99dc8d1379309a80d077dee9e0c12a8beb0ba6e641ae607fb56ca94cb6ecc86c",
+    "android_binary": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/preparation/socket-load-arm64",
+    "android_sha256": "3c3009632667927775929dfb4b197e5d4898d44d5f853af23064486a7a6703a4",
+    "host_binary": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/preparation/socket-load-host",
+    "host_sha256": "df2fdb7693e66336b9d636e5beb0e24bf40b5892ff0ee56b8e3065af2ba42fd2",
+    "remote": "/data/local/tmp/sakamoto-benchmark-3c3009632667",
+    "peer_host": "192.168.4.5",
+    "peer_port": 41320,
+    "cell_ms": 5000,
+    "threads": 4,
+    "flows_per_thread": 16,
+    "profiling": false,
+    "prepared_utc_ns": 1791711241865605079,
+    "fixed_source_port_base": 42000,
+    "conditions": [
+      "baseline",
+      "batch"
+    ],
+    "qualification": "new controlled-tuple screening; not historical B0"
+  },
+  "cases": [
+    {
+      "profile": "root",
+      "mode": "baseline",
+      "generation": "1857",
+      "pid": 28871,
+      "client": {
+        "case": "udp-fixed",
+        "case_id": 0,
+        "pid": 29007,
+        "uid": 12632,
+        "start_monotonic_ns": 2580111664515507,
+        "end_monotonic_ns": 2580116666397020,
+        "requested_ms": 5000,
+        "threads": 4,
+        "flows_per_thread": 16,
+        "bytes": 3068318400,
+        "packets": 2556932,
+        "attempts": 0,
+        "completed": 0,
+        "errors": 7342476,
+        "timeouts": 16,
+        "cancelled_at_deadline": 4,
+        "input_unique_udp_tuples": 64,
+        "tuple_space_exhausted": 0,
+        "latency_samples": 5,
+        "latency_overflow_samples": 0,
+        "p99_upper_us": 173900,
+        "generator_cpu_seconds": 14.455644,
+        "generator_maxrss_kib": 4232,
+        "fixed_source_port_base": 42000
+      },
+      "peer": {
+        "case_id": 0,
+        "tcp_offered_bytes": 0,
+        "tcp_requests": 0,
+        "udp_received_bytes": 295027200,
+        "udp_received_packets": 245856,
+        "udp_duplicates": 0,
+        "underlay_unique_tuples": 64,
+        "tuple_capacity_overflow_packets": 0,
+        "sequence_overflow_packets": 0,
+        "malformed": 0,
+        "send_errors": 0,
+        "peer_cpu_seconds": 0.704476,
+        "peer_maxrss_kib": 3840
+      },
+      "cpu": {
+        "sample_coverage_seconds": 4.815563275,
+        "sample_count": 25,
+        "cpu_seconds": 4.39,
+        "threads": [
+          {
+            "tid": 28871,
+            "cpu_seconds": 0.01,
+            "cpu_percent_one_core": 0.20766002706090494,
+            "last_cpu": 0
+          },
+          {
+            "tid": 28877,
+            "cpu_seconds": 4.38,
+            "cpu_percent_one_core": 90.95509185267636,
+            "last_cpu": 1
+          },
+          {
+            "tid": 28878,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 2
+          }
+        ],
+        "rss_peak_bytes": 126894080
+      },
+      "worker_layout": [
+        {
+          "id": 0,
+          "name": "vpp_main",
+          "tid": 28871,
+          "lcore": 0
+        },
+        {
+          "id": 1,
+          "name": "vpp_wk_0",
+          "tid": 28877,
+          "lcore": 1
+        },
+        {
+          "id": 2,
+          "name": "vpp_wk_1",
+          "tid": 28878,
+          "lcore": 2
+        }
+      ],
+      "capacity": [
+        {
+          "credits": "32",
+          "primary_slots": "64",
+          "completion_slots": "128"
+        }
+      ],
+      "mechanism": {
+        "node_calls": 198580,
+        "node_vectors": 198580,
+        "node_clocks": 33205241,
+        "primary_calls": 1,
+        "primary_packets": 1,
+        "transferred": 1,
+        "rejected": 0,
+        "quads": 0,
+        "scalars": 0,
+        "external_frames": 198580,
+        "physical_queue_publications": 1,
+        "graph_primary_rejected": 0,
+        "vectors_per_call": 1.0,
+        "remote_packets_per_publication": 1.0,
+        "admit_clocks_per_vector": 167.2134202840165,
+        "vpp_cpu_seconds_per_admitted_packet": 2.2962296470010262e-05,
+        "admitted_pps": 39701.060387753336,
+        "remote_share": 5.035753852351697e-06,
+        "rejection_share": 0.0
+      },
+      "score": {
+        "elapsed_seconds": 5.001881513,
+        "delivered_mbps": 471.86595561405096,
+        "delivered_pps": 49152.70370979697,
+        "completed_cps": null,
+        "input_unique_udp_tuples_per_second": null,
+        "udp_loss_packets": 2311076,
+        "udp_duplicate_packets": 0,
+        "flow_occupancy_before": [
+          107,
+          27
+        ],
+        "flow_occupancy_after": [
+          108,
+          27
+        ],
+        "flow_capacity": [
+          1024,
+          1024
+        ],
+        "flow_creates": 1,
+        "flow_capacity_misses": 0,
+        "p99_upper_us": 173900,
+        "latency_samples": 5,
+        "vpp_cpu_seconds": 4.39,
+        "root_receive_rows": [
+          {
+            "generation": "1857",
+            "lane": "0",
+            "family": "4",
+            "queue": "176",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "211615",
+            "returns": "212820",
+            "ingress_accepts": "5506",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "1",
+            "family": "4",
+            "queue": "177",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "2",
+            "family": "6",
+            "queue": "178",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "3",
+            "family": "6",
+            "queue": "179",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          }
+        ],
+        "vpp_cpu_seconds_estimated_window": 4.559852833014638,
+        "root_unadmitted_accepts": 5320,
+        "root_receive_deltas": {
+          "ingress_accepts": 5320,
+          "reserve_accepts": 0,
+          "reserve_losses": 0,
+          "identity_losses": 0
+        },
+        "cpu_seconds_per_delivered_gib": 16.59543492292475,
+        "sparse_latency_samples": true,
+        "policy_throughput_qualified": false,
+        "qualification": "endpoint delivery; consult admission, capacity and adapter counters for graph coverage"
+      }
+    },
+    {
+      "profile": "root",
+      "mode": "batch",
+      "generation": "1857",
+      "pid": 28871,
+      "client": {
+        "case": "udp-fixed",
+        "case_id": 1,
+        "pid": 29048,
+        "uid": 12632,
+        "start_monotonic_ns": 2580121706981047,
+        "end_monotonic_ns": 2580126707465872,
+        "requested_ms": 5000,
+        "threads": 4,
+        "flows_per_thread": 16,
+        "bytes": 3019878000,
+        "packets": 2516565,
+        "attempts": 0,
+        "completed": 0,
+        "errors": 6827179,
+        "timeouts": 16,
+        "cancelled_at_deadline": 4,
+        "input_unique_udp_tuples": 64,
+        "tuple_space_exhausted": 0,
+        "latency_samples": 7,
+        "latency_overflow_samples": 0,
+        "p99_upper_us": 173700,
+        "generator_cpu_seconds": 14.482678,
+        "generator_maxrss_kib": 4068,
+        "fixed_source_port_base": 42000
+      },
+      "peer": {
+        "case_id": 1,
+        "tcp_offered_bytes": 0,
+        "tcp_requests": 0,
+        "udp_received_bytes": 338740800,
+        "udp_received_packets": 282284,
+        "udp_duplicates": 0,
+        "underlay_unique_tuples": 64,
+        "tuple_capacity_overflow_packets": 0,
+        "sequence_overflow_packets": 0,
+        "malformed": 0,
+        "send_errors": 0,
+        "peer_cpu_seconds": 1.435023,
+        "peer_maxrss_kib": 4608
+      },
+      "cpu": {
+        "sample_coverage_seconds": 4.812334475,
+        "sample_count": 25,
+        "cpu_seconds": 4.35,
+        "threads": [
+          {
+            "tid": 28871,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 0
+          },
+          {
+            "tid": 28877,
+            "cpu_seconds": 4.35,
+            "cpu_percent_one_core": 90.3927194295862,
+            "last_cpu": 1
+          },
+          {
+            "tid": 28878,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 2
+          }
+        ],
+        "rss_peak_bytes": 126894080
+      },
+      "worker_layout": [
+        {
+          "id": 0,
+          "name": "vpp_main",
+          "tid": 28871,
+          "lcore": 0
+        },
+        {
+          "id": 1,
+          "name": "vpp_wk_0",
+          "tid": 28877,
+          "lcore": 1
+        },
+        {
+          "id": 2,
+          "name": "vpp_wk_1",
+          "tid": 28878,
+          "lcore": 2
+        }
+      ],
+      "capacity": [
+        {
+          "credits": "32",
+          "primary_slots": "64",
+          "completion_slots": "128"
+        }
+      ],
+      "mechanism": {
+        "node_calls": 3820,
+        "node_vectors": 198393,
+        "node_clocks": 32334713,
+        "primary_calls": 2,
+        "primary_packets": 2,
+        "transferred": 2,
+        "rejected": 0,
+        "quads": 45118,
+        "scalars": 17921,
+        "external_frames": 3820,
+        "physical_queue_publications": 2,
+        "graph_primary_rejected": 0,
+        "vectors_per_call": 51.93534031413613,
+        "remote_packets_per_publication": 1.0,
+        "admit_clocks_per_vector": 162.98313448559173,
+        "vpp_cpu_seconds_per_admitted_packet": 2.278343599815157e-05,
+        "admitted_pps": 39674.752937581405,
+        "remote_share": 1.0081000841763571e-05,
+        "rejection_share": 0.0
+      },
+      "score": {
+        "elapsed_seconds": 5.000484825,
+        "delivered_mbps": 541.9327314926908,
+        "delivered_pps": 56451.32619715529,
+        "completed_cps": null,
+        "input_unique_udp_tuples_per_second": null,
+        "udp_loss_packets": 2234281,
+        "udp_duplicate_packets": 0,
+        "flow_occupancy_before": [
+          108,
+          27
+        ],
+        "flow_occupancy_after": [
+          109,
+          27
+        ],
+        "flow_capacity": [
+          1024,
+          1024
+        ],
+        "flow_creates": 1,
+        "flow_capacity_misses": 0,
+        "p99_upper_us": 173700,
+        "latency_samples": 7,
+        "vpp_cpu_seconds": 4.35,
+        "root_receive_rows": [
+          {
+            "generation": "1857",
+            "lane": "0",
+            "family": "4",
+            "queue": "176",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "424613",
+            "returns": "426995",
+            "ingress_accepts": "11020",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "1",
+            "family": "4",
+            "queue": "177",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "2",
+            "family": "6",
+            "queue": "178",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "1857",
+            "lane": "3",
+            "family": "6",
+            "queue": "179",
+            "flags": "9",
+            "maxlen": "1024",
+            "allocated": "72",
+            "normal_free": "64",
+            "reserve_free": "8",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          }
+        ],
+        "vpp_cpu_seconds_estimated_window": 4.520074217981284,
+        "root_unadmitted_accepts": 5330,
+        "root_receive_deltas": {
+          "ingress_accepts": 5330,
+          "reserve_accepts": 0,
+          "reserve_losses": 0,
+          "identity_losses": 0
+        },
+        "cpu_seconds_per_delivered_gib": 14.32774775117316,
+        "sparse_latency_samples": true,
+        "policy_throughput_qualified": false,
+        "qualification": "endpoint delivery; consult admission, capacity and adapter counters for graph coverage"
+      }
+    },
+    {
+      "profile": "vpn",
+      "mode": "baseline",
+      "generation": "1858",
+      "pid": 29346,
+      "client": {
+        "case": "udp-fixed",
+        "case_id": 2,
+        "pid": 29446,
+        "uid": 2000,
+        "start_monotonic_ns": 2580144430945454,
+        "end_monotonic_ns": 2580149431779563,
+        "requested_ms": 5000,
+        "threads": 4,
+        "flows_per_thread": 16,
+        "bytes": 6958502400,
+        "packets": 5798752,
+        "attempts": 0,
+        "completed": 0,
+        "errors": 0,
+        "timeouts": 16,
+        "cancelled_at_deadline": 4,
+        "input_unique_udp_tuples": 64,
+        "tuple_space_exhausted": 0,
+        "latency_samples": 1,
+        "latency_overflow_samples": 0,
+        "p99_upper_us": 21700,
+        "generator_cpu_seconds": 18.385396,
+        "generator_maxrss_kib": 5528,
+        "fixed_source_port_base": 42000
+      },
+      "peer": {
+        "case_id": 2,
+        "tcp_offered_bytes": 0,
+        "tcp_requests": 0,
+        "udp_received_bytes": 24782400,
+        "udp_received_packets": 20652,
+        "udp_duplicates": 0,
+        "underlay_unique_tuples": 64,
+        "tuple_capacity_overflow_packets": 0,
+        "sequence_overflow_packets": 0,
+        "malformed": 0,
+        "send_errors": 0,
+        "peer_cpu_seconds": 1.614192,
+        "peer_maxrss_kib": 5760
+      },
+      "cpu": {
+        "sample_coverage_seconds": 4.824174563,
+        "sample_count": 25,
+        "cpu_seconds": 4.609999999999999,
+        "threads": [
+          {
+            "tid": 29346,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 0
+          },
+          {
+            "tid": 29353,
+            "cpu_seconds": 4.6,
+            "cpu_percent_one_core": 95.35310009883653,
+            "last_cpu": 1
+          },
+          {
+            "tid": 29354,
+            "cpu_seconds": 0.01,
+            "cpu_percent_one_core": 0.207289348040949,
+            "last_cpu": 2
+          }
+        ],
+        "rss_peak_bytes": 129536000
+      },
+      "worker_layout": [
+        {
+          "id": 0,
+          "name": "vpp_main",
+          "tid": 29346,
+          "lcore": 0
+        },
+        {
+          "id": 1,
+          "name": "vpp_wk_0",
+          "tid": 29353,
+          "lcore": 1
+        },
+        {
+          "id": 2,
+          "name": "vpp_wk_1",
+          "tid": 29354,
+          "lcore": 2
+        }
+      ],
+      "capacity": [
+        {
+          "credits": "32",
+          "primary_slots": "64",
+          "completion_slots": "128"
+        }
+      ],
+      "mechanism": {
+        "node_calls": 270563,
+        "node_vectors": 270563,
+        "node_clocks": 5862760,
+        "primary_calls": 2,
+        "primary_packets": 2,
+        "transferred": 2,
+        "rejected": 0,
+        "quads": 0,
+        "scalars": 0,
+        "external_frames": 270563,
+        "physical_queue_publications": 2,
+        "graph_primary_rejected": 0,
+        "vectors_per_call": 1.0,
+        "remote_packets_per_publication": 1.0,
+        "admit_clocks_per_vector": 21.668742584906287,
+        "vpp_cpu_seconds_per_admitted_packet": 1.7662490991571966e-05,
+        "admitted_pps": 54103.57434434144,
+        "remote_share": 7.3919937315893155e-06,
+        "rejection_share": 0.0
+      },
+      "score": {
+        "elapsed_seconds": 5.000834109,
+        "delivered_mbps": 39.645226311985226,
+        "delivered_pps": 4129.711074165128,
+        "completed_cps": null,
+        "input_unique_udp_tuples_per_second": null,
+        "udp_loss_packets": 5778100,
+        "udp_duplicate_packets": 0,
+        "flow_occupancy_before": [
+          95,
+          48
+        ],
+        "flow_occupancy_after": [
+          95,
+          49
+        ],
+        "flow_capacity": [
+          1024,
+          1024
+        ],
+        "flow_creates": 1,
+        "flow_capacity_misses": 0,
+        "p99_upper_us": 21700,
+        "latency_samples": 1,
+        "vpp_cpu_seconds": 4.609999999999999,
+        "root_receive_rows": [
+          {
+            "generation": "0",
+            "lane": "0",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "1",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "2",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "3",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          }
+        ],
+        "vpp_cpu_seconds_estimated_window": 4.778816550152686,
+        "root_unadmitted_accepts": 0,
+        "root_receive_deltas": {
+          "ingress_accepts": 0,
+          "reserve_accepts": 0,
+          "reserve_losses": 0,
+          "identity_losses": 0
+        },
+        "cpu_seconds_per_delivered_gib": 207.05077793604866,
+        "sparse_latency_samples": true,
+        "policy_throughput_qualified": false,
+        "qualification": "endpoint delivery; consult admission, capacity and adapter counters for graph coverage"
+      }
+    },
+    {
+      "profile": "vpn",
+      "mode": "batch",
+      "generation": "1858",
+      "pid": 29346,
+      "client": {
+        "case": "udp-fixed",
+        "case_id": 3,
+        "pid": 29483,
+        "uid": 2000,
+        "start_monotonic_ns": 2580154357683537,
+        "end_monotonic_ns": 2580159358985012,
+        "requested_ms": 5000,
+        "threads": 4,
+        "flows_per_thread": 16,
+        "bytes": 6173683200,
+        "packets": 5144736,
+        "attempts": 0,
+        "completed": 0,
+        "errors": 0,
+        "timeouts": 16,
+        "cancelled_at_deadline": 4,
+        "input_unique_udp_tuples": 64,
+        "tuple_space_exhausted": 0,
+        "latency_samples": 2,
+        "latency_overflow_samples": 0,
+        "p99_upper_us": 75700,
+        "generator_cpu_seconds": 17.636965,
+        "generator_maxrss_kib": 5528,
+        "fixed_source_port_base": 42000
+      },
+      "peer": {
+        "case_id": 3,
+        "tcp_offered_bytes": 0,
+        "tcp_requests": 0,
+        "udp_received_bytes": 26968800,
+        "udp_received_packets": 22474,
+        "udp_duplicates": 0,
+        "underlay_unique_tuples": 64,
+        "tuple_capacity_overflow_packets": 0,
+        "sequence_overflow_packets": 0,
+        "malformed": 0,
+        "send_errors": 0,
+        "peer_cpu_seconds": 1.76954,
+        "peer_maxrss_kib": 6784
+      },
+      "cpu": {
+        "sample_coverage_seconds": 4.817368208,
+        "sample_count": 25,
+        "cpu_seconds": 4.59,
+        "threads": [
+          {
+            "tid": 29346,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 0
+          },
+          {
+            "tid": 29353,
+            "cpu_seconds": 4.59,
+            "cpu_percent_one_core": 95.28024020205847,
+            "last_cpu": 1
+          },
+          {
+            "tid": 29354,
+            "cpu_seconds": 0.0,
+            "cpu_percent_one_core": 0.0,
+            "last_cpu": 2
+          }
+        ],
+        "rss_peak_bytes": 129536000
+      },
+      "worker_layout": [
+        {
+          "id": 0,
+          "name": "vpp_main",
+          "tid": 29346,
+          "lcore": 0
+        },
+        {
+          "id": 1,
+          "name": "vpp_wk_0",
+          "tid": 29353,
+          "lcore": 1
+        },
+        {
+          "id": 2,
+          "name": "vpp_wk_1",
+          "tid": 29354,
+          "lcore": 2
+        }
+      ],
+      "capacity": [
+        {
+          "credits": "32",
+          "primary_slots": "64",
+          "completion_slots": "128"
+        }
+      ],
+      "mechanism": {
+        "node_calls": 4291,
+        "node_vectors": 274469,
+        "node_clocks": 9411865,
+        "primary_calls": 1,
+        "primary_packets": 1,
+        "transferred": 1,
+        "rejected": 0,
+        "quads": 64327,
+        "scalars": 17161,
+        "external_frames": 4291,
+        "physical_queue_publications": 1,
+        "graph_primary_rejected": 0,
+        "vectors_per_call": 63.963877883943134,
+        "remote_packets_per_publication": 1.0,
+        "admit_clocks_per_vector": 34.29117678134871,
+        "vpp_cpu_seconds_per_admitted_packet": 1.736171319387287e-05,
+        "admitted_pps": 54879.515136607515,
+        "remote_share": 3.6433987080508183e-06,
+        "rejection_share": 0.0
+      },
+      "score": {
+        "elapsed_seconds": 5.001301475,
+        "delivered_mbps": 43.13885117273399,
+        "delivered_pps": 4493.630330493124,
+        "completed_cps": null,
+        "input_unique_udp_tuples_per_second": null,
+        "udp_loss_packets": 5122262,
+        "udp_duplicate_packets": 0,
+        "flow_occupancy_before": [
+          95,
+          49
+        ],
+        "flow_occupancy_after": [
+          96,
+          49
+        ],
+        "flow_capacity": [
+          1024,
+          1024
+        ],
+        "flow_creates": 1,
+        "flow_capacity_misses": 0,
+        "p99_upper_us": 75700,
+        "latency_samples": 2,
+        "vpp_cpu_seconds": 4.59,
+        "root_receive_rows": [
+          {
+            "generation": "0",
+            "lane": "0",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "1",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "2",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          },
+          {
+            "generation": "0",
+            "lane": "3",
+            "family": "0",
+            "queue": "0",
+            "flags": "0",
+            "maxlen": "0",
+            "allocated": "0",
+            "normal_free": "0",
+            "reserve_free": "0",
+            "loans": "0",
+            "withheld": "0",
+            "paused": "0",
+            "identity_fault": "0",
+            "datagrams": "0",
+            "returns": "0",
+            "ingress_accepts": "0",
+            "reserve_accepts": "0",
+            "reserve_losses": "0",
+            "identity_losses": "0"
+          }
+        ],
+        "vpp_cpu_seconds_estimated_window": 4.765252058609093,
+        "root_unadmitted_accepts": 0,
+        "root_receive_deltas": {
+          "ingress_accepts": 0,
+          "reserve_accepts": 0,
+          "reserve_losses": 0,
+          "identity_losses": 0
+        },
+        "cpu_seconds_per_delivered_gib": 189.72480930670562,
+        "sparse_latency_samples": true,
+        "policy_throughput_qualified": false,
+        "qualification": "endpoint delivery; consult admission, capacity and adapter counters for graph coverage"
+      }
+    }
+  ],
+  "lifetimes": [
+    {
+      "profile": "root",
+      "generation": "1857",
+      "stopped": {
+        "generation": "1857",
+        "schemaVersion": "2",
+        "adapter": "unavailable",
+        "protectionRunning": "false",
+        "profile": "root",
+        "errorMessage": "",
+        "abi": "",
+        "health": "unknown",
+        "errorCode": "",
+        "pid": "-1",
+        "version": "",
+        "mayBeActive": "false",
+        "artifact": "",
+        "protocol": "",
+        "coreHealth": "unknown",
+        "updatedAtMillis": "1791711381987",
+        "adapterReadiness": "unavailable",
+        "state": "stopped",
+        "abiEvidence": ""
+      },
+      "native_zero": {
+        "event": "stop_native_zero",
+        "generation": "1857",
+        "ready_mask": "0",
+        "graph_enabled": "0",
+        "graph_accepting": "0",
+        "pending": "0",
+        "buffers": "0",
+        "obligations": "0",
+        "handoffs": "0",
+        "completion_frames": "0"
+      }
+    },
+    {
+      "profile": "vpn",
+      "generation": "1858",
+      "stopped": {
+        "generation": "1858",
+        "schemaVersion": "2",
+        "adapter": "unavailable",
+        "protectionRunning": "false",
+        "profile": "vpn",
+        "errorMessage": "",
+        "abi": "",
+        "health": "unknown",
+        "errorCode": "",
+        "pid": "-1",
+        "version": "",
+        "mayBeActive": "false",
+        "artifact": "",
+        "protocol": "",
+        "coreHealth": "unknown",
+        "updatedAtMillis": "1791711410347",
+        "adapterReadiness": "unavailable",
+        "state": "stopped",
+        "abiEvidence": ""
+      }
+    }
+  ],
+  "errors": [],
+  "vpn_before_stop_native_zero": {
+    "generation": "1858",
+    "enabled": "1",
+    "attached": "1",
+    "fd": "44",
+    "origin_thread": "1",
+    "draining": "0",
+    "captured": "570692",
+    "submitted": "570692",
+    "completed": "573534",
+    "pending": "0",
+    "policy_drops": "0",
+    "runtime_drops": "609",
+    "transport_unavailable": "0",
+    "pregraph_returns": "0",
+    "errors": "0",
+    "rejected": "0",
+    "local": "569554",
+    "remote": "3980",
+    "frames": "0",
+    "buffers": "0",
+    "obligations": "0",
+    "tun_writes": "2842",
+    "nfq_verdicts": "0",
+    "direct_egress_ready": "0"
+  },
+  "final_runtime": {
+    "generation": "1858",
+    "schemaVersion": "2",
+    "adapter": "unavailable",
+    "protectionRunning": "false",
+    "profile": "vpn",
+    "errorMessage": "",
+    "abi": "",
+    "health": "unknown",
+    "errorCode": "",
+    "pid": "-1",
+    "version": "",
+    "mayBeActive": "false",
+    "artifact": "",
+    "protocol": "",
+    "coreHealth": "unknown",
+    "updatedAtMillis": "1791711410378",
+    "adapterReadiness": "unavailable",
+    "state": "stopped",
+    "abiEvidence": ""
+  },
+  "final_processes": "",
+  "rules_unchanged": true,
+  "elapsed_seconds": 61.177961692912504
+}

@@ -1,0 +1,246 @@
+{
+  "decision": "FAIL",
+  "threshold_source": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/pre-registered-balanced-cohort.json",
+  "comparisons": {
+    "root": {
+      "admit_clocks_per_vector": 8.929390338484012,
+      "vpp_cpu_seconds_per_admitted_packet": -1.7536081355677302,
+      "admitted_pps": -1.2664045951698677,
+      "remote_share_difference_pp": 0.2636352398731612,
+      "rejection_share_increase_pp": 0.5130093786905596,
+      "root_bypass_share_increase_pp": 0.21101814757544246
+    },
+    "vpn": {
+      "admit_clocks_per_vector": -37.85426914781059,
+      "vpp_cpu_seconds_per_admitted_packet": 0.3640751409926368,
+      "admitted_pps": -0.3390820988134813,
+      "remote_share_difference_pp": 0.03012765200258727,
+      "rejection_share_increase_pp": 0.5162675079530425,
+      "root_bypass_share_increase_pp": null
+    }
+  },
+  "checks": [
+    {
+      "name": "complete four windows within 120 seconds",
+      "passed": true,
+      "observed": 61.130837111966684,
+      "bound": 120
+    },
+    {
+      "name": "ordinary lifetimes and final cleanup",
+      "passed": true,
+      "observed": null,
+      "bound": null
+    },
+    {
+      "name": "root batch vectors per call",
+      "passed": true,
+      "observed": 35.33774008480918,
+      "bound": ">=4"
+    },
+    {
+      "name": "root batch remote packets per actual queue publication",
+      "passed": true,
+      "observed": 17.509954058192957,
+      "bound": ">=4"
+    },
+    {
+      "name": "root lookahead four-packet preparation exercised",
+      "passed": true,
+      "observed": 30034,
+      "bound": ">0"
+    },
+    {
+      "name": "root baseline workload actually exercises primary handoff",
+      "passed": true,
+      "observed": 0.49916699777633716,
+      "bound": "[.1,.9]"
+    },
+    {
+      "name": "root baseline no Flow capacity miss",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "root baseline no owner failure",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "root batch workload actually exercises primary handoff",
+      "passed": true,
+      "observed": 0.49653064537760555,
+      "bound": "[.1,.9]"
+    },
+    {
+      "name": "root batch no Flow capacity miss",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "root batch no owner failure",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "root whole VPP CPU per packet regression",
+      "passed": true,
+      "observed": -1.7536081355677302,
+      "bound": "<=+5%"
+    },
+    {
+      "name": "root admission rate regression",
+      "passed": true,
+      "observed": -1.2664045951698677,
+      "bound": ">=-5%"
+    },
+    {
+      "name": "root remote share comparability",
+      "passed": true,
+      "observed": 0.2636352398731612,
+      "bound": "<=5pp"
+    },
+    {
+      "name": "root primary rejection regression",
+      "passed": true,
+      "observed": 0.5130093786905596,
+      "bound": "<=3pp"
+    },
+    {
+      "name": "Root ingress bypass regression",
+      "passed": true,
+      "observed": 0.21101814757544246,
+      "bound": "<=3pp"
+    },
+    {
+      "name": "vpn batch vectors per call",
+      "passed": true,
+      "observed": 44.595921883974725,
+      "bound": ">=4"
+    },
+    {
+      "name": "vpn batch remote packets per actual queue publication",
+      "passed": true,
+      "observed": 21.90285458078015,
+      "bound": ">=4"
+    },
+    {
+      "name": "vpn lookahead four-packet preparation exercised",
+      "passed": true,
+      "observed": 69472,
+      "bound": ">0"
+    },
+    {
+      "name": "vpn baseline workload actually exercises primary handoff",
+      "passed": true,
+      "observed": 0.5004107540545918,
+      "bound": "[.1,.9]"
+    },
+    {
+      "name": "vpn baseline no Flow capacity miss",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "vpn baseline no owner failure",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "vpn batch workload actually exercises primary handoff",
+      "passed": true,
+      "observed": 0.5001094775345659,
+      "bound": "[.1,.9]"
+    },
+    {
+      "name": "vpn batch no Flow capacity miss",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "vpn batch no owner failure",
+      "passed": true,
+      "observed": 0,
+      "bound": 0
+    },
+    {
+      "name": "vpn whole VPP CPU per packet regression",
+      "passed": true,
+      "observed": 0.3640751409926368,
+      "bound": "<=+5%"
+    },
+    {
+      "name": "vpn admission rate regression",
+      "passed": true,
+      "observed": -0.3390820988134813,
+      "bound": ">=-5%"
+    },
+    {
+      "name": "vpn remote share comparability",
+      "passed": true,
+      "observed": 0.03012765200258727,
+      "bound": "<=5pp"
+    },
+    {
+      "name": "vpn primary rejection regression",
+      "passed": true,
+      "observed": 0.5162675079530425,
+      "bound": "<=3pp"
+    },
+    {
+      "name": "at least one profile improves BOTH admit clocks and whole VPP CPU per packet by 10%",
+      "passed": false,
+      "observed": {
+        "root": {
+          "admit_clocks_per_vector": 8.929390338484012,
+          "vpp_cpu_seconds_per_admitted_packet": -1.7536081355677302,
+          "admitted_pps": -1.2664045951698677,
+          "remote_share_difference_pp": 0.2636352398731612,
+          "rejection_share_increase_pp": 0.5130093786905596,
+          "root_bypass_share_increase_pp": 0.21101814757544246
+        },
+        "vpn": {
+          "admit_clocks_per_vector": -37.85426914781059,
+          "vpp_cpu_seconds_per_admitted_packet": 0.3640751409926368,
+          "admitted_pps": -0.3390820988134813,
+          "remote_share_difference_pp": 0.03012765200258727,
+          "rejection_share_increase_pp": 0.5162675079530425,
+          "root_bypass_share_increase_pp": null
+        }
+      },
+      "bound": "both <=-10% in the same profile"
+    }
+  ],
+  "failed_checks": [
+    {
+      "name": "at least one profile improves BOTH admit clocks and whole VPP CPU per packet by 10%",
+      "passed": false,
+      "observed": {
+        "root": {
+          "admit_clocks_per_vector": 8.929390338484012,
+          "vpp_cpu_seconds_per_admitted_packet": -1.7536081355677302,
+          "admitted_pps": -1.2664045951698677,
+          "remote_share_difference_pp": 0.2636352398731612,
+          "rejection_share_increase_pp": 0.5130093786905596,
+          "root_bypass_share_increase_pp": 0.21101814757544246
+        },
+        "vpn": {
+          "admit_clocks_per_vector": -37.85426914781059,
+          "vpp_cpu_seconds_per_admitted_packet": 0.3640751409926368,
+          "admitted_pps": -0.3390820988134813,
+          "remote_share_difference_pp": 0.03012765200258727,
+          "rejection_share_increase_pp": 0.5162675079530425,
+          "root_bypass_share_increase_pp": null
+        }
+      },
+      "bound": "both <=-10% in the same profile"
+    }
+  ]
+}

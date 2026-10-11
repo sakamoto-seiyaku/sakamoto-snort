@@ -67,6 +67,23 @@ def main():
                 reset = quick.peer_query("127.0.0.1", port, index, "R")
                 assert reset["tcp_requests"] == reset["udp_received_packets"] == 0
                 print(case + ": PASS", flush=True)
+            # The mechanism experiment replays the same UDP five-tuples, so
+            # canonical-owner distribution does not change between modes.
+            for case_id, stride in ((10, 1), (11, 1), (12, 2), (13, 2)):
+                quick.peer_query("127.0.0.1", port, case_id, "R")
+                result = json.loads(subprocess.check_output(
+                    [str(binary), "client", "127.0.0.1", str(port), str(case_id),
+                     "udp-fixed", "250", "2", "4", "38000", str(stride)], text=True, timeout=2))
+                stats = quick.peer_query("127.0.0.1", port, case_id)
+                assert result["fixed_source_port_base"] == 38000
+                assert result["fixed_source_port_stride"] == stride
+                assert result["input_unique_udp_tuples"] == 8 and stats["underlay_unique_tuples"] == 8
+                # A full-speed nonblocking sender reports unsent datagrams in
+                # "errors"; correctness depends on the successfully sent set.
+                assert stats["udp_duplicates"] == stats["malformed"] == 0
+                assert stats["tuple_capacity_overflow_packets"] == stats["sequence_overflow_packets"] == 0
+                assert 0 < stats["udp_received_packets"] <= result["packets"]
+            print("fixed UDP tuple replay: PASS", flush=True)
             # Independently inject a duplicate to verify received/lost/duplicate accounting.
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as endpoint:
                 packet = struct.pack("!IIIIQ", 0x53424e31, 0, ord("U"), 24, 100)

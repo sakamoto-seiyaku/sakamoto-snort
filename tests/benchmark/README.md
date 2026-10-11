@@ -120,3 +120,14 @@ duplicate accounting and peer reset between repeated runs. Their rates are never
 used as Android performance results. Peer sequence/tuple sets are bounded and
 report overflow explicitly. Failed calibration artifacts should be retained in
 their own directories, not relabeled or overwritten as B0.
+
+For a separately frozen mechanism experiment, the helper accepts optional
+`UDP_FIXED_SOURCE_PORT_BASE [UDP_FIXED_SOURCE_PORT_STRIDE]` after the existing
+`udp-fixed` client arguments. It binds all data sockets and four thread probes
+before connecting; an occupied port fails explicitly. Without these arguments,
+the four original workloads retain their existing socket behavior. The stride
+defaults to 1; stride 2 avoids synchronized source/destination port low bits
+putting this controlled cohort on one canonical owner. Freeze the new helper
+hash and actual owner distribution before comparison; these runs are distinct
+from historical B0. See the [withdrawn admit/owner experiment](../../docs/testing/2026-10-11_PIXEL6A_VPP_ADMIT_OWNER_BATCH.md)
+for the qualified fixed-tuple setup and failed effectiveness gate.

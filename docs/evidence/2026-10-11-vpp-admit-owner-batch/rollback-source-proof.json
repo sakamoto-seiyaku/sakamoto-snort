@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "baseline_commit": "09f494b7ae46bbe69c442acb44580d712990f43e",
+  "restored_sha256": {
+    "src/product/vpp/CMakeLists.txt": "655c39f0392328cbf76a1f391e63460ca80a2b0d36c0c2f9274bef8a88f32bef",
+    "src/product/vpp/product_packet_graph.c": "d7fa94d4143020d8e3deeb72a766513313a7960b15a4b924f9f199188886ffb3",
+    "src/product/vpp/product_packet_graph.h": "82379fda1b725dee5a631248572716ea5c51fd6343c076596dfab2fbaec12fae",
+    "src/product/vpp/product_root_nfqueue_adapter.c": "a4e854ce03595b14b26f71679655ed6494df6bbb0d8268b4e4cf5dcc3908fc6c",
+    "src/product/vpp/product_vpn_tun_adapter.c": "4254533d2cc900921b6459608700e9afd927c02f937392586bc64dfeffa4744e"
+  },
+  "r0_apk_sha256": "d4aab5dbeecab3cfabc204de29212da45f78be65227abfea4201df6b88228974",
+  "experimental_inc_removed": true,
+  "experiment_patch_sha256": "13455c8a57ea7dbcb2aae1388f7da8a64390b246d572177dde1536904886f8ed"
+}

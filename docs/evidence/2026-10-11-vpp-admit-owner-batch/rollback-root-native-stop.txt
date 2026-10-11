@@ -1,0 +1,12 @@
+s242 event=quiesce generation=1861 lane=1 fd=28 queue=177 pending=0
+s242 event=quiesce generation=1861 lane=2 fd=29 queue=178 pending=0
+s242 event=quiesce generation=1861 lane=3 fd=30 queue=179 pending=0
+s242 event=lane_retire generation=1861 lane=3 family=6 queue=179 fd=30 pending=0 allocated=72 loans=0 verdicts=0 succeeded=0 failed=0 settlements=0 returns=0
+s242 event=lane_closed generation=1861 lane=3 fd=-1 pending=0 allocated=0 loans=0 listener=0 socket=0
+s242 event=lane_retire generation=1861 lane=2 family=6 queue=178 fd=29 pending=0 allocated=72 loans=0 verdicts=0 succeeded=0 failed=0 settlements=0 returns=0
+s242 event=lane_closed generation=1861 lane=2 fd=-1 pending=0 allocated=0 loans=0 listener=0 socket=0
+s242 event=lane_retire generation=1861 lane=1 family=4 queue=177 fd=28 pending=0 allocated=72 loans=0 verdicts=0 succeeded=0 failed=0 settlements=0 returns=0
+s242 event=lane_closed generation=1861 lane=1 fd=-1 pending=0 allocated=0 loans=0 listener=0 socket=0
+s242 event=lane_retire generation=1861 lane=0 family=4 queue=176 fd=27 pending=0 allocated=72 loans=0 verdicts=0 succeeded=0 failed=0 settlements=0 returns=0
+s242 event=lane_closed generation=1861 lane=0 fd=-1 pending=0 allocated=0 loans=0 listener=0 socket=0
+s242 event=stop_native_zero generation=1861 ready_mask=0 graph_enabled=0 graph_accepting=0 pending=0 buffers=0 obligations=0 handoffs=0 completion_frames=0
