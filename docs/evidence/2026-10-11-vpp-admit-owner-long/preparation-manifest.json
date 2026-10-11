@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "serial": "28201JEGR0XPAJ",
+  "model": "Pixel 6a",
+  "uid": 12632,
+  "apk": "/data/app/~~iR4MZEgv2LubULbjiTaGOg==/com.sakamoto.snort.androidruntime-PhCcJv0AFjzHPoc7epgojQ==/base.apk",
+  "apk_sha256": "26938cd5cd82549de74d6fbe96be579ee3bf75182f9bc21e1835c40d76efe9b2",
+  "rules_path": "/data/user/0/com.sakamoto.snort.androidruntime/files/rule-configuration/rules.conf",
+  "rules_sha256": "f9e8c4ffef5a6a20b81e4092cc83a7c56b8359605b1a78f35b94fbc284438f0b",
+  "source_sha256": "c8dd7ad3618bd03963ec8954943d0318266ab9e24888d349fbf4ba115f77c056",
+  "android_binary": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-long-20261011/preparation/socket-load-arm64",
+  "android_sha256": "208728dadf036da9aec499e4e0c80343b6d4fa06cd32bea19e2aeeeb75380aca",
+  "host_binary": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-long-20261011/preparation/socket-load-host",
+  "host_sha256": "fcac0b9208aa6a7dbab41a990b1bba6789c45fdb86f05f21707a45fdba81dce5",
+  "remote": "/data/local/tmp/sakamoto-benchmark-208728dadf03",
+  "peer_host": "192.168.4.5",
+  "peer_port": 41320,
+  "cell_ms": 30000,
+  "threads": 4,
+  "flows_per_thread": 16,
+  "profiling": false,
+  "prepared_utc_ns": 1791713633397352850,
+  "fixed_source_port_base": 42000,
+  "fixed_source_port_stride": 2,
+  "global_deadline_seconds": 600,
+  "order": [
+    "baseline",
+    "batch",
+    "batch",
+    "baseline"
+  ],
+  "profile_order": [
+    "root",
+    "vpn"
+  ],
+  "source_snapshot": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/instrumented/source",
+  "build_manifest": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/instrumented/build-manifest.json",
+  "preparation_utc_ns": 1791713634849086489
+}

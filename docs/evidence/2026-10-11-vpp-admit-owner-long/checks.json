@@ -1,0 +1,6 @@
+{
+  "socket_workloads_and_sequence_edges": "PASS",
+  "raw_counter_cpu_capture_replay": "PASS",
+  "ordinary_restore_root_vpn": "PASS",
+  "product_source_diff": "EMPTY"
+}

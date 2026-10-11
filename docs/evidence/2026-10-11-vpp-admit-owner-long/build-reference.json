@@ -1,0 +1,9 @@
+{
+  "artifact": "/home/js/Git/sakamoto/sakamoto-snort/build-output/vpp-admit-owner-batch-20261011/instrumented",
+  "manifest_sha256": "10bb0d541652f272fd1d02989e56ca16097a74f4e67d940d807e9a1317ba5f59",
+  "native_apk_sha256": "26938cd5cd82549de74d6fbe96be579ee3bf75182f9bc21e1835c40d76efe9b2",
+  "unstripped_sha256": "0d1d33e9066745afc73280a19cd4f847165f1f928be123439eb478ca97fee428",
+  "source_files": 1213,
+  "persistent_manifest": "../2026-10-11-vpp-admit-owner-batch/build-manifest.json",
+  "source_proof": "Verified the 1213-file frozen build snapshot, ELF and native APK before installation; product working tree stayed at the restored baseline."
+}

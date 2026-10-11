@@ -97,6 +97,22 @@ def main():
             assert stats["udp_received_packets"] == 2
             assert stats["udp_duplicates"] == 1 and stats["underlay_unique_tuples"] == 1
             print("duplicate accounting and per-run reset: PASS")
+            # Longer windows must retain exact duplicate accounting beyond
+            # the original 2^24 sequence space, including the capacity edge.
+            quick.peer_query("127.0.0.1", port, 0, "R")
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as endpoint:
+                for sequence in ((1 << 24) + 100, (1 << 24) + 100,
+                                 (1 << 27) - 1, (1 << 27) - 1, (1 << 27)):
+                    endpoint.sendto(struct.pack("!IIIIQ", 0x53424e31, 0, ord("U"), 24, sequence),
+                                    ("127.0.0.1", port))
+            until = time.monotonic() + 1
+            while time.monotonic() < until:
+                stats = quick.peer_query("127.0.0.1", port, 0)
+                if stats["udp_received_packets"] == 5:
+                    break
+            assert stats["udp_received_packets"] == 5 and stats["udp_duplicates"] == 2
+            assert stats["sequence_overflow_packets"] == 1
+            print("long-window sequence boundaries: PASS")
         finally:
             peer.terminate()
             peer.wait(timeout=2)

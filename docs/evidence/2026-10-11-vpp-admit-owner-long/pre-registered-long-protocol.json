@@ -1,0 +1,58 @@
+{
+  "registered_utc_ns": 1791713634849737793,
+  "purpose": "User-requested longer throughput re-evaluation; keep the previous five-second evidence unchanged.",
+  "native_apk_sha256": "26938cd5cd82549de74d6fbe96be579ee3bf75182f9bc21e1835c40d76efe9b2",
+  "helper_sha256": "208728dadf036da9aec499e4e0c80343b6d4fa06cd32bea19e2aeeeb75380aca",
+  "cell_ms": 30000,
+  "windows_per_profile": 4,
+  "order": [
+    "baseline",
+    "batch",
+    "batch",
+    "baseline"
+  ],
+  "profiles": [
+    "root",
+    "vpn"
+  ],
+  "global_deadline_seconds": 600,
+  "cohort": {
+    "threads": 4,
+    "flows_per_thread": 16,
+    "udp_bytes": 1200,
+    "source_base": 42000,
+    "source_stride": 2,
+    "destination_base": 41320
+  },
+  "primary_outcomes": [
+    "peer delivered Mbps",
+    "VPP CPU seconds per delivered unique GiB"
+  ],
+  "secondary_outcomes": [
+    "admission pps",
+    "admit clocks per vector",
+    "primary physical publications",
+    "rejection/bypass shares",
+    "per-second peer delivery",
+    "battery temperature",
+    "peer CPU headroom"
+  ],
+  "interpretation": {
+    "compare_both_reversed_pairs": true,
+    "aggregate_by_total_delivered_bytes_and_total_window_cpu": true,
+    "screening_positive": "Both reversed pairs show >=5% delivery improvement and aggregate delivery improves >=10%, with aggregate VPP CPU/GiB falling >=5%; comparable remote share and no >3pp rejection/bypass regression.",
+    "other_profile": "Report separately; no merged overall score. A single five-second gain or full CPU utilization is not a pass/fail conclusion.",
+    "limits": "Two 30s windows per condition are screening evidence; not thermal steady state, statistical confidence or energy measurement."
+  },
+  "correctness": [
+    "same native APK/ELF/source snapshot and fixed tuple cohort",
+    "same rule/UID/W2/credits32 identity",
+    "same generation within each profile",
+    "capture progress and no duplicate/sequence overflow",
+    "ordinary zero-debt/residue cleanup"
+  ],
+  "tcp_initial_warmup_ms": 3000,
+  "udp_each_condition_warmup_ms": 1000,
+  "warmup_amendment_utc_ns": 1791713890693671629,
+  "warmup_amendment": "Original 250ms cold TCP warmup delivered zero bytes; first attempt ended before any scored 30s window. Extend initial warmup to 3s for both profiles; all scored conditions and thresholds remain unchanged."
+}

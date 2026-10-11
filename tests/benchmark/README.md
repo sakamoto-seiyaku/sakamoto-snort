@@ -131,3 +131,9 @@ putting this controlled cohort on one canonical owner. Freeze the new helper
 hash and actual owner distribution before comparison; these runs are distinct
 from historical B0. See the [withdrawn admit/owner experiment](../../docs/testing/2026-10-11_PIXEL6A_VPP_ADMIT_OWNER_BATCH.md)
 for the qualified fixed-tuple setup and failed effectiveness gate.
+
+The socket helper accepts client windows up to 60 seconds and monitor windows
+up to 61 seconds. Its bounded duplicate bitmap covers 2^27 sequence values and
+still reports overflow explicitly. These limits support separately frozen longer
+experiments; the daily quick runner retains its existing window choices and
+120-second deadline. See the [30-second repeated comparison](../../docs/testing/2026-10-11_PIXEL6A_VPP_ADMIT_OWNER_LONG.md).

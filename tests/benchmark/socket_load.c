@@ -24,7 +24,7 @@
 #define PORTS 64
 #define CASES 16
 #define MAXFD 65536
-#define SEQS (1u << 24)
+#define SEQS (1u << 27)
 #define TUPLES (1u << 19)
 #define HIST 10001
 typedef struct { uint32_t magic, id, op, size; uint64_t seq; } header;
@@ -290,7 +290,7 @@ static int client(int argc, char **argv) {
   const char *names[] = {"tcp-fixed", "tcp-new", "udp-fixed", "udp-new"}; int mode = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(argv[5], names[i])) mode = i;
   if (mode < 0) return 2;
-  int port = number(argv[3], 1024, 65472), id = number(argv[4], 0, CASES - 1), ms = number(argv[6], 100, 10000);
+  int port = number(argv[3], 1024, 65472), id = number(argv[4], 0, CASES - 1), ms = number(argv[6], 100, 60000);
   int threads = number(argv[7], 1, 8), flows = number(argv[8], 1, 256);
   int fixed_port_stride = argc == 11 ? number(argv[10], 1, 16) : 1;
   int fixed_port_base = argc >= 10 ? number(argv[9], 1024, 65535 - (threads * flows + threads - 1) * fixed_port_stride) : 0;
@@ -375,7 +375,7 @@ int main(int argc,char **argv) {
   signal(SIGINT,stop_signal); signal(SIGTERM,stop_signal); signal(SIGPIPE,SIG_IGN);
   if(argc>=2 && !strcmp(argv[1],"client"))return client(argc,argv);
   if(argc==4 && !strcmp(argv[1],"server"))return server(argv[2],number(argv[3],1024,65472));
-  if(argc==4 && !strcmp(argv[1],"monitor"))return monitor(number(argv[2],1,10000000),number(argv[3],100,11000));
+  if(argc==4 && !strcmp(argv[1],"monitor"))return monitor(number(argv[2],1,10000000),number(argv[3],100,61000));
   if(argc>=4 && !strcmp(argv[1],"cli"))return cli(argc,argv);
   fprintf(stderr,"server BIND_IP PORT | client IP PORT CASE_ID CASE MS THREADS FLOWS | monitor PID MS | cli SOCKET COMMAND...\n");return 2;
 }
