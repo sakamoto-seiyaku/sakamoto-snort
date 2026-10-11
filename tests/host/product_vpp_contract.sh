@@ -149,6 +149,7 @@ grep -q 'sakamoto-product-host-residue-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-vapi-callback-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-host-vapi-build-contract' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-plugin-init-contract' "$repo_root/CMakeLists.txt"
+grep -q 'sakamoto-vpp-runtime-mode-test' "$repo_root/CMakeLists.txt"
 grep -q 'sakamoto-product-path-contract' "$repo_root/CMakeLists.txt"
 grep -q 'mismatched API identity' "$repo_root/tests/host/product_query_identity_contract.sh"
 grep -q 'generation_marker=present' "$repo_root/tests/host/product_residue_contract.sh"
@@ -207,5 +208,7 @@ for test_script in \
   "$repo_root/tests/host/product_path_contract.sh"; do
   bash -n "$test_script"
 done
+
+python3 "$repo_root/tests/host/vpp_runtime_mode_test.py"
 
 echo "sakamoto product VPP build/allowlist contract: PASS"

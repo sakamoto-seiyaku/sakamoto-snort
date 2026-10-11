@@ -247,6 +247,9 @@ add_test(NAME sakamoto-s187-worker-core-guardrails-contract
 add_test(NAME sakamoto-product-platform-boundary-contract
   COMMAND python3
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_platform_boundary_test.py")
+add_test(NAME sakamoto-vpp-runtime-mode-test
+  COMMAND python3
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/vpp_runtime_mode_test.py")
 
 add_test(NAME sakamoto-android-runtime-teardown-contract
   COMMAND bash

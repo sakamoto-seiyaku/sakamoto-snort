@@ -14,6 +14,7 @@ enum {
 /* The native packet graph runs for either product VPN or controlled validation. */
 int product_vpn_tun_enabled (void);
 int product_vpn_tun_product_mode (void);
+void product_vpn_tun_mode_init (void);
 /* Product readiness requires the TUN, graph and both egress shards. */
 int product_vpn_tun_product_ready (void);
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation);

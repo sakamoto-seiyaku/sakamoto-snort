@@ -905,6 +905,7 @@ vl_api_product_core_root_stop_t_handler (vl_api_product_core_root_stop_t *mp)
 static clib_error_t *
 product_core_init (vlib_main_t *vm)
 {
+  product_vpn_tun_mode_init ();
   product_core_main_t *pcm = &product_core_main;
   pcm->vlib_main = vm;
   pcm->generation = product_core_generation ();

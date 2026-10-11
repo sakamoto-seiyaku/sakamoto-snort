@@ -590,8 +590,6 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
 }
 
 int product_vpn_udp4_adapter_available (void) { return 0; }
-int product_vpn_tun_enabled (void) { return 0; }
-int product_vpn_tun_product_mode (void) { return 0; }
 int product_vpn_tun_product_ready (void) { return 0; }
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   (void) vm; (void) generation; return 0;
@@ -720,6 +718,7 @@ cc -std=c11 -Wall -Wextra -Werror \
   "$repo_root/src/product/vpp/product_domains.c" \
   "$repo_root/src/product/vpp/product_domains_memory.c" \
   "$repo_root/src/product/vpp/product_domains_rax.c" \
+  "$repo_root/src/product/vpp/product_vpn_tun_mode.c" \
   "$work_dir/harness.c" -lm -o "$work_dir/plugin-init-contract"
 "$work_dir/plugin-init-contract"
 echo "sakamoto production VPP plugin init contract: PASS"

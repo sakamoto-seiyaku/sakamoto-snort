@@ -29,6 +29,8 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/timerfd.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <vlib/file.h>
@@ -97,6 +99,7 @@ typedef struct
   u8 receive_paused; /* Explicit CLI pressure probe; does not close verdict fd. */
   u8 identity_fault;
   u8 verdict_fault_next; /* CLI-only one-shot, real sendto(MSG_OOB) rejection. */
+  u8 listener_fault_after_submit; /* CLI-only: one real admitted packet. */
   u16 withheld_count;
   u16 withheld[PRODUCT_ROOT_RECEIVE_TOTAL];
   product_root_receive_pool_t receive_pool;
@@ -117,6 +120,7 @@ typedef struct
   u64 buffer_returns;
   u64 origin_local_completions;
   u64 origin_remote_completions;
+  u64 receive_overruns;
   u32 last_verdict_packet_id;
   u8 verdict_packet_id_known;
   u8 socket_ready;
@@ -164,6 +168,17 @@ typedef struct
   u32 facts_fault; /* Explicit CLI-only attribute fault; reset per generation. */
   u8 hook_ready;
   u8 available;
+  u8 fault_latched;
+  u8 fault_pending;
+  u32 fault_retry_count;
+  u32 fault_drain_steps;
+  u32 fault_lane;
+  int fault_errno;
+  int fault_socket_fd;
+  int fault_timer_fd;
+  uword fault_timer_file;
+  char fault_socket_path[sizeof (((struct sockaddr_un *) 0)->sun_path)];
+  char fault_event[160];
   product_root_nfqueue_lane_t lanes[PRODUCT_ROOT_NFQUEUE_MAX_LANES];
 } product_root_nfqueue_main_t;
 
@@ -176,7 +191,116 @@ static product_root_nfqueue_main_t product_root_nfqueue_main = {
     PRODUCT_ROOT_NFQUEUE_DEFAULT_QUEUE + PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES - 1,
   .lane_count = PRODUCT_ROOT_NFQUEUE_DEFAULT_LANES,
   .uid_owner = UINT32_MAX,
+  .fault_socket_fd = -1,
+  .fault_timer_fd = -1,
+  .fault_timer_file = ~0,
 };
+
+/* The fault socket is a one-way control signal, separate from lossy packet
+ * observations. It is idle while Root is healthy. A failed nonblocking send
+ * arms only a fault-time one-shot retry. */
+static void
+product_root_nfqueue_send_fault (product_root_nfqueue_main_t *nm)
+{
+  if (!__atomic_load_n (&nm->fault_pending, __ATOMIC_ACQUIRE))
+    return;
+  ssize_t sent = nm->fault_socket_fd >= 0
+    ? send (nm->fault_socket_fd, nm->fault_event,
+            strlen (nm->fault_event), MSG_DONTWAIT | MSG_NOSIGNAL) : -1;
+  if (sent == (ssize_t) strlen (nm->fault_event))
+    {
+      __atomic_store_n (&nm->fault_pending, 0, __ATOMIC_RELEASE);
+      return;
+    }
+  if (nm->fault_timer_fd >= 0)
+    {
+      struct itimerspec retry = { .it_value = { .tv_nsec = 100000000 } };
+      (void) timerfd_settime (nm->fault_timer_fd, 0, &retry, 0);
+    }
+}
+
+static clib_error_t *
+product_root_nfqueue_fault_retry (clib_file_t *file)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u64 expirations;
+  (void) read ((int) file->file_descriptor, &expirations, sizeof (expirations));
+  if (file->private_data == nm->generation)
+    {
+      if (!__atomic_load_n (&nm->fault_pending, __ATOMIC_ACQUIRE)) return 0;
+      if (nm->fault_retry_count++ < 30)
+        product_root_nfqueue_send_fault (nm);
+      else
+        {
+          /* A broken control receiver cannot leave a partial Root runtime
+           * reporting protection forever. The main thread performs the same
+           * bounded native quiesce as Java before an orderly process exit;
+           * the existing exit monitor then audits OS-reclaimed resources. */
+          vlib_main_t *vm = vlib_get_main ();
+          vlib_worker_thread_barrier_sync (vm);
+          int drained = product_root_nfqueue_adapter_stop_step (vm, nm->generation);
+          vlib_worker_thread_barrier_release (vm);
+          if (drained == 1 || ++nm->fault_drain_steps >= 20)
+            {
+              fprintf (stderr, "s296 event=root_fault_transport_failed generation=%llu lane=%u errno=%d native_drain=%d\n",
+                (unsigned long long) nm->generation, nm->fault_lane,
+                nm->fault_errno, drained);
+              vlib_exit_with_status (vm, 70);
+            }
+          else if (nm->fault_timer_fd >= 0)
+            {
+              struct itimerspec retry = { .it_value = { .tv_nsec = 100000000 } };
+              (void) timerfd_settime (nm->fault_timer_fd, 0, &retry, 0);
+            }
+        }
+    }
+  return 0;
+}
+
+static void
+product_root_nfqueue_mark_lane_fault (product_root_nfqueue_main_t *nm,
+                                      product_root_nfqueue_lane_t *lane,
+                                      const char *reason, int fault_errno)
+{
+  if (!lane || lane->generation != nm->generation)
+    return;
+  u32 lane_index = lane->lane_index < nm->lane_count && lane->lane_index < 32
+    ? lane->lane_index : 0;
+  lane->draining = 1; /* Existing admitted obligations still use this FD. */
+  if (lane->listener_ready && lane->clib_file_index != ~0)
+    {
+      /* Disable a level-triggered EPOLLERR without losing the verdict FD.
+       * The bounded stop path closes it after admitted obligations settle. */
+      clib_file_t *file = clib_file_get (&file_main, lane->clib_file_index);
+      file->dont_close = 1;
+      clib_file_del_by_index (&file_main, lane->clib_file_index);
+      lane->clib_file_index = ~0;
+      lane->listener_ready = 0;
+    }
+  if (lane->lane_index == lane_index)
+    __atomic_fetch_and (&nm->ready_lane_mask, ~(1U << lane_index), __ATOMIC_RELEASE);
+  else
+    __atomic_store_n (&nm->ready_lane_mask, 0, __ATOMIC_RELEASE);
+  __atomic_store_n (&nm->available, 0, __ATOMIC_RELEASE);
+  if (__atomic_exchange_n (&nm->fault_latched, 1, __ATOMIC_ACQ_REL))
+    return;
+  nm->fault_lane = lane_index;
+  nm->fault_errno = fault_errno;
+  snprintf (nm->fault_event, sizeof (nm->fault_event),
+            "SAKAMOTO_ROOT_FAULT_V1 generation=%llu lane=%u errno=%d reason=%s",
+            (unsigned long long) nm->generation, lane_index,
+            fault_errno, reason);
+  __atomic_store_n (&nm->fault_pending, 1, __ATOMIC_RELEASE);
+  product_root_nfqueue_send_fault (nm);
+  fprintf (stderr, "s296 event=root_lane_fault %s\n", nm->fault_event);
+}
+
+static int
+product_root_nfqueue_transient_errno (int value)
+{
+  return value == EAGAIN || value == EWOULDBLOCK || value == EINTR
+         || value == ENOBUFS;
+}
 
 static u32
 product_root_nfqueue_queue_from_env (void)
@@ -799,7 +923,9 @@ product_root_nfqueue_complete_from_graph (
       || obligation->origin_worker != lane->worker_index
       || vm->thread_index != vlib_get_worker_thread_index (lane->worker_index))
     { rejection = "origin_worker_mismatch"; goto stale; }
-  if (!lane->listener_ready || !lane->socket_ready || lane->fd < 0)
+  /* A fault removes ingress polling but retains the verdict descriptor until
+   * every already-admitted obligation has settled. */
+  if (!lane->socket_ready || lane->fd < 0)
     { rejection = "closed_lane"; goto stale; }
   pending = &lane->pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
   if (pending->completion.obligation.token != obligation->token
@@ -887,10 +1013,14 @@ product_root_nfqueue_read_ready (clib_file_t *file)
     uword_to_pointer (file->private_data, product_root_nfqueue_lane_t *);
   vlib_main_t *vm = vlib_get_main ();
 
+  if (lane && lane->draining) return 0;
   if (lane == 0 || lane->lane_index >= nm->lane_count
       || vm->thread_index != vlib_get_worker_thread_index (lane->worker_index)
       || file->file_descriptor != (u32) lane->fd)
-    return clib_error_return (0, "Root NFQUEUE lane identity missing");
+    {
+      product_root_nfqueue_mark_lane_fault (nm, lane, "identity", EINVAL);
+      return clib_error_return (0, "Root NFQUEUE lane identity missing");
+    }
   if (lane->draining || lane->receive_paused)
     return 0;
 
@@ -927,7 +1057,13 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           received = recv (lane->fd, 0, 0, MSG_DONTWAIT | MSG_TRUNC);
           if (received < 0)
             {
-              if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+              int saved_errno = errno;
+              if (product_root_nfqueue_transient_errno (saved_errno))
+                {
+                  if (saved_errno == ENOBUFS) lane->receive_overruns++;
+                  return 0;
+                }
+              product_root_nfqueue_mark_lane_fault (nm, lane, "discard", saved_errno);
               return clib_error_return_unix (0, "Root NFQUEUE discard");
             }
           lane->receive_datagrams++;
@@ -954,8 +1090,12 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         {
           int saved_errno = errno;
           product_root_nfqueue_return_receive (lane, receive_slot, buffer_index);
-          if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK)
-            return 0;
+          if (product_root_nfqueue_transient_errno (saved_errno))
+            {
+              if (saved_errno == ENOBUFS) lane->receive_overruns++;
+              return 0;
+            }
+          product_root_nfqueue_mark_lane_fault (nm, lane, "recv", saved_errno);
           return clib_error_return_unix (0, "Root NFQUEUE recv");
         }
       lane->receive_datagrams++;
@@ -1153,9 +1293,57 @@ product_root_nfqueue_read_ready (clib_file_t *file)
             vm->thread_index, lane->lane_index, lane->queue_id, packet.packet_id,
             buffer_index, (unsigned long long)obligation_id,
             (unsigned long long)nm->generation);
+          if (lane->listener_fault_after_submit)
+            {
+              lane->listener_fault_after_submit = 0;
+              fprintf (stderr, "s296 event=inflight_fault_fixture generation=%llu lane=%u pending=%u packet=%u\n",
+                (unsigned long long) nm->generation, lane->lane_index,
+                lane->pending_count, packet.packet_id);
+              product_root_nfqueue_mark_lane_fault (nm, lane, "epoll", EBADF);
+              return clib_error_return (0, "Root listener fault fixture after submit");
+            }
         }
     }
   return 0;
+}
+
+static clib_error_t *
+product_root_nfqueue_handle_socket_error (product_root_nfqueue_main_t *nm,
+                                           product_root_nfqueue_lane_t *lane,
+                                           int fault_errno)
+{
+  if (product_root_nfqueue_transient_errno (fault_errno))
+    {
+      if (fault_errno == ENOBUFS) lane->receive_overruns++;
+      return 0;
+    }
+  product_root_nfqueue_mark_lane_fault (nm, lane, "epoll", fault_errno);
+  return clib_error_return (0, "Root NFQUEUE EPOLLERR lane %u errno %d",
+                            lane->lane_index, fault_errno);
+}
+
+static clib_error_t *
+product_root_nfqueue_error_ready (clib_file_t *file)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  product_root_nfqueue_lane_t *lane =
+    uword_to_pointer (file->private_data, product_root_nfqueue_lane_t *);
+  if (!lane || lane->generation != nm->generation || lane->draining)
+    return 0;
+  int fault_errno = 0;
+  socklen_t length = sizeof (fault_errno);
+  if (getsockopt ((int) file->file_descriptor, SOL_SOCKET, SO_ERROR,
+                  &fault_errno, &length) < 0)
+    fault_errno = errno;
+  /* SO_ERROR=0 with EPOLLERR has no classified recoverable socket error.
+   * Keep the verdict FD for bounded drain but withdraw capture readiness. */
+  clib_error_t *error = product_root_nfqueue_handle_socket_error (nm, lane, fault_errno);
+  /* Consuming SO_ERROR alone does not clear Netlink's congestion latch. A
+   * bounded recv path reaches netlink_rcv_wake even when the queue is empty;
+   * otherwise an overrun can leave a ready lane receiving no future packets. */
+  if (!error && fault_errno == ENOBUFS)
+    return product_root_nfqueue_read_ready (file);
+  return error;
 }
 
 static void
@@ -1220,6 +1408,7 @@ product_root_nfqueue_open_lane (product_root_nfqueue_main_t *nm,
     lane->queue_id, lane->queue_flags, lane->queue_maxlen);
 
   template.read_function = product_root_nfqueue_read_ready;
+  template.error_function = product_root_nfqueue_error_ready;
   template.polling_thread_index = vlib_get_worker_thread_index (lane->worker_index);
   template.file_descriptor = (u32) fd;
   template.private_data = pointer_to_uword (lane);
@@ -1329,6 +1518,52 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
   nm->duplicate_completion_drops = 0;
   nm->stale_completion_drops = 0;
   nm->ready_lane_mask = 0;
+  nm->fault_latched = nm->fault_pending = 0;
+  nm->fault_retry_count = nm->fault_drain_steps = 0;
+  nm->fault_lane = UINT32_MAX;
+  nm->fault_errno = 0;
+  const char *fault_path = getenv ("SAKAMOTO_PRODUCT_ROOT_FAULT_SOCKET");
+  nm->fault_socket_path[0] = 0;
+  nm->fault_socket_fd = -1;
+  nm->fault_timer_fd = timerfd_create (CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+  if (nm->fault_timer_fd < 0)
+    {
+      product_root_nfqueue_adapter_stop (vm);
+      return 0;
+    }
+  clib_file_t timer = {
+    .file_descriptor = (u32) nm->fault_timer_fd,
+    .polling_thread_index = 0,
+    .private_data = generation,
+    .read_function = product_root_nfqueue_fault_retry,
+    .error_function = product_root_nfqueue_fault_retry,
+    .description = format (0, "sakamoto-root-fault-retry%c", 0),
+  };
+  nm->fault_timer_file = clib_file_add (&file_main, &timer);
+  if (fault_path && fault_path[0])
+    {
+      if (strlen (fault_path) >= sizeof (nm->fault_socket_path))
+        {
+          product_root_nfqueue_adapter_stop (vm);
+          return 0;
+        }
+      strcpy (nm->fault_socket_path, fault_path);
+      nm->fault_socket_fd = socket (AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+      if (nm->fault_socket_fd < 0)
+        {
+          product_root_nfqueue_adapter_stop (vm);
+          return 0;
+        }
+      struct sockaddr_un address = { .sun_family = AF_UNIX };
+      strcpy (address.sun_path, nm->fault_socket_path);
+      if (connect (nm->fault_socket_fd, (struct sockaddr *) &address,
+                   sizeof (address)) < 0)
+        {
+          product_root_nfqueue_adapter_stop (vm);
+          return 0;
+        }
+    }
+  else nm->fault_retry_count = 30; /* Host has an external exit supervisor. */
   nm->hook_ready = 0;
   nm->available = 0;
 
@@ -1369,6 +1604,11 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
         product_root_nfqueue_adapter_stop (vm);
         return 0;
       }
+  if (__atomic_load_n (&nm->fault_latched, __ATOMIC_ACQUIRE))
+    {
+      product_root_nfqueue_adapter_stop (vm);
+      return 0;
+    }
 
   /*
    * Android Runtime Supervisor installs/removes the platform INPUT/OUTPUT
@@ -1434,6 +1674,14 @@ product_root_nfqueue_adapter_stop (vlib_main_t *vm)
           (u32) lane->receive_pool.outstanding, lane->listener_ready, lane->socket_ready);
     }
   nm->ready_lane_mask = 0;
+  __atomic_store_n (&nm->fault_pending, 0, __ATOMIC_RELEASE);
+  if (nm->fault_timer_file != ~0)
+    clib_file_del_by_index (&file_main, nm->fault_timer_file);
+  nm->fault_timer_file = ~0;
+  nm->fault_timer_fd = -1;
+  if (nm->fault_socket_fd >= 0) close (nm->fault_socket_fd);
+  nm->fault_socket_fd = -1;
+  nm->fault_socket_path[0] = 0;
   product_network_snapshot_stop ();
 }
 
@@ -1479,8 +1727,11 @@ product_root_nfqueue_adapter_available (void)
   const product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   /* A diagnostic lane closure degrades the ready mask without stopping the
    * independent listeners. The full Q2/W2 mask remains explicit in status. */
-  return nm->available && nm->lane_count >= 1
-         && nm->ready_lane_mask != 0 && nm->hook_ready;
+  return __atomic_load_n (&nm->available, __ATOMIC_ACQUIRE)
+         && nm->lane_count > 0 && nm->lane_count <= PRODUCT_ROOT_NFQUEUE_MAX_LANES
+         && __atomic_load_n (&nm->ready_lane_mask, __ATOMIC_ACQUIRE)
+              == (1U << nm->lane_count) - 1
+         && nm->hook_ready && !__atomic_load_n (&nm->fault_latched, __ATOMIC_ACQUIRE);
 }
 
 uint32_t
@@ -1732,6 +1983,58 @@ VLIB_CLI_COMMAND (product_root_receive_fault_command, static) = {
   .short_help = "product root receive-fault <lane> <0 clear|1 hold-normal|2 hold-all|3 missing-identity|4 pause-consumer>",
 };
 
+/* Deterministic callback-path fixture: the same classifier used after a real
+ * EPOLLERR/SO_ERROR, without closing the live descriptor. */
+static clib_error_t *
+product_root_listener_fault_cli (vlib_main_t *vm, unformat_input_t *input,
+                                  vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index, fault_errno;
+  (void) command;
+  if (!unformat (input, "%u %u", &index, &fault_errno)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || index >= nm->lane_count || !nm->available
+      || !nm->lanes[index].listener_ready || fault_errno > 4095)
+    return clib_error_return (0, "expected live Root lane and errno 0..4095");
+  clib_error_t *error = product_root_nfqueue_handle_socket_error (
+    nm, &nm->lanes[index], (int) fault_errno);
+  vlib_cli_output (vm, "root.listener_fault generation=%llu lane=%u errno=%u fatal=%u ready_mask=%u",
+    (unsigned long long) nm->generation, index, fault_errno,
+    nm->fault_latched, nm->ready_lane_mask);
+  return error;
+}
+VLIB_CLI_COMMAND (product_root_listener_fault_command, static) = {
+  .path = "product root listener-fault", .function = product_root_listener_fault_cli,
+  .short_help = "product root listener-fault <lane> <errno>; callback classifier fixture",
+};
+
+static clib_error_t *
+product_root_listener_fault_after_submit_cli (vlib_main_t *vm,
+                                               unformat_input_t *input,
+                                               vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index;
+  (void) command;
+  if (!unformat (input, "%u", &index)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || index >= nm->lane_count || !nm->available
+      || !nm->lanes[index].listener_ready
+      || nm->lanes[index].draining
+      || nm->lanes[index].listener_fault_after_submit)
+    return clib_error_return (0, "expected active Root lane with no armed fault");
+  nm->lanes[index].listener_fault_after_submit = 1;
+  vlib_cli_output (vm, "root.listener_fault_after_submit=armed generation=%llu lane=%u",
+    (unsigned long long) nm->generation, index);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_listener_fault_after_submit_command, static) = {
+  .path = "product root listener-fault-after-submit",
+  .function = product_root_listener_fault_after_submit_cli,
+  .short_help = "product root listener-fault-after-submit <lane>; one real admitted packet",
+};
+
 static clib_error_t *
 product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
                                  vlib_cli_command_t *command)
@@ -1813,6 +2116,7 @@ product_root_lane_close_cli (vlib_main_t *vm, unformat_input_t *input,
   lane->listener_ready = lane->socket_ready = 0;
   nm->ready_lane_mask &= ~(1U << index);
   product_root_nfqueue_release_pool (vm, lane);
+  product_root_nfqueue_mark_lane_fault (nm, lane, "diagnostic", 0);
   vlib_cli_output (vm, "root.lane_close lane=%u state=closed pending=0", index);
   return 0;
 }

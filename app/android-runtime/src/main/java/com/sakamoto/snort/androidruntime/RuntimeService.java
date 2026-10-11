@@ -244,7 +244,7 @@ public final class RuntimeService extends VpnService {
         return false;
     }
     private final ExecutorService lifecycle = new ThreadPoolExecutor(
-            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8), runnable -> {
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(8, true), runnable -> {
                 Thread thread = new Thread(runnable, "sakamoto-runtime-lifecycle");
                 thread.setDaemon(false);
                 return thread;
@@ -262,6 +262,11 @@ public final class RuntimeService extends VpnService {
     private long generationRequestEpoch;
     private volatile long vpnRecoveryPendingEpoch;
     private int vpnRecoveryFailureCount;
+    private volatile long rootRecoveryPendingEpoch;
+    private int rootRecoveryFailureCount;
+    private boolean rootRecoveryActive;
+    private long rootFaultHandledGeneration;
+    private long rootHealthyGeneration;
     private final RuntimeStateStore.PersistenceGate persistenceGate;
     private volatile boolean stopRequested;
     private volatile boolean foregroundStarted;
@@ -274,6 +279,7 @@ public final class RuntimeService extends VpnService {
     private RuntimeSnapshot snapshot;
     private LocalProductBackend productBackend;
     private Process vppProcess;
+    private RootFaultChannel rootFaultChannel;
     private RuntimeControlNative.Session productCoreSession;
     private String productVppRevision = "";
     private String productArtifactId = "";
@@ -568,6 +574,7 @@ public final class RuntimeService extends VpnService {
                 || ACTION_STOP.equals(action) || ACTION_PROTECTION_PAUSE.equals(action)) {
             requestEpoch = explicitRequestEpoch.incrementAndGet();
             vpnRecoveryPendingEpoch = 0;
+            rootRecoveryPendingEpoch = 0;
         } else requestEpoch = explicitRequestEpoch.get();
 
         if (ACTION_START.equals(action) || ACTION_PROTECTION_RESUME.equals(action)) {
@@ -615,12 +622,12 @@ public final class RuntimeService extends VpnService {
 
         if (ACTION_STOP.equals(action)) {
             stopRequested = true;
-            enqueueLifecycle(this::stopRuntime);
+            enqueueExplicitLifecycle(this::stopRuntime, requestEpoch);
             return START_NOT_STICKY;
         }
         if (ACTION_PROTECTION_PAUSE.equals(action)) {
             stopRequested = true;
-            enqueueLifecycle(this::pauseProtection);
+            enqueueExplicitLifecycle(this::pauseProtection, requestEpoch);
             return START_NOT_STICKY;
         }
         if (ACTION_PRODUCT_PROFILE_SELECT.equals(action)) {
@@ -663,7 +670,7 @@ public final class RuntimeService extends VpnService {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            enqueueLifecycle(() -> {
+            enqueueExplicitLifecycle(() -> {
                 if (requestEpoch != explicitRequestEpoch.get()) return;
                 if (!selectWorkerPlacement(intent != null
                         && intent.hasExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
@@ -671,6 +678,12 @@ public final class RuntimeService extends VpnService {
                         : null)) return;
                 generationRequestEpoch = requestEpoch;
                 vpnRecoveryFailureCount = 0;
+                if (!(profile == RuntimeProfile.ROOT && activeProfile == RuntimeProfile.ROOT
+                        && processAlive(vppProcess) && productCoreSession != null
+                        && productCoreSession.isConnected())) {
+                    rootRecoveryFailureCount = 0;
+                    rootRecoveryActive = false;
+                }
                 requestedVpnGraphValidation = graphValidation;
                 requestedVpnHevValidation = hevValidation;
                 requestedHevUnknownIdentity = hevValidation && intent.getBooleanExtra("debugVpnHevUnknownIdentity", false);
@@ -681,7 +694,7 @@ public final class RuntimeService extends VpnService {
                         && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
                         ? intent.getIntExtra("debugNativeBuffers", 0) : 0;
                 startRuntime(profile);
-            });
+            }, requestEpoch);
             return START_STICKY;
         }
         if (ACTION_PROTECTION_RESUME.equals(action)) {
@@ -691,16 +704,22 @@ public final class RuntimeService extends VpnService {
                 stopSelf(startId);
                 return START_NOT_STICKY;
             }
-            enqueueLifecycle(() -> {
+            enqueueExplicitLifecycle(() -> {
                 if (requestEpoch != explicitRequestEpoch.get()) return;
                 generationRequestEpoch = requestEpoch;
                 vpnRecoveryFailureCount = 0;
+                if (!(profile == RuntimeProfile.ROOT && activeProfile == RuntimeProfile.ROOT
+                        && processAlive(vppProcess) && productCoreSession != null
+                        && productCoreSession.isConnected())) {
+                    rootRecoveryFailureCount = 0;
+                    rootRecoveryActive = false;
+                }
                 requestedVpnGraphValidation = false;
                 requestedVpnHevValidation = false;
                 requestedNativeBuffers = 0;
                 if (!selectWorkerPlacement(null)) return;
                 startRuntime(profile);
-            });
+            }, requestEpoch);
             return START_STICKY;
         }
         if (hasVpnFaultEvent && ACTION_QUERY.equals(action)) {
@@ -790,6 +809,22 @@ public final class RuntimeService extends VpnService {
             appendLog("lifecycle_backpressure=rejected");
             return false;
         }
+    }
+
+    private void enqueueExplicitLifecycle(Runnable task, long requestEpoch) {
+        Runnable guarded = () -> {
+            if (requestEpoch == explicitRequestEpoch.get()) task.run();
+        };
+        if (enqueueLifecycle(guarded)) return;
+        // Only the saturated case uses a waiting thread. It preserves queued
+        // rule mutations and queries; a newer explicit intent cancels this one.
+        Thread waiter = new Thread(() -> {
+            if (!RootFaultDelivery.enqueue((ThreadPoolExecutor) lifecycle, guarded,
+                    () -> !destroying && isCurrentServiceInstance()
+                            && requestEpoch == explicitRequestEpoch.get()))
+                appendLog("explicit_lifecycle=admission_cancelled epoch=" + requestEpoch);
+        }, "sakamoto-explicit-lifecycle-admission");
+        waiter.start();
     }
 
     private void markExplicitStartPending() {
@@ -991,7 +1026,7 @@ public final class RuntimeService extends VpnService {
                 publishError("root_authorization_required",
                         "KernelSU/root execution is unavailable to this app process", false,
                         ProductCoreLifecycle.UNKNOWN_PID);
-                stopIfInactive();
+                if (!rootRecoveryActive) stopIfInactive();
                 return;
             }
         }
@@ -1114,6 +1149,9 @@ public final class RuntimeService extends VpnService {
                     builder.environment().put("SAKAMOTO_PRODUCT_VPN_HEV_LIMITS", hevLimits);
             }
             if (selected == RuntimeProfile.ROOT) {
+                rootFaultChannel = RootFaultChannel.bind(runtime);
+                builder.environment().put("SAKAMOTO_PRODUCT_ROOT_FAULT_SOCKET",
+                        rootFaultChannel.path());
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_QUEUE", "176");
                 builder.environment().put("SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES",
                         PRODUCT_ROOT_NFQUEUE_LANES);
@@ -1128,6 +1166,20 @@ public final class RuntimeService extends VpnService {
             builder.redirectOutput(new File(new File(profileRoot, "logs"), "vpp-stdout.log"));
             Process process = builder.start();
             vppProcess = process;
+            if (selected == RuntimeProfile.ROOT) {
+                final RootFaultChannel channel = rootFaultChannel;
+                final long launchedGeneration = generation;
+                channel.start(new RootFaultChannel.Listener() {
+                    @Override public void onFault(RootFaultEvent event) {
+                        enqueueRootFault(() -> handleRootFaultEvent(
+                                channel, process, launchedGeneration, event));
+                    }
+                    @Override public void onFailure(IOException error) {
+                        enqueueRootFault(() -> handleRootFaultChannelFailure(
+                                channel, process, launchedGeneration, error));
+                    }
+                });
+            }
             // Product Core never consumes stdin.  Close the inherited pipe
             // immediately so the child cannot wait on input that no
             // lifecycle thread drains.  This uses the API-1 Process handle,
@@ -1151,6 +1203,10 @@ public final class RuntimeService extends VpnService {
             continueProductCoreStartup();
         } catch (Exception error) {
             Log.e(TAG, "Product Core startup failed", error);
+            if (rootFaultChannel != null && vppProcess == null) {
+                rootFaultChannel.close();
+                rootFaultChannel = null;
+            }
             if (!productCoreOwnerWritten && productCorePreflightClean
                     && !processAlive(vppProcess)
                     && !(productCoreSession != null && productCoreSession.isConnected())) {
@@ -1165,6 +1221,10 @@ public final class RuntimeService extends VpnService {
                         !repaired, ProductCoreLifecycle.UNKNOWN_PID);
                 if (recoverVpnFlowStackAfterFailure(repaired,
                         "runtime_start_failed", messageOf(error))) return;
+                if (recoverRootRuntimeAfterFailure(repaired,
+                        "runtime_start_failed", messageOf(error))) return;
+                if (selected == RuntimeProfile.ROOT && rootRecoveryActive && !stopRequested)
+                    return;
                 stopIfInactive();
                 return;
             }
@@ -2705,6 +2765,13 @@ public final class RuntimeService extends VpnService {
                 VppHealthHandshake.PROTOCOL, status.vppRevision, status.artifactId,
                 deviceAbi(), adapterReadiness, status.protectionRunning, pid, generation));
         if (published) {
+            if (activeProfile == RuntimeProfile.ROOT && rootRecoveryActive
+                    && rootHealthyGeneration != generation) {
+                final long healthyGeneration = generation;
+                rootHealthyGeneration = healthyGeneration;
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                        () -> enqueueHealthyRootReset(healthyGeneration), 60000L);
+            }
             writeRootNfqueueStatus(status);
             if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation) {
                 writeBestEffortEvidenceFile("product-state/s213-tun-graph.properties",
@@ -5143,6 +5210,11 @@ public final class RuntimeService extends VpnService {
     }
 
     private void failProductCoreGeneration(String code, String message) {
+        if (activeProfile == RuntimeProfile.ROOT) rootHealthyGeneration = 0;
+        if (activeProfile == RuntimeProfile.ROOT
+                && ("unexpected_exit".equals(code)
+                || "product_adapter_readiness_mismatch".equals(code)))
+            rootRecoveryActive = true;
         if (cleanupFaultInjected && (processAlive(vppProcess)
                 || (productCoreSession != null && productCoreSession.isConnected()))) {
             publishError("cleanup_failed", code + ": " + message
@@ -5200,6 +5272,9 @@ public final class RuntimeService extends VpnService {
                 clean ? message : code + ": " + message + "; generation cleanup failed",
                 !clean, ProductCoreLifecycle.UNKNOWN_PID);
         if (recoverVpnFlowStackAfterFailure(clean, code, message)) return;
+        if (recoverRootRuntimeAfterFailure(clean, code, message)) return;
+        if (activeProfile == RuntimeProfile.ROOT && rootRecoveryActive && !stopRequested)
+            return; // Retain the terminal cause for visible user intervention.
         stopIfInactive();
     }
 
@@ -5251,6 +5326,155 @@ public final class RuntimeService extends VpnService {
                     ProductCoreLifecycle.UNKNOWN_PID);
         }
         return posted;
+    }
+
+    private void enqueueRootFault(Runnable task) {
+        if (!RootFaultDelivery.enqueue((ThreadPoolExecutor) lifecycle, task,
+                () -> !destroying && !stopRequested && isCurrentServiceInstance()))
+            appendLog("root_fault_delivery=cancelled");
+    }
+
+    private void enqueueHealthyRootReset(long healthyGeneration) {
+        Runnable reset = () -> resetHealthyRootRecovery(healthyGeneration);
+        if (enqueueLifecycle(reset)) return;
+        // The 60s check is one-shot. A full lifecycle queue must delay it,
+        // never discard it and leave the recovery budget depleted forever.
+        Thread waiter = new Thread(() -> RootFaultDelivery.enqueue(
+                (ThreadPoolExecutor) lifecycle, reset,
+                () -> !destroying && !stopRequested && isCurrentServiceInstance()),
+                "sakamoto-root-healthy-reset-admission");
+        waiter.start();
+    }
+
+    private boolean currentRootFault(RootFaultChannel channel, Process process,
+                                     long launchedGeneration) {
+        return activeProfile == RuntimeProfile.ROOT && channel == rootFaultChannel
+                && process == vppProcess && generation == launchedGeneration
+                && generationRequestEpoch == explicitRequestEpoch.get()
+                && !stopRequested && !destroying && isCurrentServiceInstance();
+    }
+
+    private void handleRootFaultEvent(RootFaultChannel channel, Process process,
+                                      long launchedGeneration,
+                                      RootFaultEvent event) {
+        if (!currentRootFault(channel, process, launchedGeneration)
+                || !event.belongsToGeneration(launchedGeneration)
+                || rootFaultHandledGeneration == launchedGeneration) return;
+        rootFaultHandledGeneration = launchedGeneration;
+        rootRecoveryActive = true;
+        appendLog("root_fault generation=" + launchedGeneration + " " + event.detail());
+        failProductCoreGeneration("root_nfqueue_lane_failed", event.detail());
+    }
+
+    private void handleRootFaultChannelFailure(RootFaultChannel channel, Process process,
+                                               long launchedGeneration,
+                                               IOException error) {
+        if (!currentRootFault(channel, process, launchedGeneration)
+                || rootFaultHandledGeneration == launchedGeneration) return;
+        rootFaultHandledGeneration = launchedGeneration;
+        rootRecoveryActive = true;
+        failProductCoreGeneration("root_nfqueue_fault_channel_failed",
+                "Root fault notification channel failed: " + messageOf(error));
+    }
+
+    private boolean recoverRootRuntimeAfterFailure(boolean clean, String code, String message) {
+        final long requestEpoch = generationRequestEpoch;
+        if (!clean || activeProfile != RuntimeProfile.ROOT
+                || !rootRecoveryActive || stopRequested || destroying
+                || !isCurrentServiceInstance() || requestEpoch == 0
+                || requestEpoch != explicitRequestEpoch.get()
+                || persistenceGate.isPersistenceUnavailable()
+                || "root_authorization_required".equals(code)
+                || "cleanup_failed".equals(code)
+                || !rootRecoverableFailure(code)) return false;
+        RuntimeRecoveryPolicy.Decision decision = recoveryPolicy.afterFailure(
+                rootRecoveryFailureCount, code + ": " + message);
+        rootRecoveryFailureCount = decision.nextFailureCount;
+        publishError(decision.statusCode, decision.message, false,
+                ProductCoreLifecycle.UNKNOWN_PID);
+        if (!decision.shouldRestart) return false;
+        final long failedGeneration = generation;
+        rootRecoveryPendingEpoch = requestEpoch;
+        appendLog("root_recovery=scheduled generation=" + failedGeneration
+                + " attempt=" + decision.attempt + " delay_ms=" + decision.backoffMillis);
+        boolean posted = new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            if (rootRecoveryPendingEpoch != requestEpoch
+                    || requestEpoch != explicitRequestEpoch.get() || stopRequested
+                    || destroying || !isCurrentServiceInstance()) return;
+            if (!enqueueLifecycle(() -> {
+                if (rootRecoveryPendingEpoch != requestEpoch
+                        || requestEpoch != explicitRequestEpoch.get()
+                        || generation != failedGeneration || stopRequested
+                        || destroying || !isCurrentServiceInstance()) return;
+                rootRecoveryPendingEpoch = 0;
+                startRuntime(RuntimeProfile.ROOT);
+            })) {
+                rootRecoveryPendingEpoch = 0;
+                publishError("runtime_recovery_intervention_required",
+                        "Root protection stopped; restart queue unavailable", false,
+                        ProductCoreLifecycle.UNKNOWN_PID);
+                stopIfInactive();
+            }
+        }, decision.backoffMillis);
+        if (!posted) {
+            rootRecoveryPendingEpoch = 0;
+            publishError("runtime_recovery_intervention_required",
+                    "Root protection stopped; restart timer unavailable", false,
+                    ProductCoreLifecycle.UNKNOWN_PID);
+        }
+        return posted;
+    }
+
+    private static boolean rootRecoverableFailure(String code) {
+        return "root_nfqueue_lane_failed".equals(code)
+                || "root_nfqueue_fault_channel_failed".equals(code)
+                || "unexpected_exit".equals(code)
+                || "product_adapter_readiness_mismatch".equals(code)
+                || "runtime_start_failed".equals(code)
+                || "product_core_not_ready".equals(code)
+                || "product_core_connect_failed".equals(code)
+                || "product_core_session_missing".equals(code)
+                || "product_core_query_failed".equals(code)
+                || "health_process_exited".equals(code)
+                || "health_handshake_failed".equals(code)
+                || "root_nfqueue_hook_install_failed".equals(code);
+    }
+
+    private void resetHealthyRootRecovery(long healthyGeneration) {
+        if (!rootRecoveryActive || rootHealthyGeneration != healthyGeneration
+                || generation != healthyGeneration || stopRequested
+                || destroying || !isCurrentServiceInstance()) return;
+        // A fault for this generation may have already completed cleanup and
+        // scheduled its next attempt while the 60s task waited in the queue.
+        // Only the still-running generation may start a new health failure.
+        if (rootRecoveryPendingEpoch != 0 || rootFaultHandledGeneration == healthyGeneration
+                || snapshot == null || !RuntimeSnapshot.STATE_RUNNING.equals(snapshot.state)
+                || snapshot.generation != healthyGeneration) return;
+        if (!processAlive(vppProcess)) {
+            failProductCoreGeneration("unexpected_exit",
+                    "Root process exited before recovery health confirmation");
+            return;
+        }
+        if (productCoreSession == null || !productCoreSession.isConnected()) {
+            failProductCoreGeneration("product_core_session_missing",
+                    "Root session unavailable at recovery health confirmation");
+            return;
+        }
+        RuntimeControlNative.Status status = productCoreSession.query();
+        if (status == null || status.code != 0
+                || status.generation != healthyGeneration) {
+            failProductCoreGeneration("product_core_query_failed",
+                    "Root recovery health confirmation failed");
+            return;
+        }
+        if (!status.adapterAvailable || !status.protectionRunning) {
+            failProductCoreGeneration("product_adapter_readiness_mismatch",
+                    "Root capture coverage failed during recovery health confirmation");
+            return;
+        }
+        rootRecoveryFailureCount = 0;
+        rootRecoveryActive = false;
+        appendLog("root_recovery=healthy_reset generation=" + healthyGeneration);
     }
 
     private boolean drainProductRoot() {
@@ -6046,8 +6270,10 @@ public final class RuntimeService extends VpnService {
      * live/unknown ownership remains an explicit blocking error.
      */
     private void reconcileProductCoreRuntime(boolean forceHealthQuery, long queryRevision) {
-        if (vpnRecoveryPendingEpoch != 0
-                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get()) return;
+        if ((vpnRecoveryPendingEpoch != 0
+                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get())
+                || (rootRecoveryPendingEpoch != 0
+                && rootRecoveryPendingEpoch == explicitRequestEpoch.get())) return;
         Process process = vppProcess;
         if (processAlive(process) && productCoreSession != null
                 && productCoreSession.isConnected()) {
@@ -7039,8 +7265,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void stopIfInactive(int startId) {
-        if (vpnRecoveryPendingEpoch != 0
-                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get()) return;
+        if ((vpnRecoveryPendingEpoch != 0
+                && vpnRecoveryPendingEpoch == explicitRequestEpoch.get())
+                || (rootRecoveryPendingEpoch != 0
+                && rootRecoveryPendingEpoch == explicitRequestEpoch.get())) return;
         if (persistenceGate.isPersistenceUnavailable()) {
             appendLog("runtime_state_persistence=service_retained pending_recovery");
             return;
@@ -7320,6 +7548,10 @@ public final class RuntimeService extends VpnService {
     }
 
     private void clearProfileHandles() {
+        if (rootFaultChannel != null) {
+            rootFaultChannel.close();
+            rootFaultChannel = null;
+        }
         closeVpnDirectTcp4SessionQuietly();
         closeVpnDirectTcp6SessionQuietly();
         closeVpnDirectUdp6SessionQuietly();
@@ -8280,6 +8512,7 @@ public final class RuntimeService extends VpnService {
         stopRequested = true;
         explicitRequestEpoch.incrementAndGet();
         vpnRecoveryPendingEpoch = 0;
+        rootRecoveryPendingEpoch = 0;
         if (ownsServiceInstance && isCurrentServiceInstance()
                 && snapshot != null && snapshot.isActive()
                 && !RuntimeSnapshot.STATE_STOPPING.equals(snapshot.state)) {

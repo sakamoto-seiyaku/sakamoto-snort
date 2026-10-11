@@ -77,17 +77,6 @@ static struct {
 } tun = { .tun_fd = -1, .listener_fd = -1,
           .tun_file = ~0U, .listener_file = ~0U };
 
-int product_vpn_tun_product_mode (void) {
-  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
-  const char *product = getenv ("SAKAMOTO_PRODUCT_VPN_PRODUCT");
-  return profile && !strcmp (profile, "vpn") && product && !strcmp (product, "1");
-}
-int product_vpn_tun_enabled (void) {
-  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
-  const char *validation = getenv ("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION");
-  return product_vpn_tun_product_mode () ||
-    (profile && !strcmp (profile, "vpn") && validation && !strcmp (validation, "1"));
-}
 u64 product_vpn_tun_attached (void) { return tun.tun_fd >= 0; }
 u64 product_vpn_tun_captured (void) { return tun.captured; }
 int product_vpn_tun_product_ready (void) {

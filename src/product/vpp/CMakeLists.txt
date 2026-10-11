@@ -248,6 +248,7 @@ add_vpp_plugin(product_core
     product_flow_icmp.c
     product_flow_tcp.c
     product_root_nfqueue_adapter.c
+    product_vpn_tun_mode.c
     product_vpn_tun_adapter.c
     product_vpn_uid_resolver.c
     product_vpn_flow_stack_hev.c
