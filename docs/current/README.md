@@ -34,6 +34,13 @@ startup check; 16kpps still had four primary rejections. This is a user-selected
 capacity change, with no whole-path CPU benefit claim. See the scoped
 [implementation and regression record](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md).
 
+VPN builds default to inner MTU10000/MSS9940 from October 21. The software-only
+VPP pool uses ordinary pages, 10240-byte data and exactly 2048 buffers; Root keeps
+its existing buffer profile. The default 32KiB TCP ring/sndbuf remains, while
+TCP batch, readiness gating and 64KiB buffering are still opt-in. A default
+20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
+TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
+
 The [foundation joint report](../testing/2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md)
 records `PASS_WITH_EXPLICIT_LIMITS` across Linux Root and 64 distinct Pixel
 generations, with independent verifiers and retained failed attempts. Its Product

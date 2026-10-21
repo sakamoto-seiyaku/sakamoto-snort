@@ -2,6 +2,8 @@
 
 日期：2026-10-21。用户限定性能基线为 TCP 长下载；本记录没有 UDP、CPS 或 Root 性能负载。参考依据见[源码调查](../reviews/2026-10-21_VPN_TCP_REFERENCE_OPTIMIZATIONS.md)。
 
+本页保留前三阶段的历史默认值；后续MTU10000修复已完成，当前普通VPN构建默认MTU10000/MSS9940，见第四阶段。readiness、TCP batch及65528-byte缓冲仍各自默认OFF。
+
 ## 大分段实现与结果
 
 新增默认 OFF 的 `SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT`：内层 MTU1500/MSS1360 对照 MTU3000/MSS2940。Android Builder、owner netif/packet limit、lwIP MSS 和 APK stage 属性一致校验。两处独立存储拷贝、canonical owner、正常共享图和单 TUN lane 保持原有契约。pbuf pool element2048 可以组成大包，返回 spans 复制到独立连续 VPP buffer。
@@ -122,7 +124,7 @@ RSS采样峰值的两窗均值增加2454KiB（约2.40MiB）。这是同一个VPP
 
 [第三阶段汇总与火焰图](../../build-output/vpn-tcp-buffer-20261021/index.html) · [CPU/计数/RSS重算](../../build-output/vpn-tcp-buffer-20261021/summary.json) · [冻结协议](../../build-output/vpn-tcp-buffer-20261021/protocol.json)
 
-## 最终状态
+## 前三阶段结束状态
 
 三个新优化开关均默认OFF；未做UDP/CPS/Root性能扩展。最终恢复原October13 APK、全部12个native、原规则hash和Root grant，Stopped2105，Openwrt_5G不变，设备无VPP/load/monitor/simpleperf残留。[最终只读审计](../../build-output/vpn-tcp-buffer-20261021/final-readonly/result.json)。
 
@@ -133,3 +135,45 @@ RSS采样峰值的两窗均值增加2454KiB（约2.40MiB）。这是同一个VPP
 用户要求先记录选型结论，再解决连续VPP buffer的普通页限制，使本地TUN MTU达到NetGuard/PCAPdroid同档的10000字节。[库选型补查](../reviews/2026-10-21_VPN_TCP_REFERENCE_OPTIMIZATIONS.md#2026-10-21-补查竞品使用哪些库是否优于-hev)已记录：当前保留HEV/lwIP；sing-tun新栈属于未来可比较的候选，没有以换库替代本次容量修复。
 
 本阶段目标为真实Android Builder MTU10000、双栈实际大TCP段、普通4KiB页下足够且可核对的VPP池容量；不依赖hugepages，不仅修改MTU常量。上一阶段的buffer size大于page size拒绝和3584-byte步长导致池缩小是保留的失败基线。先验证分配布局及真实TCP正确性，再使用相同Openwrt_5G上的64流、20秒TCP长下载ABBA比较；两侧保持相同分配布局、实际池容量、sndbuf/ring、readiness和返回credit，区分段长收益与扩容收益。实现、测试与设备结果未完成前不宣称达到该目标或采用为默认。
+
+## 第四阶段：MTU10000在普通页上实际运行
+
+已完成。新增[Product VPP core patch 0007](../../src/product/vpp/patches/core/0007-vlib-virtual-buffer-pool.patch)，显式 `buffers { virtual-only }` 模式允许纯软件包buffer跨普通物理页，保留真实physmem页表；公开buffer物理地址接口在该模式直接拒绝DMA用途。普通物理池保留原有跨页约束。没有伪报大物理页、依赖hugepages、导入POC源码或改用链式包处理，owner、两处独立拷贝、正常策略图及单TUN lane保持原契约。
+
+Android实际配置为 `buffers { virtual-only buffers-per-numa 2048 default data-size 10240 }`。128-byte对齐下alloc stride10624，普通4KiB页共5318页（20.77MiB），精确提供2048个buffer。`show physmem`证实 `default-page-size 4K / lookup-page-size 4K / subpage-size 4K / no-pagemap`，不是用逻辑大页绕过物理限制。对照与候选都使用这同一布局和容量；旧3072-byte/1517池的历史结果不是本阶段control。
+
+原有 `SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT` 名称保留，构建默认改为ON，选择MTU10000/MSS9940；`SAKAMOTO_PRODUCT_VPN_TUN_MTU=3000`保留前一档，legacy开关OFF回到1500/MSS1360。buffer override允许2048/3072/10240且必须大于MTU，data10240要求明确的virtual-only属性。Java `VpnPacketProfile`校验打包native/MTU/MSS/buffer属性并生成启动配置；Root使用原2048-byte普通池。`TCP_WND`与默认sndbuf/ring仍为32768，返回额度仍每owner128个包，未通过扩容掩盖拒绝。
+
+**未覆盖构建选项的默认APK**另跑一窗普通VPN、64流、20秒TCP下载，generation2106：实际 `tun0 MTU10000`、两owner协商MSS9940、IPv4返回IP包最大9980字节，端点519.32Mbps，估计VPP CPU20.53秒/GiB。返回credit/stamp/buffer不足均0，正常停止且native debts零。该版本TCP batch/readiness仍OFF；它是单窗默认配置运行证据，不并入下面的优化配置A/B估计。[默认窗口](../../build-output/vpn-mtu10000-20261021/smoke-run-default/result.json) · [默认火焰图](../../build-output/vpn-mtu10000-20261021/graphs-default/vpn-tcp-fixed-flamegraph.html)。
+
+### 同池容量的20秒TCP长下载ABBA
+
+冻结[协议](../../build-output/vpn-mtu10000-20261021/protocol.json)后只跑A1/B1/B2/A2，无重试或扫参。两边都用虚拟池2048/data10240、sndbuf/ring32768、TCP_WND32768、TCP batch与readiness ON、UDP batch OFF，唯一配置差异为MTU3000/MSS2940和MTU10000/MSS9940。
+
+| 窗口 | MTU | Mbps | VPP CPU秒/GiB | 返回credit不足 | primary拒绝 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A1 /2107 | 3000 | 208.04 | 32.75 | 20 | 17756 |
+| B1 /2108 | 10000 | 516.49 | 18.12 | 0 | 3655 |
+| B2 /2109 | 10000 | 526.54 | 18.04 | 0 | 4622 |
+| A2 /2110 | 3000 | 205.11 | 33.01 | 20 | 14028 |
+
+吞吐均值206.58→521.51Mbps（+152.46%）；合并VPP CPU/端点GiB32.88→18.08（−45.01%）；成功TUN write/GiB392229→136415（−65.22%）。这是单位交付字节的CPU成本，不能称作总CPU占用或整机功耗下降45%。返回credit不足40→0，stamp与VPP buffer不足始终0。更大的内层包减少相同下载字节所需的返回包名额；本次没有扩大上游ring。
+
+每进程RSS采样峰值的两窗均值114458→114632KiB，仅增加174KiB；每时刻只取主tid一份，不累计线程共享RSS。inclusive TUN completion成本16.47→6.24 CPU秒/GiB，其中 `tun_get_user`15.01→5.69；HEV receive/splice5.93→5.56。路径重叠，不能相加。kernel比例约68.90%→69.43%，比例相近不等于每GiB内核成本未变。
+
+仍有代价与范围限制：readv/GiB70775→263646（+272.51%），receive轮次/GiB110813→284556（+156.79%），inclusive HEV scheduling0.49→0.99 CPU秒/GiB。大段带来的TUN成本下降没有解决全部空推进/调度工作；CPU-clock不提供off-CPU归因。primary拒绝仍非零，不能把端点吞吐当作完整策略Q。四窗probe p99上界735.6/357.1/330.7/483.4ms，timeout4/0/0/2，原样保留；两侧实际交付负载不同，不能宣称匹配负载延迟通过。默认单窗p99上界360.5ms也不是延迟资格。
+
+### 正确性、构建身份与保留失败
+
+- 真实VPP allocator函数在带guard页的普通4KiB mmap上执行，覆盖64/128-byte对齐、所有buffer同时写满/读回、精确数量、普通模式大buffer拒绝及release态DMA accessor拒绝。[旧逻辑失败](../../build-output/vpn-mtu10000-20261021/allocator-red.log)、[修复后通过](../../build-output/vpn-mtu10000-20261021/allocator-green.log)。旧Host VPP启动也复现buffer10560大于page4096；其进程exit0不能代替pool/ready判断，[原始诊断](../../build-output/vpn-mtu10000-20261021/before-virtual-pool/result.json)保留。
+- 默认MTU10000、batch/readiness OFF的38个HEV host回归全部通过；3000/10000对照配置各12个真实双栈TCP回归通过。覆盖字节流、checksum、真实>8KiB段、暂缓ACK恢复、ring wrap、返回拒绝及后续丢包恢复、真实sendmsg背压、FIN、underlay失效和容量拒绝。最大段见证放在已排队全部peer字节的暂缓ACK场景；早期把该断言套到故意SO_SNDBUF4KiB的基础背压用例，以及仍要求至少两次commit的失败记录保留，原4KiB echo行为恢复后按协商MSS校验提交数量。没有更改Product传输逻辑来迎合测试。[三配置测试身份](../../build-output/vpn-mtu10000-20261021/host-large-profile-identity.json)。
+- Java真实profile gate、非法MTU/小buffer/属性冲突、APK请求与已stage MTU不符、core patch composition及native stage contract通过。全仓旧 `product_platform_boundary_test.py` 的19个Root源码字符串检查失败和1个错误，在本轮前HEAD上同样复现；其VPN检查通过，本次没有改动Root适配器或把该旧检查称为通过。[HEAD基线记录](../../build-output/vpn-mtu10000-20261021/platform-boundary-head-baseline.log)。
+- Android VPP依赖构建改用Product持久缓存；API生成器无import depfile导致的重复编译与CMake LTO probe重复编译均已修复并保留失败日志。实际重复VPP构建零Ninja动作、553个编译输出mtime未变、9个runtime ELF相同；Product重复构建零编译、669个编译输出mtime未变、12个native载荷相同。[VPP复用证明](../../build-output/vpn-mtu10000-20261021/vpp-warm.json) · [Product复用证明](../../build-output/vpn-mtu10000-20261021/warm.json)。
+
+源码闭包 `ff63c92a7dd7d0d29d08790a4aa24953931d37bf4a72181cc62aef5cc8d1a8ed`；core patch count7/SHA `76aa5f7657ff0f2a4bea2fd6ec5e81c10074ea9a1b30ff3ddbf9cb4f3281deb7`。对照APK `80b0a3b55cb88b114ad1f22eb946cdeded2a30341939f68f3f24188bbba99792`，大段APK `39adbe7ef0cb106df3ccd4ff683bd9fa5b0b39c0f1d934f3f6f023078236a7f2`，默认APK `571de18c8af88f71eadebad8806a24489cb60af31a84dce0e690e8acb869ea10`。同源码、同DEX及11个相同native，插件按冻结配置变化；插件与全部9个VPP runtime均有精确未剥离符号和strip后SHA证明，采样涉及的ELF另核对Build ID，五窗perf lost0、unknown leaf0。全部原始失败、perf、APK、源码快照和符号保留。
+
+[四窗汇总与火焰图](../../build-output/vpn-mtu10000-20261021/index.html) · [计数/CPU/RSS重算](../../build-output/vpn-mtu10000-20261021/summary.json) · [配对身份](../../build-output/vpn-mtu10000-20261021/paired-build-identity.json) · [VPP符号身份](../../build-output/vpn-mtu10000-20261021/vpp-symbol-identity.json)。
+
+### 第四阶段结束状态
+
+当前源码普通VPN默认MTU10000，32KiB sndbuf/ring保留；TCP batch、readiness、65528-byte缓冲仍默认OFF。设备恢复原October13 APK及全部12个native、原规则hash和Root grant，Stopped2110，Openwrt_5G保持不变，无VPP/load/simpleperf残留。[最终审计](../../build-output/vpn-mtu10000-20261021/final-readonly/result.json)。五个阻塞reader完成、FIFO gate删除且remote日志SHA与本地停止证据一致；本任务LAN peer经exe/argv/starttime/hash核对后用pidfd终止。[reader审计](../../build-output/vpn-mtu10000-20261021/retained-reader-audit.json) · [peer退出](../../build-output/vpn-mtu10000-20261021/peer-cleanup.json)。本次没有扩大UDP/CPS/Root性能或产品发布资格。

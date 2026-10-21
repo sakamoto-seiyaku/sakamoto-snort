@@ -155,6 +155,12 @@ target_compile_options(sakamoto-product-ct-policy-test PRIVATE -Wall -Wextra -We
 add_test(NAME sakamoto-product-ct-policy-test COMMAND sakamoto-product-ct-policy-test)
 add_test(NAME sakamoto-product-static-reference-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_static_reference_test.py")
+add_test(NAME sakamoto-vpn-packet-profile-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/vpn_packet_profile_test.py")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/build-output/pinned-vpp-clean/src/vlib/buffer.c")
+  add_test(NAME sakamoto-vpp-virtual-buffer-test
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/vpp_virtual_buffer_test.py")
+endif()
 add_executable(sakamoto-product-rule-config-test
   tests/host/product_rule_config_test.c
   src/product/vpp/product_rule_config.c

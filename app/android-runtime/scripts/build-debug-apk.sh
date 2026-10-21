@@ -26,25 +26,28 @@ if [[ "$vpn_udp_batch_experiment" != ON && "$vpn_udp_batch_experiment" != OFF ]]
   echo "SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT must be ON or OFF" >&2
   exit 2
 fi
-vpn_large_segment_experiment="${SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT:-OFF}"
+vpn_large_segment_experiment="${SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT:-ON}"
 if [[ "$vpn_large_segment_experiment" != ON && "$vpn_large_segment_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT must be ON or OFF" >&2
   exit 2
 fi
-vpn_tun_mtu=1500
-vpn_tcp_mss=1360
-vpn_buffer_data_default=2048
-if [[ "$vpn_large_segment_experiment" == ON ]]; then
-  vpn_tun_mtu=3000
-  vpn_tcp_mss=2940
-  vpn_buffer_data_default=3072
-fi
+vpn_tun_mtu_default=1500
+if [[ "$vpn_large_segment_experiment" == ON ]]; then vpn_tun_mtu_default=10000; fi
+vpn_tun_mtu="${SAKAMOTO_PRODUCT_VPN_TUN_MTU:-$vpn_tun_mtu_default}"
+case "$vpn_large_segment_experiment:$vpn_tun_mtu" in
+  OFF:1500) vpn_tcp_mss=1360; vpn_buffer_data_default=2048 ;;
+  ON:3000) vpn_tcp_mss=2940; vpn_buffer_data_default=3072 ;;
+  ON:10000) vpn_tcp_mss=9940; vpn_buffer_data_default=10240 ;;
+  *) echo "SAKAMOTO_PRODUCT_VPN_TUN_MTU must match OFF:1500 or ON:3000/10000" >&2; exit 2 ;;
+esac
 vpn_buffer_data_bytes="${SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES:-$vpn_buffer_data_default}"
-if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 ]] ||
-   [[ "$vpn_large_segment_experiment" == ON && "$vpn_buffer_data_bytes" != 3072 ]]; then
-  echo "SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES must be 2048 or 3072; large segments require 3072" >&2
+if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 &&
+      "$vpn_buffer_data_bytes" != 10240 ]] || ((vpn_buffer_data_bytes <= vpn_tun_mtu)); then
+  echo "SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES must be 2048, 3072 or 10240 and exceed MTU" >&2
   exit 2
 fi
+vpn_buffer_virtual_only=OFF
+if [[ "$vpn_buffer_data_bytes" == 10240 ]]; then vpn_buffer_virtual_only=ON; fi
 vpn_tcp_buffer_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT:-OFF}"
 if [[ "$vpn_tcp_buffer_experiment" != ON && "$vpn_tcp_buffer_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT must be ON or OFF" >&2
@@ -621,6 +624,7 @@ build_native_stage() {
     "-DSAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT=$vpn_tcp_progress_experiment"
     "-DSAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT=$vpn_tcp_buffer_experiment"
     "-DSAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=$vpn_large_segment_experiment"
+    "-DSAKAMOTO_PRODUCT_VPN_TUN_MTU=$vpn_tun_mtu"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=$root_verdict_batch_experiment"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE=$root_verdict_batch_mode"
     "-DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS=$policy_qualification_counters"
@@ -844,6 +848,7 @@ vpnLargeSegmentExperiment=$vpn_large_segment_experiment
 vpnTunMtu=$vpn_tun_mtu
 vpnTcpMss=$vpn_tcp_mss
 vpnBufferDataBytes=$vpn_buffer_data_bytes
+vpnBufferVirtualOnly=$vpn_buffer_virtual_only
 rootVerdictBatchExperiment=$root_verdict_batch_experiment
 rootVerdictBatchMode=$root_verdict_batch_mode
 policyQualificationCounters=$policy_qualification_counters
@@ -933,6 +938,7 @@ PY
   echo "vpnTunMtu=$vpn_tun_mtu"
   echo "vpnTcpMss=$vpn_tcp_mss"
   echo "vpnBufferDataBytes=$vpn_buffer_data_bytes"
+  echo "vpnBufferVirtualOnly=$vpn_buffer_virtual_only"
   echo "rootVerdictBatchExperiment=$root_verdict_batch_experiment"
   echo "rootVerdictBatchMode=$root_verdict_batch_mode"
   echo "policyQualificationCounters=$policy_qualification_counters"
@@ -1062,13 +1068,15 @@ build_apk_only() {
   staged_vpn_tcp_buffer_bytes="${staged_vpn_tcp_buffer_bytes:-32768}"
   staged_vpn_large_segment="$(sed -n 's/^vpnLargeSegmentExperiment=//p' "$product_manifest")"
   staged_vpn_large_segment="${staged_vpn_large_segment:-OFF}"
-  local staged_vpn_mtu staged_vpn_mss staged_vpn_buffer
+  local staged_vpn_mtu staged_vpn_mss staged_vpn_buffer staged_vpn_virtual
   staged_vpn_mtu="$(sed -n 's/^vpnTunMtu=//p' "$product_manifest")"
   staged_vpn_mss="$(sed -n 's/^vpnTcpMss=//p' "$product_manifest")"
   staged_vpn_buffer="$(sed -n 's/^vpnBufferDataBytes=//p' "$product_manifest")"
   staged_vpn_mtu="${staged_vpn_mtu:-1500}"
   staged_vpn_mss="${staged_vpn_mss:-1360}"
   staged_vpn_buffer="${staged_vpn_buffer:-2048}"
+  staged_vpn_virtual="$(sed -n 's/^vpnBufferVirtualOnly=//p' "$product_manifest")"
+  staged_vpn_virtual="${staged_vpn_virtual:-OFF}"
   staged_batch="$(sed -n 's/^rootBatchExperiment=//p' "$product_manifest")"
   staged_verdict_batch="$(sed -n 's/^rootVerdictBatchExperiment=//p' "$product_manifest")"
   staged_verdict_batch="${staged_verdict_batch:-OFF}"
@@ -1087,6 +1095,7 @@ build_apk_only() {
      "$staged_vpn_mtu" == "$vpn_tun_mtu" &&
      "$staged_vpn_mss" == "$vpn_tcp_mss" &&
      "$staged_vpn_buffer" == "$vpn_buffer_data_bytes" &&
+     "$staged_vpn_virtual" == "$vpn_buffer_virtual_only" &&
      "$staged_verdict_batch" == "$root_verdict_batch_experiment" &&
      "$staged_verdict_mode" == "$root_verdict_batch_mode" &&
      "$staged_qualification" == "$policy_qualification_counters" ]] || \

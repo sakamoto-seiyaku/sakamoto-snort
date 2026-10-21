@@ -17,10 +17,7 @@ public final class VpnTunPlatformSession implements AutoCloseable {
     public static final String ADAPTER_NAME = ProductPacketAdapterContract.VPN_ADAPTER;
     public static final String IPV4_ADDRESS = "10.111.0.2";
     public static final String IPV6_ADDRESS = "fd00:111:111::2";
-    public static final int MTU = 1500;
-    // Leave room for the VPP header, alignment padding and a spare read byte.
-    static final int LARGE_SEGMENT_MTU = 3000;
-    static final int LARGE_SEGMENT_BUFFER_BYTES = 3072;
+    public static final int MTU = VpnPacketProfile.STANDARD_MTU;
 
     private int rawFd;
     public final boolean ipv6Enabled;
@@ -45,7 +42,7 @@ public final class VpnTunPlatformSession implements AutoCloseable {
 
     static EstablishResult establish(VpnService service, boolean enableIpv6,
                                      boolean graphValidation, InetAddress[] dnsServers, int mtu) {
-        if (mtu != MTU && mtu != LARGE_SEGMENT_MTU)
+        if (!VpnPacketProfile.supportsMtu(mtu))
             return EstablishResult.error("vpn_mtu_invalid", "unsupported VPN packet profile");
         if (service == null) {
             return EstablishResult.error("vpn_service_missing",

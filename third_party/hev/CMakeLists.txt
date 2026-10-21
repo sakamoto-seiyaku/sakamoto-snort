@@ -66,7 +66,21 @@ target_include_directories(sakamoto_hev_lwip PUBLIC
   "${HEV_LWIP}/ports/include")
 target_compile_options(sakamoto_hev_lwip PRIVATE -Wall -fvisibility=hidden)
 option(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
-  "Use inner MTU3000/MSS2940 within ordinary 4KiB VPP buffer pages" OFF)
+  "Enable a larger inner TCP packet profile (legacy option name)" ON)
+set(vpn_tun_mtu_default 1500)
+if(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT)
+  set(vpn_tun_mtu_default 10000)
+endif()
+set(SAKAMOTO_PRODUCT_VPN_TUN_MTU "${vpn_tun_mtu_default}" CACHE STRING
+  "Inner VPN MTU: 1500, or experimental 3000/10000")
+if((SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT AND
+    NOT SAKAMOTO_PRODUCT_VPN_TUN_MTU MATCHES "^(3000|10000)$") OR
+   (NOT SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT AND
+    NOT SAKAMOTO_PRODUCT_VPN_TUN_MTU STREQUAL "1500"))
+  message(FATAL_ERROR "VPN MTU does not match the selected packet profile")
+endif()
+target_compile_definitions(sakamoto_hev_lwip PUBLIC
+  SAKAMOTO_PRODUCT_VPN_TUN_MTU=${SAKAMOTO_PRODUCT_VPN_TUN_MTU})
 if(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT)
   target_compile_definitions(sakamoto_hev_lwip PUBLIC
     SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=1)

@@ -41,11 +41,7 @@ static product_vpn_stack_owner_t owners[PRODUCT_VPN_RETURN_WORKERS];
 static product_vpn_flow_stack_config_t limits = {
   .max_sessions = 256, .max_input_packets = 1024, .max_pbufs = 8192,
   .max_pcbs = 258, .max_sockets = 256,
-#ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
-  .max_packet_bytes = 3000,
-#else
-  .max_packet_bytes = 1500,
-#endif
+  .max_packet_bytes = SAKAMOTO_PRODUCT_VPN_TUN_MTU,
   .task_stack_bytes = 32768,
   .broker_timeout_ms = 2500, .idle_timeout_ms = 60000,
 };

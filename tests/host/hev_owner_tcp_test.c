@@ -20,7 +20,8 @@
  * Two owners deliberately receive the identical tuple to expose any shared
  * PCB/input/sequence/timer authority, independently of Product hash steering. */
 #ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
-enum { PAYLOAD = 73728, QUEUE = 128, MTU = 3000, CLIENT_MSS = 2940 };
+enum { PAYLOAD = 73728, QUEUE = 128, MTU = SAKAMOTO_PRODUCT_VPN_TUN_MTU,
+       CLIENT_MSS = SAKAMOTO_PRODUCT_VPN_TUN_MTU - 60 };
 #else
 enum { PAYLOAD = 73728, QUEUE = 128, MTU = 1500, CLIENT_MSS = 1360 };
 #endif
@@ -290,6 +291,7 @@ static int endpoint(int family, uint16_t *port)
 
 int main(int argc, char **argv)
 {
+  setvbuf(stdout, NULL, _IOLBF, 0);
   alarm(25);
   int family = argc > 1 && !strcmp(argv[1], "ipv6") ? 6 : 4;
   int unreachable = argc > 2 && !strcmp(argv[2], "unreachable");
@@ -493,11 +495,18 @@ int main(int argc, char **argv)
 #ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
       /* Credit fixtures intentionally drip <=1024-byte bursts on owner0. */
       if (f->pressure < 4) assert(f->max_data_length > 2000);
+      /* The basic case deliberately caps the outer SO_SNDBUF to 4KiB.
+       * Withheld ACKs queue all peer bytes before release, so that case is
+       * the deterministic witness of an actual >8KiB inner segment. */
+      if (MTU == 10000 && hold_ack) assert(f->max_data_length > 8192);
 #endif
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
       assert(s.tcp_commit_max <= 8);
       if (!pressure && !reset && !remote_fin && !underlay)
-        assert(s.tcp_commit_max >= (MTU > 1500 ? 2 : 4));
+        /* The peer echoes <=4KiB per read. At MSS9940 one commit can
+         * consume that entire burst; the old >=2 assertion is inapplicable. */
+        assert(s.tcp_commit_max >= (4096U + CLIENT_MSS - 1) / CLIENT_MSS);
+      if (MTU == 10000 && hold_ack) assert(s.tcp_commit_max >= 2);
 #else
       assert(s.tcp_commit_max <= 2); /* A wrapped ring can have two short spans. */
 #endif

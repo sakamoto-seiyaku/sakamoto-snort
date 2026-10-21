@@ -442,6 +442,7 @@ def run(args):
                     commands.append("show product flow-stack")
                 if suite == VPN_TCP_SUITE:
                     commands.append("show runtime")
+                    commands.append("show physmem")
                     (cell / "startup.conf").write_text(device.command(
                         "shell", "run-as", PACKAGE, "cat", "files/profiles/vpn/vpp/startup.conf"))
                     (cell / "interface-links.txt").write_text(device.root(
@@ -453,6 +454,14 @@ def run(args):
                                          if line.startswith("default-numa-"))
                     if available_pool < manifest["minimum_native_buffers"]:
                         raise RuntimeError("native buffer pool below frozen minimum: " + str(available_pool))
+                    expected_count = manifest.get("expected_native_buffer_count")
+                    if expected_count is not None and available_pool != expected_count:
+                        raise RuntimeError("native buffer pool differs from frozen capacity: " + str(available_pool))
+                    expected_data = manifest.get("expected_native_buffer_data_bytes")
+                    if expected_data is not None and any(
+                            int(line.split()[4]) != expected_data for line in diagnostic.splitlines()
+                            if line.startswith("default-numa-")):
+                        raise RuntimeError("native buffer data size differs from frozen profile")
                 layout = []
                 for line in diagnostic.splitlines():
                     match = re.match(r"\s*(\d+)\s+(vpp_\S+)\s+(?:workers\s+)?(\d+)\s+\S+\s+\(\d+\)\s+(\d+)", line)

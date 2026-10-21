@@ -104,14 +104,20 @@ calls; `max_commits` is a lifetime maximum, not a delta. `tun.capture_batch`
 measures graph publication, not fewer TUN read syscalls; `show runtime` gives
 actual vectors/call. See the [fixed TCP experiment](../../docs/testing/2026-10-21_VPN_FIXED_TCP_BATCH.md).
 
-`SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT` defaultsOFF and selects inner
-MTU3000/MSS2940 when ON. `SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES` accepts2048/3072;
-large segments require3072. Use3072 in both A/B arms to isolate MSS with the same
-actual pool. The pinned allocator's page/stride geometry means requested page
-count does not equal usable buffer count. `flow_stack.tcp_progress` reports
+`SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT` retains its legacy option name
+and now defaultsON with inner MTU10000/MSS9940. Set
+`SAKAMOTO_PRODUCT_VPN_TUN_MTU=3000` for the earlier large-segment control, or
+set the legacy optionOFF for MTU1500/MSS1360. The buffer-data override accepts
+2048/3072/10240 and must exceed MTU. Data10240 selects the explicit VPP
+`virtual-only` software pool on ordinary pages, with2048 actual buffers by
+default; it does not permit buffer DMA. Use data10240 and the same actual pool
+in both MTU3000/10000 comparison arms. The legacy physical-page allocator still
+has its original page/stride geometry. `flow_stack.tcp_progress` reports
 round-entry observations, `flow_stack.driver` reports ready delay/empty steps,
 and `tun.return_detail`/`tun.write_size` distinguish return rejection and actual
-packet sizes. See [long TCP evidence](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
+packet sizes. The TCP collector retains `show physmem` and can enforce frozen
+`expected_native_buffer_count`/`expected_native_buffer_data_bytes` before load.
+See [long TCP evidence](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
 `SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT` defaultsOFF. It gates socket
 readiness by writable ring space and queued upload data, without changing owner
