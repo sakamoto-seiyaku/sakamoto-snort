@@ -21,7 +21,9 @@ SOURCE = Path(__file__).with_name("socket_load.c")
 VPN_SUITE = "ordinary-vpn-v1"
 VPN_FRESH_SUITE = "ordinary-vpn-fresh-v1"
 VPN_TCP_SUITE = "ordinary-vpn-tcp-fixed-v1"
-VPN_SUITES = (VPN_SUITE, VPN_FRESH_SUITE, VPN_TCP_SUITE)
+VPN_UDP_SUITE = "ordinary-vpn-udp-fixed-v1"
+VPN_SINGLE_SUITES = (VPN_TCP_SUITE, VPN_UDP_SUITE)
+VPN_SUITES = (VPN_SUITE, VPN_FRESH_SUITE, *VPN_SINGLE_SUITES)
 NDK_CLANG = Path("/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang")
 
 
@@ -228,12 +230,13 @@ def prepare(args):
                 "profiling": not args.no_profile, "prepared_utc_ns": time.time_ns()}
     if args.suite in VPN_SUITES:
         manifest.update(suite=args.suite, profiles=["vpn"],
-                        cases=["tcp-fixed"] if args.suite == VPN_TCP_SUITE else list(CASES),
+                        cases=["tcp-fixed"] if args.suite == VPN_TCP_SUITE else
+                              ["udp-fixed"] if args.suite == VPN_UDP_SUITE else list(CASES),
                         collector_sha256=digest(__file__),
                         native_stop_evidence="retained-open-log-inode")
-        if args.suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE):
+        if args.suite in (VPN_FRESH_SUITE, *VPN_SINGLE_SUITES):
             manifest['fresh_lifetime_each_case'] = True
-        if args.suite == VPN_TCP_SUITE:
+        if args.suite in VPN_SINGLE_SUITES:
             manifest['control_timeout_seconds'] = 15
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (output / "device-before.json").write_text(json.dumps(initial, indent=2) + "\n")
@@ -293,13 +296,14 @@ def monitor_summary(raw, client):
             "rss_peak_bytes": max(t["rss_pages"] * s["page_size"] for s in samples for t in s["threads"])}
 
 
-def validate_vpn_window(generation, client, before, after):
+def validate_vpn_window(generation, client, before, after, owner_count=2):
     for raw in (before, after):
         tun = rows(raw, "tun.status ")
         stack = rows(raw, "flow_stack.status ")
         if (len(tun) != 1 or tun[0].get("generation") != str(generation)
                 or tun[0].get("enabled") != "1" or tun[0].get("attached") != "1"
-                or len(stack) != 2 or {v.get("owner") for v in stack} != {"0", "1"}
+                or len(stack) != owner_count
+                or {v.get("owner") for v in stack} != {str(i) for i in range(owner_count)}
                 or any(v.get("generation") != str(generation) or v.get("ready") != "1"
                        for v in stack)):
             raise RuntimeError("VPN capture/owner generation or readiness changed")
@@ -309,10 +313,11 @@ def validate_vpn_window(generation, client, before, after):
     validate_capture_window("vpn", client, before, after)
 
 
-def validate_vpn_stop(raw, generation):
+def validate_vpn_stop(raw, generation, owner_count=2):
     owners = rows(raw, "s237 event=owner_stopped ")
     stop = rows(raw, "s213 event=stop ")
-    if (len(owners) != 2 or {v.get("owner") for v in owners} != {"0", "1"}
+    if (len(owners) != owner_count
+            or {v.get("owner") for v in owners} != {str(i) for i in range(owner_count)}
             or any(v.get("generation") != str(generation)
                    or any(v.get(k) != "0" for k in ("sessions", "inputs", "pbufs", "buffers", "obligations", "frames"))
                    or v.get("timer_fd") != "-1" or v.get("broker_fd") != "-1"
@@ -321,6 +326,33 @@ def validate_vpn_stop(raw, generation):
             or any(stop[0].get(k) != "0" for k in ("pending", "buffers", "frames", "obligations"))
             or stop[0].get("tun_fd") != "-1"):
         raise RuntimeError("VPN native stop audit does not settle this generation")
+
+
+def validate_vpn_layout(layout, worker_cpus, tun_io_cpu, raw):
+    """Check the actual VPP roles before using a cell as topology evidence."""
+    if worker_cpus is None:
+        if tun_io_cpu is not None:
+            raise RuntimeError('dedicated I/O placement requires frozen owner CPUs')
+        # Existing suites may use Android's saved placement rather than an
+        # Intent override. Validate roles and each reported core's /proc affinity.
+        worker_cpus = [row['lcore'] for row in layout[1:]]
+    expected_workers = list(worker_cpus) + ([] if tun_io_cpu is None else [tun_io_cpu])
+    if (len(layout) != len(expected_workers) + 1
+            or [(row['id'], row['name'], row['lcore']) for row in layout]
+            != [(0, 'vpp_main', 0)] + [(i + 1, f'vpp_wk_{i}', cpu)
+                                      for i, cpu in enumerate(expected_workers)]):
+        raise RuntimeError('actual VPP main/owner/I/O layout differs from frozen placement')
+    if tun_io_cpu is None:
+        return
+    count = len(worker_cpus)
+    required = [f'topology.profile=vpn owner_count={count} vpp_worker_count={count + 1} '
+                f'actual_vpp_workers={count + 1}',
+                f'topology.tun_io_lane=0 worker={count} thread_index={count + 1} '
+                f'actual_core={tun_io_cpu} is_flow_owner=0']
+    required += [f'topology.owner={i} thread_index={i + 1} actual_core={cpu}'
+                 for i, cpu in enumerate(worker_cpus)]
+    if not all(any(line.startswith(value) for line in raw.splitlines()) for value in required):
+        raise RuntimeError('Product topology roles differ from frozen placement')
 
 
 def score(client, peer, cpu, diagnostic, before):
@@ -377,29 +409,43 @@ def run(args):
         last_port = tcp_source_port + manifest['threads'] * (manifest['flows_per_thread'] + 1) - 1 if type(tcp_source_port) is int else 65536
         if suite != VPN_TCP_SUITE or type(tcp_source_port) is not int or tcp_source_port < 1024 or last_port > 65535:
             raise ValueError("tcp_fixed_source_port_base requires a valid fixed TCP port range")
+    udp_source_port = manifest.get("udp_fixed_source_port_base")
+    udp_rate = manifest.get("udp_offered_rate")
+    udp_burst = manifest.get("udp_burst_size", 1)
+    if any(value is not None for value in (udp_source_port, udp_rate)) or udp_burst != 1:
+        last_port = udp_source_port + manifest['threads'] * (manifest['flows_per_thread'] + 1) - 1 if type(udp_source_port) is int else 65536
+        if (suite != VPN_UDP_SUITE or type(udp_source_port) is not int or udp_source_port < 1024
+                or last_port > 65535 or type(udp_rate) is not int or not 1 <= udp_rate <= 1000000
+                or type(udp_burst) is not int or not 1 <= udp_burst <= manifest['threads'] * 16):
+            raise ValueError("paced UDP requires valid fixed ports, offered rate and burst in UDP suite")
     worker_cpus = manifest.get("worker_cpu_ids")
-    if worker_cpus is not None and (suite != VPN_TCP_SUITE or not isinstance(worker_cpus, list)
-            or len(worker_cpus) != 2 or any(type(cpu) is not int or cpu < 1 or cpu > 1023 for cpu in worker_cpus)
-            or worker_cpus[0] == worker_cpus[1]):
-        raise ValueError("worker_cpu_ids requires two distinct non-main CPUs and the TCP VPN suite")
+    tun_io_cpu = manifest.get("tun_io_cpu_id")
+    if worker_cpus is not None and (suite not in VPN_SINGLE_SUITES or not isinstance(worker_cpus, list)
+            or not worker_cpus or any(type(cpu) is not int or cpu < 1 or cpu > 1023 for cpu in worker_cpus)
+            or (tun_io_cpu is None and (len(worker_cpus) != 2 or worker_cpus[0] == worker_cpus[1]))):
+        raise ValueError("worker_cpu_ids requires single-cell VPN suite and valid ordered owner CPUs")
+    if tun_io_cpu is not None and (worker_cpus is None or type(tun_io_cpu) is not int
+            or tun_io_cpu < 1 or tun_io_cpu > 1023 or tun_io_cpu in worker_cpus):
+        raise ValueError("tun_io_cpu_id requires an explicit CPU distinct from main and all owners")
+    owner_count = len(worker_cpus) if worker_cpus is not None else 2
     callgraph = manifest.get("profiler_callgraph", "dwarf")
     mmap_pages = manifest.get("profiler_mmap_pages")
     if callgraph not in ("dwarf", "fp"):
         raise ValueError("profiler_callgraph must be dwarf or fp")
     if mmap_pages is not None and (type(mmap_pages) is not int or mmap_pages not in (1024, 4096)):
         raise ValueError("profiler_mmap_pages must be 1024 or 4096")
-    fresh_each_case = suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE)
+    fresh_each_case = suite in (VPN_FRESH_SUITE, *VPN_SINGLE_SUITES)
     if fresh_each_case and manifest.get('fresh_lifetime_each_case') is not True:
         raise RuntimeError("fresh VPN suite must freeze independent lifetimes")
     profiles = ("vpn",) if vpn_only else ("root", "vpn")
-    cases = ("tcp-fixed",) if suite == VPN_TCP_SUITE else CASES
+    cases = ("tcp-fixed",) if suite == VPN_TCP_SUITE else ("udp-fixed",) if suite == VPN_UDP_SUITE else CASES
     if vpn_only and (manifest.get("profiles") != ["vpn"] or manifest.get("cases") != list(cases)):
         raise RuntimeError("VPN suite must freeze its exact workload list")
     result = {"schema": 1, "status": "INCOMPLETE", "manifest": manifest,
               "runner_sha256": digest(__file__), "cases": [], "errors": [],
               "started_utc_ns": time.time_ns(), "deadline_seconds": 120}
     control_timeout = manifest.get('control_timeout_seconds', 5)
-    if control_timeout not in (5, 15) or (control_timeout != 5 and suite != VPN_TCP_SUITE):
+    if control_timeout not in (5, 15) or (control_timeout != 5 and suite not in VPN_SINGLE_SUITES):
         raise RuntimeError('control timeout is outside the frozen suite contract')
     device = Device(manifest["serial"], output, entry + 120, control_timeout)
     active = False
@@ -439,6 +485,8 @@ def run(args):
                     start_args = ["--ez", "runtimeStart", "true", "--es", "runtimeProfile", profile]
                     if worker_cpus is not None:
                         start_args.extend(["--es", "runtimeWorkerCpuIds", ",".join(map(str, worker_cpus))])
+                    if tun_io_cpu is not None:
+                        start_args.extend(["--es", "runtimeTunIoCpuId", str(tun_io_cpu)])
                     (cell / "start.txt").write_text(device.action(*start_args))
                     running = device.wait_state("running", profile)
                     pid_text = device.command("shell", "pidof", "libvpp_runtime.so").strip().split()
@@ -450,7 +498,7 @@ def run(args):
                     if current.get("state") != "running" or current.get("profile") != profile or current.get("generation") != running["generation"]:
                         raise RuntimeError("runtime changed between fixed-flow workloads")
                 (cell / "runtime.json").write_text(json.dumps(running, indent=2) + "\n")
-                if suite == VPN_TCP_SUITE:
+                if suite in VPN_SINGLE_SUITES:
                     retained_log = run_remote + "/" + case + "-native.log"
                     device.retain_vpn_log(retained_log)
                 if primary_credits is not None:
@@ -472,7 +520,9 @@ def run(args):
                 commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows", "show buffers"]
                 if vpn_only:
                     commands.append("show product flow-stack")
-                if suite == VPN_TCP_SUITE:
+                    if tun_io_cpu is not None:
+                        commands.append("show product topology")
+                if suite in VPN_SINGLE_SUITES:
                     commands.append("show runtime")
                     commands.append("show physmem")
                     (cell / "startup.conf").write_text(device.command(
@@ -481,7 +531,7 @@ def run(args):
                         "ip -details link show"))
                 diagnostic = device.cli(profile, ["show threads", *commands])
                 (cell / "before-cli.txt").write_text(diagnostic)
-                if suite == VPN_TCP_SUITE and manifest.get("minimum_native_buffers"):
+                if suite in VPN_SINGLE_SUITES and manifest.get("minimum_native_buffers"):
                     available_pool = sum(int(line.split()[5]) for line in diagnostic.splitlines()
                                          if line.startswith("default-numa-"))
                     if available_pool < manifest["minimum_native_buffers"]:
@@ -499,20 +549,20 @@ def run(args):
                     match = re.match(r"\s*(\d+)\s+(vpp_\S+)\s+(?:workers\s+)?(\d+)\s+\S+\s+\(\d+\)\s+(\d+)", line)
                     if match:
                         layout.append({"id": int(match[1]), "name": match[2], "tid": int(match[3]), "lcore": int(match[4])})
-                if len(layout) != 3:
-                    raise RuntimeError("expected the current VPP main + two-worker layout")
-                if worker_cpus is not None:
-                    for index, cpu in enumerate(worker_cpus):
-                        worker = next(row for row in layout if row["name"] == f"vpp_wk_{index}")
-                        status = device.root(f"cat /proc/{pid}/task/{worker['tid']}/status")
-                        (cell / f"worker-{index}-affinity.txt").write_text(status)
-                        allowed = re.search(r"^Cpus_allowed_list:\s*(\S+)$", status, re.M)
-                        if worker["lcore"] != cpu or not allowed or allowed[1] != str(cpu):
-                            raise RuntimeError("actual worker affinity differs from frozen CPU selection")
+                if vpn_only:
+                    validate_vpn_layout(layout, worker_cpus, tun_io_cpu, diagnostic)
+                elif len(layout) != 3:
+                    raise RuntimeError("expected the current VPP main + two-worker Root layout")
+                for worker in layout:
+                    status = device.root(f"cat /proc/{pid}/task/{worker['tid']}/status")
+                    (cell / f"{worker['name']}-affinity.txt").write_text(status)
+                    allowed = re.search(r"^Cpus_allowed_list:\s*(\S+)$", status, re.M)
+                    if not allowed or allowed[1] != str(worker['lcore']):
+                        raise RuntimeError("actual worker affinity differs from frozen CPU selection")
                 flow_rows = rows(diagnostic, "flow.runtime ")
                 occupancy = sum(int(v["entries"]) for v in rows(diagnostic, "flow.pool "))
                 capacity = sum(int(v["capacity"]) for v in flow_rows)
-                if len(flow_rows) != 2 or not capacity or occupancy > capacity // 10:
+                if len(flow_rows) != (owner_count if vpn_only else 2) or not capacity or occupancy > capacity // 10:
                     raise RuntimeError("Flow table is already busy before pressure: " + str(occupancy))
                 if any(int(v["capacity_misses"]) for v in flow_rows):
                     raise RuntimeError("Flow capacity miss before pressure")
@@ -559,6 +609,8 @@ def run(args):
                 argv = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), str(case_id), case, str(manifest["cell_ms"]), str(manifest["threads"]), str(manifest["flows_per_thread"])]
                 if tcp_source_port is not None:
                     argv.extend([str(tcp_source_port), "1"])
+                if udp_rate is not None:
+                    argv.extend([str(udp_source_port), "1", str(udp_rate), str(udp_burst)])
                 if client_cpu_mask is not None:
                     script = "cat /proc/self/status; echo BENCH_CLIENT_JSON; exec " + shlex.join(argv)
                     argv = ["/system/bin/taskset", client_cpu_mask, "/system/bin/sh", "-c", script]
@@ -578,6 +630,10 @@ def run(args):
                 client = json.loads(value)
                 if tcp_source_port is not None and (client["fixed_source_port_base"] != tcp_source_port or client["fixed_source_port_stride"] != 1):
                     raise RuntimeError("traffic helper did not use the frozen TCP source ports")
+                if udp_rate is not None and (client['fixed_source_port_base'] != udp_source_port
+                        or client['fixed_source_port_stride'] != 1 or client['offered_rate'] != udp_rate
+                        or client['burst_size'] != udp_burst):
+                    raise RuntimeError('traffic helper did not use frozen UDP ports/rate')
                 if client["uid"] != (manifest["uid"] if profile == "root" else 2000):
                     raise RuntimeError("traffic helper UID is outside the intended capture profile")
                 after = device.cli(profile, commands)
@@ -609,7 +665,7 @@ def run(args):
                     (cell / "perf.log").write_text(log)
                 try:
                     if vpn_only:
-                        validate_vpn_window(running["generation"], client, diagnostic, after)
+                        validate_vpn_window(running["generation"], client, diagnostic, after, owner_count)
                     validate_capture_window(profile, client, diagnostic, after)
                 except RuntimeError:
                     if profile == 'root':
@@ -637,7 +693,7 @@ def run(args):
                         native_stop = device.read_retained_vpn_log(retained_log)
                         (cell / "native-stop.txt").write_text(native_stop)
                         retained_log = None
-                        validate_vpn_stop(native_stop, running["generation"])
+                        validate_vpn_stop(native_stop, running["generation"], owner_count)
                 if profile == "root" and stopped_lifetime:
                     tail = device.command("shell", "run-as", PACKAGE, "tail", "-n", "12", "files/product-state/s242-last-stop.log")
                     (cell / "native-stop.txt").write_text(tail)

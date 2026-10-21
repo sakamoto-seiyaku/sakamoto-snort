@@ -415,3 +415,48 @@ partial send capacity, zero-length/chained datagrams, and descriptor limits.
 The October 21 independent baseline, failed two-lifetime campaign and separate
 four-lifetime comparison are recorded in
 [`2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md`](../../docs/testing/2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md).
+
+## S304 local-owner versus dedicated-I/O Product VPN comparison
+
+[`s304_vpn_topology.py`](s304_vpn_topology.py) runs six independent ordinary
+Product windows: old N=2, new N=2 twice, old N=2, then new N=1 and N=3.
+It verifies installed APK/native bytes, actual worker affinity, TUN capture,
+FlowOwner count, endpoint progress and zero native stop debt, and restores the
+specified original APK even after an incomplete attempt. Run from the repo root
+with the Pixel stopped, saved benchmark LAN selected, and the Host peer running:
+
+```sh
+rtk proxy python3 tests/benchmark/pixel_quick.py prepare \
+  --suite ordinary-vpn-tcp-fixed-v1 --peer 192.168.4.5 --port 41723 \
+  --cell-ms 20000 --no-profile --output build-output/<unique-tcp-prepared>
+rtk proxy build-output/<unique-tcp-prepared>/socket-load-host server 192.168.4.5 41723
+rtk proxy python3 tests/benchmark/s304_vpn_topology.py \
+  --prepared build-output/<unique-tcp-prepared>/manifest.json \
+  --old-apk build-output/vpn-diagnosis-default-20261021/default/apk/sakamoto-runtime-debug.apk \
+  --new-apk build-output/s303-apk-a/sakamoto-runtime-debug.apk \
+  --restore-apk build-output/s300-apk-g/sakamoto-runtime-debug.apk \
+  --output build-output/<unique-tcp-campaign>
+```
+
+For fixed UDP, prepare `--suite ordinary-vpn-udp-fixed-v1 --cell-ms 5000`
+with the other arguments unchanged. That runs unpaced saturation. For the
+separate paced cohort, set `udp_fixed_source_port_base: 25000`,
+`udp_offered_rate: 8000` and `udp_burst_size: 1` in a copied frozen UDP
+manifest before invoking the campaign. The fixed port range is below the
+Pixel's observed ephemeral range; the campaign logs any bind failure as an
+incomplete attempt. Use a new output directory for every attempt. The
+[S304 evidence record](../../docs/testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md)
+links the exact three frozen manifests, source snapshots, raw runs, failure
+attempts and cache proofs. After all three cohorts, run
+[`s304_summary.py`](s304_summary.py) with `--tcp`, `--udp-stress`, `--udp-paced`,
+`--snapshots` and `--output` to recheck identities and calculate descriptive
+N=2 means. The [portable raw archive](../../docs/testing/evidence/s304-vpn-product-20261022-34f277b4962b563d.zip)
+and [SHA index](../../docs/testing/evidence/s304-vpn-product-20261022-index.json)
+can be checked from a clean checkout with:
+
+```sh
+rtk proxy python3 tests/benchmark/s304_archive.py verify \
+  --index docs/testing/evidence/s304-vpn-product-20261022-index.json
+```
+
+Select the original Wi-Fi again and verify the final device audit.

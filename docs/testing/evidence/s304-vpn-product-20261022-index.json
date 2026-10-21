@@ -1,0 +1,2984 @@
+{
+  "schema": "s304-portable-raw-evidence/v1",
+  "archive": "s304-vpn-product-20261022-34f277b4962b563d.zip",
+  "archive_sha256": "34f277b4962b563dd944ceaeb3cdd5a6f85d035f3c346caafc2edde68817fceb",
+  "archive_bytes": 19891285,
+  "source_checkout": "/home/js/Git/sakamoto/sakamoto-snort",
+  "files": [
+    {
+      "path": "build-output/android-product-stage-s302-e/product-stage.properties",
+      "bytes": 1508,
+      "sha256": "bea033ce87619f9e48b2d3b6837365f27fbef8f1e9626007b26e53114b3a8684"
+    },
+    {
+      "path": "build-output/s300-apk-g/sakamoto-runtime-debug.apk",
+      "bytes": 6211717,
+      "sha256": "cc329acc906ba6ce8dd6e626c2849de1e9f335a96e2548a7ea3ab2becf9a1110"
+    },
+    {
+      "path": "build-output/s303-apk-a/sakamoto-runtime-debug.apk",
+      "bytes": 6215813,
+      "sha256": "6a424ab27181b40772a4298e46d6bf5bf4c19329618e78a3ea35d2139bf32ce1"
+    },
+    {
+      "path": "build-output/s303-apk-cache-check/result.json",
+      "bytes": 1006,
+      "sha256": "4fba1c74a9d44bfdb8ffd302caaf6b003fba02fb9a5eac0c7cf870e06af338be"
+    },
+    {
+      "path": "build-output/s303-native-cache-pinned/result.json",
+      "bytes": 3209,
+      "sha256": "aff8405f5293aefa0a14d5658b59a5d373f2c9fb03cbc2edd98f96e9f275a048"
+    },
+    {
+      "path": "build-output/s304-prepared/manifest.json",
+      "bytes": 1500,
+      "sha256": "e3b25bb069fd6bc6687d44e5413b8da5309f7072c2bd22e1b244d86360283123"
+    },
+    {
+      "path": "build-output/s304-prepared/socket-load-arm64",
+      "bytes": 94136,
+      "sha256": "ed1e582cca83d5f96425fedec6e511d59b0727272ded69d41b3cad7f1037c575"
+    },
+    {
+      "path": "build-output/s304-prepared/socket-load-host",
+      "bytes": 112288,
+      "sha256": "92019b4d45d37bb9d214e84182835cfae5cd5388b27f2276feef01283dda8f28"
+    },
+    {
+      "path": "build-output/s304-source-snapshots/paced-pixel_quick.py",
+      "bytes": 51739,
+      "sha256": "f84f28b9339500abfc30bc586a6d724bdd99131551f2636a131266998fc7a51c"
+    },
+    {
+      "path": "build-output/s304-source-snapshots/tcp-pixel_quick.py",
+      "bytes": 50180,
+      "sha256": "53349808e16462d668086881afe1fa334bc13cab368593742727e26fafb8c97f"
+    },
+    {
+      "path": "build-output/s304-source-snapshots/unpaced-pixel_quick.py",
+      "bytes": 50456,
+      "sha256": "1f66dbaf25a7e4387c1a1338c80af2db3776c9cb2f215a2ff27d758c0da86c50"
+    },
+    {
+      "path": "build-output/s304-summary-20261022/summary.json",
+      "bytes": 30088,
+      "sha256": "48fc25b97efddabbe49335bcedce8f085c017a5ffcb9cc9a9943c71cedc339a6"
+    },
+    {
+      "path": "build-output/s304-udp-paced-prepared-b/manifest.json",
+      "bytes": 1589,
+      "sha256": "adc2c5b7a2fcdb909f73bf06dc08adbab6d1852a2ce7ee882acc263ed6f9b485"
+    },
+    {
+      "path": "build-output/s304-udp-paced-prepared/manifest.json",
+      "bytes": 1589,
+      "sha256": "0c191c27bc651db7337047550a97519b7c5b335809b4bf9cae514441de772c6d"
+    },
+    {
+      "path": "build-output/s304-udp-prepared/manifest.json",
+      "bytes": 1499,
+      "sha256": "f3a25da0ad0efee25a3a1e635023a7ea8a7b9547408ada9ab28ee5c0152aa05a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/campaign.json",
+      "bytes": 4623,
+      "sha256": "68c417390f9580b3e5f02bff8f11160fab4d0c8c376ce8b07b45a68dd639b8ce"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/final-device-audit/operations.jsonl",
+      "bytes": 1390,
+      "sha256": "5ce42ab2691b12379b7f5ef106610852b64b9bdb103daf4f72659de8d97409bf"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/final-device-audit/result.json",
+      "bytes": 2265,
+      "sha256": "2d0d965debc60071aa5e9ed6c61a6fc84f64c7b5079e33e64c091f8a2e525bc6"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/initial-runtime.json",
+      "bytes": 448,
+      "sha256": "3df9283b6b4628359ca35406981945ac829fa3e8929a91d82b510c976a5c06b1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/initial-wifi.txt",
+      "bytes": 1276,
+      "sha256": "f20b3788d59e57a9af4fcce17d50213d77020a1f0ef076faa080eb54540fa638"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A1-local-n2/before.json",
+      "bytes": 448,
+      "sha256": "3df9283b6b4628359ca35406981945ac829fa3e8929a91d82b510c976a5c06b1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A1-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "93f51cc989a5c8ef55fb9df68bfe578b4af0ff923bdbbe9ecd4347360fb5bb07"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A1-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A1-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "a2c785142371fd6395f294e105dd1bbc6d9a8563d751d6fe2d9ec7e7745e3a07"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A2-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "0b5d630e42857e56f4dacc8566650c1a45a6354a3d58bdb1377e30a019940838"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A2-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "b96e5cff961f7109934981228200c5059c2dc3ec35064397d515331000270294"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A2-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-A2-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "0a1f62d74f5024416deb9332ddcf5a08bfce1c8c582446f42888851fdd08ddc0"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-B1-io-n2/before.json",
+      "bytes": 447,
+      "sha256": "61a154119ad97b8b24f456dda5ab2388af28348c0305a11ec665d291d4cf598e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-B1-io-n2/identity.json",
+      "bytes": 1476,
+      "sha256": "c0c82d9f72a9fc9573748b1087926dd78fdbe7972edeed78f8f9136c39f6264e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-B1-io-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-B1-io-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "695fe0706bbb01ba892fec69a726801b9ad925e403cde2d581ec90f7e8c189d1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-C1-io-n1/before.json",
+      "bytes": 447,
+      "sha256": "4276ecdde2911fabe1f466ecca5974b0d6389b4c18e596efe31f01efaf712b79"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-C1-io-n1/identity.json",
+      "bytes": 1476,
+      "sha256": "e832621be63621651cf8b5f67688637c9847884813ed4b215b7ddc2e26d8f44d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-C1-io-n1/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-C1-io-n1/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "4da1fb5d7a2f193f688f3c81202fda182f105080c38f3780f54e56037186a774"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-restore/before.json",
+      "bytes": 447,
+      "sha256": "c78c6e09f1f8d69dad196b61719132d6d35460317157df8eaf2654909df19964"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-restore/identity.json",
+      "bytes": 1476,
+      "sha256": "cf234de56c60df5659fd46de56b8c67e3824a261d69326150edb90364b0968b3"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-restore/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/install-restore/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "c6ebf7621698472aefe9335c6e9dbfa3d6693549b3d5331c4a01db7ec9c5a64f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-A1-local-n2.json",
+      "bytes": 1794,
+      "sha256": "d5d0db6afa2aa6420389c4af4e4559c497babca8b20005c329221390656d9b9a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-A2-local-n2.json",
+      "bytes": 1794,
+      "sha256": "96853c5164d407bf7945b8b2b4ed33076276ab0647f718343f0da0b000a17506"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-B1-io-n2.json",
+      "bytes": 1813,
+      "sha256": "35812dde7c19bbaea4a4fad6b9dfa00e7157a30ab3c9488433ec2a7dc9e36069"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-B2-io-n2.json",
+      "bytes": 1813,
+      "sha256": "9baa12c17b2f42764fffa95e1a50cccb4314b1bff102bae3d142726f8fa5bc78"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-C1-io-n1.json",
+      "bytes": 1806,
+      "sha256": "49e4ae55e65c6acf05d5343279a5d78bf9ee3341c807bf06fddf4e8dca94284a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/manifest-C3-io-n3.json",
+      "bytes": 1820,
+      "sha256": "a45b2822320976939270c1a62ba851032a624453bd296a8f9c8924891cd12b8a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/operations.jsonl",
+      "bytes": 15279,
+      "sha256": "c1e63d4af6fa338914ff425af267bdd150f3e06ef6aad752448096dcabe37b1f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2.log",
+      "bytes": 433,
+      "sha256": "9d59a69af804cea4062bf74b0ecc23051c184ff93b805bc4cf14b8728604089c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/operations.jsonl",
+      "bytes": 16819,
+      "sha256": "ee1d7ec9ccb719e9c20379df07b5b1cf0a97116e45d6f34b461bfa164280b46b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/result.json",
+      "bytes": 10736,
+      "sha256": "555ac24d6f6228d3372fda80f3f386ec0141587fde6b5268d0285f90a730063b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 144079,
+      "sha256": "13d69606267f985e4df71aec7efd64dc167adca6fc82823b836797d8f18a6daa"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 58317,
+      "sha256": "22e47b3c4e605943e700a75c86eebd04922577c71a6ebc78ff5032cbec0615a4"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "28776545f7fed3e5e0367e828a2d6a03b93e1ab75484f9d8f60bbaa5b185026f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/client.json",
+      "bytes": 869,
+      "sha256": "a013f8f00741f6b84a2acc15b55ce43456f4c04c3e0d2503b25aa03ab4b96b5d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 30895,
+      "sha256": "ee7230260b828e2f7453c2a1eb37ff626ef58d8d59a5e8eb2f490e0bbe8dc085"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "5a560d21b35b75a61c802b778c45edc90123ad606610c63c56dd1c4d5ed03109"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 19747,
+      "sha256": "5b0f3bff83bbcfb4898c06ad49618707a9bf83d386034083c7d8a7ab4a57fe19"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/peer.json",
+      "bytes": 493,
+      "sha256": "a6e82be32734d9e8a19b6742e6d0728f0fc855c84315ef67e4bf08444d2a926a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "8743a91206e1690d3cab436c9d9a3da03a91fbf3f2d8c2fbc5f636477e072682"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "77e212de15a2bdedb83df25afd6bc4fa9474b0724c21b0e9efbfdc026fc74f65"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "c1c065f005d98751e5224171bbacecec7677bfe9c3bb5e1b63536a772fa3becc"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "61a154119ad97b8b24f456dda5ab2388af28348c0305a11ec665d291d4cf598e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 8667,
+      "sha256": "f33b9bd5729bdfd0e55b9b4f72a07ee77c333a8e2d41ae26aef237882b17d998"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 8646,
+      "sha256": "f803849a0aeeb4a30ced0dc4e9d9e2093e4a92e0328129bc067c6e61045f0715"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1062,
+      "sha256": "dac9134fd0a7b319bf62be1f48251fc205dacde9c610c01ad8c800576c4c77e2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1065,
+      "sha256": "605706f77fcc52b2c0d9faca464b7a325cbc4d3ebf3b09a9f815884e1596b601"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "099036aa92b539012fe5b905421d6e33fbc0e00ed78e890d53b970e039016419"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 15052,
+      "sha256": "fa34fd806ebaed85700bd8d635530c469d4612db74996cbf55f18d53a0a806bd"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A1-local-n2/vpn-tcp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "9edf9341a7d47ef0bcde2993d95a554ef5cb9bf808db622d73f02577bb45d4b7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2.log",
+      "bytes": 432,
+      "sha256": "4f56683b4805a39d91c435381e507ba8aee000f84ddd07c44561fe775a044d29"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/operations.jsonl",
+      "bytes": 16606,
+      "sha256": "eed2cf0bee0ec7b82b75b4db36d3e98d275e3dcdf4c5e0360ee2be5cdc89694e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/result.json",
+      "bytes": 10747,
+      "sha256": "9e1d9e235169be6cde80b3f82e382ab1b00ece6fecb87f629f29bed16e76fe87"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 149379,
+      "sha256": "7fcc2e95d8e913ee8dc3007fc81fc8bb6e61178332a6853f1e7a970867bec847"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 58675,
+      "sha256": "64d3161dbe8d0535b19bb29239caf58054ee04c370a77db1068526ca4f51e81b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "6aac95a0503a8f0b3297b49d350765afd2b6fc87fd88ebb02798c53ea768e874"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/client.json",
+      "bytes": 869,
+      "sha256": "b2e5620b7afab87b21ec318759e9969c2ca67bce61ca9a4b9b8b26d9b83ce89e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 30893,
+      "sha256": "4fad2d140df4496da5ad349117522fedb8b8a616f24f5ab1641a7f7610fe30f2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "c7f2e7c9da7b16ae4cdb32a40c9e5c09898d3f343ec4abf5bc3de1afda9cdfff"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 18581,
+      "sha256": "14b79a1a5ada91bf2e2c76325e37622c9d4029407a696a3537df14cfbd5a7270"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/peer.json",
+      "bytes": 504,
+      "sha256": "8d9b24ac83a393091430da0274b5b2ffd163a4111a6230f53a29f6758714844a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "5cdab69a1862f95a899f378929e9e7623f19a4c01e77f56650a32548b6b88c20"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "ebf11e32312607f5dcbd2618b2215b69b7284964b7e231121d297d45e6197f05"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "a300303afd844959b858376acb302e2a6a848ed9d7cae261c24b38c241fab99f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "380ed7fa7571794f520e09e2624e6e034e03db68ac6a6d71cda3a2604b535a43"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 8668,
+      "sha256": "58e31110cfb0d248c8655690ede147adff642840405f95dd5a257912a1b0318f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 8644,
+      "sha256": "cfbaa5aabd92cad6d8bc16296d5fbe14b8a6c554902d38591a5029bd9a397496"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "6f4a2c44df81bf8d76b5972cfe9ab533c61b719a00aa0029ffbbb5d3164039a7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1064,
+      "sha256": "857fc8d8dbb8c0bd9070e7eaf7c6918f7e50faf70839c89a7592b84418282147"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "f19449e90a455b9be38c6572b3f403241cdb12fb69ac8a005eeec271f48ed464"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 10830,
+      "sha256": "cb1043eacdca3133289000601bdd74ccf97af2dfda20f1d6dfa21508042c4656"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-A2-local-n2/vpn-tcp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "d133e2d16601e3362afdcbbaf47a515d39ef28269054157ae2b10da8e0100f27"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2.log",
+      "bytes": 430,
+      "sha256": "57f5d086e189b52047adb05eeb33d7f31e308bab88ecfeb01bbcde15b9e4afb3"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/operations.jsonl",
+      "bytes": 17271,
+      "sha256": "c167bca1d575321bb90beca7fea0634a9fecb9378a7b374241ea64a0d8fd80a8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/result.json",
+      "bytes": 11024,
+      "sha256": "fc06eeaa144efdee4f8f3a013e42f829e7a5b9247933dd06209c85a3b5de099e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 147877,
+      "sha256": "2397597984b420e8783089b1198d6117616d0e20f6f1f410d7791fdea282570d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 59479,
+      "sha256": "ccddf2e368bc708ecb1423b33590b8e8f0d214a080e04c590d509a447104cff9"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "50fae9cf288b0c1c7b439a3637cfc1440bfccb5e257e20a97821e6141b18ba5e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/client.json",
+      "bytes": 869,
+      "sha256": "9a11bab1124d215010713d8e81ac0931a1f34dc519453286322855bce6aa4067"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 37622,
+      "sha256": "4b82eaf44372fb4bdd53a10f5e4cc8f9dadac8d0af90df4604b133fe2db5312b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "f091167e8e5c346c9303fd284a919269fbfad5e3ddc7c97c4454b899e9f61b1a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 19364,
+      "sha256": "dbd0ae0e7f683f0434afcc83ebd92f8409841baeb3109e8a14654c99d38cdee3"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/peer.json",
+      "bytes": 503,
+      "sha256": "935df7d28fe79684275f1c1a528dd78cae3cdd197c9dcfb6b49af56de0cd446d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "2db9db920e17da733564a2caa53bf8f494aa6ef9d3c75855265e75fc47f3d993"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "54d96803f25a189e3946b200e77ef7b425641253dcdb4361c114a933fb9d7132"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "401b9c156135e129ca7ea15c910667af155b407835bb9cb065b0e1473892905c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "f918165dee826573451fed5a65a4389eb1c14250183eaf68a82322745712d891"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 10172,
+      "sha256": "4a71f93af8eec6c791969c29228a17ed2bc0583fa7cf07bd5893899bed54ef04"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 10140,
+      "sha256": "e222fd62e3ac798ddeb548e1c4d3d378482a0bba0a7e4b0a57614c3deee3c793"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "c0ea92294bec9771542cfb04d88100dbb9a310c9a2bd7c3e39010a51cbe3f02b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "91c6a72cc30e26534f5052ca8a6b999cbee33d49ccb858c3aeb9e2dc07d42c33"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1062,
+      "sha256": "497cbffd09f25a80e720ae0c0b3882c6a99b9238bb18c8c98505073e3b74a6b2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1065,
+      "sha256": "c8e0f25a55631073aaacc68a39ad05170e4ffa5a894299f9d2c716b8935082ec"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 13413,
+      "sha256": "1b8dab45baeddf4232982d1890a104b36f7312fc4b7092f472be09184eac5c22"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B1-io-n2/vpn-tcp-fixed/warm.json",
+      "bytes": 846,
+      "sha256": "3939f2c3ffa1f12f852d68efd2ff38c5473001a22336705abe01f4b4f20210c3"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2.log",
+      "bytes": 429,
+      "sha256": "fec48465603fb8ff2876cb2f57ec3e7f3e3d0b2741a2a8b7e62154ca23f694e6"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/operations.jsonl",
+      "bytes": 17061,
+      "sha256": "357d8a1751afd7b43b32bc037e552ccdccc0cf49a030f87467a834921981d87e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/result.json",
+      "bytes": 11021,
+      "sha256": "c62f2020a24eb96f03da649cb16dfcfe9ba793be9e5eab3c13e5a2583e9ed6bf"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 147914,
+      "sha256": "b4c89ca7fb3ffac49ec40301404658716a616742ad4192bc3ef5891ac328d6ca"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 59488,
+      "sha256": "a6a6a617ba1b05e676b963243f800787ab4a928ac22f7eefa1647a253963bfbe"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "b6b6ba762eced794694728e18d7da1e3ef73594db26794ca180bd1d7d57463ca"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/client.json",
+      "bytes": 869,
+      "sha256": "17a809531bf885108aeb8577e3dff2cb70fc539c578a70f07992a33a0abf5093"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 37985,
+      "sha256": "9be7296b905bc54265df4d7c6539982d6b6583057d986b31ef584ec4ce61af46"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "6a028347cbd85e31ad42768ba05b3cf24c4689eb59aab54c838a20fd3dfcbd9d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 16896,
+      "sha256": "83b4bedbdecb2b99c84f1319c8a7de5e211bbded3516eefcab779613faf80c09"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/peer.json",
+      "bytes": 504,
+      "sha256": "36df419346ae52b88a95fa08999bf433d0582cbe13d2829ff062a3e60da88e2c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "6f710711037a351fd9fe1ef774a7a23c7b55912322324bf29e43f82cbdeaff4f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "daf7ba734aba92d243cbc757470d4964085bb7645ffdb2f4ac429ad6f5426268"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "694e6299e809e09b1b589c0d05bf1058bd7b85a185242efacae93bd35ac1de1a"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "c2f40fcbff390270e204d6cc9dc807b1ef6b7079d92d57d2b36c831c75ea138b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 10171,
+      "sha256": "b60e761f0b82de00e2b71e0468effad7b3f011e379fec0421d8d4d25a515ef5c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 10142,
+      "sha256": "0cab2cb1df2de5519b326b1b244ab94d5db0ee2397b1ff2bf51344639ad161f4"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1062,
+      "sha256": "d71ea1cd6818de40511787c2e206c630a39193d645e007c8b3dfbe37d6c71041"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "f352c752311d65ffd4080e0697716fd2eeb7d12b04e0459e72a260989f128eac"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "ee97ab2c321f37074fe26bf073f206050aca9b940a45e394487fae652781703d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1065,
+      "sha256": "d48a7331c7e6847766bbe85f2723587005dd776900532d23f790123314003dff"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 15073,
+      "sha256": "50ac442f869e4078d7e34ef0d97df5fc70f0a52dcc1bb438dd95c5adb299bd70"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-B2-io-n2/vpn-tcp-fixed/warm.json",
+      "bytes": 846,
+      "sha256": "4dc4901fcb3175e3f298fc82c2a65d92fdeb5ef96594cc6d1c6b140394cccba0"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1.log",
+      "bytes": 429,
+      "sha256": "a2348b802641241813d5d3c01e23377fea2ebf0b2ec7f4f7ec148e2b1ca38041"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/operations.jsonl",
+      "bytes": 17117,
+      "sha256": "e3c1d49eb5aa15222e55a6c32cf378a859702c2747d32a86f169bbcda521d143"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/result.json",
+      "bytes": 10686,
+      "sha256": "a330fe8e0944743303f4147bbf4d6d9b7c09fa67b9ac9a2323140a70b8b88c37"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 140344,
+      "sha256": "61e2c08eee153f2781e2a39375a5407f6d20737620c463a627a67c9df22dd2c9"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 53345,
+      "sha256": "ef6a9588793c3b29fd0718ec139eec6afb140a902c77f3ae15cc61d82140697c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "3a91ba19c1091b8ebe42409c020df731ac369e011f375d20f0695d829b6125c0"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/client.json",
+      "bytes": 868,
+      "sha256": "882f100106a1faa0cc5b37312b3bb18242ab90e01491c1deb64c1b8ea11d43aa"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 30534,
+      "sha256": "742cacedaf74bdd58e65a239e49b2848e695bbde7e283f7462364acdfb42f542"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "73829ed5eabd1ee7c35fa475058e5c6017bff2688a3c709cade45ac2fb2372cb"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 12543,
+      "sha256": "476abbf52176189553b516805938761ee085bcc2bc6f5c787dad19a6cb6fa505"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/peer.json",
+      "bytes": 502,
+      "sha256": "3a2c32b5e84139206d6896c7e8e7d9ad31d567e4a9a1df23fabcfd0eeec399aa"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "8f04cd5f8b62c99e1c56ef790d0cee97c55a983df8d956815310955e2483b8bd"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "92072abc5933f05a2aad149290388a0e33ab8cc33a8b284a5adb55fd518bc952"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "56a3c05db3c9d7c706f593dfa69a2adf5ebb8fbacf6268827c6f6ee3f586c10d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "68441368a0a0800a4160b1f3d8028873108db3eac7884b333166cf0635438f15"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 8667,
+      "sha256": "fa5b1e63b9540f74abee2de85e1a5a5faeab4d29af970652a2afa1c3ae875bfa"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 8647,
+      "sha256": "16208456fb52df51e6cb64705273291001abc70e62b5a7a3201213d71b3c3747"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "eb720e2623f5e36e4b9e4065d0b5bce49069371516afa87ebdb9cd596650d890"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "61b4de1ae614355072ad3a96721013af816857ef0c9aa50caf5f1bb9e63068fe"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1065,
+      "sha256": "01ec90171203670c9cbae2803290d3c743eb491b44abcedc2469bf43775ede9c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 15071,
+      "sha256": "442e8806158354f7a87b8257fb43530552bfec6f502e8aa28900d03ca2d9dfa7"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C1-io-n1/vpn-tcp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "ac8b13b1688f63964a1d1ebf356bd858d75b9934dad6172fdafdcab4c842165b"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3.log",
+      "bytes": 429,
+      "sha256": "f570eb722227a0ae8f6341014dc73ef0e86939d4ae8d5ba60a4060fb6288ad9c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/operations.jsonl",
+      "bytes": 17400,
+      "sha256": "d05934f5043dcd2d11fb38955abb8f53da6b9bfe93bbb2721acb6980dc6de65c"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/result.json",
+      "bytes": 11347,
+      "sha256": "89a367bad651b241041b6cd45b3c6fb39dca4ba2f503bfd5804b9cebeade5124"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/after-cli.txt",
+      "bytes": 148471,
+      "sha256": "5b638af8b33349672cb6eece459c675111aadeca3b23ee13e41cd50c24002beb"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/before-cli.txt",
+      "bytes": 61426,
+      "sha256": "40c5abede82626472650c590d1ba3f7688568d9c688a7101ea56186250bab0f1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "495742e37fabe0b65e8fa069a090f1fc09257d2fcbfd3edb780cf150e8c8d022"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/client.json",
+      "bytes": 869,
+      "sha256": "2bd4130ddfdf5c7ac5c4054aeae560ec20011b716cb9e39ea5b22e5514d13bd1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/cpu.jsonl",
+      "bytes": 45053,
+      "sha256": "8e0ef184c73a5cce5a144542bc66f242d33da0b75616f741f2f486d3badf7eb0"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "62fd11eb2c0c2dec11ed088c74f2832ea0ecce80d9e73bd70b5dd51e9a9d1151"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/native-stop.txt",
+      "bytes": 30288,
+      "sha256": "c566551b2ed02231468d7f3339d8fba0f8716396bf8678531d3e558fc9a818b0"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/peer.json",
+      "bytes": 502,
+      "sha256": "6d6b1001b45549a7290ea5f3819b215d846639e8fd10f078a5f88cd5555d796d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "ae8ecaef0c65124aff97de36bd9758a9f6ee8d07b7429cf07ad0ca7c38c2e4e1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "8621ec663340392c282cd3f2f38a733a583485279fc5a1ea4b7704ffad8388c6"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/startup.conf",
+      "bytes": 1063,
+      "sha256": "b20903c257b1c858eb66fda44a34dcf8e1947553c96bd7e5b5b8eb93b0e2e8ca"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "ec19bf9e16edb92093c1515624491263fec73b69a19d1ea79e3340c953257eb1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/system-cpu-after.txt",
+      "bytes": 11678,
+      "sha256": "a279d4863b6fcb49f01917400a48091b7184ff5e15d98e31d7dbcfd8138dfdd3"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/system-cpu-before.txt",
+      "bytes": 11636,
+      "sha256": "124fb9756aef1a4707f6ed53a5111eaa5486f40ef29970a2d028070880d7b415"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "c2c92eb49b97ba1c1c6a6c397c15e4abc1d6e9d9d6c4fbf8f8e2d9831e2211f6"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "7f767b5acd32a64946285baf9f26d2c031adcd5eb64a8cec6884ff7a65f3cca4"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "68d56425811fde26f7b109e4cd6f620003f5eea873495ddb3ed314c1ebe2177f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1063,
+      "sha256": "cfa4d5d093d8800cbcb0a36f8fbcd264e0069753ea0e74c4bca6f746abea915d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/vpp_wk_3-affinity.txt",
+      "bytes": 1064,
+      "sha256": "767fbfe26b0a3e89dcd18a9e42f8e9fc8232f24632a92351679eb11792a3d89f"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/warm-flow-evidence.json",
+      "bytes": 13311,
+      "sha256": "f7b1381912e102d34df1f1265681567ea18193de104c0a21f4ee4af02b040f6e"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022-b/run-C3-io-n3/vpn-tcp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "ad0687d6d17ea781bb70d9b53119407117a86543593e6983c89897d3d122d2dd"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/campaign.json",
+      "bytes": 1626,
+      "sha256": "becfc24a45ed0a3ebf1703115088de34efe75f40f14057168c4601a865b7e38d"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/initial-runtime.json",
+      "bytes": 448,
+      "sha256": "3df9283b6b4628359ca35406981945ac829fa3e8929a91d82b510c976a5c06b1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/initial-wifi.txt",
+      "bytes": 1275,
+      "sha256": "090c349f0aae01872c8d2517b78e782136c66a9716d232ba1ca7a90888cf22af"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/install-A1-local-n2/before.json",
+      "bytes": 448,
+      "sha256": "3df9283b6b4628359ca35406981945ac829fa3e8929a91d82b510c976a5c06b1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/install-restore/before.json",
+      "bytes": 448,
+      "sha256": "3df9283b6b4628359ca35406981945ac829fa3e8929a91d82b510c976a5c06b1"
+    },
+    {
+      "path": "build-output/s304-vpn-topology-20261022/operations.jsonl",
+      "bytes": 1185,
+      "sha256": "ddbd0b0718132fe2603805f7759479d1c82084c9ca1c24830be8f9dc36e938be"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/campaign.json",
+      "bytes": 4678,
+      "sha256": "7aa154e05bcdf44a27605c45a1467a1e788ee2d4fdfa7fe258baeb977698f88e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/final-device-audit/operations.jsonl",
+      "bytes": 1601,
+      "sha256": "3c0426449b8cdbb142c34f593e8b49dd62026eeed8d44bb19eba2beed97b4784"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/final-device-audit/result.json",
+      "bytes": 2193,
+      "sha256": "3ee9feadf5d733419ca949cf5728bade7a7f48a1678469e2a6eabafb4bd24fa8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/initial-runtime.json",
+      "bytes": 447,
+      "sha256": "ce225e48e6526d20ee5d31c0f9b7cad8b331d7e4bf960297e37847c803c0b8f7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/initial-wifi.txt",
+      "bytes": 1275,
+      "sha256": "cdf8a6220d44919548b353432ef498633bd8ecc3252cfa58963b4b6e603486f3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A1-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "ce225e48e6526d20ee5d31c0f9b7cad8b331d7e4bf960297e37847c803c0b8f7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A1-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "3fe882dd4382c181ff4da7a423b2e06d300073b56054da1aced74d10ac0fd603"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A1-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A1-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "54f6fa529276bcdc777e8a90d45b6eac1eda14fcd6d680fc5aea3861eabc2a9d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A2-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "4a1576f89d58d98f186ba9488204ed01614d51451e9fdbdf88526919e9fb340f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A2-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "57deb27c0e5e5b20c60535638315f4d35279e5a0ebc2ef634b275a4ec80a80c0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A2-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-A2-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "03a1746bdb4c02d7a01ea6d38dad652013ec5f6eeebf70bde4429f6676e2983a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-B1-io-n2/before.json",
+      "bytes": 447,
+      "sha256": "aeea2a0ccfa3bfddbcdb6f846d6b1b3ba66ee556bbb73395fa06e4e53f7e3b50"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-B1-io-n2/identity.json",
+      "bytes": 1476,
+      "sha256": "58d0fbd5c8faf3fbaf8ddd85e7237f09acff0296db36b1d8d2e4f60e431ee185"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-B1-io-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-B1-io-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "56282de137e2ae1b121705e2d031ffabf4ba63815755c30c163dbb9f9a64189f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-C1-io-n1/before.json",
+      "bytes": 447,
+      "sha256": "bf77734d52a2bbbd152ea4cfcacb6f348737eb39b07b292d723732a11219d796"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-C1-io-n1/identity.json",
+      "bytes": 1476,
+      "sha256": "1e599239230723fb536da16c1c43cbdb419102fad41da5d61f4c51aa3a5e506f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-C1-io-n1/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-C1-io-n1/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "0a71dcbfd387f09018ef25bf8843dd480207ad54fe66acb78f32624e85708e52"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-restore/before.json",
+      "bytes": 447,
+      "sha256": "f8a6d6f671722f914a8aa7a22ca5a56c8151dd9ef3890d77e88c872ae4d986cf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-restore/identity.json",
+      "bytes": 1476,
+      "sha256": "4dcecc130574be94f06faa3290ae8c734a4f1be16ffcdebaf30f8e7a1b61193b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-restore/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/install-restore/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "0ed1e66372740b486e52c71efb47ae0f440994e37bd450330b7c0d2e1d25e7c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-A1-local-n2.json",
+      "bytes": 1844,
+      "sha256": "d16dbaf3e93d466d313da11b09b916a88a612f670388f90a495a99779fdd569a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-A2-local-n2.json",
+      "bytes": 1844,
+      "sha256": "45658babca52990b03cdc358f63d38ee0684fcfa4f8a7d2b82f38ec274af646d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-B1-io-n2.json",
+      "bytes": 1863,
+      "sha256": "68395fd250f4f36dcec48c7c7977192ab2c679b5f002f0fcad369f800d9959ac"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-B2-io-n2.json",
+      "bytes": 1863,
+      "sha256": "d38d81112fd6f454535982f4487477c47c60807260fa9251c2b9dd99aa380d88"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-C1-io-n1.json",
+      "bytes": 1856,
+      "sha256": "117519308ece1c9c9f7fa8eda112343da6393437d064f484c735ed7045bf524f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/manifest-C3-io-n3.json",
+      "bytes": 1870,
+      "sha256": "8487d4fc1ef7429f882f502a55e1e3f334d4202b03cf1e64cca4a025f3c146fa"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/operations.jsonl",
+      "bytes": 15281,
+      "sha256": "1e78b57bc0c19ae8bf891d0080d7e78afcf50ad1af2d7657aaf0565ace3b485e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2.log",
+      "bytes": 431,
+      "sha256": "046886554293a0d5d580704e0a08786647b400d946f6974f99bffda3d4ae8a90"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/operations.jsonl",
+      "bytes": 16606,
+      "sha256": "7d34977ad974bc8a81caf9c04756c705fe8db174509c3e6acedd6dfd5d50c091"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/result.json",
+      "bytes": 10786,
+      "sha256": "aa3e5be35359cbecbdcfc3e6676d39f889f0e4eb2bbb3289227aedb9457ad5f5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 129905,
+      "sha256": "81fe0143cfa20ef8507944454a6c7c741d25bb78a49df47d41961ecd504beff5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 58303,
+      "sha256": "bd21074fa1fee7ade7aa641e26ee5b1dacf628c94138e108261c69adde181091"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "77bc1e5634ff4a1b37252d5de7f4ce5ba02bada2c0ade028fc8c740125abbdff"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/client.json",
+      "bytes": 911,
+      "sha256": "df5f2094a5e21b9fbc7f265036eef304ca47567aa5030fc313161db146c53d67"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8542,
+      "sha256": "cb59c05f63ed9a8555c4c57c9cb7193ce34fea14d6b06e1a7d724958ac6315b2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "1ab35a4d42efb2a8b9e7d0766ddf3c9ff6bded388d48fd9cb2f30508eec1ace2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 17242,
+      "sha256": "7722b2fb3e980a7570145ec88cd74ad853688394e923c14e4ac0c65d4b3e2d51"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/peer.json",
+      "bytes": 492,
+      "sha256": "601a6be308eed69d590e1d1835e0ed4d5e99dc102dd0091a3537e049038bf17b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "f72697b7a6fcc6c2ce12834ff7773c00d1ce439397188f7fd72b4f113abf2baa"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "1641ffc465238bb193db0c13cd5b25e39be790edc19712966dc39904a64c7470"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "b52683b6141f90b80735e9a6bfa50d6856a89a6896932a853dc59602b17004fa"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "aeea2a0ccfa3bfddbcdb6f846d6b1b3ba66ee556bbb73395fa06e4e53f7e3b50"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8662,
+      "sha256": "e369fe72e3a3379f820df4fb708fddc1bb8f76dc5fa3e588a402b8157aebb66e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8650,
+      "sha256": "f9a94844e8bd22d56cd4ddd527d5335f93378324a8494bb0147c6ac14a487751"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "bfadde2cc4a15f1fab06ab0e6fbbff73158f47fc787e02340ebe338ec5852e6d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1065,
+      "sha256": "129cea451f092e98c68a9016d6437e869609fa6d3d7ae1823239ade3247badd9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "52f02db667ae304ac88c9dc0d92b6e6d6dd54712577fda70e86e7c178297fba3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 14219,
+      "sha256": "e54dc8dd88809d4bd2c737cb6e23c8d695da71e2b247bfa8ed8b638ae155e3e6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A1-local-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "54bd1bafc2ee1c55ec52afa750dff1a2fefbd1778962148bac7bb446b34753d3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2.log",
+      "bytes": 431,
+      "sha256": "84fd4bd07fc7b4e400dc558268d3750389fb0b8514d1b93d33def3eb2a7101b7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/operations.jsonl",
+      "bytes": 16823,
+      "sha256": "8cd670fea873bced07cc77f751bddc2d0c452ab36ed39dc527e88a969429fba8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/result.json",
+      "bytes": 10814,
+      "sha256": "890ea13d8a28a806b912a61ea645201a98ad0dd39c2ee7e47443d48872181f80"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 128564,
+      "sha256": "47094b7e422138ca00e131fd3d0a0c3d62b369820641bffc92edd4e3618a86fb"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 56998,
+      "sha256": "946169a34c4cd5332ed7ca24d3f8dfac6a543a20942cffde3a2fc4cd9434aaa2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "ee3f839dbd96b514679f768d97a2e5243e6cc40efdda5b85a3fd50eb211a45bf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/client.json",
+      "bytes": 913,
+      "sha256": "a51af2afb926f3543e624901840e2c39751d2cb6fdcf165fd9d2f89817f20b93"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8532,
+      "sha256": "e022494d82b7abe1b222f6a12b07145bb5504597663133a68e7c4e043e6b9316"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "967c2ed614445ba47cab8838500875715b179851c84372049cbf98e41299ace0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 16062,
+      "sha256": "297124cb0773c235c2014ba1d0af26d1142db73bc42c2b7b65ee07e0103b22f6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/peer.json",
+      "bytes": 502,
+      "sha256": "0f08de1579117a532630403fab118aae9bcf2755d6d0cf69e3299c689e561fb7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "40fe5863969eb04f7c8f714172ce3896fd9853c54d4e44eacddb195cf10ec369"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "c1fa6aefb0d509040f370bc380a09aa8f927628b8953d653f7b757fde566a322"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "3e00447b0350c0262648af00d3eba9b83c8ed6e4bae759faa11ae95bfeaa5c39"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "bf77734d52a2bbbd152ea4cfcacb6f348737eb39b07b292d723732a11219d796"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8662,
+      "sha256": "3250d568f8c6cc0e776f0f0099a4131e5bea8d15636aab9fe8d956e3891446d1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8649,
+      "sha256": "e167ddd19d7f2458749b89ec6176af4a6ab928769eb03bbc9e9a110d6d0235e3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "d7bc5d4a573d9533302740e0a08f750c2a2a4a1afb469ebede06718bcea6309a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1065,
+      "sha256": "c73c4e63b6f1c6afe4709c45505be507f4122ef0002f6c62f9d07055cedb8ece"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "b6166c0924a199ef8339f9c98840d00ceb15df22f2c505d15f6a72c1f7a09b04"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15046,
+      "sha256": "dab87b48269c6f2ae7ccd720f3b2284cb28cbf47b032cf5564ed719fef9d009f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-A2-local-n2/vpn-udp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "dafe9f7a20de26e3729e9d876fdbe3a8f6261d6d4aae1de516779a742cf943a3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2.log",
+      "bytes": 429,
+      "sha256": "5e259e22f46e1dd823971961c51364bccc5f6097233bec267bb9dc84f423152e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/operations.jsonl",
+      "bytes": 17274,
+      "sha256": "64fb56f7a16b07884014cdeea935b89e69cb50c8422223158e8143cc544a4c85"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/result.json",
+      "bytes": 11099,
+      "sha256": "beb3471753324044f335af6d144384586ae20d5d6c7c974dfb32d4df48ad1492"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 131002,
+      "sha256": "38e141e8c1d404dfde0ff24d22047fb67c9e3e0adf0a40d3b6dc97c3c01b96ec"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 59353,
+      "sha256": "21e77f26e28344cb0632572919f079b6c0def85bd24ca90a1601784db1d91cab"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "2ebf7f16b88be767050cfcb5ed035afa78eb603b469938b2ea08331a75576cc8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/client.json",
+      "bytes": 911,
+      "sha256": "3ba495e9e0661f5229a3dd732e44f2ec78fda23bc7bbf5a8608d55a222f8a301"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 10448,
+      "sha256": "3e6a469e449129b6d8d5ad12041f82090d4f28c93b369b870eb7c522b69fa24d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "ba96795a33d39f8e1ea8ee8cb6bc12a2eba79514fd372d9179076685435500b4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 16896,
+      "sha256": "1ccf95c90d05945abc7dc9ad19110c2fd9c8543687a7fea8e8463a6429a2e8d0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/peer.json",
+      "bytes": 503,
+      "sha256": "d3ad21c7707e2139f430c170edae403dcc9fd03174ac9170f0ab43710878acb4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "1ec274d13f81e97c5910f251979d0ff36b0148c2b14e9c84f70ee7959cc3b009"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "14171c9acc61a4ed190983dcbcdbbde3ac87e7822c757950be20dcd3a5d64f44"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "c6da933e4e8228686b26a8ef0aba5c5db43168ee33e12771f1e738791b55db62"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "d471736528ad683a7ed604f27ea592b35707d1b22c88643557658f45c91c93e7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 10165,
+      "sha256": "56b6757041c5162637752d8159b9e74ad0545428e5a932d130000972bd72c1fc"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 10135,
+      "sha256": "07ef094ec102778d7c734fa0b1c3051562e56846da68a2000727d165272c0fe1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "b7271936d28398101a7f78fc7e8e32c7b68eacfd56cef7f76951e85325c73119"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1062,
+      "sha256": "86cec6675381aa660b24532bd31bd0510c34e25f06c78307818632fb6d19d126"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "368141c497d0284f380dbb4ea4f66b1575597c448683177935651720be84b9d4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1064,
+      "sha256": "ad14fb0d5e3758eca9317c5b3b6f84890c373b1ac1381d1f4eb3ed8b400629df"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 5836,
+      "sha256": "101971cf9e9f7ad20fa2571e75deb09a1bf712abfcb36cf877248f648309b459"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B1-io-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "ff466c54128ac40f0c00eb2851d216d9ddc175b0f6bbfb343f660efd9455dd6a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2.log",
+      "bytes": 429,
+      "sha256": "397cce93b961319963e1726fd0e71afb5d635ca4a9e8a6a0fcbe3db99603541a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/operations.jsonl",
+      "bytes": 17272,
+      "sha256": "5bfdeef646205df495644a85bb4bc1d63eec55027042571f707b4b9b6e7760e4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/result.json",
+      "bytes": 11110,
+      "sha256": "298700671daaea40961b59afbd0796e2d34281446186a6c0ed5ee7437726b927"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 127011,
+      "sha256": "1135d4e478efda68080798a0f2d9b34234ca5293e4d9b069b6696cc1a8196997"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 55371,
+      "sha256": "913f98f82516685ef102bf9335f50bc90b9e09e5198595632176a8d189337f2a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "5eaf480b80d8b3398f1b4df2c71957762b3358d5125ec14c151d29b84ae32fc4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/client.json",
+      "bytes": 911,
+      "sha256": "b3cd1a5431abe4287f8127a87fc96dbee16efc3044a30b03c5017f053af9b24c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 10450,
+      "sha256": "2ae144a961d06394f2abc77de46ae2c3af9e5a9390e828898801335fb4144656"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "3ccdf08129eab22bf7a380ca3ee614f4b7961e05007f37ae9df5d123e36b7336"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 17266,
+      "sha256": "46885e3fc9a0b887024d1a699354d1dc9001c4cc4e866dbfa5bd715a11ebe9cf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/peer.json",
+      "bytes": 494,
+      "sha256": "0654090340d113cf35fc253a8005beb33d177b2709a457027ea05b8cc0e99e12"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "0c55164eb0674dec57fed5045a813e53290c5ba1e7bb508ea2f7dc18f63e5f8b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "b3fa84bfd0f13f0c735120d3b6240d6d2dddabb33bc99cdc8f077c8939073dc5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "8ea4d0ea153292244d503376098cfdbb376d78d97b16bc07d45a5ba6c2573ea4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "4a1576f89d58d98f186ba9488204ed01614d51451e9fdbdf88526919e9fb340f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 10164,
+      "sha256": "2d31bc789ea033b2a77345f615280bab9579bbcc2316a9caef7d55f29758ab9b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 10138,
+      "sha256": "1e9e002d34c7d55d68dd2a2a7816e5e93a635c3a28cb46380a76e0941b30ad05"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "ec6bcd99cd7aeb50bff849187ea4d37c57feed022fb77af05be7631f7f96aa13"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "fc51400fdf3e44d49182c9def1702407d7d4d0b736250848499a6b2fe709c8c5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "7950bed82e426ac547396aa146502ccd58c76e604af68ce348e270d9bfab66c3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1064,
+      "sha256": "ba303adc84e2f94bfe583bceeff9f5e75cfc04e0f32adcdff7cd73ec6b96c8e5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 5847,
+      "sha256": "d57570650cde1c38a39d403c4d76515fe7174c1a788d230f5d7cf5b5de719906"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-B2-io-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "ec243c64792116968b62b0bbd8e888ff8fdf73dc83031ccdfe64ab77521cb3cf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1.log",
+      "bytes": 428,
+      "sha256": "a15b29c1b31146f844b66a0d89c7406a735d33c08534e20a4e4e5808b0c2d4e9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/operations.jsonl",
+      "bytes": 16710,
+      "sha256": "37f00c98791c3ad5fd020b2420ba7a6b94961a43ef1b4c3c514981bf0212833a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/result.json",
+      "bytes": 10771,
+      "sha256": "f4c0144ab420b0bdc24a332d1d14394c68e52c90e0cc38116ff1c62230b397d4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/after-cli.txt",
+      "bytes": 123594,
+      "sha256": "f7a5e22221bcf52b8df5304e7c764d07f3c4ce398d954dce8c5d5063783113ab"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/before-cli.txt",
+      "bytes": 52001,
+      "sha256": "9832a3b18e3b4e18eefda1375e2383e88ced1ffdd963807c385c32e0352dac9a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "90804afac8e5e53c1ec4df07e3e3a8c9d375a06a3014a6cd50d9353b8f59f2e3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/client.json",
+      "bytes": 911,
+      "sha256": "065e71c857fb54e1fe3853bdf7196aa09a07d90e7670d9b12840fc2e29e926e3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8532,
+      "sha256": "f75a238edeedda4fb195f3a495b7d419a1ab862d49056a4dbb69b8acbd6588e7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "db42981cd97d81ed2db50e19611f7938da14333dac618120eb90383d3b24ed80"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/native-stop.txt",
+      "bytes": 9547,
+      "sha256": "0afbc048da91baa6f89cf1e29837b05714014caabc9e343ed4fd164c609590a5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/peer.json",
+      "bytes": 491,
+      "sha256": "80262626a061316e778d4c18fa678d7878eaa53feadc8690916758c98ccc24fa"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "b824d13c688f3b194fd373aec4ec1a4f117479813ff7ddc873c89e6a71f5444b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "129085700adb5eb8e325973375623fea907de160d9b44bceea65fda1bf9d865c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "890acd8f4f08b185cb18bbdbe8789f8f5c88a6dd7d111c574cc86b3d0c64f451"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "f9d68e4366d88ef1e86576ea8e8596f4e2de4b94625713dad4b2e593478b0b81"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8664,
+      "sha256": "1dcc30624277ca6790f47f3f1d8e662706f38e3de341feb1101aaaad526b63c8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8647,
+      "sha256": "1d32c003c8713314942ece26306f0dc63c2a79e4fb5109d70c3ab9d13fd96719"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "5b1944a18f805fba1513e66ee57545a825d88fc351da1cf358bab36d11f3c767"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "55b5b2bf91e98e0096328898b7891ea42d48e99cb28a870f2456c132049c97f9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1065,
+      "sha256": "91a9f5f31e77d417f34f3e89e618dbb8e1d229a9a33ff8b8effb4ac9e9d29059"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15075,
+      "sha256": "a8ce3ea2075584b4aba243b89a381d822b21cf0878f01d793f8712b805825121"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C1-io-n1/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "c3a32048ecd2daedce6665b1fe4de3736ffda5b2849c667841506ec0c26eabdb"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3.log",
+      "bytes": 430,
+      "sha256": "7cea30ea719090743ba622ada4cc0aa9a2b6b4b12ece533a3b08bd1fb1f11cb8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/operations.jsonl",
+      "bytes": 17630,
+      "sha256": "f647bb9a5791260276e5ce41f5779fdddb94a4123a7beb38288b18c6e0f05e15"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/result.json",
+      "bytes": 11438,
+      "sha256": "b3e70077cc46332dcb34d864870f5a35fe2f442395bde050bb7414f5ebdb08e9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/after-cli.txt",
+      "bytes": 137270,
+      "sha256": "1531a952b2d9b33160034005b2cac1443655dfe46e9a13a1cafccbdb34032ae8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/before-cli.txt",
+      "bytes": 65701,
+      "sha256": "5bed26ef9f5f67c20480cc65fdae7d926515310b8e08863bcbfefbf4119a5b2f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "f41149053803c882257f41e465ecf78992084eb0a933377b49720e315664473c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/client.json",
+      "bytes": 913,
+      "sha256": "cb56b242474f1fbd6acccfaf6d3f6b1b55fe2f9c00fd2137b1d8400be54d9893"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 12391,
+      "sha256": "46f9e4c37efaab66b803b06e9bd4348b4b75e05fb4a5238e26da630e5a3c82ba"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "8f5e08e1b892b0be6b4fd5bf2a0aa425c21422931f633c9305d81c5577d2dbd2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/native-stop.txt",
+      "bytes": 22896,
+      "sha256": "4bc471d82458f84d3b2489bb52bb1b29c5971da8a643084a07b6d4e388437abe"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/peer.json",
+      "bytes": 505,
+      "sha256": "5236b7836aac5869739471d2cadf8fbd34cae815d7492e1218c521149a430a8e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "b8b57aa2d0568ba9e844ae8911ea6e3ba14e511e8701560f6f0cc2feaca3cd98"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "e2871ab384368cc67a5471a1cc5ae08c2dc1b6f4fd4bc211bdde3ed439fddf1a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/startup.conf",
+      "bytes": 1063,
+      "sha256": "6b82a0ba060454abdb95ec60ab17e22041ae5dead1bb97529fe4f1f752c57a02"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "f8a6d6f671722f914a8aa7a22ca5a56c8151dd9ef3890d77e88c872ae4d986cf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 11673,
+      "sha256": "f7c0db23c7161fb80788b9f93a897a46e6a28c5155bddce32e8aeed20df8cca9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 11643,
+      "sha256": "4b189d34479cc356141a3794c400f2667429c16aaaaf9a6527d34e0a802bceb4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "30ef02d2a24ebd1aeef0af797c586404d9e66976abb81d6b8e0d5153b3ec3056"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1064,
+      "sha256": "eb4d00695be54c62b7f134e736b5722f3274aa4c664ff4181a8b7aac8bac0a2a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "a3b33434cb3ba0a4232d51f37dc8f2e3c675723997f9cbd198e05fbb2cb3c967"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1064,
+      "sha256": "a36b6089c527f826f95dcd477ded2d948538187e9f538a286c5f47d46cb73203"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/vpp_wk_3-affinity.txt",
+      "bytes": 1065,
+      "sha256": "927b1304d99b26de0bb45848a68f763d24a5a7603abe1b8d304e59c9c3741efb"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15047,
+      "sha256": "d361265c8034a8a6e5bf8bec0aafa7a11c8ade47c8aebc252f486f60f2eb4bfd"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022-b/run-C3-io-n3/vpn-udp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "106ffd1a461605314fb0fe8fb60d1c9c9066b2db76b98e920dcf129611b5c14e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/campaign.json",
+      "bytes": 3664,
+      "sha256": "22d64b659f5d43ffeff9d4013b6bf4031b90efe394e5b54ce51e669b21d27718"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/initial-runtime.json",
+      "bytes": 447,
+      "sha256": "5a9ad77f2d6652858cdab21085c51744d0c6f9d691d1023b1c2bc1b7a60f7487"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/initial-wifi.txt",
+      "bytes": 1265,
+      "sha256": "491281daac60430e4ffa2bf70b3f9b6b08c2bdd56bfedb26b188fcc291ddeaf2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-A1-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "5a9ad77f2d6652858cdab21085c51744d0c6f9d691d1023b1c2bc1b7a60f7487"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-A1-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "8171f05a82b31a156469f76da91b2baa15d6a6e74517c5b9e63e9dce755b2448"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-A1-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-A1-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "d07fc5005147853b41eb14eb82bd592f20676f771c80129e5d22049e01007a8d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-restore/before.json",
+      "bytes": 447,
+      "sha256": "ce225e48e6526d20ee5d31c0f9b7cad8b331d7e4bf960297e37847c803c0b8f7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-restore/identity.json",
+      "bytes": 1476,
+      "sha256": "05186dac8385933e3422132113310779c9e34727bc1e7eb53f67b49c8738331c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-restore/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/install-restore/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "23c5e2c24a4df1f876dda8f26a834b8e3b8066704b89eaae7e74ef1ba78b6205"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/manifest-A1-local-n2.json",
+      "bytes": 1844,
+      "sha256": "53b250839afa762d5400de383fa14e7106f93f9a222a73c4106010fac426498d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/operations.jsonl",
+      "bytes": 6607,
+      "sha256": "dc41c070d1701555db779045a8d46ae895dcd4542069496db0a2870cab5dfdf0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2.log",
+      "bytes": 1495,
+      "sha256": "9cebc1e99603fb1c380e7d5df707f6bc31c7ed0da6b3526a3752c56e85feb345"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/operations.jsonl",
+      "bytes": 14774,
+      "sha256": "2dd2dda22778131ce19b46aa6ffe9692bfe4d47b0d9cbaf085adde6ac4242e8e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/result.json",
+      "bytes": 4166,
+      "sha256": "bc0ac47c2be5a7f83e816a857078c695c190b79da418a0327fb1c7de9e0b00d9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 58328,
+      "sha256": "5076d5fdf037a953b430a2cf561325919159a2c79f01acc04ee32f49908d2163"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "c34b83ea53c82c1371217d266f3d70913c20052aacacbc74a9e514271c9371c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/native-failure.txt",
+      "bytes": 5059,
+      "sha256": "f1e38acf9d3ed129a1836718959d1e512e5103240eb97eada7c1841519b49ef4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "165e6eb0ef1e24a6cbf8e6bcf78b5d54dfb025d3ada520ec3aebce745c9a8b5f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "594472807f2b4c104fdb4bf2586030c243b83d392d3e098548d25ddcf4fbb2e1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "78e1ded0e3a57dcef8d2acea0e5de367a2689d02beb53b2d74575919cfbced1e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8649,
+      "sha256": "8c3b8643986ac748954e1b02d48819d19eb94c7fee2fc3433e30e6c8850f06b4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1062,
+      "sha256": "dc8b2019030442fb5fcf5765b69347b574336b8704f8e793e798c44af0241c1a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1065,
+      "sha256": "d464bec62a1029a1ef7ca7b39dff9a50f77406e999054eb876e25d6183ea8285"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1064,
+      "sha256": "a7c5f79a512df98a59b17b841f557c1aa258b25c99d453654ee1be9f3874546f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15057,
+      "sha256": "21029320d32ce962b15af3ce61a4e69d4fd5375de534119fac488d1140c64ca0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-paced-20261022/run-A1-local-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "281a7163a0beb6151004038a6435c8a5197960c211a007845aaae109280601a8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/campaign.json",
+      "bytes": 4672,
+      "sha256": "903454a8be7da4d1db08c254d07a7c3c091c68e5f1a8be5863bd54db85bebdae"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/final-device-audit/operations.jsonl",
+      "bytes": 1598,
+      "sha256": "ef6746c715ee54197eac290c54b44fd158457cc52cdcf2174d7cfdc7ea2cc261"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/final-device-audit/result.json",
+      "bytes": 2191,
+      "sha256": "93c49cebdafc718875a1a13cffa65e755ff4298176ba66c19e55672859a1e12b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/initial-runtime.json",
+      "bytes": 447,
+      "sha256": "c78c6e09f1f8d69dad196b61719132d6d35460317157df8eaf2654909df19964"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/initial-wifi.txt",
+      "bytes": 1266,
+      "sha256": "e7bbce0fbd4f29df9664538269355fb9ca55141195c01de0ee4765c387ce0d23"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A1-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "c78c6e09f1f8d69dad196b61719132d6d35460317157df8eaf2654909df19964"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A1-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "0b87de3a60ddf2a63fd82c7a9e351b4b9e09b74394d86170d6dc986d5947ad95"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A1-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A1-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "34eb8eaec124e0e76d7ba3c3f910abb858c3690bbe8694d4cecbc631111d781d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A2-local-n2/before.json",
+      "bytes": 447,
+      "sha256": "2199077a16d642c3f21e7dc5c4ed51416b50e2caea6aa8530b19bc6f26c7a71a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A2-local-n2/identity.json",
+      "bytes": 1508,
+      "sha256": "e91ebe1a82da2a582628a77bdbcf3f39610f4848c6d6f694decbea169c5541f2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A2-local-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-A2-local-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "34999347d695a36624d2b9dd258d2cd6e3c07deaf59e2d8283eb7dbb4dd092e2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-B1-io-n2/before.json",
+      "bytes": 447,
+      "sha256": "7f10a984ac0de034607be52daa57d0ff359d33059e37aaa031a0fe898737f442"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-B1-io-n2/identity.json",
+      "bytes": 1476,
+      "sha256": "b60d30e1562dd12aefdf85f0793da28bf5266292abd51b4cf2f5ff965a44390d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-B1-io-n2/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-B1-io-n2/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "6f5c319f07e9746cfffc576568066dd7a1da5fe712f5477d2afbd6968ac60bcf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-C1-io-n1/before.json",
+      "bytes": 447,
+      "sha256": "4104bf3f0a9c4f8a5e5e361c9548b9b627f169e7e2d68ce74f53ffc7c7b1f625"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-C1-io-n1/identity.json",
+      "bytes": 1476,
+      "sha256": "190537ee0a4eeaf175c44b1b7c4e4435a30a2006e63d477b4df9dc390ebcbf7c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-C1-io-n1/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-C1-io-n1/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "a9a32479b38d5a8677886fd8b86d94f38cdc08b5441aa2265511b1ca0e64eb9c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-restore/before.json",
+      "bytes": 447,
+      "sha256": "5a9ad77f2d6652858cdab21085c51744d0c6f9d691d1023b1c2bc1b7a60f7487"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-restore/identity.json",
+      "bytes": 1476,
+      "sha256": "46722db2d683104efa418b187083d82c0a25d9de5871802b66eb1c3505f0bff1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-restore/install.txt",
+      "bytes": 36,
+      "sha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/install-restore/native-sha256.txt",
+      "bytes": 2285,
+      "sha256": "25f2af75852c2bd054622c0a22b6c0a99781165af435001e782e96a8892a0fe1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-A1-local-n2.json",
+      "bytes": 1754,
+      "sha256": "411688cd01d7f6844619d67b3caaaee7c824cc45d0fa10d4c55fcfff914dea16"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-A2-local-n2.json",
+      "bytes": 1754,
+      "sha256": "ec67380f46489675db4cd920e3f529f04d901458deff0b15f7b09693ff8a13df"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-B1-io-n2.json",
+      "bytes": 1773,
+      "sha256": "aed29a799a1f8c15318f5b6727e7ab9e47654fd9e560e47732e9e011589a50c9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-B2-io-n2.json",
+      "bytes": 1773,
+      "sha256": "5e317b491a17b63d6abf69b9eaa1f86ccc3525d5ba6dc3797c0d4d6fb3ff7bf5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-C1-io-n1.json",
+      "bytes": 1766,
+      "sha256": "4384912f91058d5a327a2108f7ae60025dd6c9937cf801abe998974fe96a828f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/manifest-C3-io-n3.json",
+      "bytes": 1780,
+      "sha256": "67894e61f9bf0b51732b2d397b10fea904338e9d3a36b4193163bfddb7212c7b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/operations.jsonl",
+      "bytes": 15264,
+      "sha256": "b2228ca5e72a2a533835c3c89dcaec4b7f6f9112768a1971d55dd8560d51f9f6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2.log",
+      "bytes": 429,
+      "sha256": "f1036d2584f2277e5cdab294aa65aedc26d592cba4b94c84a9075e4352548a1d"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/operations.jsonl",
+      "bytes": 16799,
+      "sha256": "6722578cdc59e98da51486a45715d8b26c65506bbd4749dd7dd9a3179355bdea"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/result.json",
+      "bytes": 10681,
+      "sha256": "649e570f545f6e1ac04bc5d8ab6dae100a48b9cd2a3c54039422841f197d4156"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 129091,
+      "sha256": "545aab5afa607afa6904e39d9135038bd346ecb0b28cad1ec14a18e5b9fe18b7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 58225,
+      "sha256": "ff832134b4e92007a25ac00daa1ab2c2014263b99cdf37009bc3d1373004e6fd"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "d384c616b70154bb6798f2e26cd4f685273e6257d4bed3bd4efbbebf81b26712"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/client.json",
+      "bytes": 888,
+      "sha256": "fef092dacae53fb4e6126e51aa7ab8ef0c5b539bc585d48019bdfb0c6273e1f5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8557,
+      "sha256": "88b4029cfcfc14926d8c96989e7df4367d308f7e8e8697a468756bd7325f0f44"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "8e68379598be89fc8488f6a62c41ef0c95a36654c2ab0e665f82b52161a94ca8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 16751,
+      "sha256": "b40bbe5954b775b7f724f2d11e35a2832bada845348355044fc310aa87c2c451"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/peer.json",
+      "bytes": 503,
+      "sha256": "cc5fb6493a9be0438f8432840838fddcda5437650d61deae8baac4068160c010"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "f7e551f570160e50024c1ecd954f61a1cad0fb7fddbaedd63dfaf47df8a1b02c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "ec1625604f0e7e091dec785735bb6747f9b0122f346fe183cea50c956c326c14"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "f21026352b07dd3532e7b275edb6ca08663308a464f660d4a65e1f932f6cbe76"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "7f10a984ac0de034607be52daa57d0ff359d33059e37aaa031a0fe898737f442"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8658,
+      "sha256": "7ac72ddb879b2db65c1c3838cc6ac3cddf48ee3ac08e9e75107bc98f798c79a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8645,
+      "sha256": "895390547fe10b0037a3098f4f087ea6281cbd3f100f5d0ec19acf31553d6c5e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "e019d5de8c7b8b5b76e59bf915ffde33933a85262496040a3aaa69f6938393f1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1064,
+      "sha256": "43580c2f592907b46a9475dedb0f2f3cff826c876969c3e6c2195b54dc93b579"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "d0dd2250bae7679929480b0d77795443be2719e5a78027ba8b071cdaaa402495"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 8322,
+      "sha256": "b07c4ae591da7079edc63ff7b77ddcd13a43186c22dcf3f79936e1638acddbc4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A1-local-n2/vpn-udp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "d05fa06305ef98b8bc5e4562281c3b24251483d32d379d806f43c92cc77ca317"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2.log",
+      "bytes": 431,
+      "sha256": "634c223fe7b47a23fb461b71d30edb9a7f2064271243f1ed99b21b5519fed313"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/operations.jsonl",
+      "bytes": 16377,
+      "sha256": "069caa131c03fc7d5d4d82a3ca45260aa05937ee0bb314ee32e751cc61688bd3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/result.json",
+      "bytes": 10684,
+      "sha256": "b8bf9c49f24b3f3926e6e581247166616161952b63fa30e3298480a4a121098b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 126511,
+      "sha256": "210f1a1509cab11fa5db773d935e08f53e6d61e8e75cd5079d2ca62d5bd05567"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 55649,
+      "sha256": "d88b37e19fb83b69b48f16e2642d5b40738b91e538b45de8b167b77968bf2bc2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "861b28de5de5d4fc72b41ecac92bdbd695f2655409e870b808962931a845dded"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/client.json",
+      "bytes": 888,
+      "sha256": "2ea8e753203f88df21facd8c0f84714154d5b1e03f91651a9fbbf8c762b001e3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8571,
+      "sha256": "055c970a7a0716f20bb404de671e596e085e43615b7924487ca55d4176d29a1a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "e428104316c6989a4d9b12ccb0054e6b59ba4a3481497dbd3a3fecc3cf09a89b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 16068,
+      "sha256": "20743bc4eed68ff387d6dbd1c37fed6b5a12e86da2cb06a88583eb6f55086398"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/peer.json",
+      "bytes": 505,
+      "sha256": "887db1eb64537dcbafdb933be0db411dd27797bf0cf13ee1c396e49c62e7fcb3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "ecd53badb8b25d28c554171c0afa1950b5157468a8545d8a82f57ad4e2041d56"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "6f1de2213e46434de1ab85d1f190378f7ed52b335c871211a53f0d75ffc72002"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "353d9c1792022c5ae8db90c57858c065b306fd103e69bb01d1d8575f4f244ec0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "3e16ff0253fbb24052c8403ceccc154a8f33fcf5a5cadc7b00c3c7fd1277a4b1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8661,
+      "sha256": "e874bc2c1fedb7325b15a6b0d8f927148c458b4c20cf7fed7813d49c68cac4f5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8650,
+      "sha256": "e938c69e171561c78b3c6b9aa9ec3baf56fcf7a75f5a3a5734c98e1f8071a050"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "557f1f9b6903e4be03ead7d7f046a164d9a16188bbfa7827f944f7aeacc5f3a5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1065,
+      "sha256": "899f58384a39f87cf2f802787a97d6211e75fd4f9ff3e082d1dd19f5e5c296f5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "6917b17bef340296a665e0fbc8ffc1a110f7acb4515ab613f56ad30d333f8751"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15057,
+      "sha256": "2436c470db0061e53adb448844211e62eff2c069074791824eb3eff8fe7f5ce6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-A2-local-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "ec2840e9b37699c17467497b630826382ca6852e2f04352bde6f11c1b58912de"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2.log",
+      "bytes": 428,
+      "sha256": "aa4be7280d23dee55017487cb7084efadd332855b1ca2e9531a728a6e7b3b3e9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/operations.jsonl",
+      "bytes": 17474,
+      "sha256": "c70b314c6a076c053f2cf42ec105e840b3156082791586a1196410dfbb3dabd9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/result.json",
+      "bytes": 10985,
+      "sha256": "63d3ff6540d938cc3e80ae4762fe7225da121dc1bd172f8e64018089f3acdb42"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 131401,
+      "sha256": "ba5cc5c5cca928195cb153e152852446ef14f66a1cb6eed0ae4d7d4828f1c41a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 59420,
+      "sha256": "841aac26b9ff6b72361abf9aee0a1276c20d51198ddae9c775b7af42616c1cba"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "874a08743bcf125c3eb3c304fc2c3460c25dee46c7cdd877d6fab2877c6308ab"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/client.json",
+      "bytes": 888,
+      "sha256": "da29a9a1ed3320f7ca619a230ccb12831b07ff59b3777f512a38e0680be42e11"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 10510,
+      "sha256": "ee9e2bed62c9ff6d99f129866d8203520dd6f8b8734037dbbd3b77f4a57b8d2f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "a5d47db22e9906c6a8581d6669f3fde386b9d75cc0232e8b7a6e87c7b2909634"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 84267,
+      "sha256": "523aa90fd62af04948e4eeca6a83c9bde94ab94c60a194053510cc1d09e569c5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/peer.json",
+      "bytes": 504,
+      "sha256": "79e38373248f0cef198b6cae5e51f4c664ffbb6a2d27b3b77ae07f4639b3dfbf"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "3c463cb8921e3ed390022db220e75d5532502316a2a8695cf99d9805bb87c506"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "1b78d2b2b31a9f136c4cfe5acd0718634ede25ecfa18f6f0d6cd4a6c76272a4a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "f0d3f251117167d18ea0b8fe12d486e444c1665bfed50bc7d7bdc3294f6faca6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "bdc15086e0df43cd42797e4ac26612ba4309bd46dd6a5ef51c9d8774581e5c4c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 10162,
+      "sha256": "873ceff00aa6767226961cc292eaa7eb98be6e605aee29114bcf7a4eb3eced29"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 10139,
+      "sha256": "84365d08af23f965633b6dab3f3b9770bee365e47d6be37bdeef6f0d872e5752"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "26fccafe679f26d8390830fcda8896b5de5695f1e9dfb0f94bb0491a50c74109"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1063,
+      "sha256": "bf25866c8b2644866fd973fa665ccb8386b78457dd011ff830d9ed1de2af48c7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "b71fe7906406f8d583f50dbd5196ae508eb936ba4889323a5f0cadec1909cb2b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1064,
+      "sha256": "f4a4facb9dba4aff9758d0b69083e21c127083d26894d0592abeaa7726316b6a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 12526,
+      "sha256": "b72023e1234c3be9a669d061b85e3c8af6de95d5ddc76d94814414b5b2bfbf45"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B1-io-n2/vpn-udp-fixed/warm.json",
+      "bytes": 844,
+      "sha256": "4397873b93a034bc7fd3216f90154c69c2293f59be8953778dd91e3dbc6a5099"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2.log",
+      "bytes": 428,
+      "sha256": "00fabc676a5106cd33257faeb511bef705fe4193ec02524a56f9a42768808f1f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/operations.jsonl",
+      "bytes": 17047,
+      "sha256": "fff8984a42cb00fdfdf3b7b2712f709fe0ac800effbbc3c73e67799da9dff5b8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/result.json",
+      "bytes": 10985,
+      "sha256": "eb84295cbb771f3b686cfbae20177e69f7804af0f725f7afac9f8aa1673ba225"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/after-cli.txt",
+      "bytes": 131354,
+      "sha256": "9196e2b75b5929b32565e9b8e7109226f27109ef13edc327de72bcf29610b513"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/before-cli.txt",
+      "bytes": 59522,
+      "sha256": "5627b24268aeb46cb1aabc8953de706680c1b4dc048f7a38f315006ceec1f984"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "267ae9aa47b60ee94416f90807c4e676cdf6077322bd7ab08a080e6f461a7af7"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/client.json",
+      "bytes": 888,
+      "sha256": "1b56fed4395732bda3a2b314026c5bb377ba692846393e1580f055de1a502468"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 10502,
+      "sha256": "97897969d3cce87b929db9813af5d0518993194caef7918073516e01cd84d2b9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "435ed1b6951ed208eb28985e32028ff18f328b9aa3f42ac1b960a96476e07ffa"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/native-stop.txt",
+      "bytes": 83998,
+      "sha256": "cf0defa317813e6284517724b3245b36b567355aab899fb0933687444cb40141"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/peer.json",
+      "bytes": 505,
+      "sha256": "8d711f9d0bc682684a23d251f19cc53456687f7556af835d83e0a1d88b4b33c0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "49be6a3ae6b09cfc858ea77af29d93398d4db888f80e27f05ace862566e352d9"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "1b38b63f8f7c846055504940672d920ad7ea2ccd6db4e14aa8639cf1b63f48cc"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/startup.conf",
+      "bytes": 1061,
+      "sha256": "87d56c2a3b1b7482d145246452875ab3f3f0752df2e4553e483628d8544e9236"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "2199077a16d642c3f21e7dc5c4ed51416b50e2caea6aa8530b19bc6f26c7a71a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 10160,
+      "sha256": "9d596719a473d73cf8eda397d57531125a47aacf09ebd0faf84e5955e84d5f2b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 10135,
+      "sha256": "9ec475527902fa7edb79e6bd8b01922e9e5dc01f6fa9745fe9336062ac9c5b99"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "a2ea6a6c7384ac287363a93d5f4aec073b0f756eec3ead112e71506b4fb02ed5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1062,
+      "sha256": "7b6ec82c1158dcc649a43a62b82ce0e88ee5b72598751eca4253431f8e81b532"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1063,
+      "sha256": "9a44a0117d069d21afb7b50bdae9aa2dbd0cfffa9c5a475ed5543270991fd660"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1064,
+      "sha256": "301ab5cf0f4a2258f9678f31ff8cfc3f687d5846fabfb2815019edf8c3ae0390"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 5838,
+      "sha256": "58223f6e1c4a116aa9377bd49454947ea568aad935a86a6bd5605284f7693b32"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-B2-io-n2/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "256287ec8842cdde64b4ebd6d1ca526a31a3b20e517bc4f96419294cd21b1ac5"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1.log",
+      "bytes": 429,
+      "sha256": "417bb02e61445f7209ad493678ad49abe1cb0bc3667ff3f2a5072f7196c7060e"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/operations.jsonl",
+      "bytes": 16480,
+      "sha256": "0896e22c0c9c106f86e3332556fd73e4ce22031d3364dff46742d978c8801d67"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/result.json",
+      "bytes": 10667,
+      "sha256": "6189500d3163b0d8bcca59265d72c65dc4ffe97e6db602f5c9791cc951bf64b2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/after-cli.txt",
+      "bytes": 119116,
+      "sha256": "5a913ea1a1794de3ec9cfc5aefd64875ee655852552e2934ae5b8842c389b0ec"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/before-cli.txt",
+      "bytes": 49337,
+      "sha256": "29f104492cc25dab671abcd3a997ca42e3d02378318915c645f7df25c04d42c6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "09e6d0f19fd2dcf8c92325ef613dc5c825022847bd319ae0e6943f253156b32c"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/client.json",
+      "bytes": 888,
+      "sha256": "cb3c2bcabdbb78ca6ff495d26eaf826fd9e1b13f90bdf113bbea7d535173d0a4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 8559,
+      "sha256": "fcc73de9d4aa63675eebe862dc8deff7817a7904860d3858296f3f17eb4ce290"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "7de0969aea27156eb3e1b8bfc5337d866095acd17321a0b3cac2db6a869b4653"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/native-stop.txt",
+      "bytes": 43920,
+      "sha256": "022422e5711c05176cf7e6ec6626d56559b0a19456c1bbb834f32be7c3720f94"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/peer.json",
+      "bytes": 504,
+      "sha256": "00b599907c6f780e37ff3aafb6b8016b67c0168ae65137359241a20f016061bd"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "37f61b96efec5103a382965196350eefbaca2a7c34d26beee795d9b5194589a1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "4f0722231deab781c085e04efbdc76358dafa75ae63fc9877d1d1378345475e0"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/startup.conf",
+      "bytes": 1059,
+      "sha256": "83991de01c0b0cfd0d12e2da10634d08665dcfbb56694bb723d94e0ea36315fe"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "a3feb53ca40eee8fb9637786bb1b6b33d167f33d24678a37d2433fe8adc8e474"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 8659,
+      "sha256": "1338079f68eb7023f7089306be9d0be358ae0d3145a8734895ae6f5eab13239f"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 8646,
+      "sha256": "153a25a9cb82d90dfd186431b7cb93524897a6d771c96e5bb161bcacccafc2fe"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1062,
+      "sha256": "e508ea510425480ab49b04df891ea676d1025a00192e4dfc7f2c249a2ce0b90b"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1064,
+      "sha256": "86fc955a08b3b1c4fec3672c6ca48747cb39af5c7dae0ec7289dba44cdf210c8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1065,
+      "sha256": "9ac28a70c39146e155695742a0c06426230b406d5a42b2979035a76a343038d3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15076,
+      "sha256": "ab3e55964ae3cb3d8dad439cc8bcc61f48fc46afa66a3d42bd40ec35d87a1d13"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C1-io-n1/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "8b3dfe768782c69ec4c09d0be60e59e76daa2f2315f663315b971a4e0bc0eb55"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3.log",
+      "bytes": 428,
+      "sha256": "134040cd35c78f8f7324b4f7846834a82278efdb61d8155d483716009742fd74"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/network-before.txt",
+      "bytes": 388,
+      "sha256": "ada40336250cb34f127185ab4301a62d7c3ea15217fe3513948e0703b770a2e8"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/operations.jsonl",
+      "bytes": 17827,
+      "sha256": "f978d42e23e480a993c20d9f434a75699633d8e0049385c7ad68b34482209010"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/result.json",
+      "bytes": 11360,
+      "sha256": "60a18abc2f95b91bebe1b818db6e01f896e0f390250c15edaa1b9ee56ace68ab"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/after-cli.txt",
+      "bytes": 133492,
+      "sha256": "6b51ca9c7cd94c3e7bc0c6f3f000e08bf04b7b92d09d509a46030ce6d1c7aa8a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/before-cli.txt",
+      "bytes": 61701,
+      "sha256": "6e555a6b01aac1460ec63ac96abd2cbbf5fce062a306df115a04b3f4aa41f98a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/client-affinity.txt",
+      "bytes": 1093,
+      "sha256": "a6a9d3cc74ff9d4f250aeb3ab5ea99ced0657ca5168a33dbb69a2d313c80ac02"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/client.json",
+      "bytes": 889,
+      "sha256": "8fa49a326e59df3843ef2923536a5db1f0aa31009aaf274bbdab018a897e39e1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/cpu.jsonl",
+      "bytes": 12414,
+      "sha256": "84d9588ddd24d5e03f91ca786332a74582ecd6ad8772122decf41ac4df7664b4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/interface-links.txt",
+      "bytes": 12241,
+      "sha256": "004c30414ec15528128d8608a02b60c8945d04e008672f5cbc0c964ba47708c4"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/native-stop.txt",
+      "bytes": 49475,
+      "sha256": "1cd5ca6986c5bfb5feb0ad3cf59b1a7fa93801da818940351c81f9dbb6b3adfd"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/peer.json",
+      "bytes": 506,
+      "sha256": "92af45d5b4c34f47e14639c41ca3ab94bc0d1552f070ddce6562791e709a124a"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/runtime.json",
+      "bytes": 567,
+      "sha256": "f857b16594891aec55277eefccd8c6f140557c88602b7982d524db3fabbab452"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/samplers.txt",
+      "bytes": 14,
+      "sha256": "0d07ff40552809ff8e9830810928218454b43b4934e49d5a3bc1ee01b886e800"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/start.txt",
+      "bytes": 94,
+      "sha256": "9a653ced16b8cc0cb5f5d61f1c80815c2d33ffe30d988793182e413c5d57e3a2"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/startup.conf",
+      "bytes": 1063,
+      "sha256": "a3aad612b7cb2cfd696c1b94214afbff14d2fb34efd2a840338bbb01e948fc49"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/stopped.json",
+      "bytes": 447,
+      "sha256": "5a9ad77f2d6652858cdab21085c51744d0c6f9d691d1023b1c2bc1b7a60f7487"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/system-cpu-after.txt",
+      "bytes": 11670,
+      "sha256": "033c05b992b810466cb9d4f5b75d9475267c04bf10e1ef5a3a983cad5533ae91"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/system-cpu-before.txt",
+      "bytes": 11640,
+      "sha256": "c2c7521522d086094a4de80a285e44230bf9127d3f61828ce42621a6c168f1f1"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/vpp_main-affinity.txt",
+      "bytes": 1063,
+      "sha256": "a84be9abf1dcafe80aca0863adb7565f411ca94bf2358e70d3ea8b95c5ea8605"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/vpp_wk_0-affinity.txt",
+      "bytes": 1064,
+      "sha256": "1880b06639c7296b4aca86c051eadac2d50799f743a4a4a6700de4f6f9679e16"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/vpp_wk_1-affinity.txt",
+      "bytes": 1064,
+      "sha256": "39db1911df89d4b8eb086f878ce6e032c7a23b96d89ae58dcd7c98fbf70122e3"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/vpp_wk_2-affinity.txt",
+      "bytes": 1063,
+      "sha256": "c6b4cdb931b1184a79d3f6d086bcdd5d982ef2c7a0f7db7ba362c6dd4f1779e6"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/vpp_wk_3-affinity.txt",
+      "bytes": 1065,
+      "sha256": "32ab0c5adda3202485723ba6e3f1ca4b5372a1ad9036e46536257704b5dd0324"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/warm-flow-evidence.json",
+      "bytes": 15042,
+      "sha256": "fd7ccbecc1fb0ec0fc248f12338a5440e8df0fbc81119d033b573aaa574ed179"
+    },
+    {
+      "path": "build-output/s304-vpn-udp-topology-20261022/run-C3-io-n3/vpn-udp-fixed/warm.json",
+      "bytes": 845,
+      "sha256": "4c387a10b629bce72ab276034348e30307830cacf60b0a9e833e6a8a488ad889"
+    },
+    {
+      "path": "build-output/vpn-diagnosis-default-20261021/cache-warm-proof/result.json",
+      "bytes": 3211,
+      "sha256": "42b24c98d9e0f3cc170bc202971c0b4cbd6c47078f59ca6efec625dee3e1cffd"
+    },
+    {
+      "path": "build-output/vpn-diagnosis-default-20261021/default/apk/sakamoto-runtime-debug.apk",
+      "bytes": 6199429,
+      "sha256": "b92e51202821d64e2a5571dea02998fcee19eaceaa1370e9348e407964a94a78"
+    },
+    {
+      "path": "build-output/vpn-diagnosis-default-20261021/default/build.json",
+      "bytes": 181045,
+      "sha256": "8e8bb7c640123d9ee7b4805f24aac02951b934037df7fe16af5d188edebbd305"
+    },
+    {
+      "path": "build-output/vpn-diagnosis-default-20261021/default/stage/product-stage.properties",
+      "bytes": 1508,
+      "sha256": "11efd302bd91909365a85047d53c0b3916dcd96ee091c6a12d3b6b39c75fcf76"
+    }
+  ]
+}

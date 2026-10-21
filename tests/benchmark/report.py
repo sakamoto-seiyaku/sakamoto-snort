@@ -109,7 +109,7 @@ def compare(args):
                     or collector != runs[0]["manifest"].get("collector_sha256")):
                 raise RuntimeError("VPN collector identity differs")
         profiles = ["vpn"] if suite in quick.VPN_SUITES else ["root", "vpn"]
-        cases = ('tcp-fixed',) if suite == quick.VPN_TCP_SUITE else quick.CASES
+        cases = ('tcp-fixed',) if suite == quick.VPN_TCP_SUITE else ('udp-fixed',) if suite == quick.VPN_UDP_SUITE else quick.CASES
         expected = [(p, c) for p in profiles for c in cases]
         if (suite not in ("root-vpn-v1", *quick.VPN_SUITES) or run["status"] != "COMPLETE"
                 or [(c["profile"], c["case"]) for c in run["cases"]] != expected
@@ -121,11 +121,12 @@ def compare(args):
                                           (cell / 'before-cli.txt').read_text(),
                                           (cell / 'after-cli.txt').read_text())
             if suite in quick.VPN_SUITES:
+                owner_count = len(run['manifest'].get('worker_cpu_ids') or [1, 2])
                 quick.validate_vpn_window(case['generation'], case['client'],
                                           (cell / 'before-cli.txt').read_text(),
-                                          (cell / 'after-cli.txt').read_text())
-                if suite in (quick.VPN_FRESH_SUITE, quick.VPN_TCP_SUITE) or case['case'] in ('tcp-new', 'udp-new'):
-                    quick.validate_vpn_stop((cell / 'native-stop.txt').read_text(), case['generation'])
+                                          (cell / 'after-cli.txt').read_text(), owner_count)
+                if suite in (quick.VPN_FRESH_SUITE, *quick.VPN_SINGLE_SUITES) or case['case'] in ('tcp-new', 'udp-new'):
+                    quick.validate_vpn_stop((cell / 'native-stop.txt').read_text(), case['generation'], owner_count)
         for key in fixed:
             if run["manifest"][key] != runs[0]["manifest"][key]:
                 raise RuntimeError("benchmark parameter differs: " + key)
