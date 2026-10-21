@@ -247,6 +247,8 @@ add_test(NAME product_root_capacity
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_capacity_test.py")
 add_test(NAME sakamoto-product-root-defaults-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_defaults_test.py")
+add_test(NAME sakamoto-product-build-cache-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_build_cache_test.py")
 add_test(NAME sakamoto-product-l4-match-evidence-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_l4_match_evidence_test.py")
 add_test(NAME sakamoto-product-stop-before-start-test

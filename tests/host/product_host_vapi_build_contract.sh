@@ -8,6 +8,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Fixture headers/wrappers remain isolated, but immutable Rust dependencies
+# must not be rebuilt into a fresh /tmp target directory for every check.
+source "$repo_root/tools/product/build-cache.sh"
+product_open_build_cache host "$fixture_root" \
+  --input purpose=vapi-build-contract --input "rustc=$(rustc -vV)" \
+  --input "cargo=$(cargo --version)" --input "compiler=$(cc --version)"
+
 mkdir -p "$fixture_root/include" "$fixture_root/generated/vapi"
 
 # Exercise the Cargo build-script seam without needing an external VPP tree.
@@ -66,7 +73,7 @@ fi
 EOF
 chmod +x "$ar_wrapper"
 
-CARGO_TARGET_DIR="$fixture_root/target" \
+CARGO_TARGET_DIR="$product_build_cache_dir/cargo-target" \
 SAKAMOTO_TEST_REAL_CC="$(command -v cc)" \
 SAKAMOTO_TEST_REAL_AR="$(command -v ar)" \
 CC="$cc_wrapper" \

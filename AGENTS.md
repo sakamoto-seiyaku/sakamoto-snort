@@ -1,6 +1,15 @@
 
 ## Agent skills
 
+### Build cache and disk usage
+
+Compilation caches must be reused across repeated builds and experiment output
+directories. Use the Product builders' persistent cache; do not create fresh
+CMake/Cargo dependency builds under each `/tmp` or evidence directory. Verify an
+unchanged second build has no compilation before repeating expensive work.
+Preserve raw evidence and exact artifact identities during cleanup. See
+`docs/agents/build-cache.md` for cache isolation, verification and retention rules.
+
 ### Issue tracker
 
 Issues and PRDs are tracked in Plane through the global `plane-ops` skill, using its default project. Do not use Plane MCP. See `docs/agents/issue-tracker.md`.

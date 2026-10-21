@@ -185,6 +185,13 @@ if [[ ! -f "$vpp_lib/libvapiclient.so" && ! -f "$vpp_lib/libvapiclient.so.0" ]];
   exit 2
 fi
 
+source "$repo_root/tools/product/build-cache.sh"
+product_open_build_cache host "$artifact_root" \
+  --input "target=$(rustc -vV)" --input "cargo=$(cargo --version)" \
+  --input "cmake=$(cmake --version)" --input "compiler=$(cc --version)" \
+  --input "vpp_stage=$stage_dir" --input "vpp_source=$vpp_source" \
+  --input build_type=default --file "vpp_identity=$stage_manifest"
+
 if [[ -e "$artifact_root" ]]; then
   if [[ ! -d "$artifact_root" || ! -f "$artifact_marker" ||
         -L "$artifact_marker" ||
@@ -220,8 +227,9 @@ for library_name in "${vpp_library_names[@]}"; do
   printf '%s  %s\n' "$(sha256sum -- "$core_library" | awk '{print $1}')" \
     "$library_name" >> "$libraries_manifest"
 done
-plugin_build="$artifact_root/plugin-build"
-cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
+plugin_build="$product_build_cache_dir/product-plugin-build"
+product_configure_cached "$plugin_build" \
+  -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DVPP_SOURCE_DIR="$vpp_source" \
   -DVPP_INCLUDE_DIR="$vpp_include" \
   -DVPP_APIGEN="$vpp_apigen" \
@@ -233,9 +241,10 @@ cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT="$root_verdict_batch_experiment" \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE="$root_verdict_batch_mode" \
   -DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS="$policy_qualification_counters" \
-  -DCMAKE_INSTALL_PREFIX="$artifact_root" \
+  -DCMAKE_INSTALL_PREFIX="$product_build_cache_dir/plugin-install" \
   -DCMAKE_INSTALL_LIBDIR=lib
-cmake --build "$plugin_build" --target install
+cmake --build "$plugin_build" --target product_core_plugin
+cmake --install "$plugin_build" --prefix "$artifact_root"
 
 plugin_dir="$artifact_root/lib/vpp_plugins"
 plugin="$plugin_dir/product_core_plugin.so"
@@ -280,8 +289,9 @@ export SAKAMOTO_PRODUCT_VAPI_INCLUDE_DIR="$vpp_include"
 export SAKAMOTO_PRODUCT_VAPI_LIBRARY_DIR="$vpp_lib"
 export SAKAMOTO_PRODUCT_VAPI_GENERATED_DIR="$generated_vapi_dir"
 export SAKAMOTO_PRODUCT_VAPI_REQUIRED=1
+export CARGO_TARGET_DIR="$product_build_cache_dir/cargo-target"
 cargo build --release -p sakamoto-product-core
-install -m 0755 "$repo_root/target/release/sakamoto-product-core-host" \
+install -m 0755 "$CARGO_TARGET_DIR/release/sakamoto-product-core-host" \
   "$artifact_root/bin/sakamoto-product-core-host"
 
 cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \

@@ -64,6 +64,18 @@ fn main() {
         .join("src")
         .join("product")
         .join("include");
+    // A persistent target directory must observe header contents, not merely
+    // whether the generated include directory's environment variable changed.
+    println!("cargo:rerun-if-changed={}", include_dir.display());
+    if let Some(directory) = &vapi_include {
+        println!(
+            "cargo:rerun-if-changed={}",
+            PathBuf::from(directory).display()
+        );
+    }
+    if let Some(directory) = &generated_include {
+        println!("cargo:rerun-if-changed={}", directory.display());
+    }
     let library_name = if use_vapi {
         "sakamoto_product_vapi_abi"
     } else {
@@ -72,6 +84,14 @@ fn main() {
     let object = out_dir.join(format!("{library_name}.o"));
     let library = out_dir.join(format!("lib{library_name}.a"));
     let target = env::var("TARGET").unwrap_or_default();
+    for prefix in ["CC", "AR"] {
+        println!("cargo:rerun-if-env-changed={prefix}");
+        println!(
+            "cargo:rerun-if-env-changed={}_{}",
+            prefix,
+            target.replace('-', "_")
+        );
+    }
     let compiler_name = target_tool("CC", &target, "cc");
     let mut compiler = Command::new(compiler_name);
     compiler

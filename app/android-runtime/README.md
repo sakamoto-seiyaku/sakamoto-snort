@@ -35,6 +35,14 @@ Build with the default stage when it is available:
 app/android-runtime/scripts/build-debug-apk.sh
 ```
 
+Native CMake/Ninja, Rust and JNI intermediates persist below
+`build-output/product-build-cache/android/`; the owned Product distribution is
+still assembled separately and atomically published. Repeated builds and new
+evidence directories reuse that cache. See the
+[cache constraints and real reuse check](../../docs/agents/build-cache.md).
+APK-only builds also retain validated Java/DEX outputs in the separate `apk/`
+cache. Packaging, version-code allocation and signing run for each APK.
+
 Host contract coverage is in `tests/android/android-runtime-contract-test.sh`.
 
 SAKAMOTO-50 begins the Local Product Backend boundary in this active app:

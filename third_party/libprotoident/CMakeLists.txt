@@ -543,7 +543,8 @@ set(LPI_SOURCES
   lib/udp/lpi_zoom.cc
 )
 add_library(sakamoto_lpi STATIC ${LPI_SOURCES} adapter.cc)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/config.h" "/* feature-only upstream build */\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/config.h"
+  CONTENT "/* feature-only upstream build */\n" @ONLY)
 target_include_directories(sakamoto_lpi PRIVATE lib "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(sakamoto_lpi PRIVATE SAKAMOTO_LPI_FEATURES_ONLY=1)
 target_compile_features(sakamoto_lpi PRIVATE cxx_std_11)

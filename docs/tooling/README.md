@@ -1,5 +1,9 @@
 # Build and tooling
 
+Read the [compilation cache and artifact-retention constraints](../agents/build-cache.md)
+before repeated builds or experiments. Product builders share persistent compiler
+intermediates across output directories; unique evidence folders are not caches.
+
 The root CMake project builds C Host semantic/ABI tests. It does not build the
 removed C++ daemon or the complete Android VPP artifact.
 

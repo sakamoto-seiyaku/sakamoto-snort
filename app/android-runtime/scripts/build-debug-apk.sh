@@ -75,6 +75,7 @@ Optional inputs:
   SAKAMOTO_VPP_PYTHONPATH
   SAKAMOTO_ANDROID_PRODUCT_STAGE_DIR
   SAKAMOTO_ANDROID_VERSION_STATE_FILE
+  SAKAMOTO_PRODUCT_BUILD_CACHE_DIR (persistent, below this checkout's build-output)
   SAKAMOTO_PRODUCT_PLUGIN
 
 --stage-only requires SAKAMOTO_VPP_STAGE_DIR and SAKAMOTO_VPP_SOURCE_DIR.
@@ -476,7 +477,7 @@ build_native_stage() {
   [[ -x "$llvm_ar" ]] || die "Android LLVM archiver is missing: $llvm_ar"
   [[ -x "$llvm_readelf" ]] || die "Android LLVM readelf is missing: $llvm_readelf"
   [[ -x "$llvm_strip" ]] || die "Android LLVM strip is missing: $llvm_strip"
-  for tool in cmake ninja cargo file readelf; do
+  for tool in cmake ninja cargo rustc file readelf; do
     command -v "$tool" >/dev/null 2>&1 || die "required build tool is missing: $tool"
   done
 
@@ -529,6 +530,19 @@ build_native_stage() {
   if [[ -e "$product_stage" || -L "$product_stage" ]]; then
     assert_owned_product_stage
   fi
+  # Compilation survives independent distribution directories and atomic stage
+  # exchange. Product edits are tracked by Ninja/Cargo; do not key by source hash
+  # or by the caller's unique evidence/output directory.
+  source "$repo_root/tools/product/build-cache.sh"
+  product_open_build_cache android "$product_stage" \
+    --input "target=$android_target" --input "api=$android_api" \
+    --input "ndk=$ndk_root" --input "compiler=$android_clang" \
+    --input "compiler_version=$($android_clang --version)" \
+    --input "rustc=$(rustc -vV)" --input "cargo=$(cargo --version)" \
+    --input "cmake=$(cmake --version)" --input "vpp_source=$vpp_source_dir" \
+    --input "vpp_stage=$stage_dir" --input build_type=Release \
+    --file "ndk_identity=$ndk_root/source.properties" \
+    --file "toolchain=$toolchain_file" --file "vpp_identity=$stage_manifest"
   product_stage_candidate="$(mktemp -d "$product_stage_parent/.${product_stage_name}.build.XXXXXX")"
   product_stage_cleanup_dir="$product_stage_candidate"
   cleanup_product_stage() {
@@ -538,7 +552,7 @@ build_native_stage() {
     fi
   }
   trap cleanup_product_stage EXIT
-  build_root="$product_stage_candidate/.build"
+  build_root="$product_build_cache_dir"
   plugin_build="$build_root/product-plugin-build"
   plugin_install="$build_root/product-plugin-install"
 
@@ -567,7 +581,7 @@ build_native_stage() {
     -DCMAKE_INSTALL_LIBDIR=lib
     "-DCMAKE_INSTALL_PREFIX=$plugin_install"
   )
-  cmake "${cmake_args[@]}"
+  product_configure_cached "$plugin_build" "${cmake_args[@]}"
   # VPP_LIBRARY_DIR is the exact runtime library input directory, not the
   # temporary CMake install destination. Build the plugin in place so the
   # clean input stage is never mutated by an install rule.
@@ -646,22 +660,21 @@ build_native_stage() {
       die "product stage omitted VPP runtime library: $runtime_library"
   done
   install -m 0755 "$rust_library" "$native_dir/libsakamoto_product_core.so"
-  android_sysroot="$ndk_root/toolchains/llvm/prebuilt/$ndk_host/sysroot/usr/include"
   jni_library="$native_dir/libsakamoto_runtime_control.so"
-  "$android_clang" \
-    -std=c11 -Wall -Wextra -Werror -fPIC -shared \
-    -I "$android_sysroot" \
-    -I "$repo_root/src/product/include" \
-    "$jni_source" \
-    -L "$native_dir" -Wl,--no-as-needed \
-    -Wl,-soname,libsakamoto_runtime_control.so \
-    -lsakamoto_product_core -o "$jni_library"
+  product_configure_cached "$build_root/jni-build" \
+    -S "$repo_root/app/android-runtime/src/main/native" \
+    -B "$build_root/jni-build" -G Ninja \
+    "-DCMAKE_TOOLCHAIN_FILE=$toolchain_file" \
+    -DANDROID_ABI=arm64-v8a "-DANDROID_PLATFORM=android-$android_api" \
+    "-DSAKAMOTO_PRODUCT_CORE_LIBRARY=$rust_library"
+  cmake --build "$build_root/jni-build" --parallel "${SAKAMOTO_ANDROID_BUILD_JOBS:-2}"
+  install -m 0755 "$build_root/jni-build/libsakamoto_runtime_control.so" "$jni_library"
   [[ -f "$jni_library" ]] || die "Product Core JNI library was not produced"
   # Android PackageManager recognizes only lib/<abi>/lib*.so as native
   # payload. Use the linker-prefixed installed name required by that boundary.
   install -m 0755 "$plugin_source" "$native_dir/$plugin_name"
-  # Optional exact unstripped companion for offline profiling, before the
-  # temporary native build is deleted. This never changes the APK payload.
+  # Optional exact unstripped companion for offline profiling. Only staged
+  # copies below are stripped; the compilation cache stays reusable.
   if [[ -n "${SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR:-}" ]]; then
     [[ "$SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR" == /* ]] || \
       die "SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR must be absolute"
@@ -738,7 +751,8 @@ build_native_stage() {
   # Audit the distribution closure, not temporary compiler inputs. The pinned
   # owner-inline HEV fork is linked into the allowlisted Product plugin; its
   # source/archive build tree is not an APK payload or an external HEV DSO.
-  rm -rf -- "$build_root"
+  # The persistent compilation cache is outside the candidate distribution.
+  # Never delete it during stage publication or a failed build's cleanup.
   forbidden_stage_path=""
   while IFS= read -r -d '' stage_path; do
     case "${stage_path,,}" in
@@ -922,6 +936,9 @@ build_apk_only() {
   local -a class_files
   local -a d8_outputs
   local -a d8_command
+  local -a bytecode_state_command
+  local d8_identity
+  local bytecode_cache
   local product_artifact_id
   local product_api_identity
   local product_abi_version
@@ -1169,9 +1186,7 @@ build_apk_only() {
   payload_root="$apk_build_dir/payload"
   payload_assets="$payload_root/assets"
   payload_lib="$payload_root/lib/arm64-v8a"
-  classes_dir="$apk_build_dir/classes"
-  dex_dir="$apk_build_dir/dex"
-  mkdir -p -- "$payload_assets" "$payload_lib" "$classes_dir" "$dex_dir"
+  mkdir -p -- "$payload_assets" "$payload_lib"
   install -m 0644 "$product_manifest" "$payload_assets/product-stage.properties"
   python3 "$repo_root/tools/product/hev-notices.py" --output "$payload_assets/hev-notices.txt"
   install -m 0644 "$repo_root/src/product/NOTICE.tcp" "$payload_assets/product-tcp-notices.txt"
@@ -1187,51 +1202,73 @@ build_apk_only() {
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"
   [[ -f "$java_home/lib/modules" ]] || \
     die "JDK module image is missing from java.home: $java_home/lib/modules"
-  javac_support_dir="$apk_build_dir/javac-support"
-  javac_support_jar="$apk_build_dir/javac-support.jar"
-  mkdir -p "$javac_support_dir"
-  # Android's platform stub omits LambdaMetafactory.metafactory, which javac
-  # needs solely to lower Java-8 lambdas.  Add that compiler-only signature
-  # from this JDK's module image on the ordinary compiler class path while
-  # keeping every Android API class, including java.lang.Process, on the sole
-  # Android boot class path. The support class is never packaged.
-  "$jimage_bin" extract --dir="$javac_support_dir" \
-    --include "glob:**/java/lang/invoke/LambdaMetafactory.class" \
-    "$java_home/lib/modules" >/dev/null || \
-    die "cannot extract the javac LambdaMetafactory support class"
-  [[ -f "$javac_support_dir/java.base/java/lang/invoke/LambdaMetafactory.class" ]] || \
-    die "javac LambdaMetafactory support class was not extracted"
-  "$jar_bin" cf "$javac_support_jar" -C "$javac_support_dir/java.base" \
-    java/lang/invoke/LambdaMetafactory.class || \
-    die "cannot package the javac LambdaMetafactory support class"
-  javac_classpath="$android_jar:$javac_support_jar"
-  javac_log="$apk_build_dir/javac.verbose.log"
-  # -source/-target select Java language/class-file compatibility only.  The
-  # boot class path must explicitly point at Android's platform stub or JDK17
-  # java.base can leak host-only methods into the generated class files. The
-  # verbose log is diagnostic evidence only; its format is not a build gate.
-  if ! "$javac_bin" -encoding UTF-8 -Xlint:-options -source 8 -target 8 \
-      -bootclasspath "$android_jar" -classpath "$javac_classpath" \
-      -verbose -d "$classes_dir" "${java_sources[@]}" >"$javac_log" 2>&1; then
-    sed -n '1,160p' "$javac_log" >&2
-    tail -160 "$javac_log" >&2
-    die "Android Java compilation failed; see $javac_log"
-  fi
-  mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)
-  ((${#class_files[@]} > 0)) || die "Android Java compilation produced no classes"
-
   if [[ -f "$d8_jar" ]]; then
     d8_command=("$java_bin" -cp "$d8_jar" com.android.tools.r8.D8)
+    d8_identity="$d8_jar"
   else
     d8_command=("$d8")
+    d8_identity="$d8"
   fi
-  "${d8_command[@]}" --lib "$android_jar" --min-api "$android_api" \
-    --output "$dex_dir" "${class_files[@]}"
-  mapfile -t d8_outputs < <(find "$dex_dir" -mindepth 1 -maxdepth 1 -print | sort)
-  if ((${#d8_outputs[@]} != 1)) || [[ "${d8_outputs[0]:-}" != "$dex_dir/classes.dex" ]]; then
-    printf 'D8 output must contain only classes.dex; found:\n' >&2
-    printf '  %s\n' "${d8_outputs[@]:-<none>}" >&2
-    die "D8 produced unexpected classes*.dex output"
+  source "$repo_root/tools/product/build-cache.sh"
+  product_open_build_cache apk "$apk_output_dir" \
+    --input "androidApi=$android_api" --input "javaCompatibility=8" \
+    --file "androidJar=$android_jar" --file "jdkModules=$java_home/lib/modules" \
+    --file "java=$java_bin" --file "javac=$javac_bin" --file "d8=$d8_identity"
+  bytecode_cache="$product_build_cache_dir/bytecode"
+  classes_dir="$bytecode_cache/classes"
+  dex_dir="$bytecode_cache/dex"
+  bytecode_state_command=(python3 "$repo_root/tools/product/apk-bytecode-cache.py"
+    --cache "$bytecode_cache" --sources "$java_source_dir" --pipeline "${BASH_SOURCE[0]}")
+  if "${bytecode_state_command[@]}" check; then
+    echo "bytecodeCompile=reuse"
+  else
+    echo "bytecodeCompile=javac+d8"
+    # Failed or changed input builds cannot retain classes from deleted sources.
+    rm -rf -- "$bytecode_cache"
+    mkdir -p -- "$classes_dir" "$dex_dir"
+    javac_support_dir="$bytecode_cache/javac-support"
+    javac_support_jar="$bytecode_cache/javac-support.jar"
+    mkdir -p "$javac_support_dir"
+    # Android's platform stub omits LambdaMetafactory.metafactory, which javac
+    # needs solely to lower Java-8 lambdas.  Add that compiler-only signature
+    # from this JDK's module image on the ordinary compiler class path while
+    # keeping every Android API class, including java.lang.Process, on the sole
+    # Android boot class path. The support class is never packaged.
+    "$jimage_bin" extract --dir="$javac_support_dir" \
+      --include "glob:**/java/lang/invoke/LambdaMetafactory.class" \
+      "$java_home/lib/modules" >/dev/null || \
+      die "cannot extract the javac LambdaMetafactory support class"
+    [[ -f "$javac_support_dir/java.base/java/lang/invoke/LambdaMetafactory.class" ]] || \
+      die "javac LambdaMetafactory support class was not extracted"
+    "$jar_bin" cf "$javac_support_jar" -C "$javac_support_dir/java.base" \
+      java/lang/invoke/LambdaMetafactory.class || \
+      die "cannot package the javac LambdaMetafactory support class"
+    javac_classpath="$android_jar:$javac_support_jar"
+    javac_log="$bytecode_cache/javac.verbose.log"
+    # -source/-target select Java language/class-file compatibility only.  The
+    # boot class path must explicitly point at Android's platform stub or JDK17
+    # java.base can leak host-only methods into the generated class files. The
+    # verbose log is diagnostic evidence only; its format is not a build gate.
+    if ! "$javac_bin" -encoding UTF-8 -Xlint:-options -source 8 -target 8 \
+        -bootclasspath "$android_jar" -classpath "$javac_classpath" \
+        -verbose -d "$classes_dir" "${java_sources[@]}" >"$javac_log" 2>&1; then
+      sed -n '1,160p' "$javac_log" >&2
+      tail -160 "$javac_log" >&2
+      die "Android Java compilation failed; see $javac_log"
+    fi
+    mapfile -t class_files < <(find "$classes_dir" -type f -name '*.class' -print | sort)
+    ((${#class_files[@]} > 0)) || die "Android Java compilation produced no classes"
+
+    "${d8_command[@]}" --lib "$android_jar" --min-api "$android_api" \
+      --output "$dex_dir" "${class_files[@]}"
+    mapfile -t d8_outputs < <(find "$dex_dir" -mindepth 1 -maxdepth 1 -print | sort)
+    if ((${#d8_outputs[@]} != 1)) || [[ "${d8_outputs[0]:-}" != "$dex_dir/classes.dex" ]]; then
+      printf 'D8 output must contain only classes.dex; found:\n' >&2
+      printf '  %s\n' "${d8_outputs[@]:-<none>}" >&2
+      die "D8 produced unexpected classes*.dex output"
+    fi
+
+    "${bytecode_state_command[@]}" record
   fi
 
   "$aapt2" link -o "$apk_build_dir/unsigned.apk" \

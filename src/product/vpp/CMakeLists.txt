@@ -209,7 +209,14 @@ configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/product_core_identity.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/product_core_identity.h"
   @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/product-vpp-artifact.properties"
+  "${CMAKE_CURRENT_SOURCE_DIR}/pinned-vpp-revision.txt")
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+# Run the pinned official generator unchanged. Normalize only its depfile so
+# an API with no imports does not make Ninja rebuild the plugin forever.
+set(VPP_APIGEN "${Python3_EXECUTABLE};${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/product/vpp-apigen-cache.py;${VPP_APIGEN}")
 include("${VPP_SOURCE_DIR}/src/cmake/VPPConfig.cmake")
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
