@@ -5,6 +5,15 @@ project(sakamoto_hev LANGUAGES C ASM)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Threads REQUIRED)
 get_filename_component(SAKAMOTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+# Staged sources are immutable snapshots. Editing the fork must re-run staging
+# even when a persistent build reuses its CMake command-line identity.
+file(GLOB_RECURSE HEV_FORK_INPUTS CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/product/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/*")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${HEV_FORK_INPUTS} "${CMAKE_CURRENT_SOURCE_DIR}/upstream-manifest.json"
+  "${SAKAMOTO_ROOT}/tools/product/stage-hev.py"
+  "${SAKAMOTO_ROOT}/tools/product/vendor-hev.py")
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" "${SAKAMOTO_ROOT}/tools/product/stage-hev.py"
           --output-root "${CMAKE_CURRENT_BINARY_DIR}/staged"
@@ -56,6 +65,12 @@ target_include_directories(sakamoto_hev_lwip PUBLIC
   "${HEV_SOURCE}/sakamoto" "${HEV_LWIP}/include"
   "${HEV_LWIP}/ports/include")
 target_compile_options(sakamoto_hev_lwip PRIVATE -Wall -fvisibility=hidden)
+option(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
+  "Use inner MTU3000/MSS2940 within ordinary 4KiB VPP buffer pages" OFF)
+if(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_lwip PUBLIC
+    SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=1)
+endif()
 
 # Product allocator is separate so lower-level fault fixtures can substitute
 # their own heap without replacing real lwIP pbuf/PCB implementations.

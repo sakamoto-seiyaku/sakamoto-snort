@@ -210,6 +210,8 @@ public final class RuntimeService extends VpnService {
     private String requestedHevLimits, hevLimits;
     private int requestedHevFlowEntries, hevFlowEntries;
     private int requestedNativeBuffers, nativeBuffers;
+    private boolean vpnLargeSegmentExperiment;
+    private int vpnBufferDataBytes = 2048;
     // Matches the frozen native W2 layout; registration must succeed for both
     // independent channels before the TUN can be attached.
     private final VpnSocketBroker[] vpnSocketBrokers = new VpnSocketBroker[2];
@@ -1039,6 +1041,21 @@ public final class RuntimeService extends VpnService {
         Properties productManifest;
         try {
             productManifest = readProductManifest();
+            String largeSegments = productManifest.getProperty("vpnLargeSegmentExperiment", "OFF");
+            if (!largeSegments.equals("ON") && !largeSegments.equals("OFF"))
+                throw new IOException("invalid packaged VPN packet profile");
+            vpnLargeSegmentExperiment = largeSegments.equals("ON");
+            String bufferBytes = productManifest.getProperty("vpnBufferDataBytes", "2048");
+            if (!bufferBytes.equals("2048") && !bufferBytes.equals("3072"))
+                throw new IOException("invalid packaged VPN buffer profile");
+            vpnBufferDataBytes = Integer.parseInt(bufferBytes);
+            String tunMtu = productManifest.getProperty("vpnTunMtu", "1500");
+            String tcpMss = productManifest.getProperty("vpnTcpMss", "1360");
+            if (!tunMtu.equals(vpnLargeSegmentExperiment ? "3000" : "1500")
+                    || !tcpMss.equals(vpnLargeSegmentExperiment ? "2940" : "1360")
+                    || (vpnLargeSegmentExperiment && vpnBufferDataBytes
+                        != VpnTunPlatformSession.LARGE_SEGMENT_BUFFER_BYTES))
+                throw new IOException("packaged VPN MTU/MSS/buffer profile disagrees");
             productVppRevision = requiredProductProperty(productManifest, "vppRevision");
             productArtifactId = requiredProductProperty(productManifest, "artifactId");
             productApiIdentity = requiredProductProperty(productManifest, "apiIdentity");
@@ -6190,10 +6207,16 @@ public final class RuntimeService extends VpnService {
                 + PRODUCT_PLUGIN_BINARY + " { enable }\n}\n";
         // Real startup pool reduction for allocator-pressure validation.
         // It is neither a runtime fault result override nor a release default.
-        if (nativeBuffers != 0) {
-            if (nativeBuffers < 512 || nativeBuffers > 4096 || nativeBuffers % 32 != 0)
+        boolean largeVpnBuffers = owner.profile == RuntimeProfile.VPN && vpnBufferDataBytes != 2048;
+        if (nativeBuffers != 0 || largeVpnBuffers) {
+            if (nativeBuffers != 0
+                    && (nativeBuffers < 512 || nativeBuffers > 4096 || nativeBuffers % 32 != 0))
                 throw new IOException("invalid native buffer validation capacity");
-            config += "buffers { buffers-per-numa " + nativeBuffers + " }\n";
+            config += "buffers { "
+                    + (nativeBuffers == 0 ? "" : "buffers-per-numa " + nativeBuffers + " ")
+                    + (largeVpnBuffers ? "default data-size "
+                        + vpnBufferDataBytes + " " : "")
+                    + "}\n";
         }
         if (vpnHevValidation) {
             // Test-only reductions of actual startup capacity, not runtime
@@ -6692,7 +6715,8 @@ public final class RuntimeService extends VpnService {
         }
         VpnTunPlatformSession.EstablishResult result =
                 VpnTunPlatformSession.establish(this, adapter.enableIpv6,
-                        vpnGraphValidation, dnsServers);
+                        vpnGraphValidation, dnsServers, vpnLargeSegmentExperiment
+                            ? VpnTunPlatformSession.LARGE_SEGMENT_MTU : VpnTunPlatformSession.MTU);
         if (!result.ok) {
             failSelectedProfileWithoutRuntime(result.errorCode, result.errorMessage);
             return null;

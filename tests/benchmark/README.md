@@ -83,11 +83,16 @@ evidence for all four generations. It is a distinct configuration from both
 the two-lifetime VPN suite and the original eight-cell B0.
 
 `--suite ordinary-vpn-tcp-fixed-v1` freezes **only ordinary VPN fixed TCP
-download**, with one normal start/warmup/5-second load/stop lifetime. It retains
+download**, with one normal start/warmup/load/stop lifetime (default5 seconds;
+`--cell-ms 20000` selects the long-download window). It retains
 the same concurrency, UID/Flow/occupancy checks, 120-second total deadline and
 generation-matched native stop audit. It is a distinct suite; it does not run
 UDP, new-connection pressure or Root. Its manifest records a 15-second control
-transport timeout and its CLI snapshots additionally retain `show runtime`.
+transport timeout and its CLI snapshots additionally retain `show runtime`,
+`show buffers`, startup.conf and read-only interface facts. An optional frozen
+`minimum_native_buffers` rejects insufficient actual pool size before pressure.
+Its native log reader holds an inode before load and blocks on a FIFO until
+stop or failure cleanup; it does not poll during performance measurement.
 `report.py compare` requires exactly that one cell for this suite.
 
 The default-OFF `SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT` combines at most eight
@@ -98,6 +103,15 @@ does not change MTU/MSS, pool counts, ring/sndbuf size or TUN packet boundaries.
 calls; `max_commits` is a lifetime maximum, not a delta. `tun.capture_batch`
 measures graph publication, not fewer TUN read syscalls; `show runtime` gives
 actual vectors/call. See the [fixed TCP experiment](../../docs/testing/2026-10-21_VPN_FIXED_TCP_BATCH.md).
+
+`SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT` defaultsOFF and selects inner
+MTU3000/MSS2940 when ON. `SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES` accepts2048/3072;
+large segments require3072. Use3072 in both A/B arms to isolate MSS with the same
+actual pool. The pinned allocator's page/stride geometry means requested page
+count does not equal usable buffer count. `flow_stack.tcp_progress` reports
+round-entry observations, `flow_stack.driver` reports ready delay/empty steps,
+and `tun.return_detail`/`tun.write_size` distinguish return rejection and actual
+packet sizes. See [long TCP evidence](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
 It runs Root, then ordinary VPN. Each mode uses this fixed order:
 

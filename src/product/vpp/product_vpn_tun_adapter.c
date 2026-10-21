@@ -51,6 +51,7 @@ typedef struct {
   product_vpn_return_credit_t credit;
   product_vpn_return_stamp_t stamps;
   u64 next_token, packets, submitted, output_calls, copy_calls, copy_bytes;
+  u64 no_credit, no_stamp, no_buffer, submitted_bytes, large_packets, packet_max;
   u32 next_stamp_slot;
   u64 fault_allocate_at, fault_reject_at, fault_stale_at;
 } __attribute__((aligned(CLIB_CACHE_LINE_BYTES))) tun_return_owner_t;
@@ -65,6 +66,7 @@ static struct {
   u64 policy_drops, runtime_drops, transport_unavailable, errors, rejected;
   u64 transport_unsupported;
   u64 tun_write_attempts, tun_writes, tun_write_failed;
+  u64 tun_write_bytes, tun_write_large, tun_write_max;
   u64 capture_batch_calls, capture_batch_packets, capture_batch_max;
   u64 stack_accepted_originals, stack_rejected_originals;
   u64 fault_write_at;
@@ -141,11 +143,14 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
    * packet_id is VPN-private credit-owner identity, not an NFQUEUE packet ID.
    * Origin placement remains the sole TUN lane, never the generating owner. */
   if (owner->next_token == ((1ULL << 55) - 1) ||
-      !product_vpn_return_credit_take(&owner->credit, generation))
+      !product_vpn_return_credit_take(&owner->credit, generation)) {
+    ++owner->no_credit;
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
+  }
   int stamp_index = product_vpn_return_stamp_find_free(&owner->stamps,
     owner->next_stamp_slot);
   if (stamp_index < 0) {
+    ++owner->no_stamp;
     if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
   }
@@ -154,6 +159,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
     (++owner->next_token << 7) | (u64)stamp_index;
   u32 bi;
   if (vlib_buffer_alloc(vm, &bi, 1) != 1) {
+    ++owner->no_buffer;
     if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
   }
@@ -218,6 +224,9 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   }
   /* Native scheduling now owns the independent buffer; never touch it again. */
   ++owner->submitted;
+  owner->submitted_bytes += total;
+  if (total > 1500) ++owner->large_packets;
+  if (total > owner->packet_max) owner->packet_max = total;
   return PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED;
 }
 
@@ -283,7 +292,13 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
     }
     ssize_t written = tun.tun_fd >= 0
       ? write(tun.tun_fd, vlib_buffer_get_current(buffer), write_length) : -1;
-    if (written == buffer->current_length) { ++tun.tun_writes; outcome = "TUN_WRITE_SUCCEEDED"; }
+    if (written == buffer->current_length) {
+      ++tun.tun_writes;
+      tun.tun_write_bytes += written;
+      if (written > 1500) ++tun.tun_write_large;
+      if ((u64)written > tun.tun_write_max) tun.tun_write_max = written;
+      outcome = "TUN_WRITE_SUCCEEDED";
+    }
     else { ++tun.tun_write_failed; ++tun.errors; outcome = "TUN_WRITE_FAILED"; }
   } else if (admitted) { ++tun.stack_accepted_originals; outcome = "ADMITTED"; }
   else if (frame->flow_stack_result) { ++tun.stack_rejected_originals; outcome = "INPUT_REJECTED"; }
@@ -618,7 +633,14 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
       i, (unsigned long long)owner->credit.generation, owner->credit.capacity,
       product_vpn_return_credit_used(&owner->credit),
       (unsigned long long)owner->packets, (unsigned long long)owner->submitted);
+    vlib_cli_output(vm, "tun.return_detail owner=%u no_credit=%llu no_stamp=%llu no_buffer=%llu bytes=%llu large_packets=%llu max_bytes=%llu",
+      i, (unsigned long long)owner->no_credit, (unsigned long long)owner->no_stamp,
+      (unsigned long long)owner->no_buffer, (unsigned long long)owner->submitted_bytes,
+      (unsigned long long)owner->large_packets, (unsigned long long)owner->packet_max);
   }
+  vlib_cli_output(vm, "tun.write_size bytes=%llu large_packets=%llu max_bytes=%llu buffer_data_bytes=%u",
+    (unsigned long long)tun.tun_write_bytes, (unsigned long long)tun.tun_write_large,
+    (unsigned long long)tun.tun_write_max, vlib_buffer_get_default_data_size(vm));
   vlib_cli_output (vm, "tun.transport unsupported=%llu unavailable=%llu",
     (unsigned long long) tun.transport_unsupported, (unsigned long long) tun.transport_unavailable);
   vlib_cli_output(vm, "tun.flow_stack enabled=%u ready=%u return_packets=%llu return_submitted=%llu write_attempts=%llu write_succeeded=%llu write_failed=%llu accepted_originals=%llu rejected_originals=%llu",

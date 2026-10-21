@@ -23,6 +23,9 @@ typedef struct {
   uint64_t generation;
   uint64_t input_calls, reject_input_at;
   uint64_t hold_until_ms;
+  uint64_t pending_since_ns, schedule_calls, ready_wakes, timer_wakes;
+  uint64_t node_calls, empty_steps, timer_arms, ready_samples;
+  uint64_t ready_delay_ns, ready_delay_max_ns, ready_delay_over_1ms;
   uint32_t index;
   unsigned enabled, stop_requested, stopped, ready, trace;
   int timer_fd;
@@ -38,13 +41,34 @@ static product_vpn_stack_owner_t owners[PRODUCT_VPN_RETURN_WORKERS];
 static product_vpn_flow_stack_config_t limits = {
   .max_sessions = 256, .max_input_packets = 1024, .max_pbufs = 8192,
   .max_pcbs = 258, .max_sockets = 256,
-  .max_packet_bytes = 1500, .task_stack_bytes = 32768,
+#ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
+  .max_packet_bytes = 3000,
+#else
+  .max_packet_bytes = 1500,
+#endif
+  .task_stack_bytes = 32768,
   .broker_timeout_ms = 2500, .idle_timeout_ms = 60000,
 };
 extern vlib_node_registration_t product_vpn_flow_stack_input_node;
 
+static u64 clock_ns(void)
+{
+  struct timespec time;
+  if (clock_gettime(CLOCK_MONOTONIC, &time)) abort();
+  return (u64)time.tv_sec * 1000000000 + time.tv_nsec;
+}
+
 static void schedule(vlib_main_t *vm)
-{ vlib_node_set_interrupt_pending(vm, product_vpn_flow_stack_input_node.index); }
+{
+  product_vpn_stack_owner_t *owner = &owners[vlib_get_worker_index(vm->thread_index)];
+  __atomic_fetch_add(&owner->schedule_calls, 1, __ATOMIC_RELAXED);
+  if (!__atomic_load_n(&owner->pending_since_ns, __ATOMIC_RELAXED)) {
+    u64 expected = 0, now = clock_ns();
+    (void)__atomic_compare_exchange_n(&owner->pending_since_ns, &expected, now,
+      0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+  }
+  vlib_node_set_interrupt_pending(vm, product_vpn_flow_stack_input_node.index);
+}
 
 static u64 clock_ms(void)
 {
@@ -62,14 +86,17 @@ static void arm_timer(product_vpn_stack_owner_t *owner, int timeout_ms)
     if (!timeout_ms) timer.it_value.tv_nsec = 1;
   }
   if (timerfd_settime(owner->timer_fd, 0, &timer, NULL)) abort();
+  ++owner->timer_arms;
 }
 
 static clib_error_t *read_ready(clib_file_t *file)
 {
+  product_vpn_stack_owner_t *owner = &owners[vlib_get_worker_index(vlib_get_thread_index())];
   if (file->private_data) {
     u64 expirations;
-    (void)read(file->file_descriptor, &expirations, sizeof(expirations));
-  }
+    if (read(file->file_descriptor, &expirations, sizeof(expirations)) == sizeof(expirations))
+      ++owner->timer_wakes;
+  } else ++owner->ready_wakes;
   schedule(vlib_get_main());
   return NULL;
 }
@@ -202,6 +229,8 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
   if (!enabled || strcmp(enabled, "1")) return 1;
   if (!vm || vm->thread_index || !generation ||
       product_packet_graph_worker_count() != PRODUCT_VPN_RETURN_WORKERS) return 0;
+  /* Capture reads need spare space to detect a potentially truncated packet. */
+  if (vlib_buffer_get_default_data_size(vm) <= limits.max_packet_bytes) return 0;
   for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
     if (owners[i].enabled) return 0;
   /* Validation may reduce real startup limits, never resize live storage or
@@ -332,6 +361,15 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
       vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS) return 0;
   product_vpn_stack_owner_t *owner = &owners[vlib_get_worker_index(vm->thread_index)];
   if (!owner->stack) return 0;
+  ++owner->node_calls;
+  u64 pending_since = __atomic_exchange_n(&owner->pending_since_ns, 0, __ATOMIC_RELAXED);
+  if (pending_since) {
+    u64 delay = clock_ns() - pending_since;
+    ++owner->ready_samples;
+    owner->ready_delay_ns += delay;
+    if (delay > owner->ready_delay_max_ns) owner->ready_delay_max_ns = delay;
+    if (delay > 1000000) ++owner->ready_delay_over_1ms;
+  }
   owner->snapshot = product_vpn_flow_stack_snapshot(owner->stack);
   if (owner->hold_until_ms && !__atomic_load_n(&owner->stop_requested, __ATOMIC_ACQUIRE)) {
     u64 now = clock_ms();
@@ -358,6 +396,7 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
   owner->output_node = node;
   owner->output_next = 0; /* product-vpn-flow-stack-input -> product-packet-admit */
   product_vpn_flow_stack_step_result_t result = product_vpn_flow_stack_step(owner->stack, 8, 200);
+  if (!received && !result.quanta && !result.runnable) ++owner->empty_steps;
   owner->output_node = NULL;
   owner->snapshot = product_vpn_flow_stack_snapshot(owner->stack);
   if (result.stopped && !product_packet_graph_buffer_debt() &&
@@ -399,6 +438,20 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
   for (u32 index = 0; index < PRODUCT_VPN_RETURN_WORKERS; ++index) {
   product_vpn_stack_owner_t *owner = &owners[index];
   product_vpn_flow_stack_snapshot_t *s = &owner->snapshot;
+  vlib_cli_output(vm, "flow_stack.driver owner=%u schedules=%llu ready_wakes=%llu timer_wakes=%llu nodes=%llu empty_steps=%llu timer_arms=%llu ready_samples=%llu ready_delay_ns=%llu ready_max_ns=%llu ready_over_1ms=%llu",
+    index, (unsigned long long)owner->schedule_calls,
+    (unsigned long long)owner->ready_wakes, (unsigned long long)owner->timer_wakes,
+    (unsigned long long)owner->node_calls, (unsigned long long)owner->empty_steps,
+    (unsigned long long)owner->timer_arms, (unsigned long long)owner->ready_samples,
+    (unsigned long long)owner->ready_delay_ns, (unsigned long long)owner->ready_delay_max_ns,
+    (unsigned long long)owner->ready_delay_over_1ms);
+  vlib_cli_output(vm, "flow_stack.tcp_progress owner=%u idle_rounds=%llu ring_full=%llu sndbuf_full=%llu window_full=%llu cwnd_full=%llu pending_rounds=%llu ring_peak=%llu pending_peak=%llu flight_peak=%llu mss_min=%u mss_max=%u entry_observations=1",
+    index, (unsigned long long)s->tcp_idle_rounds,
+    (unsigned long long)s->tcp_ring_full, (unsigned long long)s->tcp_sndbuf_full,
+    (unsigned long long)s->tcp_window_full, (unsigned long long)s->tcp_cwnd_full,
+    (unsigned long long)s->tcp_pending_rounds, (unsigned long long)s->tcp_ring_peak,
+    (unsigned long long)s->tcp_pending_peak, (unsigned long long)s->tcp_flight_peak,
+    s->tcp_mss_min, s->tcp_mss_max);
   vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu",
     index, (unsigned long long)s->tcp_rx_rounds,
     (unsigned long long)s->tcp_read_calls, (unsigned long long)s->tcp_read_blocked,

@@ -171,6 +171,10 @@ product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_snapshot(
   COPY(tcp_rx_rounds); COPY(tcp_read_calls); COPY(tcp_read_blocked);
   COPY(tcp_commits); COPY(tcp_commit_bytes); COPY(tcp_write_blocked);
   COPY(tcp_output_calls); COPY(tcp_commit_max);
+  COPY(tcp_idle_rounds); COPY(tcp_ring_full); COPY(tcp_sndbuf_full);
+  COPY(tcp_window_full); COPY(tcp_cwnd_full); COPY(tcp_pending_rounds);
+  COPY(tcp_ring_peak); COPY(tcp_pending_peak); COPY(tcp_flight_peak);
+  COPY(tcp_mss_min); COPY(tcp_mss_max);
   COPY(sessions); COPY(input_packets); COPY(pbufs); COPY(pbuf_peak); COPY(running); COPY(stopped);
   COPY(pcbs); COPY(pcb_peak); COPY(sockets); COPY(socket_peak); COPY(input_pbufs);
   COPY(pcb_allocations); COPY(pcb_frees);

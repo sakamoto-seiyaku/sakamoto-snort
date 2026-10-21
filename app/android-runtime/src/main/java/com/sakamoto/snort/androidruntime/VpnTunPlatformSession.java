@@ -18,6 +18,9 @@ public final class VpnTunPlatformSession implements AutoCloseable {
     public static final String IPV4_ADDRESS = "10.111.0.2";
     public static final String IPV6_ADDRESS = "fd00:111:111::2";
     public static final int MTU = 1500;
+    // Leave room for the VPP header, alignment padding and a spare read byte.
+    static final int LARGE_SEGMENT_MTU = 3000;
+    static final int LARGE_SEGMENT_BUFFER_BYTES = 3072;
 
     private int rawFd;
     public final boolean ipv6Enabled;
@@ -37,6 +40,13 @@ public final class VpnTunPlatformSession implements AutoCloseable {
 
     static EstablishResult establish(VpnService service, boolean enableIpv6,
                                      boolean graphValidation, InetAddress[] dnsServers) {
+        return establish(service, enableIpv6, graphValidation, dnsServers, MTU);
+    }
+
+    static EstablishResult establish(VpnService service, boolean enableIpv6,
+                                     boolean graphValidation, InetAddress[] dnsServers, int mtu) {
+        if (mtu != MTU && mtu != LARGE_SEGMENT_MTU)
+            return EstablishResult.error("vpn_mtu_invalid", "unsupported VPN packet profile");
         if (service == null) {
             return EstablishResult.error("vpn_service_missing",
                     "VpnService instance is unavailable");
@@ -46,7 +56,7 @@ public final class VpnTunPlatformSession implements AutoCloseable {
         try {
             VpnService.Builder builder = service.new Builder()
                     .setSession("Sakamoto VPN")
-                    .setMtu(MTU)
+                    .setMtu(mtu)
                     .addAddress(IPV4_ADDRESS, 32)
                     .addRoute("0.0.0.0", 0);
             if (graphValidation) {

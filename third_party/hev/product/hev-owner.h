@@ -125,6 +125,11 @@ typedef struct {
   uint64_t tcp_rx_rounds, tcp_read_calls, tcp_read_blocked;
   uint64_t tcp_commits, tcp_commit_bytes, tcp_write_blocked, tcp_output_calls;
   uint64_t tcp_commit_max;
+  /* Observations at Direct receive-round entry, not time-weighted occupancy. */
+  uint64_t tcp_idle_rounds, tcp_ring_full, tcp_sndbuf_full;
+  uint64_t tcp_window_full, tcp_cwnd_full, tcp_pending_rounds;
+  uint64_t tcp_ring_peak, tcp_pending_peak, tcp_flight_peak;
+  uint32_t tcp_mss_min, tcp_mss_max;
   uint64_t task_quanta, steps, wrong_owner, stale_generation;
   uint32_t sessions, input_packets, input_peak, pbufs, pbuf_peak;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;

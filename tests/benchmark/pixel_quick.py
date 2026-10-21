@@ -158,30 +158,34 @@ class Device:
     def retain_vpn_log(self, destination):
         """Hold the log inode across RuntimeService's normal profile deletion.
 
-        Start only after the measured window. The bounded shell reader copies
-        after native exit, so it adds no polling to the performance samples.
+        The reader blocks on a FIFO until native exit; it can be started before
+        load to preserve fatal evidence without polling during the samples.
         """
         log = "/data/data/" + PACKAGE + "/files/profiles/vpn/vpp/logs/vpp-stdout.log"
         q = shlex.quote
-        script = ("exec 3< " + q(log) + " || exit 1; touch " + q(destination + ".ready")
-                  + "; n=0; while [ ! -f " + q(destination + ".copy")
-                  + " ] && [ $n -lt 150 ]; do sleep .1; n=$((n+1)); done; "
-                  + "[ -f " + q(destination + ".copy") + " ] || exit 2; "
-                  + "cat <&3 > " + q(destination) + " && touch " + q(destination + ".done"))
-        value = self.root("sh -c " + q(script) + " >/dev/null 2>&1 </dev/null & echo reader=$!")
+        gate = destination + ".gate"
+        script = ("exec 3< " + q(log) + " || exit 1; mkfifo " + q(gate)
+                  + " || exit 2; touch " + q(destination + ".ready")
+                  + "; IFS= read -r trigger < " + q(gate) + " || exit 3; "
+                  + "cat <&3 > " + q(destination) + " && touch " + q(destination + ".done")
+                  + "; rm -f " + q(gate))
+        value = self.root("timeout 120 sh -c " + q(script)
+                          + " >/dev/null 2>&1 </dev/null & echo reader=$!")
         if not properties(value).get("reader", "").isdigit():
             raise RuntimeError("native log reader did not start")
         self.root("n=0; while [ ! -f " + q(destination + ".ready")
                   + " ] && [ $n -lt 50 ]; do sleep .02; n=$((n+1)); done; test -f "
                   + q(destination + ".ready"), timeout=2)
 
-    def read_retained_vpn_log(self, destination):
+    def read_retained_vpn_log(self, destination, cleanup=False):
         q = shlex.quote
-        return self.root("touch " + q(destination + ".copy")
+        return self.root("if [ ! -f " + q(destination + ".done")
+                         + " ]; then timeout 1 sh -c "
+                         + q("echo copy > " + q(destination + ".gate")) + "; fi"
                          + "; n=0; while [ ! -f " + q(destination + ".done")
                          + " ] && [ $n -lt 50 ]; do sleep .02; n=$((n+1)); done; "
                          + "test -f " + q(destination + ".done") + " && cat "
-                         + q(destination), timeout=2)
+                         + q(destination), timeout=3, cleanup=cleanup)
 
 
 def prepare(args):
@@ -378,6 +382,7 @@ def run(args):
     active = False
     initial = None
     sampler_pids = {}
+    retained_log = None
     helper = manifest["remote"] + "/socket-load"
     device.helper = helper
     run_remote = manifest["remote"] + "/run-" + hashlib.sha256(str(output).encode()).hexdigest()[:12]
@@ -419,6 +424,9 @@ def run(args):
                     if current.get("state") != "running" or current.get("profile") != profile or current.get("generation") != running["generation"]:
                         raise RuntimeError("runtime changed between fixed-flow workloads")
                 (cell / "runtime.json").write_text(json.dumps(running, indent=2) + "\n")
+                if suite == VPN_TCP_SUITE:
+                    retained_log = run_remote + "/" + case + "-native.log"
+                    device.retain_vpn_log(retained_log)
                 client_prefix = ["shell", "su", str(manifest["uid"]), "-c"] if profile == "root" else ["shell"]
                 # Warm only existing tracing and the actual LAN path. Its flows and time are explicit.
                 warm = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), "14", "tcp-fixed", "250", "2", "8"]
@@ -429,13 +437,22 @@ def run(args):
                     warm_result = json.loads(warm_value)
                     if not warm_result.get("bytes"):
                         raise RuntimeError("phone cannot deliver warmup data from the selected LAN peer")
-                commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows"]
+                commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows", "show buffers"]
                 if vpn_only:
                     commands.append("show product flow-stack")
                 if suite == VPN_TCP_SUITE:
                     commands.append("show runtime")
+                    (cell / "startup.conf").write_text(device.command(
+                        "shell", "run-as", PACKAGE, "cat", "files/profiles/vpn/vpp/startup.conf"))
+                    (cell / "interface-links.txt").write_text(device.root(
+                        "ip -details link show"))
                 diagnostic = device.cli(profile, ["show threads", *commands])
                 (cell / "before-cli.txt").write_text(diagnostic)
+                if suite == VPN_TCP_SUITE and manifest.get("minimum_native_buffers"):
+                    available_pool = sum(int(line.split()[5]) for line in diagnostic.splitlines()
+                                         if line.startswith("default-numa-"))
+                    if available_pool < manifest["minimum_native_buffers"]:
+                        raise RuntimeError("native buffer pool below frozen minimum: " + str(available_pool))
                 layout = []
                 for line in diagnostic.splitlines():
                     match = re.match(r"\s*(\d+)\s+(vpp_\S+)\s+(?:workers\s+)?(\d+)\s+\S+\s+\(\d+\)\s+(\d+)", line)
@@ -513,8 +530,9 @@ def run(args):
                 stopped_lifetime = fresh_each_case or case in ("tcp-new", "udp-new")
                 if stopped_lifetime:
                     if vpn_only:
-                        retained_log = run_remote + "/" + case + "-native.log"
-                        device.retain_vpn_log(retained_log)
+                        if retained_log is None:
+                            retained_log = run_remote + "/" + case + "-native.log"
+                            device.retain_vpn_log(retained_log)
                     device.action("--ez", "runtimeStop", "true")
                     final = device.wait_state("stopped")
                     device.wait_process_gone("libvpp_runtime.so")
@@ -528,6 +546,7 @@ def run(args):
                     if vpn_only:
                         native_stop = device.read_retained_vpn_log(retained_log)
                         (cell / "native-stop.txt").write_text(native_stop)
+                        retained_log = None
                         validate_vpn_stop(native_stop, running["generation"])
                 if profile == "root" and stopped_lifetime:
                     tail = device.command("shell", "run-as", PACKAGE, "tail", "-n", "12", "files/product-state/s242-last-stop.log")
@@ -579,6 +598,12 @@ def run(args):
                     result["errors"].append("final cleanup or rules identity failed")
             except Exception as error:
                 result["errors"].append("final audit: " + str(error))
+        if retained_log is not None:
+            try:
+                (cell / "native-failure.txt").write_text(
+                    device.read_retained_vpn_log(retained_log, cleanup=True))
+            except Exception as error:
+                result["errors"].append("native failure evidence: " + str(error))
         result["elapsed_seconds"] = time.monotonic() - entry
         if result["elapsed_seconds"] > 120 or result["errors"]:
             result["status"] = "INCOMPLETE"
@@ -598,7 +623,7 @@ def main():
     prep.add_argument("--peer", required=True)
     prep.add_argument("--bind", default="0.0.0.0")
     prep.add_argument("--port", type=int, default=40720)
-    prep.add_argument("--cell-ms", type=int, choices=(5000, 6000, 8000, 10000), default=5000,
+    prep.add_argument("--cell-ms", type=int, choices=(5000, 6000, 8000, 10000, 20000), default=5000,
                       help="fixed measurement window, frozen in the manifest before B0")
     prep.add_argument("--no-profile", action="store_true")
     prep.add_argument("--suite", choices=("root-vpn-v1", *VPN_SUITES), default="root-vpn-v1",

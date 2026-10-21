@@ -18,7 +18,11 @@
  * The broker is only a nonblocking recorder, not Android protect evidence.
  * Two owners deliberately receive the identical tuple to expose any shared
  * PCB/input/sequence/timer authority, independently of Product hash steering. */
-enum { PAYLOAD = 73728, QUEUE = 128, MTU = 1500 };
+#ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
+enum { PAYLOAD = 73728, QUEUE = 128, MTU = 3000, CLIENT_MSS = 2940 };
+#else
+enum { PAYLOAD = 73728, QUEUE = 128, MTU = 1500, CLIENT_MSS = 1360 };
+#endif
 static unsigned blocked_writes;
 static int backpressure;
 
@@ -39,7 +43,7 @@ typedef struct {
   uint16_t port;
   uint32_t send_seq, receive_seq, acked, sent, received;
   unsigned head, tail, outputs, syns, fins, rsts, destroyed, connects, connect_failed;
-  unsigned direct_reads, direct_writes;
+  unsigned direct_reads, direct_writes, max_data_length;
   int established, fin_sent;
   int pressure, pressure_done;
   int unreachable;
@@ -151,7 +155,8 @@ static hev_owner_input_result_t inject_port(fixture_t *f, uint16_t port, uint8_t
 {
   uint8_t packet[MTU] = {0};
   size_t ip_length = f->family == 6 ? 40 : 20;
-  size_t tcp_length = 20 + length, total = ip_length + tcp_length;
+  size_t tcp_header = flags & 2 ? 24 : 20;
+  size_t tcp_length = tcp_header + length, total = ip_length + tcp_length;
   assert(total <= sizeof(packet));
   uint32_t pseudo;
   if (f->family == 6) {
@@ -169,8 +174,10 @@ static hev_owner_input_result_t inject_port(fixture_t *f, uint16_t port, uint8_t
   uint8_t *tcp = packet + ip_length;
   write16(tcp, port); write16(tcp + 2, f->port);
   write32(tcp + 4, seq); write32(tcp + 8, f->receive_seq);
-  tcp[12] = 0x50; tcp[13] = flags; write16(tcp + 14, 32768);
-  for (size_t i = 0; i < length; ++i) tcp[20 + i] = data_byte(f, offset + i);
+  tcp[12] = (uint8_t)((tcp_header / 4) << 4);
+  tcp[13] = flags; write16(tcp + 14, 32768);
+  if (flags & 2) { tcp[20] = 2; tcp[21] = 4; write16(tcp + 22, CLIENT_MSS); }
+  for (size_t i = 0; i < length; ++i) tcp[tcp_header + i] = data_byte(f, offset + i);
   write16(tcp + 16, checksum(pseudo + sum(tcp, tcp_length)));
   hev_owner_facts_t facts = {.uid = (uint32_t)(10001 + f->index),
     .availability = HEV_OWNER_UID_KNOWN};
@@ -192,6 +199,8 @@ static void consume(fixture_t *f)
     assert(ip_length + 20 <= p.length);
     const uint8_t *tcp = p.bytes + ip_length;
     size_t header = (tcp[12] >> 4) * 4, length = p.length - ip_length - header;
+    assert(length <= CLIENT_MSS);
+    if (length > f->max_data_length) f->max_data_length = (unsigned)length;
     assert(read16(tcp) == f->port && read16(tcp + 2) == 12345);
     uint32_t pseudo = sum(p.bytes + (f->family == 6 ? 8 : 12), f->family == 6 ? 32 : 8)
                       + (uint32_t)(p.length - ip_length) + 6;
@@ -202,6 +211,8 @@ static void consume(fixture_t *f)
       f->index, tcp[13], seq, read32(tcp + 8), read16(tcp + 14), length, f->receive_seq);
     if (tcp[13] & 4) { ++f->rsts; continue; }
     if (tcp[13] & 2) {
+      assert(header >= 24 && tcp[20] == 2 && tcp[21] == 4);
+      assert(read16(tcp + 22) == CLIENT_MSS);
       ++f->syns;
       if (f->drop_syn && !f->dropped) { f->dropped = 1; continue; }
       assert((tcp[13] & 16) && read32(tcp + 8) == 100001);
@@ -367,7 +378,8 @@ int main(int argc, char **argv)
         unsigned limit = f->sent + (f->pressure >= 4 ? 1024 : 32768);
         if (limit > PAYLOAD) limit = PAYLOAD;
         while (f->sent < limit) {
-          unsigned bytes = limit - f->sent < 1024 ? limit - f->sent : 1024;
+          unsigned chunk = MTU > 1500 && !f->pressure ? CLIENT_MSS : 1024;
+          unsigned bytes = limit - f->sent < chunk ? limit - f->sent : chunk;
           inject(f, 24, f->send_seq, f->sent, bytes);
           f->send_seq += bytes; f->sent += bytes;
         }
@@ -434,10 +446,17 @@ int main(int argc, char **argv)
     if (!refusal) {
       assert(s.tcp_rx_rounds && s.tcp_read_calls && s.tcp_commits);
       assert(s.tcp_commit_bytes == PAYLOAD);
+      assert(s.tcp_mss_min == CLIENT_MSS && s.tcp_mss_max == CLIENT_MSS);
+      assert(s.tcp_idle_rounds <= s.tcp_rx_rounds);
+      assert(s.tcp_ring_peak && s.tcp_pending_peak <= s.tcp_ring_peak);
+#ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
+      /* Credit fixtures intentionally drip <=1024-byte bursts on owner0. */
+      if (f->pressure < 4) assert(f->max_data_length > 2000);
+#endif
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
       assert(s.tcp_commit_max <= 8);
       if (!pressure && !reset && !remote_fin && !underlay)
-        assert(s.tcp_commit_max >= 4);
+        assert(s.tcp_commit_max >= (MTU > 1500 ? 2 : 4));
 #else
       assert(s.tcp_commit_max <= 2); /* A wrapped ring can have two short spans. */
 #endif
@@ -446,6 +465,11 @@ int main(int argc, char **argv)
         (unsigned long long)s.tcp_read_calls, (unsigned long long)s.tcp_read_blocked,
         (unsigned long long)s.tcp_commits, (unsigned long long)s.tcp_commit_bytes,
         (unsigned long long)s.tcp_commit_max, (unsigned long long)s.tcp_output_calls);
+      printf("TCP%d owner=%d mss=%u max_payload=%u ring_peak=%llu ring_full=%llu sndbuf_full=%llu window_full=%llu cwnd_full=%llu idle_rounds=%llu\n",
+        family, i, s.tcp_mss_max, f->max_data_length,
+        (unsigned long long)s.tcp_ring_peak, (unsigned long long)s.tcp_ring_full,
+        (unsigned long long)s.tcp_sndbuf_full, (unsigned long long)s.tcp_window_full,
+        (unsigned long long)s.tcp_cwnd_full, (unsigned long long)s.tcp_idle_rounds);
     }
     assert(s.sessions_created == s.sessions_closed && s.sockets_created == s.sockets_closed);
     assert(s.pool_allocations == s.pool_frees && s.ram_allocations == s.ram_frees &&

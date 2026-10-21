@@ -570,6 +570,22 @@ static void tcp_session_task(void *opaque)
   while (owner->stats.running && !session->closing && transport->pcb) {
     uint64_t sent_before = transport->direct_sent_bytes;
     uint64_t received_before = transport->direct_received_bytes;
+    struct tcp_pcb *pcb = transport->pcb;
+    size_t used = transport->buffer->use_size;
+    size_t pending = transport->buffer->rda_size;
+    u32_t flight = pcb->snd_nxt - pcb->lastack;
+    u16_t mss = tcp_mss(pcb);
+    if (used == transport->buffer->max_size) ++owner->stats.tcp_ring_full;
+    if (!tcp_sndbuf(pcb)) ++owner->stats.tcp_sndbuf_full;
+    if (flight >= pcb->snd_wnd) ++owner->stats.tcp_window_full;
+    if (flight >= pcb->cwnd) ++owner->stats.tcp_cwnd_full;
+    if (pending) ++owner->stats.tcp_pending_rounds;
+    if (used > owner->stats.tcp_ring_peak) owner->stats.tcp_ring_peak = used;
+    if (pending > owner->stats.tcp_pending_peak) owner->stats.tcp_pending_peak = pending;
+    if (flight > owner->stats.tcp_flight_peak) owner->stats.tcp_flight_peak = flight;
+    if (!owner->stats.tcp_mss_min || mss < owner->stats.tcp_mss_min)
+      owner->stats.tcp_mss_min = mss;
+    if (mss > owner->stats.tcp_mss_max) owner->stats.tcp_mss_max = mss;
     int sent = hev_socks5_session_tcp_direct_send(transport);
     int send_error = sent == -2 ? errno : 0;
     int received = sent == -2 ? -2 : hev_socks5_session_tcp_direct_receive(transport);
@@ -584,6 +600,9 @@ static void tcp_session_task(void *opaque)
       owner->stats.tcp_output_calls += transport->direct_output_calls;
       if (transport->direct_commits > owner->stats.tcp_commit_max)
         owner->stats.tcp_commit_max = transport->direct_commits;
+      if (transport->direct_sent_bytes == sent_before &&
+          transport->direct_received_bytes == received_before &&
+          !transport->direct_commit_bytes) ++owner->stats.tcp_idle_rounds;
     }
     if (transport->direct_write_error) {
       trace(owner, "tcp_write_deferred", session->id, transport,
