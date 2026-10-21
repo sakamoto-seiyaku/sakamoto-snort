@@ -2,8 +2,9 @@
 
 The Product builders now reuse compilation across distribution directories.
 Android native staging, Host native assembly and APK Java/DEX reuse passed real
-repeat builds. Lossless deduplication of sealed artifacts released **13.43 GiB**,
-including 1.07 GiB of duplicate distributions created by this verification.
+repeat builds. Artifact deduplication and removal of obsolete C++ compiler
+objects released **18.81 GiB**. The initial deduplication phases accounted for
+13.43 GiB, including 1.07 GiB of distributions created by this verification.
 This verifies the local build workflow; no APK was installed and no new Root/VPN
 traffic or performance acceptance was performed.
 
@@ -148,3 +149,47 @@ Shared Android inputs remain installed once: active NDK 29 is about 2.35 GiB.
 The Lineage tree also supplies actual Android SDK/signing inputs and was not
 removed. Historical POC trees and unique debug binaries were retained. Native
 compilation caches are separate from all frozen hard-link groups.
+
+## Expanded temporary-directory and obsolete-output check
+
+A subsequent recheck covered the remaining audited duplicate groups and all
+4,227 real `/tmp/sakamoto*` / `/tmp/snort*` directories. Supplemental
+deduplication released another **3.741 GiB** from finalized historical POC
+libraries/APKs, immutable evidence snapshots and two frozen WASM output copies.
+It replaced 192 allocations in 90 groups, retaining paths and full-file hashes.
+The [supplemental result](../../build-output/build-cache-20261021/supplemental-cleanup-result.json)
+and [journal](../../build-output/build-cache-20261021/supplemental-dedup-journal.jsonl)
+record the operation. Existing writable hard links with potentially mutable
+aliases, sources, Git stores and validated build inputs were excluded.
+
+The old CMake trees also retained objects for the C++ daemon and host tests
+removed by ADR-0008. Cleanup removed **1,607 relocatable `.cpp.o` objects**,
+releasing **1.642 GiB**. Each file had to be an owned regular ELF `ET_REL` object
+under the old CMake Host targets, with its corresponding owned source absent.
+Source paths, inode metadata and full hashes were journaled before unlinking;
+open/mapped files were excluded. Linked executables/libraries, matching symbols,
+logs, coverage observations, third-party objects and current C/VPP compilation
+caches were retained. See the separate
+[daemon-object result](../../build-output/build-cache-20261021/retired-cxx-object-cleanup-result.json)
+and [test-object result](../../build-output/build-cache-20261021/retired-cxx-test-object-result.json).
+
+The [expanded final result](../../build-output/build-cache-20261021/expanded-final-storage-result.json)
+attributes **20,198,588,416 bytes / 18.811 GiB** of released allocations to this
+work. All **969 unique retained artifact/evidence paths** were checked against
+their expected full-file hashes and remain read-only. System-wide free-space
+changes during the supplemental pass also included concurrent external cleanup;
+they are not all attributed to this work.
+
+The originally audited `/tmp` large-file duplicate groups are now zero. This
+claim covers the five scanned directories at the original 8 MiB threshold,
+not every file under the system `/tmp`. Related Sakamoto temporary directories
+total **417,955,840 bytes / 0.389 GiB**, with no remaining `CMakeCache.txt`; their
+remaining contents are research inputs, scripts and small records.
+
+The original repo audit still reports about **0.628 GiB** of same-content
+allocations across 26 groups involving source/Git stores, mutable compilation
+trees, validated build inputs, writable hard-link aliases or unclassified legacy
+paths. They are listed in the
+[residual inventory](../../build-output/build-cache-20261021/final-residual-duplicates.json).
+They were retained explicitly; this record does not claim that every duplicate
+or unique historical file on the machine has been removed.
