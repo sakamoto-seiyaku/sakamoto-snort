@@ -177,3 +177,24 @@ Android实际配置为 `buffers { virtual-only buffers-per-numa 2048 default dat
 ### 第四阶段结束状态
 
 当前源码普通VPN默认MTU10000，32KiB sndbuf/ring保留；TCP batch、readiness、65528-byte缓冲仍默认OFF。设备恢复原October13 APK及全部12个native、原规则hash和Root grant，Stopped2110，Openwrt_5G保持不变，无VPP/load/simpleperf残留。[最终审计](../../build-output/vpn-mtu10000-20261021/final-readonly/result.json)。五个阻塞reader完成、FIFO gate删除且remote日志SHA与本地停止证据一致；本任务LAN peer经exe/argv/starttime/hash核对后用pidfd终止。[reader审计](../../build-output/vpn-mtu10000-20261021/retained-reader-audit.json) · [peer退出](../../build-output/vpn-mtu10000-20261021/peer-cleanup.json)。本次没有扩大UDP/CPS/Root性能或产品发布资格。
+
+## 第五阶段：已有500Mbps窗口的推进诊断
+
+工作跟踪：[SAKAMOTO-292](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/work-items/0a35cbe1-ce1e-4531-b413-d6d8edc8a94c)。本节记录可重算事实与证伪过程，不把热点直接认定为吞吐上限。
+
+使用 [`vpn_progress.py`](../../tests/benchmark/vpn_progress.py) 重读第四阶段B1/B2原始CLI和同generation停止证据，无设备访问、无新流量。两窗都出现：owner0每次非EAGAIN读取约30–31KiB，owner1约4.5–4.7KiB且读取EAGAIN比例约40%；owner1无数据推进146412/147001轮，ring/sndbuf满的入口观察23958/26828次。它们是次数，不代表等待时间占比；非EAGAIN分母可能包含EOF。
+
+[重算结果及输入SHA](../../build-output/vpn-mtu10000-20261021/progress-recomputed.json)，复现命令：
+
+```sh
+rtk proxy python3 tests/benchmark/vpn_progress.py \
+  build-output/vpn-mtu10000-20261021/run-B1 \
+  build-output/vpn-mtu10000-20261021/run-B2 \
+  --output build-output/vpn-mtu10000-20261021/progress-recomputed.json
+```
+
+owner0的pending-to-node均值2.33/2.48ms，owner1为40.4/44.1μs。源码 `schedule()` 在socket/timer/broker通知、输入包处理及继续推进时均可调用；时间戳由首次pending请求设定，在input node入口清除。因此原 `ready_delay` 名称不能解释成socket可读到执行的延迟。两owner的轮次、读取粒度与调度时序不同已复现，但还不是缺陷根因。
+
+两窗on-CPU火焰图中TUN completion含子调用约34–35%，HEV receive约31%（其中readv约24%），policy node约7.7%，HEV scheduling约5.5%；调用链重叠不能相加。约69%采样在内核；spin-unlock的self热点不能单独证明锁竞争。工作线程平均各51–58%单核，CPU-clock不记录off-CPU，尚不能认定500Mbps为CPU或链路上限。
+
+本次冻结的排查假设按优先顺序为：①TUN工作回合推迟同worker的flow-stack推进，缩小该回合应降低pending-to-node时延；②过密重试导致owner1碎片读取，限制无数据重试应降低EAGAIN/交付GiB且保留ACK后恢复；③primary credit或入队拒绝延迟ACK，消除该拒绝应减少sndbuf-full观察；④链路/off-CPU限制吞吐，若CPU成本下降但交付不变，则需要独立等待/链路测量。新比较保持MTU10000、2048/data10240池、32KiB ring/sndbuf、返回额度128和Openwrt_5G，性能变量逐项改变，不以扩大全部容量替代诊断。
