@@ -204,3 +204,26 @@ owner0的pending-to-node均值2.33/2.48ms，owner1为40.4/44.1μs。源码 `sche
 `show product primary`新增 `primary.rejection credit/enqueue`，分别在真实reserve失败和retained enqueue失败处计数，覆盖scalar与batch实现；既有 `rejected` 总数和处理语义保留。`show product tun`新增 `tun.capture_io`，报告实际capture budget、callback次数、预算退出及callback单调墙钟时间。`show product flow-stack`新增 `flow_stack.step_timing`，报告HEV step墙钟总时长、峰值及超过1ms次数；它包含OS抢占，不能替代CPU时间或独立off-CPU归因。对照和候选使用相同观测代码。
 
 实际Product batch函数的Host回归通过unordered enqueue拒绝与32-credit耗尽，且分别断言两类计数准确；external batch和policy batch回归通过。external batch harness在本轮前遗漏此前拆出的 `submit_external_batch_internal`，其旧提取编译失败已保留，更新为执行真实internal及wrapper；没有修改该Product提交函数来迎合测试。[Host原始日志](../../build-output/vpn-progress-20261021/host-product_packet_batch_test.py.log)。这些回归证明计数与有界拒绝行为，不证明更小TUN回合能改善实机性能。
+
+### Capture budget64/16：拒绝减少，但吞吐没有提高
+
+冻结[四窗协议](../../build-output/vpn-progress-20261021/protocol.json)，两APK源码唯一差异为 `TUN_CAPTURE_BUDGET 64→16`，DEX及11个其他native相同，插件精确匹配未剥离符号；[配对证明](../../build-output/vpn-progress-20261021/paired-build-identity.json)。持久缓存重复构建0.73秒、669个编译产物mtime不变、12个native相同。无重试或扫参，两边TCP batch/readiness ON，其余与第四阶段大MTU配置相同；普通构建默认的batch/readiness仍OFF。
+
+| 窗口 | capture budget | Mbps | VPP CPU秒/GiB | credit拒绝 | enqueue拒绝 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A1 /2111 | 64 | 505.13 | 18.43 | 2895 | 0 |
+| B1 /2112 | 16 | 489.92 | 16.00 | 134 | 0 |
+| B2 /2113 | 16 | 487.87 | 15.69 | 56 | 0 |
+| A2 /2114 | 64 | 519.52 | 17.24 | 2367 | 0 |
+
+均值512.32→488.90Mbps（−4.57%），CPU/GiB17.83→15.84（−11.14%），readv/GiB248892→73235（−70.58%），receive rounds/GiB268831→116747（−56.57%）。拒绝合计5262→190且全部为credit不足，enqueue为0；这区分了32个在途credit和64个队列槽位，不能称作handoff队列槽位不足。更小回合减少突发压力，但尚不能把所有拒绝归于单个64包callback：A1只有14/8400个callback读满64包，跨回合的在途占用也可能耗尽credit。
+
+inclusive HEV receive成本5.31→4.09 CPU秒/GiB、调度0.90→0.40；TUN completion6.20→6.23基本不变，policy node1.57→1.62。owner0 pending-to-node均值由2.13/2.32ms降至1.76/1.81ms，仍非socket-ready延迟。两侧ring/sndbuf-full入口观察没有随拒绝同步消失。该取舍没有证明吞吐改善，因此候选16不采用，源码保持capture budget64；返回credit128、primary credit32及64槽均不改。[汇总与火焰图](../../build-output/vpn-progress-20261021/index.html) · [精确计数](../../build-output/vpn-progress-20261021/progress.json)。四窗无probe timeout、停止native债务零；不是匹配负载延迟资格。
+
+### 独立off-CPU窗口：TUN worker在回注路径被抢占
+
+另用同一control64 APK跑generation2115、20秒64流，增加simpleperf `--trace-offcpu`，其465.50Mbps不混入上述ABBA。on-CPU分析明确选择on-cpu模式；[`vpn_waits.py`](../../tests/benchmark/vpn_waits.py)选择off-cpu模式，把sched_switch区间裁剪到端点实际开始/结束时间，保留raw prev_state和完整热点调用链。[等待归因](../../build-output/vpn-progress-20261021/waits.json) · [精确符号/独立CPU图](../../build-output/vpn-progress-20261021/analysis-wait64/analysis.json)。
+
+worker0总off-CPU约9.09秒，其中raw prev_state256的约8.44秒位于 `preempt_schedule → tun_rx_batched → tun_get_user → write → product_vpn_tun_complete_from_graph`；另约0.58秒在UID通知sendto路径被抢占。该worker在VPP epoll等待仅0.032秒，Android fwmark等待约0.029秒。worker1的off-CPU约12.99秒，其中VPP epoll等待11.65秒。worker0切出时紧接着调度 `socket-load` 的区间合计约8.44秒，负载客户端自身CPU为8.59秒；next_comm仅标识切出时的下一线程，不能把整个离CPU区间全算成它的CPU时间。
+
+这补充并修正了对平均CPU的解释：worker0平均只用约53%单核，不代表它在剩余时间等待网络或没有CPU调度压力。该窗口实际显示单TUN lane在回注路径被抢占，而另一owner有大量epoll等待；CPU热点和推进节奏须结合调度解释。跟踪本身会增加开销，一窗不能证明所有抢占成因、一般应用的CPU分布或整机吞吐上限。

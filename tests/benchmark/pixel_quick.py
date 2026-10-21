@@ -493,6 +493,8 @@ def run(args):
                 background = shlex.join([helper, "monitor", str(pid), str(monitor_ms)]) + " > " + shlex.quote(remote_cpu) + " 2>&1 < /dev/null & echo monitor=$!"
                 if manifest["profiling"]:
                     perf = ["/system/bin/simpleperf", "record", "-p", str(pid), "--duration", str(monitor_ms / 1000), "-e", "cpu-clock", "-f", "199", "-g", "--clockid", "monotonic", "-o", remote_perf]
+                    if manifest.get("trace_offcpu"):
+                        perf.append("--trace-offcpu")
                     background += "; " + shlex.join(perf) + " > " + shlex.quote(remote_perf + ".log") + " 2>&1 < /dev/null & echo profiler=$!"
                 sampler_text = device.root(background)
                 (cell / "samplers.txt").write_text(sampler_text)
