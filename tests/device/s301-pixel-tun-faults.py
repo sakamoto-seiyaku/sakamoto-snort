@@ -35,7 +35,11 @@ def main():
     p.add_argument('--helper', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--ordinary-product', action='store_true')
+    p.add_argument('--stop-during-congestion', action='store_true')
+    p.add_argument('--prestop-draining', action='store_true')
     a = p.parse_args()
+    assert not (a.stop_during_congestion or a.prestop_draining) or not a.ordinary_product
+    assert not (a.stop_during_congestion and a.prestop_draining)
     a.output.mkdir(parents=True, exist_ok=False)
     apk, restore, helper = (path.resolve() for path in (a.apk, a.restore_apk, a.helper))
     def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -132,7 +136,10 @@ def main():
                 'runtimeProfile', 'vpn', '--es', 'runtimeWorkerCpuIds', '1,2,1',
                 '--es', 'runtimeTunIoCpuId', '3'))
         else:
-            save('start.txt', action('--ez', 'debugVpnGraphValidation', 'true',
+            save('start.txt', action('--ez',
+                                     'debugVpnHevValidation' if (a.stop_during_congestion or
+                                                                  a.prestop_draining)
+                                     else 'debugVpnGraphValidation', 'true',
                                      '--es', 'runtimeTunIoCpuId', '3'))
         state = wait_state('running', dict(state='running', profile='vpn', errorCode='',
             protectionRunning='true' if a.ordinary_product else 'false'))
@@ -163,6 +170,23 @@ def main():
         interface = re.search(r's213 event=attach .* interface=(\S+)', log).group(1)
         result['interface'] = interface
         if not a.ordinary_product: cli('trace', 'product packet-trace limit 4096')
+        if a.prestop_draining:
+            fault = cli('prestop-draining', 'product tun fault pre-stop-draining')
+            assert 'tun.fault armed=pre-stop-draining generation=' + generation in fault
+            save('stop-prestaged-draining.txt', action('--ez', 'runtimeStop', 'true'))
+            wait_state('stopped', dict(state='stopped', mayBeActive='false', errorCode=''))
+            active = False
+            log = save('vpp.log', app('files/product-state/s237-last-stop.log'))
+            lines = log.splitlines()
+            markers = ['s301 event=tun_read_pause ', 's302 event=tun_read_quiesced ',
+                       's302 event=graph_quiesced ', 's213 event=stop ']
+            positions = [next(i for i, line in enumerate(lines) if line.startswith(marker))
+                         for marker in markers]
+            assert positions == sorted(positions), positions
+            assert 'pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1' in log
+            result['prestop_draining'] = dict(generation=generation, positions=positions)
+            result['status'] = 'RAW_COMPLETE'
+            return
         before = status('before')
         assert 'tun.fault armed=' in cli('arm-capture-alloc',
             'product tun fault capture-alloc 1')
@@ -196,6 +220,55 @@ def main():
         assert recovered[2]['owner_failures'] == '0'
         capacity('completion-capacity',
             'product capacity credits 32 primary-slots 64 completion-slots 2')
+        if a.stop_during_congestion:
+            held = cli('original-hold', 'product tun original-hold 5000')
+            assert 'tun.original_hold milliseconds=5000' in held
+            command = ('for i in $(seq 1 30); do /data/local/tmp/s301-tun-packets '
+                       + shlex.quote(interface) + ' valid 64; sleep 0.03; done')
+            flood = subprocess.Popen([str(ROOT / 'dev/adb'), '-s', SERIAL,
+                'shell', 'su', '-c', shlex.quote(command)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            time.sleep(.12)
+            save('stop-during-congestion.txt', action('--ez', 'runtimeStop', 'true'))
+            wait_state('stopped', dict(state='stopped', mayBeActive='false', errorCode=''))
+            active = False
+            flood_output, _ = flood.communicate(timeout=10)
+            save('flood.txt', flood_output)
+            log = save('vpp.log', app('files/product-state/s237-last-stop.log'))
+            lines = log.splitlines()
+            cutoff = [i for i, line in enumerate(lines)
+                if line.startswith('s302 event=tun_read_quiesced ')]
+            graph_cutoff = [i for i, line in enumerate(lines)
+                if line.startswith('s302 event=graph_quiesced ')]
+            assert len(cutoff) == len(graph_cutoff) == 1 and cutoff[0] < graph_cutoff[0]
+            captures = [dict(re.findall(r'(\w+)=([^\s]+)', line)) | {'line': i}
+                for i, line in enumerate(lines)
+                if line.startswith('s213 event=capture source=TUN_CAPTURED ')]
+            completed = [dict(re.findall(r'(\w+)=([^\s]+)', line)) | {'line': i}
+                for i, line in enumerate(lines)
+                if line.startswith('s213 event=completion source=TUN_CAPTURED ')]
+            freed = [dict(re.findall(r'(\w+)=([^\s]+)', line)) | {'line': i}
+                for i, line in enumerate(lines)
+                if line.startswith('s203 event=buffer_free source=TUN_CAPTURED ')]
+            deferred = [dict(re.findall(r'(\w+)=([^\s]+)', line)) | {'line': i}
+                for i, line in enumerate(lines)
+                if line.startswith('s210 event=completion_deferred ')]
+            assert captures and all(row['line'] < cutoff[0] for row in captures)
+            capture_tokens = [row['token'] for row in captures]
+            assert len(capture_tokens) == len(set(capture_tokens))
+            assert sorted(capture_tokens) == sorted(row['token'] for row in completed)
+            assert sorted(capture_tokens) == sorted(row['obligation'] for row in freed)
+            assert all(row['generation'] == generation for row in completed)
+            cutoff_state = dict(re.findall(r'(\w+)=([^\s]+)', lines[cutoff[0]]))
+            assert deferred and int(cutoff_state['pending']) > 0
+            assert any(row['line'] > cutoff[0] for row in completed)
+            assert 's213 event=stop generation=' + generation in log
+            assert 'pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1' in log
+            result['congestion'] = dict(captures=len(captures), deferred=len(deferred),
+                pending_at_cutoff=int(cutoff_state['pending']),
+                completion_after_cutoff=sum(row['line'] > cutoff[0] for row in completed))
+            result['status'] = 'RAW_COMPLETE'
+            return
         save('completion-burst-send.txt', root('/data/local/tmp/s301-tun-packets ' +
                                                shlex.quote(interface) + ' valid 64'))
         congested = drain('completion-congested', int(recovered[0]['captured']) + 64)

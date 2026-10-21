@@ -92,11 +92,14 @@ static struct {
   u64 capture_callbacks, capture_budget_exits, capture_callback_ns, capture_callback_max_ns;
   u64 capture_alloc_attempts, capture_alloc_failures, capture_read_pauses, capture_read_resumes;
   u64 stack_accepted_originals, stack_rejected_originals;
-  u64 fault_write_at, fault_capture_alloc_at;
+  f64 original_hold_until;
+  u64 fault_write_at, fault_write_short_at, fault_write_eagain_at;
+  u64 fault_capture_alloc_at;
   u64 pregraph_returns, local, remote;
   u32 pending, test_uid, tun_file, listener_file, snapshot_interface;
   int tun_fd, listener_fd;
-  u8 enabled, draining, test_uid_known, origin_worker, read_paused;
+  u8 enabled, draining, stop_started, graph_quiesced;
+  u8 test_uid_known, origin_worker, read_paused;
   char path[sizeof (((struct sockaddr_un *)0)->sun_path)];
   tun_pending_t obligations[TUN_PENDING];
   tun_control_t controls[TUN_CONTROL_SLOTS];
@@ -182,6 +185,9 @@ int product_vpn_tun_return_held(vlib_main_t *vm,
   const product_packet_completion_frame_t *completion)
 {
   const product_adapter_obligation_t *o = &completion->obligation;
+  if (o->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
+      o->queue_generation == tun.generation && !o->packet_id &&
+      tun.original_hold_until > vlib_time_now(vm)) return 1;
   return o->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
     o->queue_generation == tun.generation && o->packet_id &&
     o->packet_id <= active_owner_count() &&
@@ -207,8 +213,9 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
       (unsigned long long)generation, (unsigned long long)(generation - 1), (unsigned long long)serial);
     --generation;
   }
-  if (__atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE) ||
-      tun.tun_fd < 0 || generation != tun.generation || !platform ||
+  /* Quiesce withdraws new TUN reads first. Already accepted originals may
+   * still reach their owner and generate returns until the graph is drained. */
+  if (tun.graph_quiesced || tun.tun_fd < 0 || generation != tun.generation || !platform ||
       platform->provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN ||
       platform->direction != PRODUCT_PACKET_DIRECTION_INPUT || !spans ||
       !count || count > 64 || !total || total > vlib_buffer_get_default_data_size(vm))
@@ -392,8 +399,27 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
         fprintf(stderr, "%02x", bytes[i]);
       fprintf(stderr, "\n"); funlockfile(stderr);
     }
-    product_vpn_tun_write_result_t result = product_vpn_tun_write_once(
-      tun.tun_fd, vlib_buffer_get_current(buffer), write_length);
+    product_vpn_tun_write_result_t result;
+    if (tun.tun_write_attempts == tun.fault_write_short_at) {
+      /* Validation-only result at the syscall seam. The host helper also
+       * exercises a real short nonblocking write. */
+      tun.fault_write_short_at = 0;
+      result = (product_vpn_tun_write_result_t){
+        .kind = PRODUCT_VPN_TUN_WRITE_SHORT,
+        .written = write_length ? (ssize_t)write_length - 1 : 0, .error = 0};
+      fprintf(stderr, "s302 event=fault_write_short generation=%llu token=%llu\n",
+        (unsigned long long)tun.generation, (unsigned long long)o->token);
+    } else if (tun.tun_write_attempts == tun.fault_write_eagain_at) {
+      /* The host helper separately exercises an actual EAGAIN. */
+      tun.fault_write_eagain_at = 0;
+      result = (product_vpn_tun_write_result_t){
+        .kind = PRODUCT_VPN_TUN_WRITE_EAGAIN, .written = -1, .error = EAGAIN};
+      fprintf(stderr, "s302 event=fault_write_eagain generation=%llu token=%llu\n",
+        (unsigned long long)tun.generation, (unsigned long long)o->token);
+    } else {
+      result = product_vpn_tun_write_once(
+        tun.tun_fd, vlib_buffer_get_current(buffer), write_length);
+    }
     write_result = result.written;
     write_error = result.error;
     if (result.kind == PRODUCT_VPN_TUN_WRITE_SUCCEEDED &&
@@ -614,15 +640,33 @@ static int tun_attach (int fd, u32 uid, int uid_known) {
 }
 
 static int tun_stop (void) {
-  __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE);
-  /* Stop epoll readability at quiesce, before waiting for owner/completion
-   * debt. Returning from a level-triggered read callback while the fd stays
-   * readable would otherwise wake this lane continuously during drain. */
-  if (tun.tun_file != ~0U && !tun.read_paused)
-    tun_pause_reads(tun.vm, 0);
-  clib_memset(return_hold_until, 0, sizeof(return_hold_until));
-  product_vpn_flow_stack_driver_quiesce();
-  product_packet_graph_quiesce (tun.vm);
+  if (!tun.stop_started) {
+    tun.stop_started = 1;
+    __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE);
+    /* The control caller holds the worker barrier. Withdraw the read epoll
+     * subscription before an already admitted packet can complete. */
+    if (tun.tun_file != ~0U && !tun.read_paused)
+      tun_pause_reads(tun.vm, 0);
+    tun.original_hold_until = 0; /* Release bounded validation backlog. */
+    fprintf(stderr, "s302 event=tun_read_quiesced generation=%llu pending=%u buffers=%llu obligations=%llu\n",
+      (unsigned long long)tun.generation, tun.pending,
+      (unsigned long long)product_packet_graph_buffer_debt(),
+      (unsigned long long)product_packet_graph_obligation_debt());
+  }
+  if (!tun.graph_quiesced) {
+    /* The original completion is the boundary at which owner-local HEV has
+     * consumed or rejected every admitted TUN packet. Keep its transport
+     * turns and native return admission live until that boundary. */
+    if (tun.pending) return 1;
+    tun.graph_quiesced = 1;
+    clib_memset(return_hold_until, 0, sizeof(return_hold_until));
+    product_vpn_flow_stack_driver_quiesce();
+    product_packet_graph_quiesce(tun.vm);
+    fprintf(stderr, "s302 event=graph_quiesced generation=%llu pending=0 buffers=%llu obligations=%llu\n",
+      (unsigned long long)tun.generation,
+      (unsigned long long)product_packet_graph_buffer_debt(),
+      (unsigned long long)product_packet_graph_obligation_debt());
+  }
   for (u32 i = 0; i < active_owner_count(); ++i)
     if (product_vpn_return_credit_used(&returns[i].credit)) return 1;
   for (u32 i = 0; i < active_owner_count(); ++i)
@@ -857,6 +901,18 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
       (unsigned long long)tun.fault_capture_alloc_at);
     return NULL;
   }
+  if (unformat(input, "pre-stop-draining")) {
+    if (product_vpn_tun_product_mode() || !tun.enabled || tun.tun_fd < 0 ||
+        tun.draining || tun.stop_started || tun.read_paused ||
+        unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
+      return clib_error_return(0, "expected attached validation before stop");
+    /* Exercise the same state left by a fatal read or token exhaustion:
+     * draining is set, while the read fd is still epoll-subscribed. */
+    __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE);
+    vlib_cli_output(vm, "tun.fault armed=pre-stop-draining generation=%llu",
+      (unsigned long long)tun.generation);
+    return NULL;
+  }
   if (product_vpn_tun_product_mode())
     return clib_error_return(0, "Flow Stack and write faults are unavailable in Product VPN mode");
   if (owner_index >= active_owner_count())
@@ -869,6 +925,10 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
     target = &owner->fault_allocate_at; current = owner->packets;
   } else if (unformat(input, "pre-accept %u", &after)) {
     target = &owner->fault_reject_at; current = owner->packets;
+  } else if (unformat(input, "write-short %u", &after)) {
+    target = &tun.fault_write_short_at; current = tun.tun_write_attempts;
+  } else if (unformat(input, "write-eagain %u", &after)) {
+    target = &tun.fault_write_eagain_at; current = tun.tun_write_attempts;
   } else if (unformat(input, "write %u", &after)) {
     target = &tun.fault_write_at; current = tun.tun_write_attempts;
   } else if (unformat(input, "stale-output %u", &after)) {
@@ -882,7 +942,7 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
   }
   if (!target || !after || after > 64 || *target ||
       unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
-    return clib_error_return(0, "expected output-alloc|pre-accept|write|input-reject|stale-output <1..64>");
+    return clib_error_return(0, "expected output-alloc|pre-accept|write|write-short|write-eagain|input-reject|stale-output <1..64>");
   *target = current + after;
   vlib_cli_output(vm, "tun.fault armed=1 after=%u at=%llu", after, (unsigned long long)*target);
   return NULL;
@@ -910,6 +970,25 @@ static clib_error_t *tun_return_hold(vlib_main_t *vm, unformat_input_t *input,
 }
 VLIB_CLI_COMMAND(product_tun_return_hold_command, static) = {
   .path = "product tun return-hold", .function = tun_return_hold,
+};
+
+static clib_error_t *tun_original_hold(vlib_main_t *vm, unformat_input_t *input,
+                                      vlib_cli_command_t *command)
+{
+  (void)command;
+  u32 milliseconds = 0;
+  if (product_vpn_tun_product_mode() || !product_vpn_tun_enabled() ||
+      tun.tun_fd < 0 || tun.draining ||
+      !unformat(input, "%u", &milliseconds) || milliseconds > 5000 ||
+      unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
+    return clib_error_return(0, "expected attached validation: <0..5000 ms>");
+  tun.original_hold_until = milliseconds ? vlib_time_now(vm) + milliseconds * .001 : 0;
+  vlib_cli_output(vm, "tun.original_hold milliseconds=%u generation=%llu",
+    milliseconds, (unsigned long long)tun.generation);
+  return 0;
+}
+VLIB_CLI_COMMAND(product_tun_original_hold_command, static) = {
+  .path = "product tun original-hold", .function = tun_original_hold,
 };
 
 static clib_error_t *tun_stop_cli (vlib_main_t *vm, unformat_input_t *input,

@@ -2125,9 +2125,8 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
       u32 bi = queue->buffers[queue->head];
       product_packet_completion_frame_t completion;
       clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
-      /* Fault injection holds returns, not original-capture completions. Scan
-       * this existing bounded storage so the test does not accidentally fill
-       * the shared capture ledger behind a deliberately held return. */
+      /* Validation may hold an original or return completion. Scan this
+       * bounded queue so a held item does not block unrelated settlements. */
       if (product_vpn_tun_return_held(vm, &completion))
         {
           queue->head = (queue->head + 1) % PRODUCT_COMPLETION_RETURN_CAPACITY;

@@ -32,7 +32,7 @@ def main():
     parser.add_argument('--apk', type=Path, required=True)
     parser.add_argument('--endpoint-address', required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--fault', choices=['none', 'write'], default='none')
+    parser.add_argument('--fault', choices=['none', 'write', 'write-short', 'write-eagain'], default='none')
     parser.add_argument('--owner', type=int, choices=[0, 1, 2], default=0)
     parser.add_argument('--owner-count', type=int, choices=[1, 2, 3], default=2)
     parser.add_argument('--source-port-first', type=int, default=42000)
@@ -40,10 +40,18 @@ def main():
     parser.add_argument('--stress-ingress', action='store_true')
     parser.add_argument('--ordinary-product', action='store_true')
     parser.add_argument('--flow-end-mode', choices=['none', 'close', 'expiry'], default='none')
+    parser.add_argument('--stop-with-held-return', action='store_true')
+    parser.add_argument('--stale-return-before-stop', action='store_true')
     a = parser.parse_args()
     assert a.owner < a.owner_count
     assert 1024 <= a.source_port_first <= 65435
     assert not a.ordinary_product or a.fault == 'none'
+    assert not a.stop_with_held_return or (not a.ordinary_product and
+        a.fault in ('none', 'write', 'write-short', 'write-eagain') and
+        a.flow_end_mode == 'none' and not a.stress_ingress)
+    assert not a.stale_return_before_stop or (not a.ordinary_product and
+        not a.stop_with_held_return and a.fault == 'none' and
+        a.flow_end_mode == 'none' and not a.stress_ingress)
     endpoint_ip = ipaddress.ip_address(a.endpoint_address)
     assert not (endpoint_ip.is_loopback or endpoint_ip.is_unspecified
                 or endpoint_ip.is_link_local or endpoint_ip.is_multicast)
@@ -138,7 +146,8 @@ def main():
         result['uid'] = int(adb('shell', 'run-as', PKG, 'id', '-u').strip())
         helper = a.output / 'udp-endpoint'
         source = ROOT / 'tests/device/helpers/s223-udp.c'
-        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-O2', str(source), '-o', str(helper)], check=True)
+        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-O2',
+                        str(source), '-o', str(helper)], check=True)
         result['endpoint_source_sha256'] = chain.digest(source)
         result['endpoint_sha256'] = chain.digest(helper)
         with socket.socket(socket.AF_INET if family == 4 else socket.AF_INET6, socket.SOCK_DGRAM) as reservation:
@@ -229,14 +238,92 @@ def main():
                                      text=True)
             time.sleep(.2)
         if a.fault != 'none':
-            armed = cli('fault', [f'product tun fault owner {a.owner} ' + a.fault + ' 2'])
+            fault_after = 1 if a.stop_with_held_return else 2
+            armed = cli('fault', [f'product tun fault owner {a.owner} ' + a.fault +
+                                  f' {fault_after}'])
             assert 'tun.fault armed=' in armed
+        if a.stop_with_held_return:
+            held = cli('return-hold', [f'product tun return-hold {a.owner} 5000'])
+            assert f'tun.return_hold owner={a.owner} milliseconds=5000' in held, held
+        if a.stale_return_before_stop:
+            armed = cli('stale-output', [f'product tun fault owner {a.owner} stale-output 1'])
+            assert 'tun.fault armed=1' in armed, armed
         nonce = 'Es237-' + str(time.time_ns())
         result['nonce'] = nonce
         assert server.poll() is None, 'endpoint failed to bind'
         save('send.txt', action('--es', 's237ProbeNonce', nonce, '--ei', 's237SourcePort', str(port),
             '--es', 's237Endpoint', str(endpoint_ip), '--ei', 's237EndpointPort', str(endpoint_port),
-            '--ei', 's237Packets', '3'))
+            '--ei', 's237Packets', '1' if a.stale_return_before_stop else '3'))
+        if a.stale_return_before_stop:
+            probe = wait('probe', 'files/product-state/s237-probe.properties', dict(nonce=nonce))
+            assert probe.get('packet.0') == 'timeout', probe
+            before_stop = cli('stale-status', ['show product tun', 'show product primary'])
+            returned = next(dict(re.findall(r'(\w+)=([^\s]+)', line))
+                for line in before_stop.splitlines()
+                if line.startswith(f'tun.return owner={a.owner} '))
+            assert returned['in_use'] == returned['packets'] == '0', returned
+            save('stop.txt', action('--ez', 'runtimeStop', 'true'))
+            wait('stopped', STATE, dict(state='stopped', mayBeActive='false', errorCode=''))
+            active = False
+            final = save('native-stop.log', app('files/product-state/s237-last-stop.log'))
+            assert (f's237 event=fault_stale_output current_generation={result["generation"]} '
+                    f'supplied_generation={result["generation"] - 1}') in final
+            assert 's237 event=return_copy generation=' + str(result['generation'] - 1) not in final
+            assert 's213 event=completion source=FLOW_STACK_RETURN generation=' + \
+                str(result['generation'] - 1) not in final
+            assert 's213 event=stop generation=' + str(result['generation']) in final
+            assert 'pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1' in final
+            result['stale_supplied_generation'] = result['generation'] - 1
+            result['status'] = 'STALE_RETURN_REJECTED'
+            return
+        if a.stop_with_held_return:
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                before_stop = cli('held-return-status', ['show product tun',
+                    'show product completion', 'show product primary'])
+                held_owner = next((dict(re.findall(r'(\w+)=([^\s]+)', line))
+                    for line in before_stop.splitlines()
+                    if line.startswith(f'tun.return owner={a.owner} ')), None)
+                if held_owner and int(held_owner['in_use']) > 0: break
+                time.sleep(.05)
+            else: raise RuntimeError('return did not become live before stop')
+            save('stop.txt', action('--ez', 'runtimeStop', 'true'))
+            wait('stopped', STATE, dict(state='stopped', mayBeActive='false', errorCode=''))
+            active = False
+            final = save('native-stop.log', app('files/product-state/s237-last-stop.log'))
+            read_cutoff = [i for i, line in enumerate(final.splitlines())
+                if line.startswith('s302 event=tun_read_quiesced ')]
+            graph_cutoff = [i for i, line in enumerate(final.splitlines())
+                if line.startswith('s302 event=graph_quiesced ')]
+            writes = [dict(re.findall(r'(\w+)=([^\s]+)', line)) | {'line': i}
+                for i, line in enumerate(final.splitlines())
+                if line.startswith('s213 event=completion source=FLOW_STACK_RETURN ')]
+            assert len(read_cutoff) == len(graph_cutoff) == 1, final
+            assert writes and all(read_cutoff[0] < w['line'] for w in writes), final
+            assert all(w['generation'] == str(result['generation']) for w in writes)
+            assert len({w['token'] for w in writes}) == len(writes), writes
+            if a.fault == 'write':
+                assert any(w['transport_outcome'] == 'TUN_WRITE_FAILED' and
+                           w['write_errno'] == '22' for w in writes), writes
+            elif a.fault == 'write-short':
+                assert any(w['transport_outcome'] == 'TUN_WRITE_SHORT' and
+                           w['write_errno'] == '0' for w in writes), writes
+            elif a.fault == 'write-eagain':
+                assert any(w['transport_outcome'] == 'TUN_WRITE_EAGAIN' and
+                           w['write_errno'] == str(11) for w in writes), writes
+            else:
+                assert all(w['transport_outcome'] == 'TUN_WRITE_SUCCEEDED' for w in writes), writes
+            assert graph_cutoff[0] < min(w['line'] for w in writes), final
+            assert 's213 event=stop generation=' + str(result['generation']) in final
+            assert 'pending=0 buffers=0 frames=0 obligations=0 tun_fd=-1' in final
+            stopped = [dict(re.findall(r'(\w+)=([^\s]+)', line))
+                for line in final.splitlines() if line.startswith('s237 event=owner_stopped ')]
+            assert len(stopped) == a.owner_count
+            assert all(all(s[key] == '0' for key in ('sessions', 'inputs', 'pbufs',
+                'buffers', 'obligations', 'frames')) for s in stopped), stopped
+            result['held_return_writes_after_cutoff'] = len(writes)
+            result['status'] = 'QUIESCE_HELD_RETURN_COMPLETE'
+            return
         probe = wait('probe', 'files/product-state/s237-probe.properties', dict(nonce=nonce))
         if flood is not None:
             flood_output, _ = flood.communicate(timeout=30)
