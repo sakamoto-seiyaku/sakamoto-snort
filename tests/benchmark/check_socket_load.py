@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Loopback correctness checks; these are never Pixel performance results."""
 import importlib.util
+import argparse
 import json
 import os
 from pathlib import Path
@@ -40,10 +41,14 @@ def choose_port():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--binary", type=Path, help="reuse an already compiled helper")
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="sakamoto-socket-check-") as directory:
-        binary = Path(directory) / "socket-load"
-        subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
-                        str(HERE / "socket_load.c"), "-o", str(binary)], check=True)
+        binary = args.binary.resolve() if args.binary else Path(directory) / "socket-load"
+        if not args.binary:
+            subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
+                            str(HERE / "socket_load.c"), "-o", str(binary)], check=True)
         port = choose_port()
         peer = subprocess.Popen([str(binary), "server", "127.0.0.1", str(port)],
                                 stdout=subprocess.PIPE, text=True)
@@ -72,6 +77,42 @@ def main():
                 reset = quick.peer_query("127.0.0.1", port, index, "R")
                 assert reset["tcp_requests"] == reset["udp_received_packets"] == 0
                 print(case + ": PASS", flush=True)
+            def tcp_source_ports(count, stride=1):
+                for base in range(20000, 30000, count * stride):
+                    endpoints = []
+                    try:
+                        for offset in range(count):
+                            endpoint = socket.socket()
+                            endpoints.append(endpoint)
+                            endpoint.bind(("0.0.0.0", base + offset * stride))
+                        return base
+                    except OSError:
+                        continue
+                    finally:
+                        for endpoint in endpoints:
+                            endpoint.close()
+                raise RuntimeError("no free TCP source port range")
+
+            tcp_base = tcp_source_ports(10, 2)
+            fixed = json.loads(subprocess.check_output(
+                [str(binary), "client", "127.0.0.1", str(port), "14", "tcp-fixed",
+                 "250", "2", "4", str(tcp_base), "2"], text=True, timeout=2))
+            assert fixed["fixed_source_port_base"] == tcp_base and fixed["fixed_source_port_stride"] == 2
+            assert fixed["bytes"] > 0 and fixed["latency_samples"] > 0
+            assert fixed["attempts"] == 10 and fixed["errors"] == fixed["timeouts"] == 0
+            assert quick.peer_query("127.0.0.1", port, 14)["tcp_requests"] >= 10
+            # An occupied bulk source port must fail explicitly; falling back
+            # to an ephemeral port would silently change canonical ownership.
+            with socket.socket() as occupied:
+                occupied.bind(("0.0.0.0", tcp_source_ports(2)))
+                source = occupied.getsockname()[1]
+                collision = json.loads(subprocess.check_output(
+                    [str(binary), "client", "127.0.0.1", str(port), "15", "tcp-fixed",
+                     "100", "1", "1", str(source), "1"], text=True, timeout=2))
+                assert collision["bytes"] == 0 and collision["errors"] == 1, collision
+                assert collision["latency_samples"] > 0 and collision["timeouts"] == 0
+            print("fixed TCP source ports and bind collision: PASS", flush=True)
+
             # The mechanism experiment replays the same UDP five-tuples, so
             # canonical-owner distribution does not change between modes.
             for case_id, stride in ((10, 1), (11, 1), (12, 2), (13, 2)):

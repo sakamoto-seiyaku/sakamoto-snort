@@ -372,6 +372,16 @@ def run(args):
     primary_credits = manifest.get("primary_handoff_credits")
     if primary_credits is not None and (not vpn_only or type(primary_credits) is not int or primary_credits not in (32, 48)):
         raise ValueError("primary_handoff_credits requires VPN suite and 32 or 48")
+    tcp_source_port = manifest.get("tcp_fixed_source_port_base")
+    if tcp_source_port is not None:
+        last_port = tcp_source_port + manifest['threads'] * (manifest['flows_per_thread'] + 1) - 1 if type(tcp_source_port) is int else 65536
+        if suite != VPN_TCP_SUITE or type(tcp_source_port) is not int or tcp_source_port < 1024 or last_port > 65535:
+            raise ValueError("tcp_fixed_source_port_base requires a valid fixed TCP port range")
+    worker_cpus = manifest.get("worker_cpu_ids")
+    if worker_cpus is not None and (suite != VPN_TCP_SUITE or not isinstance(worker_cpus, list)
+            or len(worker_cpus) != 2 or any(type(cpu) is not int or cpu < 1 or cpu > 1023 for cpu in worker_cpus)
+            or worker_cpus[0] == worker_cpus[1]):
+        raise ValueError("worker_cpu_ids requires two distinct non-main CPUs and the TCP VPN suite")
     callgraph = manifest.get("profiler_callgraph", "dwarf")
     mmap_pages = manifest.get("profiler_mmap_pages")
     if callgraph not in ("dwarf", "fp"):
@@ -426,7 +436,10 @@ def run(args):
                 fresh_lifetime = fresh_each_case or case in ("tcp-fixed", "udp-new")
                 if fresh_lifetime:
                     active = True  # ambiguous start failure still requires normal stop
-                    (cell / "start.txt").write_text(device.action("--ez", "runtimeStart", "true", "--es", "runtimeProfile", profile))
+                    start_args = ["--ez", "runtimeStart", "true", "--es", "runtimeProfile", profile]
+                    if worker_cpus is not None:
+                        start_args.extend(["--es", "runtimeWorkerCpuIds", ",".join(map(str, worker_cpus))])
+                    (cell / "start.txt").write_text(device.action(*start_args))
                     running = device.wait_state("running", profile)
                     pid_text = device.command("shell", "pidof", "libvpp_runtime.so").strip().split()
                     if len(pid_text) != 1:
@@ -488,6 +501,14 @@ def run(args):
                         layout.append({"id": int(match[1]), "name": match[2], "tid": int(match[3]), "lcore": int(match[4])})
                 if len(layout) != 3:
                     raise RuntimeError("expected the current VPP main + two-worker layout")
+                if worker_cpus is not None:
+                    for index, cpu in enumerate(worker_cpus):
+                        worker = next(row for row in layout if row["name"] == f"vpp_wk_{index}")
+                        status = device.root(f"cat /proc/{pid}/task/{worker['tid']}/status")
+                        (cell / f"worker-{index}-affinity.txt").write_text(status)
+                        allowed = re.search(r"^Cpus_allowed_list:\s*(\S+)$", status, re.M)
+                        if worker["lcore"] != cpu or not allowed or allowed[1] != str(cpu):
+                            raise RuntimeError("actual worker affinity differs from frozen CPU selection")
                 flow_rows = rows(diagnostic, "flow.runtime ")
                 occupancy = sum(int(v["entries"]) for v in rows(diagnostic, "flow.pool "))
                 capacity = sum(int(v["capacity"]) for v in flow_rows)
@@ -525,7 +546,19 @@ def run(args):
                 sampler_pids = properties(sampler_text)
                 if not sampler_pids.get("monitor", "").isdigit() or (manifest["profiling"] and not sampler_pids.get("profiler", "").isdigit()):
                     raise RuntimeError("invalid sampler process identity")
+                cpu_paths = []
+                if manifest.get("system_cpu_accounting"):
+                    cpu_paths = ["/proc/uptime", "/proc/stat"]
+                    for worker in layout:
+                        task = f"/proc/{pid}/task/{worker['tid']}"
+                        cpu_paths.extend([task + "/stat", task + "/schedstat", task + "/status"])
+                    cpu_paths.extend([f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/stats/time_in_state"
+                                      for cpu in range(8)])
+                    accounting_command = "for path in " + shlex.join(cpu_paths) + "; do printf 'PATH %s\\n' \"$path\"; cat \"$path\"; done; cat /proc/uptime"
+                    (cell / "system-cpu-before.txt").write_text(device.root(accounting_command, check=False))
                 argv = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), str(case_id), case, str(manifest["cell_ms"]), str(manifest["threads"]), str(manifest["flows_per_thread"])]
+                if tcp_source_port is not None:
+                    argv.extend([str(tcp_source_port), "1"])
                 if client_cpu_mask is not None:
                     script = "cat /proc/self/status; echo BENCH_CLIENT_JSON; exec " + shlex.join(argv)
                     argv = ["/system/bin/taskset", client_cpu_mask, "/system/bin/sh", "-c", script]
@@ -533,6 +566,8 @@ def run(args):
                 if client_cpu_mask is not None:
                     command = ["shell", shlex.join(argv)]
                 value = device.command(*command, timeout=manifest["cell_ms"] / 1000 + 2)
+                if cpu_paths:
+                    (cell / "system-cpu-after.txt").write_text(device.root(accounting_command, check=False))
                 if client_cpu_mask is not None:
                     affinity, value = value.split("\nBENCH_CLIENT_JSON\n", 1)
                     (cell / "client-affinity.txt").write_text(affinity + "\n")
@@ -541,6 +576,8 @@ def run(args):
                         raise RuntimeError("actual client CPU affinity differs from frozen mask")
                 (cell / "client.json").write_text(value)
                 client = json.loads(value)
+                if tcp_source_port is not None and (client["fixed_source_port_base"] != tcp_source_port or client["fixed_source_port_stride"] != 1):
+                    raise RuntimeError("traffic helper did not use the frozen TCP source ports")
                 if client["uid"] != (manifest["uid"] if profile == "root" else 2000):
                     raise RuntimeError("traffic helper UID is outside the intended capture profile")
                 after = device.cli(profile, commands)
@@ -625,6 +662,13 @@ def run(args):
             result["status"] = "COMPLETE"
     except Exception as error:
         result["errors"].append(type(error).__name__ + ": " + str(error))
+        if vpn_only and active and retained_log is None:
+            try:
+                (output / "native-start-failure.txt").write_text(device.command(
+                    "shell", "run-as", PACKAGE, "cat", "files/profiles/vpn/vpp/logs/vpp-stdout.log",
+                    check=False, cleanup=True))
+            except Exception as evidence_error:
+                result["errors"].append("native startup evidence: " + str(evidence_error))
     finally:
         if sampler_pids:
             try:

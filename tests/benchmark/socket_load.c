@@ -222,6 +222,11 @@ static void open_conn(worker *w, int ep, client_conn *c, int i, int probe) {
   memset(c, 0, sizeof(*c)); c->fd = sock(SOCK_STREAM); w->attempts++; c->since = now_ns();
   if (c->fd < 0) { w->errors++; return; }
   int one = 1; setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  if (w->fixed_port_base) {
+    int index = probe ? w->threads * w->flows + w->index : w->index * w->flows + i;
+    struct sockaddr_in local = address("0.0.0.0", w->fixed_port_base + index * w->fixed_port_stride);
+    if (bind(c->fd, (void *)&local, sizeof(local))) { w->errors++; close(c->fd); c->fd = -1; return; }
+  }
   c->h = message(w->id, w->mode == 1 || probe ? 'E' : 'D', c->since, sizeof(header));
   struct sockaddr_in a = address(w->ip, w->port);
   if (connect(c->fd, (void *)&a, sizeof(a)) && errno != EINPROGRESS) { w->errors++; close(c->fd); c->fd = -1; return; }
@@ -367,7 +372,7 @@ static void *udp_worker(void *arg) {
   free(used); free(fds); close(probe); return NULL;
 }
 static int client(int argc, char **argv) {
-  if (argc < 9 || argc > 13) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [UDP_FIXED_SOURCE_PORT_BASE [UDP_FIXED_SOURCE_PORT_STRIDE [OFFERED_RATE [UDP_BURST_SIZE]]]]\n"); return 2; }
+  if (argc < 9 || argc > 13) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [FIXED_SOURCE_PORT_BASE [FIXED_SOURCE_PORT_STRIDE [OFFERED_RATE [UDP_BURST_SIZE]]]]\n"); return 2; }
   const char *names[] = {"tcp-fixed", "tcp-new", "udp-fixed", "udp-new"}; int mode = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(argv[5], names[i])) mode = i;
   if (mode < 0) return 2;
@@ -378,7 +383,7 @@ static int client(int argc, char **argv) {
   int offered_rate = argc >= 12 ? number(argv[11], 0, 1000000) : 0;
   int burst_size = argc >= 13 ? number(argv[12], 1, threads * 16) : 1;
   if (fixed_port_base && fixed_port_base < 1024) return 2;
-  if (fixed_port_base && mode != 2) return 2;
+  if (fixed_port_base && mode != 0 && mode != 2) return 2;
   if (offered_rate && mode != 1 && mode != 2) { fprintf(stderr, "OFFERED_RATE is supported only for tcp-new (attempts/s) and udp-fixed (payload packets/s)\n"); return 2; }
   if (burst_size > 1 && (!offered_rate || mode != 2)) { fprintf(stderr, "UDP_BURST_SIZE requires paced udp-fixed\n"); return 2; }
   address(argv[2], port); signal(SIGPIPE, SIG_IGN);

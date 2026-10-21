@@ -310,4 +310,41 @@ I1 worker0记录off-CPU8.668秒，其中8.143秒在TUN write的tun_rx_batched抢
 
 最终恢复原October13 APK及12个native、规则hash和Root grant，设备Stopped2133，Openwrt_5G保持，VPP/socket-load/simpleperf无残留。两次专用LAN peer均按PID/starttime/exe/argv/hash核对并由pidfd结束。[最终设备审计](../../build-output/vpn-read-reasons-20261021/final-readonly/result.json) · [peer清理](../../build-output/vpn-read-reasons-20261021/peer-cleanup.json)。
 
-本轮因果结论是：大部分idle是实际推进后的最后一次读空探测，随后进入WAITIO；不是无进展持续自我调度。等待条件与首次I/O/ACK/poll唤醒已分开，owner0主要保持runnable并在单TUN lane工作及抢占之间等待再次执行，owner1有大量真实I/O/ACK等待。已证实并修复的是external调度器的重复epoll扫描，其配对CPU成本下降5.28%；ACK过滤未获整条路径收益而被撤回。以上完成了这些现象的可重复定位与修复验证，没有把500Mbps当作已经被唯一归因或解除的吞吐上限。
+这些64流窗口确认了读空后WAITIO、首次唤醒分类，以及external调度器重复epoll扫描的局部缺陷；它们没有完成端到端性能根因诊断。此前配对CPU成本下降5.28%的观察没有固定实际TCP源端口和owner负载分布，保留为探索测量，不作为普遍收益估计。ACK过滤未获整条路径收益而被撤回。后续补齐直连控制并发现显著单流差距，见下节；SAKAMOTO-292仍在进行中。
+
+
+## 重新诊断：直连控制、单流归属与CPU配置
+
+用户要求重新诊断后，先保留现有Product源码和APK，补上同一端点、同一网络、同一helper的原生直连控制。PC端192.168.4.5使用网线；手机始终连接Openwrt_5G。64条下载流的直连前后分别545.77/524.08 Mbps，中间普通VPN为526.48 Mbps；独立Python流服务加Android toybox nc单连接直连为514.21 Mbps。约500 Mbps在该64流场景中不是已证明的VPN内部上限。[原始控制](../../build-output/vpn-diagnosis-reset-20261021/)。
+
+改为一条下载流加一条轻量探测流，20秒直连537.86 Mbps、VPN137.40 Mbps，实际下载流归owner1。64流聚合掩盖了这个差距，不能据前述总吞吐判断单连接正常。[单流原始证据](../../build-output/vpn-diagnosis-single-20261021/)。
+
+### 固定源端口与实际owner
+
+测试helper增加TCP固定源端口，显式bind失败不会退回临时端口；真实loopback覆盖两线程八下载流及探测流、占用端口冲突。host/Android helper使用持久编译缓存，第二次均零编译、mtime与hash相同。固定端口的新helper直连为531.99 Mbps。各窗口使用不同、事先冻结的源端口，并从实际FlowEntry核对owner；没有把端口推算当作实际归属证据。
+
+同一Product closure `8318c4c9eb778517157eff41d52f0743cc1dec97e631eb720d9fa9387986e50c`、APK `ae2882215b1e22376fb31f1d0b888882b18e1d498b2c4aa93e69bb94227257c5`，MTU10000、32KiB ring/sndbuf、batch/progress开关及规则不变，profiling关闭：
+
+| worker0/1绑核 | 实际下载owner | 20秒Mbps | 证据含义 |
+| --- | --- | ---: | --- |
+| 1,2 | 1 | 160.27 | 默认小核，跨TUN worker |
+| 1,2 | 0 | 444.76 | 默认小核，TUN同worker |
+| 2,1 | 1 | 121.57 | 交换两个小核后仍慢 |
+| 2,1 | 0 | 450.52 | 快慢仍跟随owner角色 |
+| 4,5 | 1 | 474.49 | 中核上差距大幅缩小 |
+| 4,5 | 0 | 468.54 | 同配置另一owner |
+| 1,2 | 1 | 164.21 | 切回小核后再次变慢 |
+
+Pixel实测CPU0–3 capacity160、4–5 capacity498、6–7 capacity1024；worker编号不是CPU编号，main始终CPU0。CPU6,7尝试在启动阶段失败，无测速结果；Android foreground cpuset为0–5，故不能把该失败当作6,7性能证据。CPU4,5成功窗口通过VPP布局和`/proc/.../status`双重亲和性检查。没有修改全局cpuset，也没有更改产品默认绑核。
+
+[实际owner与身份汇总](../../build-output/vpn-diagnosis-contention-20261021/owner-core-summary.json) · [交换小核含失败尝试](../../build-output/vpn-diagnosis-cpus-20261021/campaign-result.json) · [中核及回切](../../build-output/vpn-diagnosis-medium-cpus-20261021/campaign-result.json)。
+
+### 同核其他任务与调度等待
+
+独立两窗增加测量前后的`/proc/stat`、各VPP线程`stat/schedstat/status`；得到owner1小核144.49 Mbps、中核487.91 Mbps。CPU账本窗口20.91/20.84秒，包含快照和ADB开销，不能与20秒客户端窗口当成完全同界；原始快照保留。
+
+小核配置下，worker1固定CPU2：VPP精确调度运行8.508秒、runnable等待1.149秒；该核其他task的user+nice+system合计约1.21秒，IRQ+softirq约0.55秒，idle约9.82秒。这里“其他task”也包括测试客户端，不能直接称作无关后台干扰。这不支持其他进程长期占满worker1所在核。worker0所在CPU1的其他task约5.51秒、VPP runnable等待5.419秒，TUN侧确实存在更明显的CPU竞争。中核配置worker0在CPU4还承担了更多IRQ/softirq；吞吐改善不能简单解释成所有线程都更少被抢占。
+
+[可复算CPU账本](../../build-output/vpn-diagnosis-contention-20261021/cpu-accounting.json) · [分析脚本](../../build-output/vpn-diagnosis-contention-20261021/analyze.py)。完成窗口均通过普通VPN推进和generation对应native零债务检查；每轮finally恢复原October13 APK、规则、Root grant和worker1,2偏好，原始数据与失败尝试均保留。
+
+上述结果证明了这台设备上的owner/核心组合有重大影响，还没有把具体耗时唯一归因于计算、唤醒或handoff。此阶段不推广CPU4,5为跨设备默认值、不声称功耗改善，也不宣布SAKAMOTO-292完成。
