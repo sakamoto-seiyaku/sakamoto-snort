@@ -87,3 +87,22 @@ HEV 上游 SND_BUF65528 和本产品32768确有差异；sing-tun 的 [gVisor buf
 先补齐每 owner 推进/阻塞的限定观测，同时准备内层大段的容量审计；最先有望显著降低TUN成本的是大段候选。调度候选先定位事件延迟和空转，再做一个窄变更。32→64KiB缓冲只在被实测限制时独立做。保持唯一固定TCP下载套件、原Wi-Fi和相同并发；不混入UDP/CPS/Root负载，不以另一个项目的速度宣传代替AB证据。
 
 本次已确认外部机制和限制，没有证明任何外部项目在当前设备/同策略上的吞吐，也没有证明替换HEV会更快。源码版本是调查时冻结的样本，不是建议常规升级vendor。可复查材料在 [research evidence](../../build-output/vpn-tcp-reference-research-20261021/)：各repo的commit/tree元数据、选取源码、实际submodule源码和AOSP文本；没有创建依赖构建目录或运行编译。
+
+## 2026-10-21 补查：竞品使用哪些库，是否优于 HEV
+
+**竞品确实也要把应用侧包流与外连 socket 字节流接起来，但实现不只有一种。没有本机同条件证据能认定其中某个比当前 HEV 更快。最新 sing-tun 自有 TCP 栈是值得追踪的新对照；zdtun 更轻，却不满足我们现有的返回丢包恢复语义；system 则是另一种内层终止拓扑。**
+
+| 项目／固定版本 | 实际传输实现 | 对当前固定 TCP 下载的判断 |
+| --- | --- | --- |
+| HEV，本产品 pinned family／上文 2.18.0 对照 | **lwIP 是内层 TCP/IP 栈；HEV task/reactor 是调度与 I/O 桥接层。** `tcp_write`、ACK、重传由 lwIP 处理，protected socket由外层内核处理。[上游 receive/ACK 路径](https://github.com/heiher/hev-socks5-tunnel/blob/d9dca26c7ad0e494492244f0309e80ee583e739e/src/hev-socks5-session-tcp.c#L85)可见这个分工。 | “换掉 HEV 调度”和“换掉 lwIP TCP”是两个不同变更。减少无效轮转无需重写 TCP。 |
+| PCAPdroid `66f7b35145`，zdtun `c2a2674a41` | **自研 C 库 zdtun**，部分 TCP/IP 状态与窗口/序号转换；[README明确不实现 TCP 重传](https://github.com/emanuele-f/zdtun/blob/c2a2674a411efdd71f7595e5395d8b49c52ab347/README.md#L5)。 | 很适合观察其轻量桥接办法，但不能直接替代本产品。外层 kernel TCP 的重传不能追回“已经从外连socket读走、合成内层包后被共享图/返回容量丢弃”的字节。PCAPdroid 自己的[代码注释](https://github.com/emanuele-f/PCAPdroid/blob/66f7b3514540c20add8655a74dfee93d00a9563b/app/src/main/jni/core/capture_vpn.c#L110)也明确：返回包被阻断必须关闭连接，zdtun无法处理这种丢包。更轻不等于同等语义下更快。 |
+| NetGuard `166df969c3` | **项目自己的 C TCP 实现**，在 [`tcp.c`](https://github.com/M66B/NetGuard/blob/166df969c3cedd7023c13613d9816c185702c6c9/app/src/main/jni/netguard/tcp.c)管理状态、序号、窗口、socket和返回包；不是 lwIP，也不是一个可直接替换的通用栈API。 | 可借鉴大MSS及事件策略，但没有同设备性能对照；本次未建立它与本产品全部丢包/乱序/资源拒绝语义等价的证据，不把它称作更好的通用库。 |
+| sing-box **v1.12.0** → [`sing-tun v0.7.0-beta.1`](https://github.com/SagerNet/sing-box/blob/2dcb86941f5db01bbe296acae555a3b1f38c0441/go.mod) | [选择器](https://github.com/SagerNet/sing-tun/blob/v0.7.0-beta.1/stack.go#L41)：`gvisor`使用Go用户态netstack；`system`使用系统内核TCP；[`mixed`](https://github.com/SagerNet/sing-tun/blob/v0.7.0-beta.1/stack_mixed.go)为**system TCP＋gVisor UDP**。默认还受构建是否含gVisor、GSO及IncludeAllNetworks影响。 | 仅测TCP时，mixed的TCP仍是system，不能拿mixed当第三种TCP栈。gVisor是完整用户TCP候选，但增加Go runtime/并发与生命周期整合工作，没有证据保证比lwIP省CPU。 |
+| sing-box **v1.15.0-alpha.3** 文档／sing-tun当前冻结源码 `f8d5b54dbd` | [alpha版文档](https://github.com/SagerNet/sing-box/blob/v1.15.0-alpha.3/docs/configuration/inbound/tun.md#stack)引入 **sing-tun 自有 Go TCP/IP 栈**，计划废弃旧stack选项；当前源码[空值/`go`选择NewGo](https://github.com/SagerNet/sing-tun/blob/f8d5b54dbd711a812858a403f505ee7e8fd350ee/stack.go#L59)，[engine](https://github.com/SagerNet/sing-tun/blob/f8d5b54dbd711a812858a403f505ee7e8fd350ee/stack_go_engine.go#L250)把packet、socket、ACK/timer集中有界推进。 | **最值得新增的外部研究对照**，因为它也针对用户TCP桥接调度成本设计。官方声称性能/能效改善，尚非我们的实测；alpha文档、冻结dev源码与稳定Android APK不能视为同一发布物，未证明当前已安装/稳定SFA使用该commit。Linux multi_queue能力也不能移作普通Android收益。 |
+| xjasonlyu/tun2socks **v2.6.0** | **gVisor netstack＋Go桥接**：[`core/stack.go`](https://github.com/xjasonlyu/tun2socks/blob/v2.6.0/core/stack.go)创建协议栈；[`core/tcp.go`](https://github.com/xjasonlyu/tun2socks/blob/v2.6.0/core/tcp.go)通过 `tcp.NewForwarder/CreateEndpoint/gonet.NewTCPConn`得到内层流；[`tunnel/tcp.go`](https://github.com/xjasonlyu/tun2socks/blob/v2.6.0/tunnel/tcp.go)再dial外连并双向copy。 | 是成熟的另一种桥接实例，仍保留内层重建、外连socket及TUN交付，不消除目前的大头。README的性能宣传不是Android、同MTU、同策略、同owner模型的比较。 |
+
+**system 需要特别说明。** 它不是把原应用连接直接交给真实远端内核栈：[`stack_system.go`](https://github.com/SagerNet/sing-tun/blob/v0.7.0-beta.1/stack_system.go)先创建本地TCP listener，把捕获包的地址/端口改写后写回TUN，让内核在listener终止内层TCP；accept后再由handler桥接外连，反向包也经TUN读出、还原和写回。它可能借助内核TCP实现，但也增加本地socket/包循环的工作，不能无测量就称作“去掉用户TCP所以最快”。这是普通TUN重注入/本地listener机制，与root iptables重定向或直接内核转发原远端连接不同。对本产品属于需要重新审查adapter/provenance/owner边界的拓扑候选，非ADR-0007现有lwIP模块的直接库替换。
+
+许可证只记录已读到的声明，不据项目语言或依赖名推断：zdtun的[源头声明](https://github.com/emanuele-f/zdtun/blob/c2a2674a411efdd71f7595e5395d8b49c52ab347/zdtun.c#L7)对应 `LGPL-3.0-or-later`；sing-tun当前[LICENSE](https://github.com/SagerNet/sing-tun/blob/f8d5b54dbd711a812858a403f505ee7e8fd350ee/LICENSE)为 `GPL-3.0-or-later`；xjasonlyu/tun2socks v2.6.0的[LICENSE](https://github.com/xjasonlyu/tun2socks/blob/v2.6.0/LICENSE)为 `MIT`。这些是对应项目的声明，未替代逐依赖/逐文件核对。
+
+采用判断：**目前继续优化HEV/lwIP的段长和推进最有依据；若另开库比较，先对照最新sing-tun自有栈与gVisor，保留system作为拓扑研究，zdtun不作为等价替换。** 后续比较必须先对齐MTU/MSS、socket/内层缓冲和同一固定下载，分别测端点吞吐、CPU/GiB、TUN包/GiB和off-CPU；先通过返回丢包/拒绝恢复、字节流、双栈与stop结清，再讨论替代。外部库自己的goroutine、全局栈或直写TUN不能直接绕过本产品owner-inline、copy ownership与正常策略图约束。此次补查没有实现或性能验证。
