@@ -127,3 +127,9 @@ RSS采样峰值的两窗均值增加2454KiB（约2.40MiB）。这是同一个VPP
 三个新优化开关均默认OFF；未做UDP/CPS/Root性能扩展。最终恢复原October13 APK、全部12个native、原规则hash和Root grant，Stopped2105，Openwrt_5G不变，设备无VPP/load/monitor/simpleperf残留。[最终只读审计](../../build-output/vpn-tcp-buffer-20261021/final-readonly/result.json)。
 
 12个成功窗口的阻塞日志reader均已完成，FIFO gate已删除；本任务LAN peer在核对PID、exe、argv、启动时间和hash后退出。[reader审计](../../build-output/vpn-tcp-buffer-20261021/retained-reader-audit.json) · [peer退出](../../build-output/vpn-tcp-buffer-20261021/peer-cleanup.json)。所有失败尝试、原始perf、源码闭包、APK与精确符号保留。
+
+## 后续授权范围：MTU10000
+
+用户要求先记录选型结论，再解决连续VPP buffer的普通页限制，使本地TUN MTU达到NetGuard/PCAPdroid同档的10000字节。[库选型补查](../reviews/2026-10-21_VPN_TCP_REFERENCE_OPTIMIZATIONS.md#2026-10-21-补查竞品使用哪些库是否优于-hev)已记录：当前保留HEV/lwIP；sing-tun新栈属于未来可比较的候选，没有以换库替代本次容量修复。
+
+本阶段目标为真实Android Builder MTU10000、双栈实际大TCP段、普通4KiB页下足够且可核对的VPP池容量；不依赖hugepages，不仅修改MTU常量。上一阶段的buffer size大于page size拒绝和3584-byte步长导致池缩小是保留的失败基线。先验证分配布局及真实TCP正确性，再使用相同Openwrt_5G上的64流、20秒TCP长下载ABBA比较；两侧保持相同分配布局、实际池容量、sndbuf/ring、readiness和返回credit，区分段长收益与扩容收益。实现、测试与设备结果未完成前不宣称达到该目标或采用为默认。
