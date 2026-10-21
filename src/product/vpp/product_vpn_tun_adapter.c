@@ -11,6 +11,7 @@
 #include "product_vpn_uid_resolver.h"
 #include "product_vpn_return_credit.h"
 #include "product_vpn_return_stamp.h"
+#include "product_vpn_tun_write.h"
 #include "product_runtime_topology.h"
 #include <vlib/file.h>
 #include <arpa/inet.h>
@@ -68,6 +69,7 @@ static struct {
   u64 policy_drops, runtime_drops, transport_unavailable, errors, rejected;
   u64 transport_unsupported;
   u64 tun_write_attempts, tun_writes, tun_write_failed;
+  u64 tun_write_short, tun_write_eagain, tun_write_error;
   u64 tun_write_bytes, tun_write_large, tun_write_max;
   u64 capture_batch_calls, capture_batch_packets, capture_batch_max;
   u64 capture_callbacks, capture_budget_exits, capture_callback_ns, capture_callback_max_ns;
@@ -282,6 +284,8 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
     && (frame->flags & PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED);
   int admitted = frame->flow_stack_result == PRODUCT_VPN_FLOW_STACK_ACCEPTED + 1;
   const char *outcome = "NOT_ATTEMPTED";
+  ssize_t write_result = -2;
+  int write_error = 0;
   if (policy_drop) tun.policy_drops++;
   else if (frame->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME) tun.runtime_drops++;
   else if (returned) {
@@ -294,16 +298,39 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
       fprintf(stderr, "s237 event=fault_tun_write generation=%llu token=%llu fd=%d\n",
         (unsigned long long)tun.generation, (unsigned long long)o->token, tun.tun_fd);
     }
-    ssize_t written = tun.tun_fd >= 0
-      ? write(tun.tun_fd, vlib_buffer_get_current(buffer), write_length) : -1;
-    if (written == buffer->current_length) {
+    if ((frame->flags & PRODUCT_COMPLETION_TRACE) && buffer->current_length <= 256) {
+      const u8 *bytes = vlib_buffer_get_current(buffer);
+      flockfile(stderr);
+      fprintf(stderr, "s298 event=write_wire thread=%u generation=%llu token=%llu buffer=%u bytes=%u requested=%zu mono_ns=%llu raw=",
+        vm->thread_index, (unsigned long long)tun.generation,
+        (unsigned long long)o->token, bi, buffer->current_length, write_length,
+        (unsigned long long)trace_monotonic_ns());
+      for (u32 i = 0; i < buffer->current_length; ++i)
+        fprintf(stderr, "%02x", bytes[i]);
+      fprintf(stderr, "\n"); funlockfile(stderr);
+    }
+    product_vpn_tun_write_result_t result = product_vpn_tun_write_once(
+      tun.tun_fd, vlib_buffer_get_current(buffer), write_length);
+    write_result = result.written;
+    write_error = result.error;
+    if (result.kind == PRODUCT_VPN_TUN_WRITE_SUCCEEDED &&
+        result.written == buffer->current_length) {
       ++tun.tun_writes;
-      tun.tun_write_bytes += written;
-      if (written > 1500) ++tun.tun_write_large;
-      if ((u64)written > tun.tun_write_max) tun.tun_write_max = written;
+      tun.tun_write_bytes += result.written;
+      if (result.written > 1500) ++tun.tun_write_large;
+      if ((u64)result.written > tun.tun_write_max) tun.tun_write_max = result.written;
       outcome = "TUN_WRITE_SUCCEEDED";
     }
-    else { ++tun.tun_write_failed; ++tun.errors; outcome = "TUN_WRITE_FAILED"; }
+    else {
+      ++tun.tun_write_failed; ++tun.errors;
+      if (result.kind == PRODUCT_VPN_TUN_WRITE_SHORT) {
+        ++tun.tun_write_short; outcome = "TUN_WRITE_SHORT";
+      } else if (result.kind == PRODUCT_VPN_TUN_WRITE_EAGAIN) {
+        ++tun.tun_write_eagain; outcome = "TUN_WRITE_EAGAIN";
+      } else {
+        ++tun.tun_write_error; outcome = "TUN_WRITE_FAILED";
+      }
+    }
   } else if (admitted) { ++tun.stack_accepted_originals; outcome = "ADMITTED"; }
   else if (frame->flow_stack_result) { ++tun.stack_rejected_originals; outcome = "INPUT_REJECTED"; }
   else if (unsupported) { tun.transport_unsupported++; outcome = "UNSUPPORTED"; }
@@ -311,12 +338,13 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
   /* The shared origin consumer frees the VPP buffer after this callback. No
    * TUN write is a valid completion for an outbound TUN-origin packet. */
   if (frame->flags & PRODUCT_COMPLETION_TRACE)
-    fprintf (stderr, "s213 event=completion source=%s generation=%llu token=%llu buffer=%u thread=%u producer=%u intent=%u drop_reason=%u policy_drop=%u transport_unavailable=%u pending=%u flow_stack_result=%u transport_outcome=%s processing_bypass_reason=%u policy_verdict=%s\n",
+    fprintf (stderr, "s213 event=completion source=%s generation=%llu token=%llu buffer=%u thread=%u producer=%u intent=%u drop_reason=%u policy_drop=%u transport_unavailable=%u pending=%u flow_stack_result=%u transport_outcome=%s write_result=%zd write_errno=%d processing_bypass_reason=%u policy_verdict=%s\n",
       returned ? "FLOW_STACK_RETURN" : "TUN_CAPTURED",
       (unsigned long long) tun.generation, (unsigned long long) o->token, bi,
       vm->thread_index, frame->producer_thread, frame->terminal_intent,
       frame->runtime_drop_reason, policy_drop,
       !strcmp(outcome, "UNAVAILABLE"), tun.pending, frame->flow_stack_result, outcome,
+      write_result, write_error,
       frame->processing_bypass_reason, policy_drop ? "DROP"
         : frame->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER ? "ALLOW" : "NOT_EVALUATED");
   return 1;
@@ -669,6 +697,10 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.tun_write_attempts, (unsigned long long)tun.tun_writes,
     (unsigned long long)tun.tun_write_failed, (unsigned long long)tun.stack_accepted_originals,
     (unsigned long long)tun.stack_rejected_originals);
+  vlib_cli_output(vm, "tun.write_result short=%llu eagain=%llu error=%llu",
+    (unsigned long long)tun.tun_write_short,
+    (unsigned long long)tun.tun_write_eagain,
+    (unsigned long long)tun.tun_write_error);
   vlib_cli_output(vm, "tun.copies calls=%llu bytes=%llu",
     (unsigned long long)copy_calls, (unsigned long long)copy_bytes);
   vlib_cli_output(vm, "tun.capture_batch calls=%llu packets=%llu max=%llu",

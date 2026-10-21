@@ -133,6 +133,12 @@ target_include_directories(sakamoto-product-vpn-return-credit-test PRIVATE src/p
 target_compile_options(sakamoto-product-vpn-return-credit-test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sakamoto-product-vpn-return-credit-test PRIVATE pthread)
 add_test(NAME sakamoto-product-vpn-return-credit-test COMMAND sakamoto-product-vpn-return-credit-test)
+add_executable(sakamoto-product-vpn-tun-write-test
+  tests/host/product_vpn_tun_write_test.c)
+target_include_directories(sakamoto-product-vpn-tun-write-test PRIVATE src/product/vpp)
+target_compile_features(sakamoto-product-vpn-tun-write-test PRIVATE c_std_11)
+target_compile_options(sakamoto-product-vpn-tun-write-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-vpn-tun-write-test COMMAND sakamoto-product-vpn-tun-write-test)
 add_executable(sakamoto-product-domains-test tests/host/product_domains_test.c)
 target_link_libraries(sakamoto-product-domains-test PRIVATE sakamoto_product_domains)
 target_link_options(sakamoto-product-domains-test PRIVATE -Wl,--wrap=product_domains_memory_alloc -Wl,--wrap=product_domains_memory_free)

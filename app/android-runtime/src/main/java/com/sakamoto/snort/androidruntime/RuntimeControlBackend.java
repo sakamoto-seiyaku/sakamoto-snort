@@ -103,6 +103,13 @@ public final class RuntimeControlBackend {
         return startVpnGraphValidation(context, true, unknownIdentity, unknownContext, limits, flowEntries);
     }
 
+    public StartResult startVpnHevValidation(Context context, boolean unknownIdentity,
+                                              boolean unknownContext, String limits, int flowEntries,
+                                              String tunIoCpuId) {
+        return startVpnGraphValidation(context, true, unknownIdentity, unknownContext,
+                limits, flowEntries, tunIoCpuId);
+    }
+
     private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity, boolean unknownContext) {
         return startVpnGraphValidation(context, hev, unknownIdentity, unknownContext, null, 0);
     }
