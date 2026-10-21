@@ -1358,10 +1358,11 @@ public final class AndroidRuntimeContractTest {
                         null, (Object) vpnTopologyValues, 0);
         check(rootTopology.productGraphTunIoWorkerIndex == -1,
                 "Root status has no VPN TUN lane");
-        String[] threeOwnerValues = Arrays.copyOf(vpnTopologyValues, 147);
+        String[] threeOwnerValues = Arrays.copyOf(vpnTopologyValues, 148);
         threeOwnerValues[63] = "3";
         threeOwnerValues[66] = "3";
         threeOwnerValues[146] = "1,2,1";
+        threeOwnerValues[147] = "1,2,3";
         RuntimeControlNative.Status threeOwners =
                 (RuntimeControlNative.Status) parser.invoke(
                         null, (Object) threeOwnerValues, 0);
@@ -1370,6 +1371,21 @@ public final class AndroidRuntimeContractTest {
                         && threeOwners.productGraphVppOwnerCores[1] == 2
                         && threeOwners.productGraphVppOwnerCores[2] == 1,
                 "Root status retains every actual ordered owner CPU");
+        check(Arrays.equals(threeOwners.productGraphVppOwnerThreadIndexes,
+                        new int[] {1, 2, 3}),
+                "status retains each actual owner thread index");
+        String[] uninitializedValues = Arrays.copyOf(threeOwnerValues, 148);
+        uninitializedValues[63] = "0";
+        uninitializedValues[66] = "0";
+        uninitializedValues[146] = "";
+        uninitializedValues[147] = "";
+        RuntimeControlNative.Status uninitialized =
+                (RuntimeControlNative.Status) parser.invoke(
+                        null, (Object) uninitializedValues, 0);
+        check(uninitialized.code == 7 && uninitialized.generation == 41
+                        && uninitialized.productGraphVppOwnerCores.length == 0
+                        && uninitialized.productGraphVppOwnerThreadIndexes.length == 0,
+                "uninitialized native status keeps its error and generation");
         check(status.code == 7, "native status code stays in the code field");
         check(status.abiVersion == 2, "native ABI version stays in the ABI field");
         check(status.apiVersion == 3, "native API version stays in the API field");

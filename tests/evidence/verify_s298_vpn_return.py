@@ -47,45 +47,62 @@ def verify_flow_end():
         return
     before_flow = records(run / 'flow-before.txt', 'flow.entry ')
     after_flow = records(run / 'flow-after.txt', 'flow.entry ')
-    assert one(before_flow, worker=0, slot=result['flow_slot'],
+    assert one(before_flow, worker=owner, slot=result['flow_slot'],
                incarnation=result['flow_incarnation'])
-    assert not [row for row in after_flow if row['worker'] == '0'
+    assert not [row for row in after_flow if row['worker'] == str(owner)
                 and row['slot'] == result['flow_slot']
                 and row['incarnation'] == result['flow_incarnation']]
-    before_end = one(records(run / 'flow-before.txt', 'flow-end.owner='), owner=0)
-    after_end = one(records(run / 'flow-after.txt', 'flow-end.owner='), owner=0)
+    before_end = one(records(run / 'flow-before.txt', 'flow-end.owner='), owner=owner)
+    after_end = one(records(run / 'flow-after.txt', 'flow-end.owner='), owner=owner)
     assert int(after_end['released']) > int(before_end['released'])
-    assert not records(run / 'flow-after.txt', 'flow-end.owner=1 ')
+    assert {int(row['owner']) for row in records(run / 'flow-after.txt', 'flow-end.owner=')} == set(range(owner_count))
     if result['flow_end_mode'] == 'close':
-        assert 'flow-end.close=queued owner=0' in (run / 'flow-close.txt').read_text()
+        assert f'flow-end.close=queued owner={owner}' in (run / 'flow-close.txt').read_text()
     else:
-        before_expiry = one(records(run / 'flow-before.txt', 'expiry.owner='), owner=0)
-        after_expiry = one(records(run / 'flow-after.txt', 'expiry.owner='), owner=0)
+        before_expiry = one(records(run / 'flow-before.txt', 'expiry.owner='), owner=owner)
+        after_expiry = one(records(run / 'flow-after.txt', 'expiry.owner='), owner=owner)
         assert int(after_expiry['closed']) > int(before_expiry['closed'])
 
 owner = result['owner']
 owner_count = result.get('owner_count', 2)
-assert owner_count in (1, 2) and 0 <= owner < owner_count
+assert owner_count in (1, 2, 3) and 0 <= owner < owner_count
 owner_thread = str(owner + 1)
 io_thread = str(owner_count + 1)
 generation = str(result['generation'])
+if result.get('worker_status_checked'):
+    worker_status = dict(line.split('=', 1) for line in
+                         (run / 'worker-status.properties').read_text().splitlines()
+                         if '=' in line and not line.startswith('#'))
+    expected_cpus = [1] if owner_count == 1 else [1, 2] if owner_count == 2 else [1, 2, 1]
+    assert worker_status['generation'] == generation
+    assert worker_status['worker_core_config_match'] == 'true'
+    assert worker_status['vpp_owner_cores'] == ','.join(map(str, expected_cpus))
+    assert worker_status['vpp_owner_thread_indices'] == ','.join(map(str,
+                                                                     range(1, owner_count + 1)))
 topology = one(records(run / 'before.txt', 'topology.profile='), profile='vpn')
 lane = one(records(run / 'before.txt', 'topology.tun_io_lane='), worker=owner_count)
 assert topology['owner_count'] == str(owner_count) and topology['vpp_worker_count'] == io_thread
-assert lane['thread_index'] == io_thread and lane['actual_core'] == io_thread
+io_cpu = str(2 if owner_count == 1 else 3)
+owner_cpus = [1] if owner_count == 1 else [1, 2] if owner_count == 2 else [1, 2, 1]
+assert lane['thread_index'] == io_thread and lane['actual_core'] == io_cpu
 assert lane['is_flow_owner'] == '0'
 assert one(records(run / 'before.txt', 'topology.main '))['actual_core'] == '0'
 for i in range(owner_count):
     placed = one(records(run / 'before.txt', 'topology.owner='), owner=i)
-    assert placed['thread_index'] == str(i + 1) and placed['actual_core'] == str(i + 1)
+    assert placed['thread_index'] == str(i + 1) and placed['actual_core'] == str(owner_cpus[i])
 assert not [row for row in records(run / 'before.txt', 'topology.owner=')
             if int(row['owner']) >= owner_count]
-if owner_count == 1:
-    for role, cpu in (('main', 0), ('wk_0', 1), ('wk_1', 2)):
+if owner_count in (1, 3):
+    for role, cpu in [('main', 0), *((f'wk_{i}', cpu)
+                      for i, cpu in enumerate([*owner_cpus, int(io_cpu)]))]:
         affinity = (run / ('affinity-' + role + '.txt')).read_text()
         assert re.search(r'^Cpus_allowed_list:\s*' + str(cpu) + r'\s*$',
                          affinity, re.MULTILINE), (role, affinity)
 probe = dict(line.split('=', 1) for line in (run / 'probe.properties').read_text().splitlines() if '=' in line)
+if owner_count == 3:
+    channels = records(run / 'after.txt', 'observation.channel=')
+    assert {int(row['channel']) for row in channels} == set(range(6))
+    assert {int(row['owner']) for row in records(run / 'after.txt', 'tun.return owner=')} == set(range(3))
 assert probe['nonce'] == result['nonce']
 assert all(probe['packet.' + str(i)] == ('timeout' if fault_write and i == 1 else 'echo')
            for i in range(3))
@@ -105,7 +122,7 @@ if result.get('ordinary_product'):
     assert stopped['state'] == 'stopped' and stopped['mayBeActive'] == 'false'
     assert 'libvpp_runtime.so' not in (run / 'processes-after.txt').read_text()
     verify_flow_end()
-    print(f"S{'299' if owner_count == 1 else '298'} ordinary Product generation={generation} UDP byte-equal echoes, write/status debt zero, clean stop: PASS")
+    print(f"S{'300' if owner_count == 3 else '299' if owner_count == 1 else '298'} ordinary Product generation={generation} UDP byte-equal echoes, write/status debt zero, clean stop: PASS")
     raise SystemExit(0)
 
 log = (run / 'vpp.log').read_text()
@@ -145,6 +162,8 @@ for i in range(3):
 
     wire = one([row for row in return_wire if payload(row['raw']) == expected])
     return_token, return_buffer = wire['token'], wire['buffer']
+    if owner_count == 3:
+        assert (int(return_token) >> 57) & 63 == owner
     assert wire['thread'] == owner_thread and wire['owner'] == str(owner)
     assert wire['generation'] == generation
     copied = one(return_copy, token=return_token)
@@ -201,6 +220,6 @@ stopped = dict(line.split('=', 1) for line in (run / 'stopped.properties').read_
 assert stopped['state'] == 'stopped' and stopped['mayBeActive'] == 'false'
 assert 'libvpp_runtime.so' not in (run / 'processes-after.txt').read_text()
 verify_flow_end()
-print(f"S{'299' if owner_count == 1 else '298'} owner={owner} generation={generation} "
+print(f"S{'300' if owner_count == 3 else '299' if owner_count == 1 else '298'} owner={owner} generation={generation} "
       f"{'two echoes and one classified write failure' if fault_write else 'three UDP echoes'}, "
       "exact return bytes/index, one attempt per return, zero debt: PASS")

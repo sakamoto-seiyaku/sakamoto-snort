@@ -214,8 +214,10 @@ public final class RuntimeService extends VpnService {
     private VpnPacketProfile vpnPacketProfile = VpnPacketProfile.standard();
     // Matches the frozen native W2 layout; registration must succeed for both
     // independent channels before the TUN can be attached.
-    private final VpnSocketBroker[] vpnSocketBrokers = new VpnSocketBroker[2];
-    private final VpnUidBroker[] vpnUidBrokers = new VpnUidBroker[2];
+    private final VpnSocketBroker[] vpnSocketBrokers =
+            new VpnSocketBroker[WorkerCpuPlacement.VPN_MAX_OWNER_COUNT];
+    private final VpnUidBroker[] vpnUidBrokers =
+            new VpnUidBroker[WorkerCpuPlacement.VPN_MAX_OWNER_COUNT];
 
     private boolean hasVpnSocketBrokers() {
         for (VpnSocketBroker broker : vpnSocketBrokers) if (broker != null) return true;
@@ -928,9 +930,10 @@ public final class RuntimeService extends VpnService {
             String ids = explicitIds == null ? getSharedPreferences("worker-placement",
                     MODE_PRIVATE).getString("workerCpuIds", "1,2") : explicitIds;
             WorkerCpuPlacement selection = WorkerCpuPlacement.parse(ids);
-            if (profile == RuntimeProfile.VPN && selection.ownerCount > 2) {
+            if (profile == RuntimeProfile.VPN
+                    && selection.ownerCount > WorkerCpuPlacement.VPN_MAX_OWNER_COUNT) {
                 publishError("invalid_worker_cpu_ids",
-                        "VPN currently supports one or two FlowOwner CPU IDs",
+                        "VPN requires a pinned VPP worker slot for TUN I/O",
                         currentMayBeActive(), currentPid());
                 return false;
             }
@@ -2806,6 +2809,7 @@ public final class RuntimeService extends VpnService {
                         () -> enqueueHealthyRootReset(healthyGeneration), 60000L);
             }
             writeRootNfqueueStatus(status);
+            writeS187WorkerCoreGuardrailsStatus(status);
             if (activeProfile == RuntimeProfile.VPN && vpnGraphValidation) {
                 writeBestEffortEvidenceFile("product-state/s213-tun-graph.properties",
                         "generation=" + generation + "\nvalidation=true\n"
@@ -2830,7 +2834,6 @@ public final class RuntimeService extends VpnService {
             writeS183VpnTcp6DirectEgressStatus(status);
             writeS184VpnNetworkEpochStatus(status);
             writeS185VpnFaultRecoveryStatus(status);
-            writeS187WorkerCoreGuardrailsStatus(status);
             writeS188EmptyPolicySnapshotStatus(status, "running", "", "");
             String gateStage = preservedNetworkGateEvidenceStage(status);
             writeS189RootNetworkGateStatus(status, gateStage, "", "");
@@ -3478,6 +3481,8 @@ public final class RuntimeService extends VpnService {
                 + "\nvpp_worker0_core=" + status.productGraphVppWorker0Core
                 + "\nvpp_worker1_thread_index=" + status.productGraphVppWorker1ThreadIndex
                 + "\nvpp_worker1_core=" + status.productGraphVppWorker1Core
+                + "\nvpp_owner_thread_indices=" + csvOwnerIds(status.productGraphVppOwnerThreadIndexes)
+                + "\nvpp_owner_cores=" + csvOwnerIds(status.productGraphVppOwnerCores)
                 + "\nworker_core_config_match=" + s187WorkerCoreConfigMatches(status)
                 + "\nowner_mapping=" + PRODUCT_CORE_OWNER_MAPPING
                 + "\nowner_mapping_seed=" + PRODUCT_CORE_OWNER_MAPPING_SEED
@@ -3507,6 +3512,16 @@ public final class RuntimeService extends VpnService {
                 + "\nvpn_tun_fd_attached=" + status.vpnTunFdAttached
                 + "\n";
         writeBestEffortEvidenceFile(S187_WORKER_CORE_GUARDRAILS_STATUS, text);
+    }
+
+    private static String csvOwnerIds(int[] ids) {
+        if (ids == null || ids.length == 0) return "unknown";
+        StringBuilder text = new StringBuilder();
+        for (int id : ids) {
+            if (text.length() != 0) text.append(',');
+            text.append(id);
+        }
+        return text.toString();
     }
 
     private void writeS188EmptyPolicySnapshotStatus(RuntimeControlNative.Status status,
@@ -5095,10 +5110,13 @@ public final class RuntimeService extends VpnService {
             return false;
         }
         if (status.productGraphVppOwnerCores == null
-                || status.productGraphVppOwnerCores.length != activeWorkerPlacement.ownerCount)
+                || status.productGraphVppOwnerCores.length != activeWorkerPlacement.ownerCount
+                || status.productGraphVppOwnerThreadIndexes == null
+                || status.productGraphVppOwnerThreadIndexes.length != activeWorkerPlacement.ownerCount)
             return false;
         for (int owner = 0; owner < activeWorkerPlacement.ownerCount; owner++)
-            if (status.productGraphVppOwnerCores[owner] != activeWorkerPlacement.cpuId(owner))
+            if (status.productGraphVppOwnerCores[owner] != activeWorkerPlacement.cpuId(owner)
+                    || status.productGraphVppOwnerThreadIndexes[owner] != owner + 1)
                 return false;
         return status.productGraphWorkerCount == activeWorkerPlacement.ownerCount
                 && status.productGraphVppWorkerCount == activeWorkerPlacement.ownerCount

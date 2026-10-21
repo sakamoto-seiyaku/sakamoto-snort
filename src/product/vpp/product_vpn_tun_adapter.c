@@ -62,6 +62,21 @@ _Static_assert(PRODUCT_VPN_RETURN_STAMP_SLOTS == PRODUCT_VPN_RETURN_CAPACITY,
                "return stamps share the return-credit bound");
 static tun_return_owner_t returns[PRODUCT_VPN_RETURN_WORKERS];
 static u32 active_owner_count(void) { return product_packet_graph_worker_count(); }
+/* Preserve the two-owner token layout for established generations. A layout
+ * with more owners uses six owner bits, leaving a 50-bit per-owner sequence.
+ * The stamp ledger still compares the entire token and generation. */
+static u64 return_sequence_limit(void)
+{ return active_owner_count() <= 2 ? (1ULL << 55) - 1 : (1ULL << 50) - 1; }
+static u32 return_token_owner(u64 token)
+{
+  return active_owner_count() <= 2 ? (u32)((token >> 62) & 1U)
+                                   : (u32)((token >> 57) & 63U);
+}
+static u64 return_token_make(u32 owner, u64 sequence, u32 slot)
+{
+  return (1ULL << 63) | ((u64)owner << (active_owner_count() <= 2 ? 62 : 57))
+         | (sequence << 7) | slot;
+}
 /* Written only with workers at the control barrier; workers only read. */
 static f64 return_hold_until[PRODUCT_VPN_RETURN_WORKERS];
 static struct {
@@ -148,7 +163,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   /* Disjoint token ranges make traces unambiguous without a global allocator.
    * packet_id is VPN-private credit-owner identity, not an NFQUEUE packet ID.
    * Origin placement remains the sole TUN lane, never the generating owner. */
-  if (owner->next_token == ((1ULL << 55) - 1) ||
+  if (owner->next_token == return_sequence_limit() ||
       !product_vpn_return_credit_take(&owner->credit, generation)) {
     ++owner->no_credit;
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
@@ -161,8 +176,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY;
   }
   owner->next_stamp_slot = (stamp_index + 1) & (PRODUCT_VPN_RETURN_STAMP_SLOTS - 1);
-  u64 token = (1ULL << 63) | ((u64)owner_index << 62) |
-    (++owner->next_token << 7) | (u64)stamp_index;
+  u64 token = return_token_make(owner_index, ++owner->next_token, (u32)stamp_index);
   u32 bi;
   if (vlib_buffer_alloc(vm, &bi, 1) != 1) {
     ++owner->no_buffer;
@@ -240,7 +254,7 @@ int product_vpn_tun_return_incarnation (u64 generation, u64 token,
   u64 *incarnation)
 {
   if (!(token & (1ULL << 63))) return 0;
-  u32 owner_index = (u32)((token >> 62) & 1U);
+  u32 owner_index = return_token_owner(token);
   if (owner_index >= active_owner_count()) return 0;
   return product_vpn_return_stamp_lookup(&returns[owner_index].stamps,
     generation, token, incarnation);
@@ -262,7 +276,8 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
   if (returned) {
     if (o->packet_id > active_owner_count() ||
         !(frame->flags & PRODUCT_COMPLETION_FLOW_STACK_RETURN) ||
-        (o->token >> 62) != (2U + o->packet_id - 1) ||
+        !(o->token & (1ULL << 63)) ||
+        return_token_owner(o->token) != o->packet_id - 1 ||
         !product_vpn_return_credit_used(&returns[o->packet_id - 1].credit)) {
       ++tun.rejected;
       return 0;

@@ -49,7 +49,7 @@ final class VpnSocketBroker implements AutoCloseable {
                                   long generation, int ownerIndex,
                                   boolean unknownContext, Runnable failure) throws IOException {
         if (service == null || generation <= 0 || failure == null
-                || ownerIndex < 0 || ownerIndex >= 2)
+                || ownerIndex < 0 || ownerIndex >= WorkerCpuPlacement.VPN_MAX_OWNER_COUNT)
             throw new IOException("socket broker configuration missing");
         LocalSocket socket = new LocalSocket(LocalSocket.SOCKET_SEQPACKET);
         boolean retained = false;

@@ -12,7 +12,7 @@ public final class RuntimeControlNative {
     private static final int STATUS_ASSOCIATION_VALUE_COUNT = 3;
     private static final int STATUS_WIRE_VALUE_COUNT =
             STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
-                    + STATUS_ASSOCIATION_VALUE_COUNT + 2;
+                    + STATUS_ASSOCIATION_VALUE_COUNT + 3;
     private static final int CONNECT_VALUE_COUNT = STATUS_WIRE_VALUE_COUNT + 1;
     private static final boolean LOADED;
 
@@ -216,21 +216,35 @@ public final class RuntimeControlNative {
                     parseIntAt(values, offset + 140, 0),
                     parseIntAt(values, offset + 141, 0));
             if (values.length > offset + 146) {
-                String cores = values[offset + 146];
-                if (cores != null && !cores.isEmpty()) {
-                    String[] parts = cores.split(",", -1);
-                    if (parts.length != status.productGraphWorkerCount || parts.length > 62)
-                        return Status.unavailable();
-                    int[] actual = new int[parts.length];
-                    for (int i = 0; i < parts.length; i++)
-                        actual[i] = parseInt(parts[i], -1);
-                    status.productGraphVppOwnerCores = actual;
-                }
+                status.productGraphVppOwnerCores = parseOwnerIds(
+                        values[offset + 146], status.productGraphWorkerCount);
+                if (status.productGraphVppOwnerCores == null) return Status.unavailable();
+            }
+            if (values.length > offset + 147) {
+                status.productGraphVppOwnerThreadIndexes = parseOwnerIds(
+                        values[offset + 147], status.productGraphWorkerCount);
+                if (status.productGraphVppOwnerThreadIndexes == null)
+                    return Status.unavailable();
             }
             return status;
         } catch (RuntimeException error) {
             return Status.unavailable();
         }
+    }
+
+    private static int[] parseOwnerIds(String encoded, int owners) {
+        if (encoded == null || owners < 0
+                || owners > WorkerCpuPlacement.PINNED_VPP_MAX_WORKERS) return null;
+        if (owners == 0) return encoded.isEmpty() ? new int[0] : null;
+        if (encoded.isEmpty()) return null;
+        String[] parts = encoded.split(",", -1);
+        if (parts.length != owners) return null;
+        int[] actual = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            actual[i] = parseInt(parts[i], -1);
+            if (actual[i] < 0) return null;
+        }
+        return actual;
     }
 
     private static int parseInt(String value, int fallback) {
@@ -801,6 +815,7 @@ public final class RuntimeControlNative {
         public final int productGraphVppWorker1ThreadIndex;
         public final int productGraphVppWorker1Core;
         public int[] productGraphVppOwnerCores;
+        public int[] productGraphVppOwnerThreadIndexes;
         public final int productGraphEnabled;
         public final int productGraphAccepting;
         public final int productGraphWorkerLayoutReady;
@@ -1124,6 +1139,12 @@ public final class RuntimeControlNative {
                     : productGraphWorkerCount == 2
                     ? new int[] {productGraphVppWorker0Core, productGraphVppWorker1Core}
                     : new int[0];
+            this.productGraphVppOwnerThreadIndexes = productGraphWorkerCount == 1
+                    ? new int[] {productGraphVppWorker0ThreadIndex}
+                    : productGraphWorkerCount == 2
+                    ? new int[] {productGraphVppWorker0ThreadIndex,
+                                 productGraphVppWorker1ThreadIndex}
+                    : new int[0];
             this.productGraphEnabled = productGraphEnabled;
             this.productGraphAccepting = productGraphAccepting;
             this.productGraphWorkerLayoutReady = productGraphWorkerLayoutReady;
@@ -1233,7 +1254,7 @@ public final class RuntimeControlNative {
 
         private static Status nativeFailure(Status previous, int code, String detail) {
             Status base = previous == null ? unavailable() : previous;
-            return new Status(base.abiVersion, base.apiVersion, code, code, base.generation,
+            Status failed = new Status(base.abiVersion, base.apiVersion, code, code, base.generation,
                     base.coreReady, base.adapterAvailable, base.protectionRunning,
                     base.pluginLoaded, base.vapiHandleLive, base.generationLive,
                     base.artifactId, base.apiIdentity, base.vppRevision, detail,
@@ -1368,6 +1389,10 @@ public final class RuntimeControlNative {
                     base.policyL4ViewLastMatchProbes,
                     base.policyL4ViewLastMatchCandidateCount,
                     base.policyL4ViewLastNoMatchReason);
+            failed.productGraphVppOwnerCores = base.productGraphVppOwnerCores.clone();
+            failed.productGraphVppOwnerThreadIndexes =
+                    base.productGraphVppOwnerThreadIndexes.clone();
+            return failed;
         }
 
         private static int viewValue(int[] values, int index) {

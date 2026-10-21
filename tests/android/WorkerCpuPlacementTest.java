@@ -28,6 +28,11 @@ public final class WorkerCpuPlacementTest {
         require(shared.ownerCount == 3 && shared.encode().equals("1,2,1"), "shared CPU keeps three owners");
         require(shared.startupConfig().contains("workers 3\n  ordered-workers 1,2,1"),
                 "three native worker contexts");
+        require(shared.vpnStartupConfig(3).contains("workers 4\n  ordered-workers 1,2,1,3"),
+                "VPN starts three shared-CPU owners and separate I/O context");
+        require(WorkerCpuPlacement.parse("1,2,1,2").vpnStartupConfig(3)
+                .contains("workers 5\n  ordered-workers 1,2,1,2,3"),
+                "VPN owner count is not restricted to three");
         require(forward.vpnStartupConfig(4).equals(
                 "cpu {\n  main-core 0\n  workers 3\n  ordered-workers 1,3,4\n}\n\n"),
                 "VPN appends explicit I/O CPU after owners");
@@ -60,6 +65,13 @@ public final class WorkerCpuPlacementTest {
             throw new AssertionError("accepted a worker count beyond the pinned VPP limit");
         } catch (IllegalArgumentException expected) {
             // The 63rd owner exceeds the pinned VPP thread limit.
+        }
+        try {
+            WorkerCpuPlacement.parse(String.join(",",
+                    java.util.Collections.nCopies(62, "1"))).vpnStartupConfig(3);
+            throw new AssertionError("accepted VPN without a TUN worker slot");
+        } catch (IllegalArgumentException expected) {
+            // VPN reserves one VPP worker slot after the owners.
         }
         System.out.println("Worker CPU placement: ordered W2/default/roundtrip and "
                 + invalid.length + " invalid inputs PASS; native affinity remains a device gate");

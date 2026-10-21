@@ -33,15 +33,16 @@ def main():
     parser.add_argument('--endpoint-address', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--fault', choices=['none', 'write'], default='none')
-    parser.add_argument('--owner', type=int, choices=[0, 1], default=0)
-    parser.add_argument('--owner-count', type=int, choices=[1, 2], default=2)
+    parser.add_argument('--owner', type=int, choices=[0, 1, 2], default=0)
+    parser.add_argument('--owner-count', type=int, choices=[1, 2, 3], default=2)
+    parser.add_argument('--source-port-first', type=int, default=42000)
     parser.add_argument('--preselect-other-io-cpu', action='store_true')
     parser.add_argument('--stress-ingress', action='store_true')
     parser.add_argument('--ordinary-product', action='store_true')
     parser.add_argument('--flow-end-mode', choices=['none', 'close', 'expiry'], default='none')
     a = parser.parse_args()
     assert a.owner < a.owner_count
-    assert a.flow_end_mode == 'none' or a.owner_count == 1
+    assert 1024 <= a.source_port_first <= 65435
     assert not a.ordinary_product or a.fault == 'none'
     endpoint_ip = ipaddress.ip_address(a.endpoint_address)
     assert not (endpoint_ip.is_loopback or endpoint_ip.is_unspecified
@@ -91,8 +92,9 @@ def main():
             ['set terminal pager off', *commands, 'quit']) + ' | toybox nc -U -w 2 -q 1 ' + BASE + 'runtime/cli.sock'
         return save(name + '.txt', adb('shell', 'su', '-c', shlex.quote(command)))
 
-    result = dict(status='HOLD', scope='s299-vpn-n1-udp4-return' if a.owner_count == 1
-                  else 's298-dedicated-io-udp4-return', owner_count=a.owner_count,
+    result = dict(status='HOLD', scope=('s300-vpn-n3-udp4-return' if a.owner_count == 3
+                  else 's299-vpn-n1-udp4-return' if a.owner_count == 1
+                  else 's298-dedicated-io-udp4-return'), owner_count=a.owner_count,
                   fault=a.fault,
                   flow_end_mode=a.flow_end_mode,
                   started_ns=time.time_ns(), apk_sha256=chain.digest(apk), serial=SERIAL)
@@ -145,7 +147,7 @@ def main():
         server = subprocess.Popen([str(helper.resolve()), 'server', str(os.getuid()), str(family),
             str(endpoint_ip), str(endpoint_port)], stdout=log, stderr=subprocess.STDOUT)
         oracle = module('oracle', 'tests/device/s207-owner-oracle.py')
-        for port in range(42000, 42100):
+        for port in range(a.source_port_first, a.source_port_first + 100):
             facts = dict(l3=1, l4=1, family=family, protocol=17,
                 src=tun_ip.packed.rjust(16, b'\0').hex(),
                 dst=endpoint_ip.packed.rjust(16, b'\0').hex(), src_port=port,
@@ -163,8 +165,9 @@ def main():
             wait('preselect-stopped', STATE, dict(state='stopped', mayBeActive='false', errorCode=''))
             previous = props(app(STATE))
         active = True
-        placement = ('--es', 'runtimeWorkerCpuIds', '1' if a.owner_count == 1 else '1,2')
-        io_cpu = str(a.owner_count + 1)
+        owner_cpus = [1] if a.owner_count == 1 else [1, 2] if a.owner_count == 2 else [1, 2, 1]
+        placement = ('--es', 'runtimeWorkerCpuIds', ','.join(map(str, owner_cpus)))
+        io_cpu = str(2 if a.owner_count == 1 else 3)
         if a.ordinary_product:
             save('start.txt', action('--ez', 'runtimeStart', 'true',
                 '--es', 'runtimeProfile', 'vpn', '--es', 'runtimeTunIoCpuId', io_cpu,
@@ -175,6 +178,15 @@ def main():
         state = wait('running', STATE, dict(state='running', profile='vpn',
                      protectionRunning='true' if a.ordinary_product else 'false', errorCode=''))
         result['generation'] = int(state['generation'])
+        worker_status = props(save('worker-status.properties',
+            app('files/product-state/s187-worker-core-guardrails.properties')))
+        assert worker_status['generation'] == str(result['generation'])
+        assert worker_status['vpp_owner_cores'] == ','.join(map(str,
+            [1] if a.owner_count == 1 else [1, 2] if a.owner_count == 2 else [1, 2, 1]))
+        assert worker_status['vpp_owner_thread_indices'] == ','.join(map(str,
+            range(1, a.owner_count + 1)))
+        assert worker_status['worker_core_config_match'] == 'true'
+        result['worker_status_checked'] = True
         cli('before', ['show product topology', 'show product flow-stack',
                        'show product tun', 'show threads'])
         before_topology = (a.output / 'before.txt').read_text()
@@ -189,8 +201,8 @@ def main():
                        for line in before_topology.splitlines()
                        if (match := re.search(r'^\d+\s+vpp_(main|wk_\d+)\s+(?:workers\s+)?(\d+)\s+', line)))
         assert set(threads) == {'main', *(f'wk_{i}' for i in range(a.owner_count + 1))}, threads
-        for role, cpu in [('main', 0), *( (f'wk_{i}', i + 1)
-                                              for i in range(a.owner_count + 1))]:
+        for role, cpu in [('main', 0), *((f'wk_{i}', cpu)
+                                for i, cpu in enumerate([*owner_cpus, int(io_cpu)]))]:
             lwp = threads[role]
             affinity = save('affinity-' + role + '.txt', adb('shell', 'su', '-c',
                 shlex.quote(f'cat /proc/{threads["main"]}/task/{lwp}/status')))
@@ -232,7 +244,8 @@ def main():
             assert flood.returncode == 0, flood_output
         save('vpp.log', app('files/profiles/vpn/vpp/logs/vpp-stdout.log'))
         save('broker.log', adb('logcat', '-d', '-s', 'SakamotoSocketBroker:I', '*:S'))
-        cli('after', ['show product flow-stack', 'show product tun', 'show runtime'])
+        cli('after', ['show product flow-stack', 'show product tun',
+                      'show product observation', 'show runtime'])
         assert all(probe.get('packet.' + str(i)) ==
                    ('timeout' if a.fault != 'none' and i == 1 else 'echo') for i in range(3)), probe
         endpoint_text = (a.output / 'endpoint.log').read_text()
@@ -260,7 +273,7 @@ def main():
                                               'show product expiry'])
             entries = [dict(re.findall(r'(\w+)=([^\s]+)', line))
                        for line in before_flow.splitlines() if line.startswith('flow.entry ')]
-            matches = [entry for entry in entries if entry.get('worker') == '0'
+            matches = [entry for entry in entries if entry.get('worker') == str(a.owner)
                        and {entry.get('port_a'), entry.get('port_b')} ==
                            {str(port), str(endpoint_port)}]
             assert len(matches) == 1, matches
@@ -269,15 +282,15 @@ def main():
             result['flow_incarnation'] = target['incarnation']
             assert int(target['orig_packets']) >= 3 and int(target['reply_packets']) >= 3
             if a.flow_end_mode == 'close':
-                requested = cli('flow-close', [f'product flow-end close owner 0 '
+                requested = cli('flow-close', [f'product flow-end close owner {a.owner} '
                     f'slot {target["slot"]} generation {result["generation"]} '
                     f'incarnation {target["incarnation"]}'])
-                assert 'flow-end.close=queued owner=0' in requested, requested
+                assert f'flow-end.close=queued owner={a.owner}' in requested, requested
             deadline = time.monotonic() + (50 if a.flow_end_mode == 'expiry' else 8)
             while time.monotonic() < deadline:
                 after_flow = cli('flow-after', ['show product flows', 'show product flow-end',
                                                 'show product expiry'])
-                if not any(line.startswith('flow.entry worker=0 ')
+                if not any(line.startswith(f'flow.entry worker={a.owner} ')
                            and f'slot={target["slot"]} ' in line
                            and f'incarnation={target["incarnation"]} ' in line
                            for line in after_flow.splitlines()):
@@ -285,8 +298,8 @@ def main():
                 time.sleep(.25)
             else:
                 raise RuntimeError('FlowEntry did not reach FlowEnd/expiry')
-            assert 'flow-end.owner=0 ' in after_flow and 'expiry.owner=0 ' in after_flow
-            assert 'flow-end.owner=1 ' not in after_flow and 'expiry.owner=1 ' not in after_flow
+            assert all(f'flow-end.owner={i} ' in after_flow and
+                       f'expiry.owner={i} ' in after_flow for i in range(a.owner_count))
         result['status'] = 'SMOKE_ECHO_COMPLETE' if a.fault == 'none' else 'SAME_SESSION_RECOVERY_COMPLETE'
     except Exception as error:
         result['error'] = repr(error)

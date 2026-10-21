@@ -76,7 +76,7 @@ typedef struct { u32 n_vectors, vectors[VLIB_FRAME_SIZE]; } vlib_frame_t;
 typedef struct { u8 opaque[40], opaque2[56]; } vlib_buffer_t;
 typedef struct {
   u64 generation, trace_packets, trace_limit;
-  u32 enabled, accepting, lifecycle_buffers, lifecycle_obligations;
+  u32 enabled, accepting, lifecycle_buffers, lifecycle_obligations, owner_count;
   product_adapter_obligation_kind_t adapter_kind;
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
@@ -179,6 +179,7 @@ static void reset(void) {
   product_packet_graph_main = (product_packet_graph_main_t) {
     .generation = 7041, .trace_limit = 2, .enabled = 1, .accepting = 1,
     .lifecycle_buffers = 17, .lifecycle_obligations = 29,
+    .owner_count = PRODUCT_GRAPH_WORKERS,
     .adapter_kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
   };
   memset(storage, 0xa5, sizeof(storage));

@@ -30,9 +30,8 @@ product_runtime_topology_current (product_runtime_topology_profile_t profile)
         return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
       owners = (uint32_t) parsed;
     }
-  /* SAKAMOTO-299 admits one or two VPN owners. The appended worker remains
-   * exclusively the TUN origin lane, never a canonical owner. */
-  if (profile == PRODUCT_TOPOLOGY_VPN && owners > 2)
+  /* VPN reserves one pinned VPP worker position for its TUN origin lane. */
+  if (profile == PRODUCT_TOPOLOGY_VPN && owners >= PRODUCT_VPP_MAX_FLOW_OWNERS)
     return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
   if (profile == PRODUCT_TOPOLOGY_VPN)
     {
@@ -67,10 +66,11 @@ product_runtime_topology_valid (product_runtime_topology_profile_t profile,
       || actual_vpp_workers != topology.vpp_worker_count)
     return 0;
   if (profile == PRODUCT_TOPOLOGY_ROOT)
-    return topology.vpp_worker_count == topology.owner_count
+    return topology.owner_count <= PRODUCT_VPP_MAX_FLOW_OWNERS
+           && topology.vpp_worker_count == topology.owner_count
            && topology.tun_io_worker == UINT32_MAX;
   if (profile == PRODUCT_TOPOLOGY_VPN)
-    return topology.owner_count <= 2
+    return topology.owner_count < PRODUCT_VPP_MAX_FLOW_OWNERS
            && topology.vpp_worker_count == topology.owner_count + 1
            && topology.tun_io_worker == topology.owner_count;
   return 0;

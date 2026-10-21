@@ -2030,7 +2030,7 @@ VLIB_REGISTER_NODE(product_vpn_egress_node) = {
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-#define PRODUCT_COMPLETION_RETURN_CAPACITY 1024
+#define PRODUCT_COMPLETION_RETURN_CAPACITY 8192
 _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
                   PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_MAX_CAPACITY
                   + 3 * PRODUCT_GRAPH_INJECTION_CAPACITY,
@@ -4540,7 +4540,7 @@ product_packet_graph_submit_external_batch_internal (
           product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
           vlib_get_worker_index (vm->thread_index)) &&
         obligation->packet_id == vlib_get_worker_index (vm->thread_index) + 1 &&
-        obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
+        obligation->packet_id <= graph->owner_count;
       if (!vm || !product_packet_graph_origin_valid (graph, obligation) ||
           (platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return) ||
           (!vpn_return && vm->thread_index !=
@@ -4645,7 +4645,7 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
       product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
       vlib_get_worker_index (vm->thread_index)) &&
     obligation->packet_id == vlib_get_worker_index(vm->thread_index) + 1 &&
-    obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
+    obligation->packet_id <= graph->owner_count;
   if (!vm || !product_packet_graph_origin_valid (graph, obligation)
       || (platform && platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return)
       || (!vpn_return &&

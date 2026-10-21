@@ -4,10 +4,11 @@
 #include <vlib/vlib.h>
 #include "product_packet_completion.h"
 #include "product_vpn_flow_stack.h"
+#include "product_runtime_topology.h"
 
 enum {
   PRODUCT_VPN_TUN_CAPTURE_CAPACITY = 128,
-  PRODUCT_VPN_RETURN_WORKERS = 2,
+  PRODUCT_VPN_RETURN_WORKERS = PRODUCT_VPP_MAX_FLOW_OWNERS - 1,
   PRODUCT_VPN_RETURN_CAPACITY = 128,
 };
 

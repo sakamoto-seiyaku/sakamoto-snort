@@ -4,6 +4,8 @@ import java.util.Arrays;
 
 /** Startup-only ordered owner placement. CPU IDs never identify packet/flow owners. */
 public final class WorkerCpuPlacement {
+    public static final int PINNED_VPP_MAX_WORKERS = 62;
+    public static final int VPN_MAX_OWNER_COUNT = PINNED_VPP_MAX_WORKERS - 1;
     public static final WorkerCpuPlacement DEFAULT = new WorkerCpuPlacement(1, 2);
     public final int ownerCount;
     public final int worker0CpuId;
@@ -26,7 +28,7 @@ public final class WorkerCpuPlacement {
         if (value == null || !value.matches("[0-9]{1,10}(,[0-9]{1,10})*"))
             throw new IllegalArgumentException("workerCpuIds requires ordered decimal CPU IDs");
         String[] parts = value.split(",", -1);
-        if (parts.length > 62)
+        if (parts.length > PINNED_VPP_MAX_WORKERS)
             throw new IllegalArgumentException("workerCpuIds exceeds pinned VPP thread limit");
         int[] ordered = new int[parts.length];
         for (int i = 0; i < parts.length; i++) {
@@ -68,8 +70,8 @@ public final class WorkerCpuPlacement {
     }
 
     public String vpnStartupConfig(String tunIoCpuId) {
-        if (ownerCount > 2)
-            throw new IllegalArgumentException("VPN currently supports one or two FlowOwner CPU IDs");
+        if (ownerCount > VPN_MAX_OWNER_COUNT)
+            throw new IllegalArgumentException("VPN requires a pinned VPP worker slot for TUN I/O");
         int cpu = parseTunIoCpuId(tunIoCpuId);
         return "cpu {\n  main-core 0\n  workers " + (ownerCount + 1)
                 + "\n  ordered-workers " + encode() + "," + cpu + "\n}\n\n";

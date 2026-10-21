@@ -27,8 +27,8 @@ int main (void)
   product_runtime_topology_t dedicated_three = { 3, 4, 3 };
   assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
                                           dedicated_one, 2));
-  assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
-                                           dedicated_three, 4));
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
+                                          dedicated_three, 4));
   assert (!product_runtime_topology_is_owner (dedicated_three,
                                                dedicated_three.tun_io_worker));
   assert (!product_runtime_topology_valid (
@@ -61,9 +61,19 @@ int main (void)
   root = product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT);
   assert (root.owner_count == 3 && root.vpp_worker_count == 3);
   assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 3));
+  vpn = product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN);
+  assert (vpn.owner_count == 3 && vpn.vpp_worker_count == 4 && vpn.tun_io_worker == 3);
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN, vpn, 4));
   assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 2));
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "61", 1) == 0);
+  vpn = product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN);
+  assert (vpn.owner_count == 61 && vpn.vpp_worker_count == 62);
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN, vpn, 62));
+  assert (!product_runtime_topology_valid (
+    PRODUCT_TOPOLOGY_VPN, (product_runtime_topology_t) { 62, 63, 62 }, 63));
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "62", 1) == 0);
   assert (product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count == 62);
+  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN).owner_count);
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "63", 1) == 0);
   assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "01", 1) == 0);

@@ -23,7 +23,9 @@ vppctl = stage/'source/build-root/install-vpp-native/vpp/bin/vppctl'
 
 for label, owner_count, configured in [('missing', 2, False),
                                        ('dedicated', 2, True),
-                                       ('single-owner', 1, True)]:
+                                       ('single-owner', 1, True),
+                                       ('shared-three', 3, True),
+                                       ('shared-four', 4, True)]:
     case = output/label
     case.mkdir()
     runtime = case/'runtime'
@@ -31,8 +33,9 @@ for label, owner_count, configured in [('missing', 2, False),
     assert len(os.fsencode(runtime/'tun-control.sock')) < 108, \
         'output path is too long for the Product TUN Unix socket'
     config = case/'startup.conf'
-    owners = cpus[1:1+owner_count]
-    io_cpu = cpus[1+owner_count]
+    owners = [cpus[1], cpus[2], cpus[1], cpus[2]][:owner_count] \
+        if owner_count >= 3 else cpus[1:1+owner_count]
+    io_cpu = cpus[3] if owner_count >= 3 else cpus[1+owner_count]
     config.write_text(f'''cpu {{ main-core {cpus[0]} workers {owner_count+1} ordered-workers {','.join(map(str, owners))},{io_cpu} }}
 unix {{ nodaemon cli-no-pager runtime-dir {runtime} cli-listen {runtime}/cli.sock }}
 socksvr {{ socket-name {runtime}/api.sock }}
@@ -96,4 +99,4 @@ plugins {{ path {artifact}/lib/vpp_plugins plugin default {{ disable }} plugin p
             process.wait(timeout=5)
     (case/'exit.txt').write_text(f'pid={process.pid} exit={process.returncode}\n')
     assert not Path(f'/proc/{process.pid}').exists()
-print('Product VPN dedicated I/O startup and missing-setting rejection: PASS')
+print('Product VPN N=1/2/3/4 dedicated I/O startup, shared CPU, and missing-setting rejection: PASS')
