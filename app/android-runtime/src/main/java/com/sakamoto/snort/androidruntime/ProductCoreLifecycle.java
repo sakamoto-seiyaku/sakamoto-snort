@@ -7,6 +7,11 @@ public final class ProductCoreLifecycle {
 
     private ProductCoreLifecycle() {}
 
+    public static boolean validWorkerTopology(int owners, int workers, int tunIoWorker) {
+        return owners > 0 && ((workers == owners && tunIoWorker == -1)
+                || (workers == owners + 1 && tunIoWorker == owners));
+    }
+
     /** An unstarted repair generation has no native TUN control listener to drain. */
     public static boolean requiresVpnDrain(boolean captureStarted,
                                             RuntimeControlNative.Status status) {
@@ -68,8 +73,8 @@ public final class ProductCoreLifecycle {
         if (revision.isEmpty() || !revision.equals(status.vppRevision)) {
             return "product_vpp_revision_mismatch";
         }
-        if (status.productGraphWorkerCount <= 0
-                || status.productGraphWorkerCount != status.productGraphVppWorkerCount
+        if (!validWorkerTopology(status.productGraphWorkerCount,
+                status.productGraphVppWorkerCount, status.productGraphTunIoWorkerIndex)
                 || status.productGraphWorkerLayoutReady == 0) {
             return "product_worker_layout_mismatch";
         }

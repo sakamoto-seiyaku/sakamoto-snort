@@ -222,6 +222,34 @@ main (void)
          "IP protocol must participate in canonical key");
   check_distribution_and_ledger (a, alen);
 
+  const product_worker_layout_t vpn_layout = { .worker_count = 2,
+    .hash_seed = UINT64_C (0x6f776e65722d3137) };
+  const product_packet_ingress_t vpn_io = { .data = a, .length = alen,
+    .current_worker = 2, .io_only_worker = 1, .origin_obligation_id = 61 };
+  product_packet_lease_t vpn_lease;
+  CHECK (product_packet_admit (&vpn_layout, &vpn_io, &vpn_lease) == PRODUCT_PACKET_OK,
+         "dedicated VPN I/O worker must parse and select an owner");
+  CHECK (vpn_lease.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE
+         && vpn_lease.primary_handoff_count == 1
+         && vpn_lease.assignment.execution_owner < 2,
+         "I/O ingress must always hand the original packet to one owner");
+  const product_packet_ingress_t invalid_worker = { .data = a, .length = alen,
+    .current_worker = 2, .origin_obligation_id = 62 };
+  CHECK (product_packet_admit (&vpn_layout, &invalid_worker, &vpn_lease)
+         == PRODUCT_PACKET_INVALID_ARGUMENT,
+         "non-owner ingress requires an explicit I/O-only context");
+  uint8_t malformed[80];
+  memcpy (malformed, a, alen);
+  malformed[0] = 0;
+  product_packet_ingress_t invalid_ingress = vpn_io;
+  invalid_ingress.data = malformed;
+  CHECK (product_packet_admit (&vpn_layout, &invalid_ingress, &vpn_lease)
+         == PRODUCT_PACKET_UNSUPPORTED_ENVELOPE,
+         "invalid I/O ingress must fail before an owner is assigned");
+  CHECK (!vpn_lease.assignment.valid && !vpn_lease.policy_owner_ready
+         && vpn_lease.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME,
+         "invalid I/O ingress cannot reach owner-local FlowEntry or policy");
+
   if (failures != 0)
     return 1;
   puts ("s174 product packet kernel semantic vectors: PASS");

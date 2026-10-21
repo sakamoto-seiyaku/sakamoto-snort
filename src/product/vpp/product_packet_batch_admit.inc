@@ -257,6 +257,8 @@ product_admit_prepare_window (vlib_main_t *vm, vlib_buffer_t **buffers,
       product_packet_ingress_t ingress = {
         .data = vlib_buffer_get_current (buffer), .length = buffer->current_length,
         .current_worker = vlib_get_worker_index (vm->thread_index),
+        .io_only_worker = product_packet_graph_io_only_ingress (
+          vlib_get_worker_index (vm->thread_index)),
         .origin_obligation_id = item->metadata.origin_obligation_id,
       };
       if (!product_packet_graph_get_platform_facts (

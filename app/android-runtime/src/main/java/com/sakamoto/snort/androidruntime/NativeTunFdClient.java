@@ -12,6 +12,9 @@ import java.nio.ByteOrder;
 /** Generation-scoped fd handoff only; packet bytes never use this channel. */
 final class NativeTunFdClient {
     private NativeTunFdClient() {}
+    private static volatile String lastStopDetail = "not_attempted";
+
+    static String lastStopDetail() { return lastStopDetail; }
 
     static void attach(String runtimePath, long generation, int rawFd, int controlledUid)
             throws IOException {
@@ -21,19 +24,24 @@ final class NativeTunFdClient {
     }
 
     static boolean stop(String runtimePath, long generation) {
+        lastStopDetail = "not_attempted";
         long deadline = SystemClock.elapsedRealtime() + 8000;
         try {
             do {
                 int result = call(runtimePath, generation, 2, -1, 0);
+                lastStopDetail = "reply_" + result;
                 if (result == 0) return true;
                 if (result != 1) return false;
                 Thread.sleep(50);
             } while (SystemClock.elapsedRealtime() < deadline);
         } catch (IOException error) {
+            lastStopDetail = error.getClass().getSimpleName() + ":" + error.getMessage();
             return false;
         } catch (InterruptedException error) {
+            lastStopDetail = "interrupted";
             Thread.currentThread().interrupt();
         }
+        if ("reply_1".equals(lastStopDetail)) lastStopDetail = "drain_deadline";
         return false;
     }
 

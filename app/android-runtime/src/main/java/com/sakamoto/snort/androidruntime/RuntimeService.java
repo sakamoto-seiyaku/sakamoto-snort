@@ -138,6 +138,8 @@ public final class RuntimeService extends VpnService {
     private static final String PRODUCT_CORE_MAIN_CORE = "0";
     private WorkerCpuPlacement requestedWorkerPlacement = WorkerCpuPlacement.DEFAULT;
     private WorkerCpuPlacement activeWorkerPlacement = WorkerCpuPlacement.DEFAULT;
+    private Integer requestedTunIoCpuId;
+    private Integer activeTunIoCpuId;
     private static final String PRODUCT_CORE_OWNER_MAPPING =
             "single-runtime-owner";
     private static final String PRODUCT_CORE_OWNER_MAPPING_SEED =
@@ -675,6 +677,9 @@ public final class RuntimeService extends VpnService {
                 if (!selectWorkerPlacement(profile, intent != null
                         && intent.hasExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
                         ? intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
+                        : null, intent != null
+                        && intent.hasExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID)
+                        ? intent.getStringExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID)
                         : null)) return;
                 generationRequestEpoch = requestEpoch;
                 vpnRecoveryFailureCount = 0;
@@ -717,7 +722,7 @@ public final class RuntimeService extends VpnService {
                 requestedVpnGraphValidation = false;
                 requestedVpnHevValidation = false;
                 requestedNativeBuffers = 0;
-                if (!selectWorkerPlacement(profile, null)) return;
+                if (!selectWorkerPlacement(profile, null, null)) return;
                 startRuntime(profile);
             }, requestEpoch);
             return START_STICKY;
@@ -917,7 +922,8 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private boolean selectWorkerPlacement(RuntimeProfile profile, String explicitIds) {
+    private boolean selectWorkerPlacement(RuntimeProfile profile, String explicitIds,
+                                          String explicitTunIoCpuId) {
         try {
             String ids = explicitIds == null ? getSharedPreferences("worker-placement",
                     MODE_PRIVATE).getString("workerCpuIds", "1,2") : explicitIds;
@@ -928,17 +934,27 @@ public final class RuntimeService extends VpnService {
                         currentMayBeActive(), currentPid());
                 return false;
             }
+            Integer ioCpu = null;
+            if (profile == RuntimeProfile.VPN) {
+                String saved = getSharedPreferences("worker-placement", MODE_PRIVATE)
+                        .getString("tunIoCpuId", null);
+                ioCpu = selection.parseTunIoCpuId(
+                        explicitTunIoCpuId == null ? saved : explicitTunIoCpuId);
+            }
             if ((processAlive(vppProcess) || productCoreSession != null)
-                    && !selection.equals(activeWorkerPlacement)) {
+                    && (!selection.equals(activeWorkerPlacement)
+                        || !java.util.Objects.equals(ioCpu, activeTunIoCpuId))) {
                 publishError("worker_placement_requires_restart",
                         "Stop the current runtime before changing workerCpuIds",
                         currentMayBeActive(), currentPid());
                 return false;
             }
             requestedWorkerPlacement = selection;
+            requestedTunIoCpuId = ioCpu;
             return true;
         } catch (IllegalArgumentException error) {
-            publishError("invalid_worker_cpu_ids", error.getMessage(),
+            publishError(profile == RuntimeProfile.VPN && error.getMessage().startsWith("tunIoCpuId")
+                    ? "invalid_tun_io_cpu_id" : "invalid_worker_cpu_ids", error.getMessage(),
                     currentMayBeActive(), currentPid());
             return false;
         }
@@ -1006,6 +1022,7 @@ public final class RuntimeService extends VpnService {
         activeProfile = selected;
         productCaptureStarted = false;
         activeWorkerPlacement = requestedWorkerPlacement;
+        activeTunIoCpuId = requestedTunIoCpuId;
         initializeProfilePaths(selected);
         vpnGraphValidation = selected == RuntimeProfile.VPN && requestedVpnGraphValidation;
         vpnHevValidation = vpnGraphValidation && requestedVpnHevValidation;
@@ -1067,7 +1084,7 @@ public final class RuntimeService extends VpnService {
                         "product ABI does not match device ABI");
                 return;
             }
-            if (productAbiVersion != 1 || productApiVersion != 1) {
+            if (productAbiVersion != 3 || productApiVersion != 1) {
                 failWithoutRuntime("product_protocol_mismatch",
                         "product manifest ABI/API versions are unsupported");
                 return;
@@ -1144,6 +1161,9 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
             builder.environment().put("SAKAMOTO_PRODUCT_OWNER_COUNT",
                     Integer.toString(activeWorkerPlacement.ownerCount));
+            if (selected == RuntimeProfile.VPN)
+                builder.environment().put("SAKAMOTO_PRODUCT_TUN_IO_CPU_ID",
+                        Integer.toString(activeTunIoCpuId));
             if (vpnGraphValidation) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
             }
@@ -1288,7 +1308,7 @@ public final class RuntimeService extends VpnService {
                 platformNetworkSnapshots = new PlatformNetworkSnapshots(
                         getSystemService(ConnectivityManager.class), session,
                         code -> enqueueLifecycle(() -> {
-                            if (generation == networkGeneration && productCoreSession == session
+                            if (!stopRequested && generation == networkGeneration && productCoreSession == session
                                     && currentMayBeActive()) {
                                 failProductCoreGeneration("platform_network_publish_failed",
                                         "Network snapshot publication failed: " + code);
@@ -1474,8 +1494,12 @@ public final class RuntimeService extends VpnService {
                         "VPP worker placement differs from the requested CPU order");
                 return;
             }
-            if (!getSharedPreferences("worker-placement", MODE_PRIVATE).edit()
-                    .putString("workerCpuIds", activeWorkerPlacement.encode()).commit()) {
+            android.content.SharedPreferences.Editor placementEdit =
+                    getSharedPreferences("worker-placement", MODE_PRIVATE).edit()
+                    .putString("workerCpuIds", activeWorkerPlacement.encode());
+            if (activeProfile == RuntimeProfile.VPN)
+                placementEdit.putString("tunIoCpuId", Integer.toString(activeTunIoCpuId));
+            if (!placementEdit.commit()) {
                 failProductCoreGeneration("worker_placement_persistence_failed",
                         "Validated worker placement could not be persisted");
                 return;
@@ -5078,8 +5102,9 @@ public final class RuntimeService extends VpnService {
                 return false;
         return status.productGraphWorkerCount == activeWorkerPlacement.ownerCount
                 && status.productGraphVppWorkerCount == activeWorkerPlacement.ownerCount
+                    + (activeProfile == RuntimeProfile.VPN ? 1 : 0)
                 && status.productGraphTunIoWorkerIndex ==
-                        (activeProfile == RuntimeProfile.VPN ? 0 : -1)
+                        (activeProfile == RuntimeProfile.VPN ? activeWorkerPlacement.ownerCount : -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
                 && (activeWorkerPlacement.ownerCount != 1
                     || status.productGraphVppWorker1ThreadIndex == -1
@@ -5538,7 +5563,9 @@ public final class RuntimeService extends VpnService {
                     || ProductCoreLifecycle.requiresVpnDrain(productCaptureStarted, status)) {
                 tunClosed = NativeTunFdClient.stop(new File(profileRoot, "runtime").getPath(), generation);
             }
-            appendLog("s213 native_tun_drain=" + tunClosed);
+            appendLog("s213 native_tun_drain=" + tunClosed
+                    + " detail=" + NativeTunFdClient.lastStopDetail());
+            if (!tunClosed) archiveHevNativeLog("s297-last-stop-failure.log");
             if (vpnHevValidation) archiveHevNativeLog("s237-last-stop.log");
         }
         // Keep platform facts available until native ingress is quiesced and
@@ -6195,7 +6222,9 @@ public final class RuntimeService extends VpnService {
             throw new IOException("unable to create generation-owned profile directories");
         }
         String config = "plugin_path " + nativeLibraryPath + "\n\n"
-                + activeWorkerPlacement.startupConfig()
+                + (owner.profile == RuntimeProfile.VPN
+                    ? activeWorkerPlacement.vpnStartupConfig(activeTunIoCpuId)
+                    : activeWorkerPlacement.startupConfig())
                 + "unix {\n  nodaemon\n  nobanner\n  runtime-dir "
                 + runtime.getPath() + "\n  log " + new File(logs, "vpp.log").getPath()
                 + "\n  cli-listen " + new File(runtime, "cli.sock").getPath()

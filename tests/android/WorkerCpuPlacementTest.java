@@ -28,6 +28,17 @@ public final class WorkerCpuPlacementTest {
         require(shared.ownerCount == 3 && shared.encode().equals("1,2,1"), "shared CPU keeps three owners");
         require(shared.startupConfig().contains("workers 3\n  ordered-workers 1,2,1"),
                 "three native worker contexts");
+        require(forward.vpnStartupConfig(4).equals(
+                "cpu {\n  main-core 0\n  workers 3\n  ordered-workers 1,3,4\n}\n\n"),
+                "VPN appends explicit I/O CPU after owners");
+        for (String invalidIo : new String[] {null, "", "0", "1", "3", "1024", "x", "4,5"}) {
+            try {
+                forward.vpnStartupConfig(invalidIo);
+                throw new AssertionError("accepted invalid VPN I/O CPU: " + invalidIo);
+            } catch (IllegalArgumentException expected) {
+                // No implicit default or conflicting CPU is accepted.
+            }
+        }
         String[] invalid = {null, "", "0", "0,1", "1,0",
                 "1,", ",1", "1,,2", "1-3", "3-1", "-1,2", "+1,2", "1.0,2", "1, 2",
                 " 1,2", "1,2 ", "1,2\n", "1,2\nworkers 9", "1,2}", "1024,1",

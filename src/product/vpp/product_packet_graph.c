@@ -447,6 +447,16 @@ typedef struct
 
 static product_packet_graph_main_t product_packet_graph_main;
 
+/* Worker roles are fixed when this graph generation starts. Admission uses
+ * the committed owner count rather than reparsing launcher environment for
+ * every packet (including each prefetch window in the batch path). */
+static_always_inline int
+product_packet_graph_io_only_ingress (u16 logical_worker)
+{
+  return product_packet_graph_main.adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
+    && logical_worker == product_packet_graph_main.owner_count;
+}
+
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
 typedef struct
 {
@@ -1401,6 +1411,7 @@ VLIB_NODE_FN (product_packet_admit_node)
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = buffer->current_length;
       ingress.current_worker = logical_worker;
+      ingress.io_only_worker = product_packet_graph_io_only_ingress (logical_worker);
       ingress.origin_obligation_id = initial_metadata.origin_obligation_id;
       if (!product_packet_graph_get_platform_facts (
             buffer, initial_metadata.generation, &ingress.platform))

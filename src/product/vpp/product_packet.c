@@ -337,7 +337,9 @@ product_packet_parse_ingress (const product_worker_layout_t *layout,
 
   if (layout == NULL || ingress == NULL || lease == NULL
       || ingress->data == NULL || layout->worker_count == 0
-      || ingress->current_worker >= layout->worker_count
+      || (ingress->io_only_worker
+            ? ingress->current_worker != layout->worker_count
+            : ingress->current_worker >= layout->worker_count)
       || ingress->origin_obligation_id == 0)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
 

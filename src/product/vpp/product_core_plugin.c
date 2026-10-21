@@ -228,6 +228,20 @@ product_core_graph_worker_layout_ready (void)
                                              vlib_num_workers ());
 }
 
+static int
+product_core_tun_io_cpu_ready (product_runtime_topology_t topology)
+{
+  const char *value = getenv ("SAKAMOTO_PRODUCT_TUN_IO_CPU_ID");
+  if (!value || !topology.owner_count) return 0;
+  u32 requested = (u32) strtoul (value, 0, 10);
+  if (product_core_vpp_main_core () == requested ||
+      product_core_vpp_worker_core (topology.tun_io_worker) != requested)
+    return 0;
+  for (u32 owner = 0; owner < topology.owner_count; owner++)
+    if (product_core_vpp_worker_core (owner) == requested) return 0;
+  return 1;
+}
+
 static clib_error_t *
 product_core_topology_status_cli (vlib_main_t *vm, unformat_input_t *input,
                                   vlib_cli_command_t *command)
@@ -253,9 +267,10 @@ product_core_topology_status_cli (vlib_main_t *vm, unformat_input_t *input,
     product_core_graph_worker_layout_ready ());
   if (profile == PRODUCT_TOPOLOGY_VPN)
     vlib_cli_output (vm,
-      "topology.tun_io_lane=0 worker=%u thread_index=%u is_flow_owner=%u",
+      "topology.tun_io_lane=0 worker=%u thread_index=%u actual_core=%u is_flow_owner=%u",
       topology.tun_io_worker,
       product_core_vpp_worker_thread_index (topology.tun_io_worker),
+      product_core_vpp_worker_core (topology.tun_io_worker),
       product_runtime_topology_is_owner (topology, topology.tun_io_worker));
   else
     vlib_cli_output (vm, "topology.tun_io_lane=none");
@@ -1090,6 +1105,12 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
           return 0;
         }
       vlib_process_wait_for_event_or_clock (vm, 0.001);
+    }
+  if (!product_core_profile_is_root () &&
+      !product_core_tun_io_cpu_ready (product_core_topology ()))
+    {
+      clib_warning ("Product VPN tunIoCpuId rejected before adapter capture: missing or conflicts with actual affinity");
+      return 0;
     }
   for (;;)
     {

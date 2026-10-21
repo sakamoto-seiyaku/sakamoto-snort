@@ -54,6 +54,31 @@ public final class WorkerCpuPlacement {
                 + "\n  ordered-workers " + encode() + "\n}\n\n";
     }
 
+    /** VPN requires a separate, explicit I/O binding after the owner CPUs. */
+    public int parseTunIoCpuId(String value) {
+        if (value == null || !value.matches("[0-9]{1,10}"))
+            throw new IllegalArgumentException("tunIoCpuId requires one decimal CPU ID");
+        long parsed = Long.parseLong(value);
+        if (parsed == 0 || parsed >= 1024)
+            throw new IllegalArgumentException("tunIoCpuId conflicts with main-core or CPU_SETSIZE");
+        for (int cpu : orderedCpuIds)
+            if (cpu == parsed)
+                throw new IllegalArgumentException("tunIoCpuId conflicts with a FlowOwner CPU");
+        return (int) parsed;
+    }
+
+    public String vpnStartupConfig(String tunIoCpuId) {
+        if (ownerCount != 2)
+            throw new IllegalArgumentException("VPN currently requires two FlowOwner CPU IDs");
+        int cpu = parseTunIoCpuId(tunIoCpuId);
+        return "cpu {\n  main-core 0\n  workers " + (ownerCount + 1)
+                + "\n  ordered-workers " + encode() + "," + cpu + "\n}\n\n";
+    }
+
+    public String vpnStartupConfig(int tunIoCpuId) {
+        return vpnStartupConfig(Integer.toString(tunIoCpuId));
+    }
+
     @Override public boolean equals(Object other) {
         if (!(other instanceof WorkerCpuPlacement)) return false;
         WorkerCpuPlacement value = (WorkerCpuPlacement) other;

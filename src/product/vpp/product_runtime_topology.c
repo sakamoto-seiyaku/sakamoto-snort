@@ -30,14 +30,30 @@ product_runtime_topology_current (product_runtime_topology_profile_t profile)
         return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
       owners = (uint32_t) parsed;
     }
-  /* VPN retains its qualified shared-lane topology until the dedicated-I/O
-   * implementation; it must never silently accept a Root-only selection. */
+  /* SAKAMOTO-297 keeps the VPN Flow Stack at two owners. The third worker is
+   * exclusively the TUN origin lane and is never a canonical owner. */
   if (profile == PRODUCT_TOPOLOGY_VPN && owners != 2)
     return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
+  if (profile == PRODUCT_TOPOLOGY_VPN)
+    {
+      /* The Android/Host launcher must supply this separately from ordered
+       * owner CPUs. Native startup rejects a missing or malformed setting. */
+      const char *io_cpu = getenv ("SAKAMOTO_PRODUCT_TUN_IO_CPU_ID");
+      if (!io_cpu || !*io_cpu || io_cpu[0] == '0')
+        return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
+      for (const char *digit = io_cpu; *digit; digit++)
+        if (*digit < '0' || *digit > '9')
+          return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
+      char *end = NULL;
+      errno = 0;
+      unsigned long parsed = strtoul (io_cpu, &end, 10);
+      if (errno || !end || *end || parsed >= 1024)
+        return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
+    }
   return (product_runtime_topology_t) {
     .owner_count = owners,
-    .vpp_worker_count = owners,
-    .tun_io_worker = profile == PRODUCT_TOPOLOGY_VPN ? 0 : UINT32_MAX,
+    .vpp_worker_count = owners + (profile == PRODUCT_TOPOLOGY_VPN),
+    .tun_io_worker = profile == PRODUCT_TOPOLOGY_VPN ? owners : UINT32_MAX,
   };
 }
 
@@ -54,13 +70,9 @@ product_runtime_topology_valid (product_runtime_topology_profile_t profile,
     return topology.vpp_worker_count == topology.owner_count
            && topology.tun_io_worker == UINT32_MAX;
   if (profile == PRODUCT_TOPOLOGY_VPN)
-    return topology.tun_io_worker < topology.vpp_worker_count
-           && ((topology.owner_count == 2
-                && topology.vpp_worker_count == topology.owner_count
-                && topology.tun_io_worker == 0)
-               || (topology.owner_count < UINT32_MAX
-                   && topology.vpp_worker_count == topology.owner_count + 1
-                   && topology.tun_io_worker == topology.owner_count));
+    return topology.owner_count == 2
+           && topology.vpp_worker_count == topology.owner_count + 1
+           && topology.tun_io_worker == topology.owner_count;
   return 0;
 }
 

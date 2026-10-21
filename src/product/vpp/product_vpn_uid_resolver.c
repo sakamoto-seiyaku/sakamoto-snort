@@ -299,6 +299,9 @@ void product_vpn_uid_resolver_refresh (vlib_main_t *vm,
 void product_vpn_uid_resolver_stop (void)
 {
   for (u32 i = 0; i < UID_OWNERS; ++i) {
+    /* Graph-validation VPN has no UID broker: start() was never called.
+     * Zero-initialized file index 0 is not an owned clib_file_t. */
+    if (!owners[i].generation) continue;
     close_owner(&owners[i]);
     owners[i].generation = 0;
     owners[i].pool = 0;

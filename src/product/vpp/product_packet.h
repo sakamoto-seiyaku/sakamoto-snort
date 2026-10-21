@@ -148,6 +148,7 @@ typedef struct
   const uint8_t *data;
   size_t length;
   uint16_t current_worker;
+  uint8_t io_only_worker; /* Dedicated ingress worker at worker_count. */
   uint64_t origin_obligation_id;
   product_platform_packet_facts_t platform;
 } product_packet_ingress_t;

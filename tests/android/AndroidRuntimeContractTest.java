@@ -1533,6 +1533,12 @@ public final class AndroidRuntimeContractTest {
         };
         RuntimeControlNative.Status ready = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) readyValues, 0);
+        check(ProductCoreLifecycle.validWorkerTopology(2, 3, 2),
+                "VPN two owners plus dedicated I/O worker is a valid management topology");
+        check(!ProductCoreLifecycle.validWorkerTopology(2, 3, 0),
+                "a shared owner-0 TUN lane cannot masquerade as a dedicated I/O worker");
+        check(!ProductCoreLifecycle.validWorkerTopology(2, 2, 2),
+                "an unlaunched I/O worker cannot satisfy VPN topology");
         check(ProductCoreLifecycle.isReady(42L, "product-core",
                         "product_core.api/1.0.0@abcd1234",
                         "9258530f3804a152578ce11cc7c8a1e9eab88ed0", 1, 1, ready),

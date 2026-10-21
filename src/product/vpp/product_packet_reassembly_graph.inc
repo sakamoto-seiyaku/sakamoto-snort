@@ -43,10 +43,10 @@ typedef struct {
 static struct {
   u32 initialized, accepting, injected, timeout_ms, max_originals;
   u32 handoff_queues[2];
-  product_fragment_counters_t threads[PRODUCT_GRAPH_WORKERS + 1];
-  product_fragment_table_t tables[PRODUCT_GRAPH_WORKERS + 1];
-  u64 next_expiry_us[PRODUCT_GRAPH_WORKERS + 1];
-  u8 payload[PRODUCT_GRAPH_WORKERS + 1][65535];
+  product_fragment_counters_t threads[PRODUCT_GRAPH_WORKERS + 2];
+  product_fragment_table_t tables[PRODUCT_GRAPH_WORKERS + 2];
+  u64 next_expiry_us[PRODUCT_GRAPH_WORKERS + 2];
+  u8 payload[PRODUCT_GRAPH_WORKERS + 2][65535];
 } product_fragment_main;
 static struct {
   u32 contexts, originals, timeout_ms;
@@ -68,7 +68,10 @@ product_fragment_contexts (void)
 static product_fragment_counters_t *
 product_fragment_counters (vlib_main_t *vm)
 {
-  if (PREDICT_FALSE (vm->thread_index > product_packet_graph_worker_count ()))
+  product_runtime_topology_profile_t profile = product_packet_graph_main.adapter_kind
+    == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? PRODUCT_TOPOLOGY_VPN : PRODUCT_TOPOLOGY_ROOT;
+  if (PREDICT_FALSE (vm->thread_index >
+      product_runtime_topology_current (profile).vpp_worker_count))
     clib_panic ("fragment callback outside the configured VPP threads");
   return &product_fragment_main.threads[vm->thread_index];
 }
@@ -82,7 +85,10 @@ product_fragment_load (vlib_main_t *vm, u32 bi)
   if (PREDICT_FALSE (!(envelope.flags & PRODUCT_FRAGMENT_VALID)
       || envelope.obligation.queue_generation != product_packet_graph_main.generation
       || !envelope.obligation.token || !b->ref_count
-      || envelope.obligation.origin_worker >= product_packet_graph_worker_count ()
+      || (envelope.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
+            ? envelope.obligation.origin_worker !=
+              product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN).tun_io_worker
+            : envelope.obligation.origin_worker >= product_packet_graph_worker_count ())
       || (envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
           && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)))
@@ -573,7 +579,9 @@ product_fragment_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   (void) input; (void) command;
   u64 ingress = 0, completed = 0, pins = 0, released = 0;
-  for (u32 t = 0; t <= product_packet_graph_worker_count (); t++)
+  product_runtime_topology_profile_t profile = product_packet_graph_main.adapter_kind
+    == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? PRODUCT_TOPOLOGY_VPN : PRODUCT_TOPOLOGY_ROOT;
+  for (u32 t = 0; t <= product_runtime_topology_current (profile).vpp_worker_count; t++)
     {
       product_fragment_counters_t *s = &product_fragment_main.threads[t];
       ingress += s->ingress; completed += s->completions;

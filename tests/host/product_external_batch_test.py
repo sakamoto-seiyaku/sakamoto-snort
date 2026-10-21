@@ -85,11 +85,11 @@ static vlib_buffer_t storage[VLIB_FRAME_SIZE + 16];
 static vlib_frame_t published_frame;
 static unsigned gets, frame_allocations, publications, forbidden_calls;
 static u32 vlib_get_worker_thread_index(u32 worker) {
-  assert(worker < PRODUCT_GRAPH_WORKERS);
+  assert(worker <= PRODUCT_GRAPH_WORKERS);
   return 3 + 2 * worker;
 }
 static u32 vlib_get_worker_index(u32 thread) {
-  assert(thread == 3 || thread == 5);
+  assert(thread == 3 || thread == 5 || thread == 7);
   return (thread - 3) / 2;
 }
 static vlib_buffer_t *vlib_get_buffer(vlib_main_t *vm, u32 index) {
@@ -306,6 +306,7 @@ static void vpn_return(void) {
   for (u32 i = 0; i < 8; ++i) {
     items[i] = root_item(20 + i, 0);
     items[i].obligation.kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
+    items[i].obligation.origin_worker = 2;
     items[i].obligation.packet_id = 2;
     items[i].obligation.origin_lane = 0;
     items[i].platform.provenance = PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
@@ -324,8 +325,9 @@ static void vpn_return(void) {
   product_packet_graph_main.adapter_kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
   items[0] = root_item(30, 0);
   items[0].obligation.kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
+  items[0].obligation.origin_worker = 2;
   items[0].platform.provenance = PRODUCT_PACKET_PROVENANCE_VPN_TUN;
-  vm.thread_index = 3;
+  vm.thread_index = 7;
   const u8 one[] = {1};
   batch(&vm, items, 1, one);
 }
@@ -378,5 +380,6 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-external-batch-") as temporary
                     "-Werror", "-I", str(ROOT / "src/product/vpp"),
                     str(c_source), str(ROOT / "src/product/vpp/product_runtime_topology.c"),
                     "-o", str(executable)], check=True, timeout=30)
-    subprocess.run([str(executable)], check=True, timeout=5)
+    subprocess.run([str(executable)], check=True, timeout=5,
+                   env=dict(os.environ, SAKAMOTO_PRODUCT_TUN_IO_CPU_ID="3"))
 print("production_source_sha256=" + hashlib.sha256(source.encode()).hexdigest())

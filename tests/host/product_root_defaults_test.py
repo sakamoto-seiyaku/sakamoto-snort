@@ -142,7 +142,7 @@ static product_packet_graph_main_t product_packet_graph_main;
 static u64 product_packet_batch_stats[3];
 static unsigned calls,flow_end_debt,vpn_mode,policy_ready=1;
 static unsigned product_flow_end_buffer_debt(void){return flow_end_debt;}
-static u32 vlib_num_workers(void){return 2;}
+static u32 vlib_num_workers(void){return vpn_mode?3:2;}
 static int product_fragment_start(vlib_main_t *vm){assert(vm);calls++;return 1;}
 static void product_fragment_abort(void){calls++;}
 static unsigned product_vpn_tun_product_mode(void){return vpn_mode;}
@@ -182,4 +182,5 @@ with tempfile.TemporaryDirectory(prefix='graph-defaults-') as folder:
                     '-I',str(ROOT/'src/product/vpp'),str(path/'test.c'),
                     str(ROOT/'src/product/vpp/product_runtime_topology.c'),
                     '-o',str(path/'test')],check=True)
-    subprocess.run([str(path/'test')],check=True,timeout=15)
+    subprocess.run([str(path/'test')],check=True,timeout=15,
+                   env=dict(os.environ, SAKAMOTO_PRODUCT_TUN_IO_CPU_ID='3'))
