@@ -1,0 +1,510 @@
+{
+  "archive": "s305-test-contract-20261022.zip",
+  "members": [
+    {
+      "path": "build-output/s305-stale-tests-20261022/after-android-aggregate.log",
+      "bytes": 655,
+      "sha256": "2d593f723c7205e6d24fc0472ef703fad4a8ca371ac51b73b1b0de68db601f87"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/after-android-status",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/after-host-ctest.log",
+      "bytes": 9806,
+      "sha256": "32ab7ccf17e6d746288ba6236c1316be93bd2ad526bed55c1df09058bf26dfef"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/after-host-status",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-android-aggregate.log",
+      "bytes": 476,
+      "sha256": "66d98f49df1e557c6c6e4406691dda8aebbac7cae5875bf0d87c287c81fc6605"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-android-status",
+      "bytes": 2,
+      "sha256": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-s192-runtime/stop.trace",
+      "bytes": 23,
+      "sha256": "7307d7f810e7226633ac77db58627efb7251c1bface94e52c9851847c230e027"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-s192-runtime/vpp.trace",
+      "bytes": 526,
+      "sha256": "0b0627c15d39f2e00c9905d01e82372c3d4d8f6ad4ec19ba8a57c1db9afaeb55"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-s192-status",
+      "bytes": 2,
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-s192-stdout.log",
+      "bytes": 102,
+      "sha256": "fc7b3a2cda3f485ce8164f8789bcdbb1d8f433e40b5afcab9ac10fe7dbf18ea2"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/baseline-targeted-ctest.log",
+      "bytes": 28712,
+      "sha256": "73e51ab5939a37becdc3d0f4d367779731ebf8e70566bbb8572bac5b970c22df"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/final-host-ctest.log",
+      "bytes": 9961,
+      "sha256": "bd2f93d3ac9cd44f30b6c23682d3df3d5383514292b9b81ca133016243e11360"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/final-host-status",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/target-unified-rule-ctest.log",
+      "bytes": 403,
+      "sha256": "8dcbc82df5ce15e761056872596829371b23105a13d213c67472c858cbbe9d49"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/target-unified-rule-ctest.status",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/after-stale-query.trace",
+      "bytes": 2541,
+      "sha256": "8522bb30c30c8ce7fded3c9d97180fa2d2ff5a9de76ed84db37ba898a6d37951"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/apply.trace",
+      "bytes": 1638,
+      "sha256": "5db8157d5a1812021c347b8b89f93ee51ed7b659cd1ee0cf26fd6306f4fcea75"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/config/rules.conf",
+      "bytes": 424,
+      "sha256": "b44bdcd830b7df054d2bf362d4956479e3a8d00b254ec87876ef9b578822cf93"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/initial-query.trace",
+      "bytes": 2321,
+      "sha256": "70792ebe6c77718c40996d8b510847247f8fdb896281d2a74f8e651c8296dcfb"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/residue-first.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/residue-second.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/restart-source-check.trace",
+      "bytes": 125,
+      "sha256": "7cda4a09547d0c52e9974d8b54b6e3a10a403a5129d42ac0dee35bae39d9461c"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/restarted-query.trace",
+      "bytes": 2541,
+      "sha256": "5531ee26c189cf50db5018010cd42cbcec9a73cd67e7cd1f282ec1fae00066d5"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/runtime-paths.trace",
+      "bytes": 202,
+      "sha256": "df210f32f797e0270ff4d95b531cabcf4fd194e9bb9540225b692215e9c670e0"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/saved-source.sha256",
+      "bytes": 187,
+      "sha256": "bea768e0505e2d97e326969bbe6c67b191fbfc8554e087af1bfb68a17c0e2326"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/stale-apply.trace",
+      "bytes": 1638,
+      "sha256": "fa361377ad083c591b0d250980d2ec19ad71317f976bfa8a349dc1b9b8ae549c"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/stop-first.trace",
+      "bytes": 26,
+      "sha256": "2abcfd105b0cc681413305af0d50e7de3c2853d4efcaff0636aff4268b6a9cd9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/stop-second.trace",
+      "bytes": 26,
+      "sha256": "0e318be5803405e1b1385078540e612d95a09e5dbe4b7d6432dd901f7a9f84b6"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/vpp-first.trace",
+      "bytes": 453,
+      "sha256": "dc5665ab6dff4f4c9443713a6c9e6844c2ec963137df0416f53c8a493de81ddb"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest/vpp-second.trace",
+      "bytes": 453,
+      "sha256": "ef0a6a183e4ad10662f6e27929389c2f09d7fc09f4a1c2271b5d491c2a52e16a"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first/cleanup-first.trace",
+      "bytes": 160,
+      "sha256": "32df84fd75fc5e8dac31b0f5c8488115086a66a4c940f5d7faed07d21c5b9db1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first/cleanup-residue-first.trace",
+      "bytes": 160,
+      "sha256": "32df84fd75fc5e8dac31b0f5c8488115086a66a4c940f5d7faed07d21c5b9db1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first/vpp-first.trace",
+      "bytes": 160,
+      "sha256": "32df84fd75fc5e8dac31b0f5c8488115086a66a4c940f5d7faed07d21c5b9db1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first.log",
+      "bytes": 247,
+      "sha256": "e715c08b179acb9c73c8c18eb5fa637592c9c5a6bf7fc5bf877fbbcd870bd3d9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-first.status",
+      "bytes": 2,
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/after-stale-query.trace",
+      "bytes": 2543,
+      "sha256": "001a61ba9d1111e3777496d773fa62bf6f5314ae7742cbcd27a0cbbf9227cc22"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/apply.trace",
+      "bytes": 1640,
+      "sha256": "c98a7e1db9b7bd0038e2864a0056686f2b287d6892c3637e54b45aad03970b2b"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/config/rules.conf",
+      "bytes": 424,
+      "sha256": "4be12f6d6d7a3b39d9583e0fedbd338abf3b2938c082258cb5293993b7ff9605"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/initial-query.trace",
+      "bytes": 2321,
+      "sha256": "e675e3e33b31fdce7bab58328799a974a608774d22b7ebbeedd5c66838cf9bcd"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/residue-first.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/residue-second.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/restart-source-check.trace",
+      "bytes": 126,
+      "sha256": "aea199a9d3656ed32e8ff283e24a3c92d3ec96b79c7d04fa392d25fe8656f77d"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/restarted-query.trace",
+      "bytes": 2543,
+      "sha256": "661a83a70d2137df06bc1a3ebe534a25b6c13bd4f6ed181f3b0e64f50cb9e953"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/runtime-paths.trace",
+      "bytes": 202,
+      "sha256": "b9f2145c77eb4d73015b05915f62743015ab943cf804324fc8e32626efeb19c9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/saved-source.sha256",
+      "bytes": 188,
+      "sha256": "a5eed507d0ee3739fb0547e6bce5eb521a2d5eb64280a844ece676763fb26334"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/stale-apply.trace",
+      "bytes": 1640,
+      "sha256": "0a0767eb4cd8b0eea24e8d05914a7433516d3d9a7074505535b29f3329315762"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/stop-first.trace",
+      "bytes": 26,
+      "sha256": "2abcfd105b0cc681413305af0d50e7de3c2853d4efcaff0636aff4268b6a9cd9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/stop-second.trace",
+      "bytes": 26,
+      "sha256": "0e318be5803405e1b1385078540e612d95a09e5dbe4b7d6432dd901f7a9f84b6"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/vpp-first.trace",
+      "bytes": 453,
+      "sha256": "8921ada6322e6b0ef01bca64dae0c2cb0623bbf46188b4bd3edab741fcde8b81"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth/vpp-second.trace",
+      "bytes": 453,
+      "sha256": "b2bf560e3b59c6784785b4569a97c242d67aa8d6d9fed6797fd0860d95648ed3"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth.log",
+      "bytes": 157,
+      "sha256": "5865cd940607aab41217aa22d77e1c3116141ef0e15f0f6611db5ce8122ff3b4"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-fourth.status",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/after-stale-query.trace",
+      "bytes": 2543,
+      "sha256": "23c0cd91e40ad150b9b923f842280636f1169018b994f01e0eab0388395dd8c3"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/apply.trace",
+      "bytes": 1640,
+      "sha256": "9f801ffc148d374fb1452e7c00b946e401a0b5ba524114934f284415e5189ba8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/config/rules.conf",
+      "bytes": 424,
+      "sha256": "45729471695ff5bcf7b8892996b17c68cdc1ee7656ec0e32f80f842c03f29404"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/initial-query.trace",
+      "bytes": 2321,
+      "sha256": "70792ebe6c77718c40996d8b510847247f8fdb896281d2a74f8e651c8296dcfb"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/residue-first.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/residue-second.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/restart-source-check.trace",
+      "bytes": 124,
+      "sha256": "1f2683b3747279f841f6360b69ed1954b0cdc805083f0a03f2064089d0d8ed24"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/restarted-query.trace",
+      "bytes": 2543,
+      "sha256": "12d0a83062008a1530d8ddb25f373ba77a1aa3867c1d08e9fc9b4148d1b61077"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/runtime-paths.trace",
+      "bytes": 202,
+      "sha256": "1e07a52eea87efb051c19dc79dca80b872a4e6e0798253ebc289bae4d0035d8a"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/saved-source.sha256",
+      "bytes": 186,
+      "sha256": "77cc1778363e197af59b5e228659df5f5466869c46bf2bb4c5970386d101b867"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/stale-apply.trace",
+      "bytes": 1640,
+      "sha256": "ba9e1d5cc6c9486984dca5b3e3fdf407d085a598d34ef8476d5a7e945c0cdea6"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/stop-first.trace",
+      "bytes": 26,
+      "sha256": "2abcfd105b0cc681413305af0d50e7de3c2853d4efcaff0636aff4268b6a9cd9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/stop-second.trace",
+      "bytes": 26,
+      "sha256": "0e318be5803405e1b1385078540e612d95a09e5dbe4b7d6432dd901f7a9f84b6"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/vpp-first.trace",
+      "bytes": 453,
+      "sha256": "392c89cf8512916e4d6375a32746de535d97edd2e8681b4d249f4918571b40c1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-full/vpp-second.trace",
+      "bytes": 453,
+      "sha256": "a594d131fd8a1edd064a2eb2de514b868443db679563ef45bad68095f8fb8544"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/cleanup-first.trace",
+      "bytes": 26,
+      "sha256": "2abcfd105b0cc681413305af0d50e7de3c2853d4efcaff0636aff4268b6a9cd9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/cleanup-residue-first.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/config/rules.conf",
+      "bytes": 44,
+      "sha256": "79e307dc788acfbcc466b2ec30e23c4f26c751ae554fa78454b5f655d0190c8d"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/initial-query.trace",
+      "bytes": 2323,
+      "sha256": "191363be18062690760c887366066246a151ddc7018aadc4ab037ea82877f35a"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/runtime-paths.trace",
+      "bytes": 100,
+      "sha256": "87c1792e9aea6e3bb6ae966c261317952588da1858581469ef3a4238bf9b18e1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second/vpp-first.trace",
+      "bytes": 453,
+      "sha256": "317fff5ea8cf8a8fb743a61cc6d41bafd982491c808533566ea48642a64b5b8e"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second.log",
+      "bytes": 204,
+      "sha256": "fddfc71b9929029b7ba2641c88352214ad42f0d4e28c6b0ff9c4fd4fa31f6bcf"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-second.status",
+      "bytes": 2,
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/apply.trace",
+      "bytes": 1640,
+      "sha256": "555ec8f0b9baa94cf126f28bd0cefd9406d05717d69cbbed872fa687a0cffad4"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/artifact.sha256",
+      "bytes": 501,
+      "sha256": "f0bcc0fda806037631a7ee2e3f1d7124411a3485ccf92868bdd10e90c645acf8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/cleanup-first.trace",
+      "bytes": 26,
+      "sha256": "2abcfd105b0cc681413305af0d50e7de3c2853d4efcaff0636aff4268b6a9cd9"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/cleanup-residue-first.trace",
+      "bytes": 58,
+      "sha256": "81c146a111c417b285edc0eeb2da85235a3123ed33f1147292d9448520782a5f"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/config/rules.conf",
+      "bytes": 424,
+      "sha256": "678e80d91399d764717111a556ff250ab6de07f47c4c413eacd4b20ee50bc0a1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/initial-query.trace",
+      "bytes": 2321,
+      "sha256": "e675e3e33b31fdce7bab58328799a974a608774d22b7ebbeedd5c66838cf9bcd"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/runtime-paths.trace",
+      "bytes": 100,
+      "sha256": "72efd7234e7b9231cb8d397d411c38cc1a92dfb5ed4c17ed171ca414e0d71ef6"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third/vpp-first.trace",
+      "bytes": 453,
+      "sha256": "1ef1fa904862755836f14ab856a5958a9a25e948444100806e11240b60133415"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/unified-rule-runtime-third.status",
+      "bytes": 2,
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-root-fragment-n1.log",
+      "bytes": 117,
+      "sha256": "8cda07d954effacb767cc14c63cebe4c6217e62f13e48822218e44da2677c2c1"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-root-fragment-n3.log",
+      "bytes": 117,
+      "sha256": "5d0d424488b3ffc1eda9af3c11394a48ef086c6855957cfd90f765ae21ce6f02"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-root-topology.log",
+      "bytes": 122,
+      "sha256": "7346d479d50db461598213ca08d2e70eb3e933bc67bb65e7253eed0e232180aa"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-fault-n1.log",
+      "bytes": 101,
+      "sha256": "38365dfd1600594f3061d44e2e1c80e7349874b1fc62d466e0896ed2810fbe7b"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-fault-n3.log",
+      "bytes": 100,
+      "sha256": "dd0832e3848d1b2bfec6f97ddaeb82226505a3996ab93feef6c7232581503af2"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-n1.log",
+      "bytes": 113,
+      "sha256": "d05e732fb9ae5f83c069188c39033c1c21a5071d7bfd6ea859d347a2b5c50850"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-n3-owner0.log",
+      "bytes": 113,
+      "sha256": "bb3b20531e8b25630ede058b411ef2da6d1bd713a0a6cce8412c2ded5faad39d"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-n3-owner1.log",
+      "bytes": 113,
+      "sha256": "4d637a9e3c80a1e0eeaf173a21f5da593ac1a113579f26f8c8a99b03a53bff14"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-n3-owner2.log",
+      "bytes": 113,
+      "sha256": "15af3900180d9610def583adedac7a0a4fa8aed6f1ca8e2305c759c4bf2262d8"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-stress-n1.log",
+      "bytes": 113,
+      "sha256": "e68064d4e515769b9d6818e052bf2fe59cfcd77e90e9595cb05adbad6d79aa7e"
+    },
+    {
+      "path": "build-output/s305-stale-tests-20261022/verify-vpn-stress-n3.log",
+      "bytes": 113,
+      "sha256": "8574464eb9f90b51de9df56b68c959f0066a581b49ff1e4f0f26d4a391b6650d"
+    }
+  ]
+}

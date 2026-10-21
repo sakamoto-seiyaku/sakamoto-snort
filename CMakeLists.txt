@@ -268,9 +268,12 @@ add_test(NAME sakamoto-product-stop-before-start-test
 add_test(NAME sakamoto-s174-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s174-product-packet-kernel-contract.sh")
-add_test(NAME sakamoto-s192-product-packet-graph-policy-contract
+# The S192 Host-only graph CLI cannot be built on the current VPP pin. Exercise
+# the installed Product RuleConfig path instead; packet decisions also have
+# the separate policy-cache, CT-policy and policy-batch executable tests.
+add_test(NAME sakamoto-product-unified-rule-runtime-contract
   COMMAND bash
-          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s192-product-packet-graph-policy-contract.sh")
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_unified_rule_runtime_contract.sh")
 add_test(NAME sakamoto-s175-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s175-product-packet-kernel-contract.sh")

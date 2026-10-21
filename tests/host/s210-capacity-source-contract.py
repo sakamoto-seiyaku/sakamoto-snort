@@ -37,15 +37,22 @@ assert 'vlib_buffer_enqueue_to_thread_retained' in returned and 'vlib_buffer_fre
 retained = body(graph,'product_completion_return')
 assert 'queue->buffers[' in retained and 'queue->count < PRODUCT_COMPLETION_RETURN_CAPACITY' in retained
 assert 'PRODUCT_COMPLETION_RETURN_CAPACITY >' in graph and 'PRODUCT_GRAPH_INJECTION_CAPACITY' in graph
+prepare = body(adapter,'product_root_nfqueue_prepare_completion')
 origin = body(adapter,'product_root_nfqueue_complete_from_graph')
-assert 'capacity_bypass' in origin and 'PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS' in origin
-assert 'completion->runtime_drop_reason == PRODUCT_PACKET_DROP_NONE' in origin
-assert origin.index('pending->active = 0') < origin.index('product_nfqueue_send_verdict')
+finish = body(adapter,'product_root_nfqueue_finish_completion')
+assert 'capacity_bypass' in prepare and 'PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS' in prepare
+assert 'completion->runtime_drop_reason == PRODUCT_PACKET_DROP_NONE' in prepare
+assert prepare.index('product_root_nfqueue_pending_deactivate') < prepare.index('*work =')
+assert origin.index('product_root_nfqueue_prepare_completion') < origin.index('product_nfqueue_send_verdict') < origin.index('product_root_nfqueue_finish_completion')
 assert origin.count('product_nfqueue_send_verdict (') == 1
+assert 'product_root_nfqueue_return_receive' in finish
 fixture = body(graph,'product_capacity_cli')
 assert 'lifecycle_obligations' in fixture and 'completion_pending_returns' in fixture and 'product_capacity_ring_empty' in fixture
 reset = body(graph,'product_packet_graph_start_external')
-assert 'product_capacity_configure_empty (graph, PRODUCT_GRAPH_HANDOFF_CREDITS, 64, 128)' in reset
+defaults = body(graph,'product_packet_graph_default_handoff_credits')
+assert 'PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE' in defaults
+assert 'PRODUCT_ROOT_DEFAULT_HANDOFF_CREDITS : PRODUCT_GRAPH_HANDOFF_CREDITS' in defaults
+assert 'product_capacity_configure_empty (graph,\n    product_packet_graph_default_handoff_credits (adapter_kind), 64, 128)' in reset
 ring = body(graph,'product_capacity_set_empty_ring')
 assert 'fq->head == fq->tail' in ring and 'fq->nelts = slots' in ring
 assert 'vlib_buffer_enqueue_to_thread_retained_fn' in (ROOT/'src/product/vpp/patches/core/0001-vlib-nonblocking-retained-enqueue.patch').read_text()

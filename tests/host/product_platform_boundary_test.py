@@ -75,28 +75,33 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
                      " -w -t mangle -I OUTPUT -j ", " -w -t mangle -I INPUT -j ")
 
     def test_root_completion_consumes_exact_origin_once(self):
-        complete = body(source(VPP + "product_root_nfqueue_adapter.c"),
-                        "product_root_nfqueue_complete_from_graph")
+        adapter = source(VPP + "product_root_nfqueue_adapter.c")
+        prepare = body(adapter, "product_root_nfqueue_prepare_completion")
+        complete = body(adapter, "product_root_nfqueue_complete_from_graph")
+        finish = body(adapter, "product_root_nfqueue_finish_completion")
         self.require(
-            complete,
+            prepare,
             "obligation->queue_generation != nm->generation",
             "obligation->origin_lane",
             "obligation->origin_worker != lane->worker_index",
             "vm->thread_index != vlib_get_worker_thread_index (lane->worker_index)",
-            "pending->completion.obligation.token != obligation->token",
-            "pending->completion.obligation.packet_id != packet_id",
+            "product_root_nfqueue_pending_find (",
             "if (!pending->active)",
             "pending->buffer_index != buffer_index",
             "PRODUCT_COMPLETION_REPLAY_PROBE",
         )
-        self.ordered(complete, "pending->active = 0;",
-                     "product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id",
-                     "product_root_nfqueue_return_receive (")
+        self.ordered(prepare, "product_root_nfqueue_pending_find (",
+                     "if (!pending->active)", "pending->buffer_index != buffer_index",
+                     "product_root_nfqueue_pending_deactivate (nm, lane, pending)")
+        self.ordered(complete, "product_root_nfqueue_prepare_completion (",
+                     "product_nfqueue_send_verdict (work.lane->fd, work.lane->queue_id,",
+                     "product_root_nfqueue_finish_completion (")
+        self.require(finish, "product_root_nfqueue_return_receive (")
         self.assertEqual(complete.count("product_nfqueue_send_verdict ("), 1)
 
     def test_root_facts_do_not_invent_uid_or_wifi(self):
         receive = body(source(VPP + "product_root_nfqueue_adapter.c"),
-                       "product_root_nfqueue_read_ready")
+                       "product_root_nfqueue_read_dispatch")
         self.require(
             receive, "product_network_snapshot_current ()",
             "clib_memset (&platform, 0, sizeof (platform))",
@@ -182,7 +187,7 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
             ("test_root_completion_consumes_exact_origin_once",
              "obligation->origin_worker != lane->worker_index", "0"),
             ("test_root_completion_consumes_exact_origin_once",
-             "pending->active = 0;", "pending->active = 1;"),
+             "product_root_nfqueue_pending_deactivate (nm, lane, pending);", "pending->active = 1;"),
             ("test_root_facts_do_not_invent_uid_or_wifi",
              "packet.uid_present ? PRODUCT_PLATFORM_UID_KNOWN : 0", "PRODUCT_PLATFORM_UID_KNOWN"),
             ("test_network_publication_is_generation_bound_and_whole",
