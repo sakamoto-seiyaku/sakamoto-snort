@@ -182,6 +182,8 @@ Android实际配置为 `buffers { virtual-only buffers-per-numa 2048 default dat
 
 工作跟踪：[SAKAMOTO-292](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/work-items/0a35cbe1-ce1e-4531-b413-d6d8edc8a94c)。本节记录可重算事实与证伪过程，不把热点直接认定为吞吐上限。
 
+状态纠正：此前将这些阶段测量视为任务完成并关闭SAKAMOTO-292过早，现已重新打开。三个参数对照、热点和有丢样的off-CPU线索尚未说明HEV每类无进展回合的阻塞条件、唤醒来源及CPU未推进的因果链。整体诊断仍未完成；需要在实际调用链上复现、给出可证伪的原因并验证针对性修复，不能再以热点列表或设备清理完成代替根因结论。
+
 使用 [`vpn_progress.py`](../../tests/benchmark/vpn_progress.py) 重读第四阶段B1/B2原始CLI和同generation停止证据，无设备访问、无新流量。两窗都出现：owner0每次未遇暂时错误的读取约30–31KiB，owner1约4.5–4.7KiB且暂时错误读取比例约40%；owner1无数据推进146412/147001轮，ring/sndbuf满的入口观察23958/26828次。它们是次数，不代表等待时间占比；`read_blocked`实际合计EAGAIN/EWOULDBLOCK/EINTR，不能单独解释为EAGAIN；非blocked分母可能包含EOF。
 
 [重算结果及输入SHA](../../build-output/vpn-mtu10000-20261021/progress-recomputed.json)，复现命令：
@@ -258,8 +260,10 @@ worker0保留区间中的off-CPU约9.09秒，其中raw prev_state256的约8.44�
 
 三个对照分别回答捕获回合、客户端放置与credit大小，不跨组混算；每组固定四窗，无重试或参数扫描。端点五元组与owner负载分布可变化，原始分布保留，2窗/配置不足以给出一般统计显著性或发布资格。现有证据支持把TUN回注的按包内核成本和HEV接收/推进粒度作为主要成本，而不是把500Mbps上限归因于单一队列常量；既未采用capture16，也未修改primary默认credit32、队列64槽或产品CPU放置。
 
-### 第五阶段身份、检查与结束状态
+### 第五阶段身份、检查与测量后恢复状态
 
 最终Product源码闭包为control64的 `6ede6ce5f0f647122065f57a6e8b7f209062a0f0ec600c88fef31fc127299a07`，核心patch及9个VPP runtime与第四阶段相同；这里只增加可观测计数，不改变传输/容量默认行为。control64 APK `c765faee149621939f76258bf6139c481274ab6e447260a781ca01492f7c8ca8`；被否决的candidate16 APK `cdc85e9d80a8e211c88c40a17ae0a062870e703e44f4b0e21c9eb78caad81b0a`及源码快照均保留。四个collector版本按各自manifest SHA保存，12个on-CPU窗口lost0/unknown leaf0；独立off-CPU窗口1738 lost明确保留。[13窗审计](../../build-output/vpn-progress-20261021/sampler-final.json) · [全部推进计数](../../build-output/vpn-progress-20261021/progress-all.json)。最初final日志尚在post-processing阶段，最终原始日志另存为 `perf-final.log`；审计器最初只匹配另一种lost日志格式的解析失败同样保留，格式修正后才发现并记录off-CPU lost，没有重采样。
 
 Host真实primary/completion批量回归、external batch及policy batch通过；普通VPN collector的generation/推进/native debts/保留删除日志检查通过。13窗停止均满足generation对应的native债务零，阻塞reader完成、FIFO gate移除、remote日志SHA与本地停止日志相同。最终恢复原October13 APK及12个native、规则hash、Root grant和Stopped2123，Openwrt_5G全程保持，VPP/socket-load/simpleperf无残留；本轮LAN peer经PID/starttime/exe/argv/hash核对后由pidfd关闭。[设备最终审计](../../build-output/vpn-progress-20261021/final-readonly/result.json) · [专用peer清理](../../build-output/vpn-progress-20261021/peer-cleanup.json)。
+
+以上为阶段测量和清理结果，不代表SAKAMOTO-292完成。后续诊断须分别解释用户态无进展调度、逻辑等待条件、已被唤醒但尚未运行的时长及内核off-CPU区间，保留已有失败和候选被证伪的记录。
