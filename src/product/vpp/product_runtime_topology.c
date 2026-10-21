@@ -1,16 +1,28 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_runtime_topology.h"
+#include <stdlib.h>
+#include <string.h>
 
 product_runtime_topology_t
 product_runtime_topology_current (product_runtime_topology_profile_t profile)
 {
   if (profile != PRODUCT_TOPOLOGY_ROOT && profile != PRODUCT_TOPOLOGY_VPN)
     return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
-  /* This slice preserves the existing two-owner graph and shared TUN lane.
-   * Future slices supply the configured N and append the VPN I/O worker. */
+  const char *selected = getenv ("SAKAMOTO_PRODUCT_OWNER_COUNT");
+  uint32_t owners = 2;
+  if (selected && selected[0])
+    {
+      if (strcmp (selected, "1") == 0) owners = 1;
+      else if (strcmp (selected, "2") != 0)
+        return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
+    }
+  /* VPN retains its qualified shared-lane topology until the dedicated-I/O
+   * implementation; it must never silently accept a Root-only selection. */
+  if (profile == PRODUCT_TOPOLOGY_VPN && owners != 2)
+    return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
   return (product_runtime_topology_t) {
-    .owner_count = 2,
-    .vpp_worker_count = 2,
+    .owner_count = owners,
+    .vpp_worker_count = owners,
     .tun_io_worker = profile == PRODUCT_TOPOLOGY_VPN ? 0 : UINT32_MAX,
   };
 }

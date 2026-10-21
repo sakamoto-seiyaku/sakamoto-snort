@@ -48,7 +48,8 @@
 
 #define PRODUCT_GRAPH_VECTOR_COUNT 8
 #define PRODUCT_GRAPH_WORKERS 2
-_Static_assert (PRODUCT_GRAPH_WORKERS == 2, "update rule-config query storage budget with worker layout");
+/* ABI storage still has two slots. SAKAMOTO-295 activates one or two Root
+ * owners; the configured count controls every owner-local operation. */
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 #define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48
@@ -269,6 +270,7 @@ typedef struct
 {
   vlib_main_t *vlib_main;
   product_adapter_obligation_kind_t adapter_kind;
+  u32 owner_count;
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u32 owner_guard_frame_queue;
 #else
@@ -1236,7 +1238,7 @@ product_capacity_configure_empty (product_packet_graph_main_t *graph,
   graph->primary_credit_limit = credits;
   graph->primary_ring_slots = primary;
   graph->completion_ring_slots = completion;
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 0; i < product_packet_graph_worker_count (); i++)
     clib_atomic_store_rel_n (&graph->handoff_credits[i], credits);
 }
 
@@ -1347,7 +1349,7 @@ VLIB_NODE_FN (product_packet_admit_node)
       u16 logical_worker = (u16) vlib_get_worker_index (vm->thread_index);
       product_packet_ingress_t ingress;
       product_worker_layout_t layout = {
-        .worker_count = PRODUCT_GRAPH_WORKERS,
+        .worker_count = product_packet_graph_worker_count (),
         .hash_seed = PRODUCT_GRAPH_HASH_SEED,
       };
 
@@ -2641,7 +2643,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   if (vm == 0 || generation == 0
       || (adapter_kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && adapter_kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
-      || topology.owner_count != PRODUCT_GRAPH_WORKERS
+      || !topology.owner_count || topology.owner_count > PRODUCT_GRAPH_WORKERS
       || !product_runtime_topology_valid (profile, topology,
                                           vlib_num_workers ()))
     return 0;
@@ -2655,6 +2657,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
 
   graph->vlib_main = vm;
   graph->adapter_kind = adapter_kind;
+  graph->owner_count = topology.owner_count;
 
   graph->generation = generation;
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
@@ -2740,7 +2743,12 @@ product_packet_graph_trace_limit (void)
 uint32_t
 product_packet_graph_worker_count (void)
 {
-  return PRODUCT_GRAPH_WORKERS;
+  if (product_packet_graph_main.owner_count)
+    return product_packet_graph_main.owner_count;
+  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
+  product_runtime_topology_profile_t kind = profile && strcmp (profile, "vpn") == 0
+    ? PRODUCT_TOPOLOGY_VPN : PRODUCT_TOPOLOGY_ROOT;
+  return product_runtime_topology_current (kind).owner_count;
 }
 
 uint64_t
@@ -2829,13 +2837,13 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   /* Provisional development setting, not a release sizing decision. */
   if (!graph->flow_capacity)
     graph->flow_capacity = 1024;
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     if (product_flow_runtime_create (
-          &graph->flow_pools[worker], (u16) worker, PRODUCT_GRAPH_WORKERS,
+          &graph->flow_pools[worker], (u16) worker, product_packet_graph_worker_count (),
           graph->generation, graph->flow_capacity) != PRODUCT_FLOW_ENTRY_STATUS_OK)
       goto failed;
   if (!product_flow_end_start (graph->generation, graph->flow_pools,
-                               PRODUCT_GRAPH_WORKERS))
+                               product_packet_graph_worker_count ()))
     goto failed;
   if (!product_observation_bind (graph->generation, graph->flow_pools))
     goto failed;
@@ -2854,7 +2862,7 @@ product_packet_graph_flow_pools_abort (product_packet_graph_main_t *graph)
 {
   product_observation_unbind ();
   product_flow_end_unbind ();
-  for (u32 worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (u32 worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       product_flow_runtime_destroy (graph->flow_pools[worker]);
       graph->flow_pools[worker] = 0;
@@ -2870,7 +2878,7 @@ product_packet_graph_flow_pools_flush (product_packet_graph_main_t *graph)
   if (graph == 0
       || clib_atomic_load_acq_n (&graph->flow_pools_initialized) == 0)
     return;
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       if (PREDICT_FALSE (product_flow_runtime_flush (graph->flow_pools[worker]) !=
                         PRODUCT_FLOW_ENTRY_STATUS_OK))
@@ -2893,7 +2901,7 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
     return;
   clib_memset (status, 0, sizeof (*status));
   product_packet_graph_policy_writer_lock (graph);
-  status->worker_count = PRODUCT_GRAPH_WORKERS;
+  status->worker_count = product_packet_graph_worker_count ();
   status->max_entries_per_worker = graph->flow_capacity;
   status->active_generation =
     clib_atomic_load_acq_n (&graph->flow_pools_initialized) != 0
@@ -2905,7 +2913,7 @@ product_packet_graph_flow_status (product_packet_graph_flow_status_t *status)
     clib_atomic_load_acq_n (&graph->flow_active_snapshot_hash);
   /* Callers hold the control/CLI worker barrier. Only this bounded snapshot
    * aggregates pools; packets update their current worker's counters alone. */
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       product_flow_runtime_snapshot_t snapshot = product_flow_runtime_snapshot (graph->flow_pools[worker]);
       const product_flow_runtime_snapshot_t *pool = &snapshot;
@@ -3035,7 +3043,7 @@ product_packet_graph_flow_observe (
   product_flow_entry_observation_t *observed)
 {
   if (!vm || !lease || !evaluation || vm->thread_index == 0
-      || vm->thread_index > PRODUCT_GRAPH_WORKERS || evaluation->terminal_preserved
+      || vm->thread_index > product_packet_graph_worker_count () || evaluation->terminal_preserved
       || evaluation->verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_NONE)
     return;
   u16 worker = (u16) vlib_get_worker_index (vm->thread_index);
@@ -4338,7 +4346,7 @@ product_packet_graph_policy_on_owner (
 #else
   product_policy_snapshot_acquire (graph, &snapshot);
 #endif
-  product_policy_worker_t *worker = vm->thread_index > 0 && vm->thread_index <= PRODUCT_GRAPH_WORKERS
+  product_policy_worker_t *worker = vm->thread_index > 0 && vm->thread_index <= product_packet_graph_worker_count ()
     ? &graph->policy_workers[vlib_get_worker_index (vm->thread_index)] : 0;
   snapshot.trace = trace;
   snapshot.cache = worker ? &worker->cache : 0;
@@ -4779,7 +4787,7 @@ product_batch_status_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_worker_thread_barrier_release (vm);
 #endif
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
-  for (u32 i = 0; i <= PRODUCT_GRAPH_WORKERS; ++i)
+  for (u32 i = 0; i <= product_packet_graph_worker_count (); ++i)
     vlib_cli_output (vm, "batch.thread=%u admit_frames=%llu admit_vectors=%llu prepare_windows=%llu prepared_packets=%llu primary_calls=%llu primary_publications=%llu primary_vectors=%llu primary_failed=%llu policy_claims=%llu policy_packets=%llu policy_hold_ns=%llu policy_hold_max_ns=%llu completion_calls=%llu completion_publications=%llu completion_vectors=%llu retry_windows=%llu origin_frames=%llu origin_vectors=%llu",
       i, (unsigned long long) stats[i].admit_frames,
       (unsigned long long) stats[i].admit_vectors,
@@ -4835,7 +4843,7 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
     __atomic_load_n (&g->l4_policy_bank_readers[0], __ATOMIC_SEQ_CST) - (snapshot.bank_index == 0),
     __atomic_load_n (&g->l4_policy_bank_readers[1], __ATOMIC_SEQ_CST) - (snapshot.bank_index == 1));
   product_policy_snapshot_release (g, &snapshot);
-  for (u32 worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (u32 worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       product_flow_runtime_snapshot_t snapshot = product_flow_runtime_snapshot (g->flow_pools[worker]);
       const product_flow_runtime_snapshot_t *pool = &snapshot;
@@ -5028,7 +5036,7 @@ product_policy_hold_cli (vlib_main_t *vm, unformat_input_t *input,
   (void) command;
   if (product_vpn_tun_product_mode())
     return clib_error_return (0, "policy hold is unavailable in Product VPN mode");
-  if (!unformat (input, "%u %u", &worker, &us) || worker >= PRODUCT_GRAPH_WORKERS
+  if (!unformat (input, "%u %u", &worker, &us) || worker >= product_packet_graph_worker_count ()
       || us > 500000 || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     return clib_error_return (0, "expected worker 0..1 and hold 0..500000 us");
   __atomic_store_n (&product_packet_graph_main.policy_hold_next_us[worker], us, __ATOMIC_SEQ_CST);
@@ -5101,7 +5109,7 @@ product_metadata_inject_cli (vlib_main_t *vm, unformat_input_t *input,
           || fact_provenance > PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED))
         { vec_free (hex); return clib_error_return (0, "invalid controlled platform facts"); }
     }
-  if (arrival_worker >= PRODUCT_GRAPH_WORKERS
+  if (arrival_worker >= product_packet_graph_worker_count ()
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     { vec_free (hex); return clib_error_return (0, "invalid injection worker"); }
   u16 thread = vlib_get_worker_thread_index (arrival_worker);
@@ -5227,7 +5235,7 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
   bytes[24] = 0x12; bytes[28] = 0x34; bytes[32] = 0x60; bytes[33] = 0x12;
   bytes[34] = 0xff; bytes[35] = 0xfe;
   bytes[40] = 3; bytes[41] = 3; bytes[42] = 7;
-  product_worker_layout_t layout = { .worker_count = 2, .hash_seed = PRODUCT_GRAPH_HASH_SEED };
+  product_worker_layout_t layout = { .worker_count = product_packet_graph_worker_count (), .hash_seed = PRODUCT_GRAPH_HASH_SEED };
   product_packet_ingress_t ingress = { .data = bytes, .length = 44, .origin_obligation_id = 216,
     .platform = { .availability = 7, .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
       .provenance = PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED } };
@@ -5301,7 +5309,7 @@ product_packet_graph_init (vlib_main_t *vm)
   if (flow_end_error)
     return flow_end_error;
   /* Storage belongs to an Adapter generation and is allocated at start. */
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     clib_atomic_store_rel_n (&graph->handoff_credits[worker],
                              PRODUCT_GRAPH_HANDOFF_CREDITS);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -5341,7 +5349,7 @@ int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
   vlib_worker_thread_barrier_sync (vm);
   product_flow_runtime_snapshot_t pool[PRODUCT_GRAPH_WORKERS];
   uint32_t total = 0;
-  for (uint32_t worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (uint32_t worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       pool[worker] = product_flow_runtime_snapshot (graph->flow_pools[worker]);
       out->capacity[worker] = pool[worker].capacity;
@@ -5419,7 +5427,7 @@ int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
 {
   memset(out,0,sizeof *out);
   product_packet_graph_main_t *graph=&product_packet_graph_main;
-  if(!generation || generation!=graph->generation || worker>=PRODUCT_GRAPH_WORKERS)
+  if(!generation || generation!=graph->generation || worker>=product_packet_graph_worker_count ())
     return -5;
   vlib_main_t *vm=vlib_get_main();
   vlib_worker_thread_barrier_sync(vm);

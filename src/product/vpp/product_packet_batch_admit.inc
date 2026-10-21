@@ -238,7 +238,7 @@ product_admit_prepare_window (vlib_main_t *vm, vlib_buffer_t **buffers,
   u32 base, u32 count, product_admit_prepared_t *prepared)
 {
   product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS, .hash_seed = PRODUCT_GRAPH_HASH_SEED,
+    .worker_count = product_packet_graph_worker_count (), .hash_seed = PRODUCT_GRAPH_HASH_SEED,
   };
   product_packet_batch_stats_t *stats = product_packet_batch_counters (vm);
   stats->prepare_windows++;

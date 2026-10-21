@@ -1926,7 +1926,7 @@ product_root_nfqueue_error_ready (clib_file_t *file)
 
 static void
 product_root_nfqueue_reset_lane (product_root_nfqueue_lane_t *lane,
-                                 u32 lane_index, u32 queue_id)
+                                 u32 lane_index, u32 queue_id, u32 owner_count)
 {
   clib_memset (lane, 0, sizeof (*lane));
   lane->fd = -1;
@@ -1934,7 +1934,10 @@ product_root_nfqueue_reset_lane (product_root_nfqueue_lane_t *lane,
   lane->queue_id = queue_id;
   lane->lane_index = lane_index;
   lane->family_lane = lane_index % 2;
-  lane->worker_index = lane->family_lane;
+  /* NFQUEUE lane count stays independent of the selected FlowOwner count.
+   * With one owner both IPv4 and IPv6 lanes enter on that worker. */
+  ASSERT (owner_count > 0);
+  lane->worker_index = lane->family_lane % owner_count;
   lane->ip_family = lane_index < 2 ? 4 : 6;
   lane->last_uid = UINT32_MAX;
   lane->last_cpu = UINT32_MAX;
@@ -2167,16 +2170,16 @@ int
 product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
 {
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  product_runtime_topology_t topology =
+    product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT);
   u32 index, queue_maxlen;
 
   if (nm->available)
     return 1;
   if (vm == 0 || generation == 0)
     return 0;
-  if (!product_runtime_topology_valid (
-        PRODUCT_TOPOLOGY_ROOT,
-        product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT),
-        vlib_num_workers ()))
+  if (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, topology,
+                                       vlib_num_workers ()))
     return 0;
   if (!product_root_nfqueue_maxlen_from_env (&queue_maxlen))
     {
@@ -2291,7 +2294,9 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
 
   for (index = 0; index < PRODUCT_ROOT_NFQUEUE_MAX_LANES; index++)
     {
-      product_root_nfqueue_reset_lane (&nm->lanes[index], index, nm->queue_id + index);
+      product_root_nfqueue_reset_lane (&nm->lanes[index], index,
+                                       nm->queue_id + index,
+                                       topology.owner_count);
       nm->lanes[index].generation = generation;
       nm->lanes[index].queue_maxlen = queue_maxlen;
     }

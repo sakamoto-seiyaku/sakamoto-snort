@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
 import threading
 import time
+from collections import Counter
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
@@ -17,6 +19,7 @@ parser.add_argument('--artifact', type=Path, required=True)
 parser.add_argument('--stage', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--build', type=Path, required=True)
+parser.add_argument('--owners', type=int, choices=(1, 2), default=2)
 args = parser.parse_args()
 artifact, stage, output = (p.resolve() for p in (args.artifact, args.stage, args.output))
 output.mkdir(parents=True, exist_ok=False)
@@ -29,6 +32,7 @@ runtime = ROOT/('build-output/product-vpp-runtime-t01-'+output.name)
 generation = 25201
 config_dir = output/'configuration'
 result = dict(status='HOLD', generation=generation, profile='root', source='NFQ_CAPTURED',
+              owners=args.owners,
               cases=[], endpoint=[], started_ns=time.time_ns(), artifact=str(artifact),
               manifest_sha256=hashlib.sha256((artifact/'product-vpp-artifact.properties').read_bytes()).hexdigest())
 build_path=args.build.resolve()
@@ -77,23 +81,41 @@ save('environment.txt', command('uname','-a')+command('id')+'uid_map='+' '.join(
 command('ip','link','set','lo','up')
 launch = dict(env, PRODUCT_ARTIFACT_DIR=str(artifact), PRODUCT_RUNTIME_DIR=str(runtime),
               PRODUCT_RULE_CONFIG_DIR=str(config_dir), PRODUCT_GENERATION=str(generation),
-              PRODUCT_WORKER_COUNT='2', SAKAMOTO_RUNTIME_PROFILE='root',
+              PRODUCT_WORKER_COUNT=str(args.owners), SAKAMOTO_RUNTIME_PROFILE='root',
               SAKAMOTO_PRODUCT_ROOT_NFQUEUE_UID='0', SAKAMOTO_PRODUCT_ROOT_NFQUEUE_LANES='4')
+if args.owners == 1:
+    allowed = sorted(os.sched_getaffinity(0))
+    assert len(allowed) >= 2
+    launch.update(PRODUCT_MAIN_CPU=str(allowed[0]), PRODUCT_WORKER_CPUS=str(allowed[1]))
 log = (output/'vpp.log').open('w')
 process = subprocess.Popen(['bash', str(ROOT/'tools/product/run-host-vpp.sh')], env=launch,
                            stdout=log, stderr=subprocess.STDOUT)
 server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server.bind(('127.0.0.2',40608)); server.settimeout(.1)
+server_v6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) if args.owners == 1 else None
+if server_v6:
+    server_v6.bind(('::1',40610)); server_v6.settimeout(.1)
 done = threading.Event()
-def endpoint():
+def endpoint(channel):
     while not done.is_set():
-        try: data, peer = server.recvfrom(2048)
+        try: data, peer = channel.recvfrom(2048)
         except socket.timeout: continue
-        result['endpoint'].append(data.decode()); server.sendto(data, peer)
-thread = threading.Thread(target=endpoint); thread.start()
+        result['endpoint'].append(data.decode()); channel.sendto(data, peer)
+threads = [threading.Thread(target=endpoint, args=(server,))]
+if server_v6: threads.append(threading.Thread(target=endpoint, args=(server_v6,)))
+for thread in threads: thread.start()
 hook = ['iptables','-t','mangle','-A','OUTPUT','-p','udp','--sport','32000','--dport','40608',
         '-j','NFQUEUE','--queue-num','176']
-hooked = False
+hooks = [hook]
+if args.owners == 1:
+    hooks += [
+        ['iptables','-t','mangle','-A','OUTPUT','-p','udp','--sport','40608','--dport','32000',
+         '-j','NFQUEUE','--queue-num','177'],
+        ['ip6tables','-t','mangle','-A','OUTPUT','-p','udp','--sport','32002','--dport','40610',
+         '-j','NFQUEUE','--queue-num','178'],
+        ['ip6tables','-t','mangle','-A','OUTPUT','-p','udp','--sport','40610','--dport','32002',
+         '-j','NFQUEUE','--queue-num','179']]
+installed_hooks = []
 try:
     deadline = time.monotonic()+15
     while not (runtime/'api.sock').exists():
@@ -102,7 +124,13 @@ try:
         time.sleep(.05)
     # Adapter startup is asynchronous; the status query is an actual product API.
     while True:
-        status = api('initial', 'rule-query')
+        assert process.poll() is None, (output/'vpp.log').read_text()
+        try:
+            status = api('initial', 'rule-query')
+        except RuntimeError:
+            if time.monotonic() >= deadline: raise
+            time.sleep(.05)
+            continue
         if status['query.adapter_available'] == 'true': break
         assert time.monotonic() < deadline, status
         time.sleep(.05)
@@ -112,8 +140,19 @@ try:
     save('process-exe.txt',os.readlink(f'/proc/{process.pid}/exe')+'\n')
     save('process-stat.txt',Path(f'/proc/{process.pid}/stat').read_text())
     save('process-command.txt',Path(f'/proc/{process.pid}/cmdline').read_bytes().replace(b'\0',b' ').decode())
-    cli('startup', 'product packet-trace limit 256', 'show product root lanes', 'show threads')
-    command(*hook); hooked = True
+    startup = cli('startup', 'product packet-trace limit 256', 'show product topology',
+                  'show product root lanes', 'show threads')
+    if args.owners == 1:
+        assert 'owner_count=1 vpp_worker_count=1 actual_vpp_workers=1' in startup
+        assert 'topology.tun_io_lane=none' in startup
+        for line in startup.splitlines():
+            if line.startswith('root.lane '): assert 'worker=0 thread=1' in line, line
+        for name, expected_cpu in (('vpp_main', allowed[0]), ('vpp_wk_0', allowed[1])):
+            row = next(line for line in startup.splitlines() if name in line)
+            tid = next(int(field) for field in row.split()[2:] if field.isdecimal())
+            assert os.sched_getaffinity(tid) == {expected_cpu}, (name, tid, expected_cpu)
+    for selected_hook in hooks:
+        command(*selected_hook); installed_hooks.append(selected_hook)
     save('hooks.txt', command('iptables-save','-t','mangle'))
     revision = 1
     version = None
@@ -142,19 +181,82 @@ try:
         assert (nonce in result['endpoint']) == delivered
         result['cases'].append(dict(phase=phase, nonce=nonce, delivered=delivered,
                                     rule_version=version, revision=revision))
-        save(phase+'-source.conf',(config_dir/'rules.conf').read_text())
+        (output/(phase+'-source.conf')).write_bytes((config_dir/'rules.conf').read_bytes())
         cli(phase+'-graph','show product flows','show product completion')
+    if args.owners == 1:
+        nonce = f't01-ipv6-{time.time_ns()}'
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as probe:
+            probe.bind(('::1',32002)); probe.settimeout(.5)
+            probe.sendto(nonce.encode(),('::1',40610))
+            received = probe.recv(2048).decode()
+        assert received == nonce and nonce in result['endpoint']
+        drain('ipv6-drain')
+        ipv6_graph = cli('ipv6-graph','show product root lanes','show product flows',
+                         'show product completion')
+        flow_entries = [line for line in ipv6_graph.splitlines()
+                        if line.startswith('flow.entry worker=0 ')]
+        for family in (4, 6):
+            matching = [line for line in flow_entries if f'family={family} ' in line]
+            assert len(matching) == 1, matching
+            assert 'decision=1 ' in matching[0] and 'orig_packets=' in matching[0]
+            assert int(matching[0].split('orig_packets=',1)[1].split()[0]) >= 1
+            assert int(matching[0].split('reply_packets=',1)[1].split()[0]) >= 1
+        lanes = [line for line in ipv6_graph.splitlines() if line.startswith('root.lane ')]
+        assert len(lanes) == 4
+        for lane in lanes:
+            fields = dict(part.split('=',1) for part in lane.split()[1:] if '=' in part)
+            assert int(fields['captured']) >= 1 and fields['captured'] == fields['verdicts']
+            assert fields['captured'] == fields['returns'] and fields['failed'] == '0'
+        completion = next(line for line in ipv6_graph.splitlines()
+                          if line.startswith('completion.status '))
+        for key in ('pending', 'frames', 'buffers', 'obligations'):
+            assert f'{key}=0' in completion, completion
+        trace = (output/'vpp.log').read_text()
+        for family in (4, 6):
+            lines = [line for line in trace.splitlines()
+                     if 's207 stage=admit ' in line and f'key_family={family} ' in line]
+            assert len(lines) >= 2 and all('owner=0 ' in line for line in lines), lines
+            hashes = {line.split(' hash=',1)[1].split(' ',1)[0] for line in lines}
+            assert len(hashes) == 1, lines
+        identities = {}
+        for label, pattern in (
+                ('captured', r's203 event=capture .*? obligation=(\d+)'),
+                ('verdict', r's242 event=verdict_syscall .*? token=(\d+) .*? outcome=0'),
+                ('returned', r's203 event=buffer_free .*? obligation=(\d+)')):
+            identities[label] = Counter(re.findall(pattern, trace))
+        assert identities['captured'] and identities['captured'] == identities['verdict']
+        assert identities['captured'] == identities['returned']
+        assert all(count == 1 for count in identities['captured'].values())
+        result['cases'].append(dict(phase='ipv6-bidirectional', nonce=nonce, delivered=True,
+                                    owner=0, canonical_hash_symmetric=True))
     result['status'] = 'RAW_COMPLETE'
 except Exception as error:
     result['error']=repr(error)
     raise
 finally:
-    if hooked:
-        removal=hook.copy();removal[3]='-D';command(*removal)
-    done.set();thread.join(2);server.close()
+    for installed in reversed(installed_hooks):
+        removal=installed.copy();removal[3]='-D';command(*removal)
+    done.set()
+    for thread in threads: thread.join(2)
+    server.close()
+    if server_v6: server_v6.close()
     if process.poll() is None and (runtime/'cli.sock').exists():
-        drain('final-drain');assert 'root.stop=ok' in cli('stop','product root stop')
-        cli('stopped','show product completion','show product root lanes','show product flows')
+        drain('final-drain')
+        stopped_command = cli('stop','product root stop')
+        assert 'root.stop=ok queues=0 buffers=0 obligations=0' in stopped_command
+        stopped = cli('stopped','show product completion','show product root lanes',
+                      'show product flows')
+        if args.owners == 1:
+            completion = next(line for line in stopped.splitlines()
+                              if line.startswith('completion.status '))
+            assert all(f'{field}=0' in completion for field in
+                       ('pending', 'frames', 'buffers', 'obligations')), completion
+            for line in stopped.splitlines():
+                if line.startswith('root.lane '):
+                    assert 'fd=-1 ' in line and 'ready=0 ' in line and 'pending=0 ' in line
+            assert re.search(r's242 event=stop_native_zero .*?pending=0 buffers=0 '
+                             r'obligations=0 handoffs=0 completion_frames=0',
+                             (output/'vpp.log').read_text())
         free={}
         for queue in range(176,180):
             with socket.socket(socket.AF_NETLINK,socket.SOCK_RAW,12) as channel:

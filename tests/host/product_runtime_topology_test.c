@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 int main (void)
 {
@@ -44,5 +45,17 @@ int main (void)
     2));
   assert (product_runtime_topology_current (PRODUCT_TOPOLOGY_INVALID)
             .tun_io_worker == UINT32_MAX);
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "1", 1) == 0);
+  root = product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT);
+  assert (root.owner_count == 1 && root.vpp_worker_count == 1);
+  assert (root.tun_io_worker == UINT32_MAX);
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 1));
+  assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 2));
+  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN).owner_count);
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "3", 1) == 0);
+  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "01", 1) == 0);
+  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
+  assert (unsetenv ("SAKAMOTO_PRODUCT_OWNER_COUNT") == 0);
   return 0;
 }

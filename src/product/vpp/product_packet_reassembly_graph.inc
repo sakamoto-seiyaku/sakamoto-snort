@@ -68,7 +68,7 @@ product_fragment_contexts (void)
 static product_fragment_counters_t *
 product_fragment_counters (vlib_main_t *vm)
 {
-  if (PREDICT_FALSE (vm->thread_index > PRODUCT_GRAPH_WORKERS))
+  if (PREDICT_FALSE (vm->thread_index > product_packet_graph_worker_count ()))
     clib_panic ("fragment callback outside the configured VPP threads");
   return &product_fragment_main.threads[vm->thread_index];
 }
@@ -82,7 +82,7 @@ product_fragment_load (vlib_main_t *vm, u32 bi)
   if (PREDICT_FALSE (!(envelope.flags & PRODUCT_FRAGMENT_VALID)
       || envelope.obligation.queue_generation != product_packet_graph_main.generation
       || !envelope.obligation.token || !b->ref_count
-      || envelope.obligation.origin_worker >= PRODUCT_GRAPH_WORKERS
+      || envelope.obligation.origin_worker >= product_packet_graph_worker_count ()
       || (envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
           && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
           && envelope.obligation.kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)))
@@ -246,7 +246,7 @@ product_fragment_assemble (vlib_main_t *vm, vlib_node_runtime_t *node,
     .origin_obligation_id = e.obligation.token, .platform = e.platform
   };
   product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS, .hash_seed = PRODUCT_GRAPH_HASH_SEED
+    .worker_count = product_packet_graph_worker_count (), .hash_seed = PRODUCT_GRAPH_HASH_SEED
   };
   product_packet_lease_t lease = {0};
   if (product_packet_admit_selected(&layout, &ingress, &bundle->assignment, &lease)
@@ -327,7 +327,7 @@ VLIB_NODE_FN(product_fragment_input_node)
       continue;
     }
     product_worker_layout_t layout = {
-      .worker_count = PRODUCT_GRAPH_WORKERS, .hash_seed = PRODUCT_GRAPH_HASH_SEED
+      .worker_count = product_packet_graph_worker_count (), .hash_seed = PRODUCT_GRAPH_HASH_SEED
     };
     if (!piece.offset && product_owner_assign(&layout, &facts, &assignment) != PRODUCT_PACKET_OK) {
       product_fragment_error_emit(vm, node, bi, e, PRODUCT_REASSEMBLY_ERROR_MALFORMED);
@@ -410,7 +410,7 @@ product_fragment_dispatch (vlib_main_t *vm, vlib_node_runtime_t *node, u32 bi,
     product_fragment_error_emit(vm, node, bi, e, PRODUCT_REASSEMBLY_ERROR_RESOURCE);
   else {
     product_worker_layout_t layout = {
-      .worker_count = PRODUCT_GRAPH_WORKERS, .hash_seed = PRODUCT_GRAPH_HASH_SEED
+      .worker_count = product_packet_graph_worker_count (), .hash_seed = PRODUCT_GRAPH_HASH_SEED
     };
     u16 target = vlib_get_worker_thread_index(product_fragment_worker(&layout, &piece.key));
     if (target == vm->thread_index)
@@ -532,7 +532,7 @@ product_fragment_start (vlib_main_t *vm)
     if (!product_capacity_ring_empty(index)) clib_panic("fragment queue survived retirement");
     product_capacity_set_empty_ring(index, queue->frame_queue_nelts);
   }
-  for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++) {
+  for (u32 i = 1; i <= product_packet_graph_worker_count (); i++) {
     product_fragment_table_destroy(&product_fragment_main.tables[i]);
     if (!product_fragment_table_init(&product_fragment_main.tables[i],
           product_fragment_config.contexts, product_fragment_config.originals,
@@ -559,7 +559,7 @@ product_packet_graph_quiesce (vlib_main_t *vm)
   clib_atomic_store_rel_n (&product_packet_graph_main.accepting, 0);
   product_fragment_main.accepting = 0;
   if (product_fragment_main.initialized)
-    for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++) {
+    for (u32 i = 1; i <= product_packet_graph_worker_count (); i++) {
       vlib_main_t *worker_vm = vlib_get_main_by_index(i);
       product_fragment_expire(worker_vm,
         vlib_node_get_runtime(worker_vm, product_fragment_expire_node.index), 1);
@@ -573,7 +573,7 @@ product_fragment_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   (void) input; (void) command;
   u64 ingress = 0, completed = 0, pins = 0, released = 0;
-  for (u32 t = 0; t <= PRODUCT_GRAPH_WORKERS; t++)
+  for (u32 t = 0; t <= product_packet_graph_worker_count (); t++)
     {
       product_fragment_counters_t *s = &product_fragment_main.threads[t];
       ingress += s->ingress; completed += s->completions;
@@ -627,12 +627,12 @@ product_fragment_config_cli (vlib_main_t *vm, unformat_input_t *input,
       g->lifecycle_buffers || g->lifecycle_obligations || product_fragment_contexts())
     return clib_error_return(0, "diagnostic reassembly configuration requires active empty graph");
   product_fragment_table_t tables[PRODUCT_GRAPH_WORKERS] = {0};
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 0; i < product_packet_graph_worker_count (); i++)
     if (!product_fragment_table_init(&tables[i], contexts, originals, (u64)timeout*1000)) {
-      for (u32 j = 0; j < PRODUCT_GRAPH_WORKERS; j++) product_fragment_table_destroy(&tables[j]);
+      for (u32 j = 0; j < product_packet_graph_worker_count (); j++) product_fragment_table_destroy(&tables[j]);
       return clib_error_return(0, "reassembly configuration/allocation failed");
     }
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++) {
+  for (u32 i = 0; i < product_packet_graph_worker_count (); i++) {
     product_fragment_table_destroy(&product_fragment_main.tables[i+1]);
     product_fragment_main.tables[i+1] = tables[i];
   }

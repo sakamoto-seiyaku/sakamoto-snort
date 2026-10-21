@@ -32,6 +32,7 @@ typedef struct
 static struct
 {
   product_flow_end_owner_t owners[PRODUCT_FLOW_END_WORKERS];
+  u32 owner_count;
   u32 buffers;
   u32 initialized;
 } product_flow_end_main;
@@ -74,7 +75,7 @@ static product_flow_end_owner_t *
 current_owner (vlib_main_t *vm)
 {
   if (PREDICT_FALSE (!vm->thread_index ||
-                    vm->thread_index > PRODUCT_FLOW_END_WORKERS ||
+                    vm->thread_index > product_flow_end_main.owner_count ||
                     vm->thread_index != vlib_get_thread_index ()))
     clib_panic ("FlowEnd executed outside its owner worker");
   return &product_flow_end_main.owners[vlib_get_worker_index (vm->thread_index)];
@@ -260,9 +261,10 @@ int
 product_flow_end_start (u64 generation, product_flow_runtime_t **runtimes,
                         u32 worker_count)
 {
-  if (!product_flow_end_main.initialized || !generation ||
-      worker_count != PRODUCT_FLOW_END_WORKERS || product_flow_end_buffer_debt ())
+  if (!product_flow_end_main.initialized || !generation || !worker_count ||
+      worker_count > PRODUCT_FLOW_END_WORKERS || product_flow_end_buffer_debt ())
     return 0;
+  product_flow_end_main.owner_count = worker_count;
   for (u32 i = 0; i < worker_count; i++)
     {
       product_flow_end_owner_t *owner = &product_flow_end_main.owners[i];
@@ -290,6 +292,7 @@ product_flow_end_unbind (void)
   (void) product_flow_expiry_bind (0, NULL);
   for (u32 i = 0; i < PRODUCT_FLOW_END_WORKERS; i++)
     product_flow_end_main.owners[i].runtime = 0;
+  product_flow_end_main.owner_count = 0;
 }
 
 int
@@ -400,7 +403,7 @@ product_flow_end_quiesce (vlib_main_t *vm)
    * Cancel only commands which have not closed an entry. Live ENDs drain in
    * their existing graph before administrative FlowRuntime cleanup. */
   (void) vm;
-  for (u32 i = 0; i < PRODUCT_FLOW_END_WORKERS; i++)
+  for (u32 i = 0; i < product_flow_end_main.owner_count; i++)
     {
       product_flow_end_main.owners[i].control.kind = END_CONTROL_NONE;
       vlib_main_t *worker_vm = vlib_get_main_by_index (vlib_get_worker_thread_index (i));
@@ -429,7 +432,7 @@ close_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command
       else if (unformat (input, "expire")) reason = PRODUCT_FLOW_END_EXPIRED;
       else return clib_error_return (0, "invalid FlowEnd close argument");
     }
-  if (worker >= PRODUCT_FLOW_END_WORKERS || !generation ||
+  if (worker >= product_flow_end_main.owner_count || !generation ||
       (!batch && (!incarnation || port)) ||
       (batch && (batch > 1024 || !port || port > 65535 || early ||
                  reason != PRODUCT_FLOW_END_CLOSED || incarnation || slot != ~0U)) ||
@@ -465,7 +468,7 @@ status_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *comman
 {
   (void) input; (void) command;
   vlib_cli_output (vm, "flow-end.buffers=%u", product_flow_end_buffer_debt ());
-  for (u32 i = 0; i < PRODUCT_FLOW_END_WORKERS; i++)
+  for (u32 i = 0; i < product_flow_end_main.owner_count; i++)
     {
       const product_flow_end_owner_t *o = &product_flow_end_main.owners[i];
       product_flow_runtime_snapshot_t s = product_flow_runtime_snapshot (o->runtime);

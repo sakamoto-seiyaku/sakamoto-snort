@@ -3,6 +3,7 @@
 #include "product_observation.h"
 #include "product_blocked_observation.h"
 #include "product_flow_expiry.h"
+#include "product_packet_graph.h"
 #include <vlib/threads.h>
 #include <vlib/file.h>
 #include <vlib/unix/unix.h>
@@ -232,6 +233,7 @@ void product_observation_basic (vlib_main_t *vm, unsigned outcome, uint32_t byte
 }
 void product_observation_status (product_observation_status_t *status) {
   product_observation_transport_status (transport, status);
+  if (transport) status->owners = product_packet_graph_worker_count ();
   status->blocked_capacity = blocked_capacity;
   for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
     status->blocked_active[i] = product_blocked_observation_active (blocked[i]);
@@ -318,7 +320,7 @@ int product_observation_bind (uint64_t generation, product_flow_runtime_t **runt
   blocked_capacity = capacity < 1024 ? capacity : 1024;
   transport = product_observation_transport_create (generation, capacity);
   if (!transport) goto fail;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+  for (unsigned i = 0; i < product_packet_graph_worker_count (); i++) {
     owners[i].runtime = runtimes[i]; owners[i].capacity = capacity; owners[i].generation = generation;
     owners[i].slots = calloc (capacity, sizeof (*owners[i].slots));
     blocked[i] = product_blocked_observation_create (

@@ -17,6 +17,8 @@ plugin_dir="$artifact_root/lib/vpp_plugins"
 core_bin="$artifact_root/bin/sakamoto-product-core-host"
 generation="${PRODUCT_GENERATION:-1}"
 worker_count="${PRODUCT_WORKER_COUNT:-}"
+worker_cpus="${PRODUCT_WORKER_CPUS:-}"
+main_cpu="${PRODUCT_MAIN_CPU:-}"
 manifest="$artifact_root/product-vpp-artifact.properties"
 artifact_marker="$artifact_root/.sakamoto-product-artifact"
 source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
@@ -165,6 +167,18 @@ if [[ -n "$worker_count" && ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; then
   echo "PRODUCT_WORKER_COUNT must be a positive decimal integer" >&2
   exit 2
 fi
+if [[ -n "$worker_cpus" ]]; then
+  if [[ -z "$worker_count" || ! "$worker_cpus" =~ ^[0-9]+(,[0-9]+)*$ ||
+        ! "$main_cpu" =~ ^[0-9]+$ ]]; then
+    echo "PRODUCT_WORKER_CPUS requires PRODUCT_WORKER_COUNT and decimal PRODUCT_MAIN_CPU" >&2
+    exit 2
+  fi
+  IFS=, read -r -a selected_worker_cpus <<< "$worker_cpus"
+  if [[ "${#selected_worker_cpus[@]}" -ne "$worker_count" ]]; then
+    echo "PRODUCT_WORKER_CPUS count must equal PRODUCT_WORKER_COUNT" >&2
+    exit 2
+  fi
+fi
 
 mkdir -p "$runtime_dir"
 if find "$runtime_dir" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
@@ -180,7 +194,11 @@ printf '%s\n' "$$" > "$owner_pid"
 printf '%s\n' "$generation" > "$generation_marker"
 cpu_config=""
 if [[ -n "$worker_count" ]]; then
-  cpu_config="cpu { workers $worker_count }"
+  if [[ -n "$worker_cpus" ]]; then
+    cpu_config="cpu { main-core $main_cpu workers $worker_count ordered-workers $worker_cpus }"
+  else
+    cpu_config="cpu { workers $worker_count }"
+  fi
 fi
 cat > "$config" <<EOF
 $cpu_config
@@ -202,6 +220,9 @@ plugins {
 EOF
 
 export SAKAMOTO_PRODUCT_GENERATION="$generation"
+if [[ -n "$worker_count" && -z "${SAKAMOTO_PRODUCT_OWNER_COUNT:-}" ]]; then
+  export SAKAMOTO_PRODUCT_OWNER_COUNT="$worker_count"
+fi
 # Source survives runtime-directory cleanup and profile generations. Callers
 # may select another explicit persistent directory for isolated acceptance.
 rule_config_dir="${PRODUCT_RULE_CONFIG_DIR:-$repo_root/build-output/product-rule-config}"

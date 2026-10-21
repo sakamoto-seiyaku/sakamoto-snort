@@ -47,7 +47,7 @@ static void startup(void){
  memset(&product_root_nfqueue_main,0,sizeof(product_root_nfqueue_main));
  product_root_nfqueue_main.generation=42;product_root_nfqueue_main.lane_count=1;
  product_root_nfqueue_lane_t *lane=&product_root_nfqueue_main.lanes[0];
- product_root_nfqueue_reset_lane(lane,0,176);
+ product_root_nfqueue_reset_lane(lane,0,176,2);
  lane->generation=42;lane->queue_maxlen=PRODUCT_ROOT_DEFAULT_QUEUE_MAXLEN;
  u32 indices[PRODUCT_ROOT_RECEIVE_TOTAL];
  for(u32 i=0;i<PRODUCT_ROOT_RECEIVE_TOTAL;i++){indices[i]=i;memset(&buffers[i],0,sizeof(buffers[i]));buffers[i].ref_count=1;}
@@ -128,7 +128,7 @@ typedef struct {u32 thread_index;} vlib_main_t;
 #define clib_atomic_load_acq_n(p) (*(p))
 #define clib_atomic_store_rel_n(p,v) (*(p)=(v))
 typedef struct {
- vlib_main_t *vlib_main;product_adapter_obligation_kind_t adapter_kind;
+ vlib_main_t *vlib_main;product_adapter_obligation_kind_t adapter_kind;u32 owner_count;
  u64 generation,lifecycle_obligations,lifecycle_buffers,lifecycle_handoffs,lifecycle_completion_frames;
  u32 enabled,accepting,trace_packets,trace_limit,policy_hold_next_us[2],misroute_next;
  u64 primary_published,primary_received,primary_rejected,primary_rejected_credit,primary_rejected_enqueue,owner_delivery_checks,owner_delivery_failures;

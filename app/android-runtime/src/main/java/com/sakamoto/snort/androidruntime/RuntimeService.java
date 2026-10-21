@@ -136,7 +136,6 @@ public final class RuntimeService extends VpnService {
     private static final String S194_POLICY_MUTATION_FAULT_STATUS =
             "debug/policy-mutation-fault.properties";
     private static final String PRODUCT_CORE_MAIN_CORE = "0";
-    private static final String PRODUCT_CORE_WORKER_COUNT = "2";
     private WorkerCpuPlacement requestedWorkerPlacement = WorkerCpuPlacement.DEFAULT;
     private WorkerCpuPlacement activeWorkerPlacement = WorkerCpuPlacement.DEFAULT;
     private static final String PRODUCT_CORE_OWNER_MAPPING =
@@ -673,7 +672,7 @@ public final class RuntimeService extends VpnService {
             }
             enqueueExplicitLifecycle(() -> {
                 if (requestEpoch != explicitRequestEpoch.get()) return;
-                if (!selectWorkerPlacement(intent != null
+                if (!selectWorkerPlacement(profile, intent != null
                         && intent.hasExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
                         ? intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS)
                         : null)) return;
@@ -718,7 +717,7 @@ public final class RuntimeService extends VpnService {
                 requestedVpnGraphValidation = false;
                 requestedVpnHevValidation = false;
                 requestedNativeBuffers = 0;
-                if (!selectWorkerPlacement(null)) return;
+                if (!selectWorkerPlacement(profile, null)) return;
                 startRuntime(profile);
             }, requestEpoch);
             return START_STICKY;
@@ -918,11 +917,17 @@ public final class RuntimeService extends VpnService {
         }
     }
 
-    private boolean selectWorkerPlacement(String explicitIds) {
+    private boolean selectWorkerPlacement(RuntimeProfile profile, String explicitIds) {
         try {
             String ids = explicitIds == null ? getSharedPreferences("worker-placement",
                     MODE_PRIVATE).getString("workerCpuIds", "1,2") : explicitIds;
             WorkerCpuPlacement selection = WorkerCpuPlacement.parse(ids);
+            if (profile == RuntimeProfile.VPN && selection.ownerCount != 2) {
+                publishError("invalid_worker_cpu_ids",
+                        "VPN currently requires two FlowOwner CPU IDs",
+                        currentMayBeActive(), currentPid());
+                return false;
+            }
             if ((processAlive(vppProcess) || productCoreSession != null)
                     && !selection.equals(activeWorkerPlacement)) {
                 publishError("worker_placement_requires_restart",
@@ -1137,6 +1142,8 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("SAKAMOTO_RULE_CONFIG_PATH",
                     new File(ruleDirectory, "rules.conf").getAbsolutePath());
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
+            builder.environment().put("SAKAMOTO_PRODUCT_OWNER_COUNT",
+                    Integer.toString(activeWorkerPlacement.ownerCount));
             if (vpnGraphValidation) {
                 builder.environment().put("SAKAMOTO_PRODUCT_VPN_GRAPH_VALIDATION", "1");
             }
@@ -3437,7 +3444,7 @@ public final class RuntimeService extends VpnService {
                 + "\ngeneration=" + status.generation
                 + "\nplacement_fixed_before_start=true"
                 + "\nmain_core=" + PRODUCT_CORE_MAIN_CORE
-                + "\nworker_count=" + PRODUCT_CORE_WORKER_COUNT
+                + "\nworker_count=" + activeWorkerPlacement.ownerCount
                 + "\nworker_cores=" + (activeWorkerPlacement == null ? "unknown" : activeWorkerPlacement.encode())
                 + "\nworker_cpu_ids=" + (activeWorkerPlacement == null ? "unknown" : activeWorkerPlacement.encode())
                 + "\nvpp_main_core=" + status.productGraphVppMainCore
@@ -5063,13 +5070,16 @@ public final class RuntimeService extends VpnService {
         if (status == null || activeWorkerPlacement == null) {
             return false;
         }
-        return status.productGraphWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
-                && status.productGraphVppWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
+        return status.productGraphWorkerCount == activeWorkerPlacement.ownerCount
+                && status.productGraphVppWorkerCount == activeWorkerPlacement.ownerCount
                 && status.productGraphTunIoWorkerIndex ==
                         (activeProfile == RuntimeProfile.VPN ? 0 : -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
                 && status.productGraphVppWorker0Core == activeWorkerPlacement.worker0CpuId
-                && status.productGraphVppWorker1Core == activeWorkerPlacement.worker1CpuId
+                && (activeWorkerPlacement.ownerCount == 1
+                    ? status.productGraphVppWorker1ThreadIndex == -1
+                        && status.productGraphVppWorker1Core == -1
+                    : status.productGraphVppWorker1Core == activeWorkerPlacement.worker1CpuId)
                 && status.productGraphWorkerLayoutReady != 0;
     }
 

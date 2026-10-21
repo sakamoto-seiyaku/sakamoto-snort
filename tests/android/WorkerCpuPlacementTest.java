@@ -18,7 +18,13 @@ public final class WorkerCpuPlacementTest {
                 "cpu {\n  main-core 0\n  workers 2\n  ordered-workers 3,1\n}\n\n"), "native sequence seam");
         require(WorkerCpuPlacement.parse("0003,01").equals(reverse), "decimal normalization preserves order");
         require(WorkerCpuPlacement.parse("1023,1").worker0CpuId == 1023, "syntactic upper bound");
-        String[] invalid = {null, "", "1", "1,2,3", "1,1", "01,1", "0,1", "1,0",
+        WorkerCpuPlacement single = WorkerCpuPlacement.parse("0003");
+        require(single.ownerCount == 1 && single.worker0CpuId == 3 && single.worker1CpuId == -1,
+                "single owner ordered placement");
+        require(single.equals(WorkerCpuPlacement.parse(single.encode())), "single round trip");
+        require(single.startupConfig().equals(
+                "cpu {\n  main-core 0\n  workers 1\n  ordered-workers 3\n}\n\n"), "one native worker");
+        String[] invalid = {null, "", "0", "1,2,3", "1,1", "01,1", "0,1", "1,0",
                 "1,", ",1", "1,,2", "1-3", "3-1", "-1,2", "+1,2", "1.0,2", "1, 2",
                 " 1,2", "1,2 ", "1,2\n", "1,2\nworkers 9", "1,2}", "1024,1",
                 "4294967297,2", "99999999999,2", "١,2", "1;2"};

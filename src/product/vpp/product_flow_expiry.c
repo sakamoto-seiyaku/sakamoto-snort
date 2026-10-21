@@ -29,13 +29,14 @@ typedef struct {
   u16 port;
 } expiry_owner_t;
 static expiry_owner_t owners[EXPIRY_WORKERS];
+static u32 active_owner_count;
 static u8 experimental_startup, trace_all;
 extern vlib_node_registration_t product_flow_expiry_node;
 
 static expiry_owner_t *
 current_owner (vlib_main_t *vm)
 {
-  if (!vm->thread_index || vm->thread_index > EXPIRY_WORKERS ||
+  if (!vm->thread_index || vm->thread_index > active_owner_count ||
       vm->thread_index != vlib_get_thread_index ())
     clib_panic ("flow expiry outside owner");
   return &owners[vlib_get_worker_index (vm->thread_index)];
@@ -286,7 +287,7 @@ VLIB_REGISTER_NODE (product_flow_expiry_node) = {
 void
 product_flow_expiry_quiesce (void)
 {
-  for (u32 i = 0; i < EXPIRY_WORKERS; i++)
+  for (u32 i = 0; i < active_owner_count; i++)
     {
       expiry_owner_t *owner = &owners[i];
       if (owner->mode)
@@ -309,6 +310,8 @@ int
 product_flow_expiry_bind (u64 generation, product_flow_runtime_t **runtimes)
 {
   product_flow_expiry_quiesce ();
+  active_owner_count = runtimes ? product_packet_graph_worker_count () : 0;
+  if (active_owner_count > EXPIRY_WORKERS) return 0;
   for (u32 i = 0; i < EXPIRY_WORKERS; i++)
     {
       clib_memset (&owners[i], 0, sizeof (owners[i]));
@@ -317,7 +320,7 @@ product_flow_expiry_bind (u64 generation, product_flow_runtime_t **runtimes)
       owners[i].timer_fd = -1;
       owners[i].timer_file = ~0U;
       owners[i].scheduled_us = UINT64_MAX;
-      if (runtimes && !experimental_startup)
+      if (i < active_owner_count && !experimental_startup)
         {
           /* Fresh empty runtime: attach no entry by scanning. Valid packet
            * observations on its owner will establish each real deadline. */
@@ -351,12 +354,12 @@ experiment_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *co
     }
   if (!mode || !port || port > 65535 || !generation || !product_packet_graph_accepting ())
     return clib_error_return (0, "requires poll|deadline udp-port <port> generation <active>");
-  for (u32 i = 0; i < EXPIRY_WORKERS; i++)
+  for (u32 i = 0; i < active_owner_count; i++)
     if (!owners[i].runtime || owners[i].mode || owners[i].generation != generation)
       return clib_error_return (0, "experiment already active or generation mismatch");
   /* The ordinary CLI worker barrier holds. It publishes configuration only;
    * each owner attaches its own table's deadlines in its first invocation. */
-  for (u32 i = 0; i < EXPIRY_WORKERS; i++)
+  for (u32 i = 0; i < active_owner_count; i++)
     {
       expiry_owner_t *owner = &owners[i];
       owner->port = port;
@@ -387,7 +390,7 @@ static clib_error_t *
 show_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command)
 {
   (void) input; (void) command;
-  for (u32 i = 0; i < EXPIRY_WORKERS; i++)
+  for (u32 i = 0; i < active_owner_count; i++)
     {
       expiry_owner_t *o = &owners[i];
       vlib_cli_output (vm, "expiry.owner=%u generation=%llu mode=%u initialize=%u calls=%llu checks=%llu wakes=%llu batches=%llu closed=%llu released=%llu timers=%u next_us=%llu timer_fd=%d timer_file=%u experiment=%u trace_all=%u scheduled_us=%llu due_backlog=%u oldest_overdue_us=%llu budget_exhausted=%llu stale_wakes=%llu logical_expired=%llu",
@@ -415,7 +418,7 @@ stale_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command
   u32 owner = ~0U;
   u64 generation = 0;
   if (!unformat (input, "owner %u generation %llu", &owner, &generation) ||
-      unformat_check_input (input) != UNFORMAT_END_OF_INPUT || owner >= EXPIRY_WORKERS || !generation ||
+      unformat_check_input (input) != UNFORMAT_END_OF_INPUT || owner >= active_owner_count || !generation ||
       owners[owner].mode != EXPIRY_DEADLINE || owners[owner].generation == generation || owners[owner].pending_stale)
     return clib_error_return (0, "requires active owner and distinct nonzero old generation");
   owners[owner].pending_stale = generation;
