@@ -372,6 +372,12 @@ def run(args):
     primary_credits = manifest.get("primary_handoff_credits")
     if primary_credits is not None and (not vpn_only or type(primary_credits) is not int or primary_credits not in (32, 48)):
         raise ValueError("primary_handoff_credits requires VPN suite and 32 or 48")
+    callgraph = manifest.get("profiler_callgraph", "dwarf")
+    mmap_pages = manifest.get("profiler_mmap_pages")
+    if callgraph not in ("dwarf", "fp"):
+        raise ValueError("profiler_callgraph must be dwarf or fp")
+    if mmap_pages is not None and (type(mmap_pages) is not int or mmap_pages not in (1024, 4096)):
+        raise ValueError("profiler_mmap_pages must be 1024 or 4096")
     fresh_each_case = suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE)
     if fresh_each_case and manifest.get('fresh_lifetime_each_case') is not True:
         raise RuntimeError("fresh VPN suite must freeze independent lifetimes")
@@ -506,6 +512,11 @@ def run(args):
                 background = shlex.join([helper, "monitor", str(pid), str(monitor_ms)]) + " > " + shlex.quote(remote_cpu) + " 2>&1 < /dev/null & echo monitor=$!"
                 if manifest["profiling"]:
                     perf = ["/system/bin/simpleperf", "record", "-p", str(pid), "--duration", str(monitor_ms / 1000), "-e", "cpu-clock", "-f", "199", "-g", "--clockid", "monotonic", "-o", remote_perf]
+                    if callgraph == "fp":
+                        perf.remove("-g")
+                        perf.extend(["--call-graph", "fp"])
+                    if mmap_pages is not None:
+                        perf.extend(["-m", str(mmap_pages)])
                     if manifest.get("trace_offcpu"):
                         perf.append("--trace-offcpu")
                     background += "; " + shlex.join(perf) + " > " + shlex.quote(remote_perf + ".log") + " 2>&1 < /dev/null & echo profiler=$!"
@@ -548,6 +559,13 @@ def run(args):
                     if sample_pid.isdigit():
                         stop_commands.append("kill -" + ("INT " if name == "profiler" else "TERM ") + sample_pid + " 2>/dev/null || true")
                 device.root("; ".join(stop_commands))
+                if manifest.get("profiler_await_exit") and manifest["profiling"]:
+                    sample_pid = sampler_pids["profiler"]
+                    # Wait for the owned record process to finish flushing, so
+                    # perf.log and perf.data describe the same completed file.
+                    device.root("n=0; while [ -r /proc/" + sample_pid + "/stat ]; do "
+                                "[ \"$(cut -d ' ' -f 3 /proc/" + sample_pid + "/stat)\" = Z ] && break; "
+                                "[ $n -lt 150 ] || exit 81; n=$((n+1)); sleep 0.05; done")
                 sampler_pids = {}
                 if manifest["profiling"]:
                     log = device.root("cat " + shlex.quote(remote_perf + ".log"))

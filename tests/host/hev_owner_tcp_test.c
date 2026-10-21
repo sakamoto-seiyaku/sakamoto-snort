@@ -479,6 +479,15 @@ int main(int argc, char **argv)
       assert(s.tcp_commit_bytes == PAYLOAD);
       assert(s.tcp_mss_min == CLIENT_MSS && s.tcp_mss_max == CLIENT_MSS);
       assert(s.tcp_idle_rounds <= s.tcp_rx_rounds);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+      uint64_t observed_rounds = 0, observed_idle = 0;
+      for (unsigned n = 0; n < 8; ++n) {
+        observed_rounds += s.tcp_resume_rounds[n];
+        observed_idle += s.tcp_resume_idle[n];
+      }
+      assert(observed_rounds == s.tcp_rx_rounds && observed_idle == s.tcp_idle_rounds);
+      assert(s.scheduler_io_polls && s.scheduler_io_events);
+#endif
       assert(s.tcp_ring_peak && s.tcp_pending_peak <= s.tcp_ring_peak);
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
       assert(s.tcp_buffer_bytes == 65528 && s.tcp_ring_peak <= 65528);
@@ -490,6 +499,13 @@ int main(int argc, char **argv)
         assert(f->held_acks && f->ack_released && f->queued_at_ack_release);
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
         assert(s.tcp_read_pauses && s.tcp_read_resumes && s.tcp_interest_changes >= 2);
+        assert(s.tcp_yields[2] && s.tcp_wait_ns[2] > 10000000);
+        assert(s.tcp_resume_rounds[2]); /* The held inner ACK actually wakes it. */
+        printf("TCP%d owner=%d inner_ack_wait_ns=%llu ack_wakes=%llu ack_idle=%llu continue_idle=%llu\n",
+          family, i, (unsigned long long)s.tcp_wait_ns[2],
+          (unsigned long long)s.tcp_resume_rounds[2],
+          (unsigned long long)s.tcp_resume_idle[2],
+          (unsigned long long)s.tcp_resume_idle[0]);
 #endif
       }
 #ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT

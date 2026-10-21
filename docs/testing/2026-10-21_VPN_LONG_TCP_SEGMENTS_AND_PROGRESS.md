@@ -273,3 +273,21 @@ Host真实primary/completion批量回归、external batch及policy batch通过�
 真实HEV调度器最小复现确认了一个额外系统调用：external schedule已做一次非阻塞I/O扫描，随后pick_current_task在同时存在RUNNING/WAITING任务时再次扫描。一个任务quantum包含入口及yield后的扫描即可，修复前实测3次，修复后2次。[RED](../../build-output/vpn-wait-cause-20261021/scheduler-red.log) · [GREEN及I/O回归](../../build-output/vpn-wait-cause-20261021/scheduler-coverage.log)。补丁0015只跳过external路径中紧接着的重复扫描，standalone调度器保留阻塞I/O与timer扫描；回归实际运行混合任务、真实pipe事件、standalone timer唤醒及清理。
 
 这是已证实的局部CPU空耗，尚未证明它是整体吞吐瓶颈。设备侧原始症状仍须用相同插桩的对照和等待账本验证，SAKAMOTO-292保持进行中。另一个曾考虑的“上传队列空时返回1而busy-yield”假设，经完整已应用源码核对被排除：实际空队列返回0，不能根据不完整patch片段修改它。
+
+### 首次唤醒与逻辑等待账本
+
+仅在现有TCP progress诊断开关启用时，记录WAITING→RUNNING的首次唤醒（I/O、ACK、inner recv、TCP poll、timer、other），区分正进展后的runnable continuation。每次yield记录互斥原因并把等待条件满足前、首次唤醒后到执行的墙钟区间分开；snapshot折入尚未闭合区间，避免跨采样边界丢失。这是各session的墙钟和，不能解释成CPU百分比。实际tcp_receive rounds、idle与首次来源逐项对账；[分析器](../../tests/benchmark/vpn_task_waits.py)在五个设备窗口全部通过。[原始协议](../../build-output/vpn-wait-cause-20261021/protocol.json) · [账本](../../build-output/vpn-wait-cause-20261021/task-waits.json)。
+
+重复poll的ABBA G1/H1/H2/G2使用完全相同的插桩、MTU10000、capture64、ring32768及primary32/64槽，只有patch0015的external guard不同，11个native与DEX相同。吞吐均值518.43→519.35Mbps（+0.18%），CPU秒/GiB19.01→18.00（−5.28%），poll/GiB−50.07%。这证明减少了实际系统调用空耗，没有证明吞吐上限已解除。
+
+四窗合计651533个idle round中，569590（87.42%）紧接正进展后的continuation；该round发现无进展后进入WAITIO，源码与计数共同排除了“无进展仍不断自我yield”的busy loop。另81071（12.44%）由ACK首次唤醒，其余主要是TCP poll。I/O首次唤醒后的idle只有13次。后续应验证ACK在没有解除ring/pending限制时是否造成无用唤醒，不能把所有idle都算作同一种问题。
+
+owner0的runnable任务从yield到再执行的合计时长/该类yield数约39.80ms，owner1约0.40ms；此处是session调度间隔，不是每个VPP input node的待运行延迟。owner0基本保持可运行，主要不是等上游数据或ACK；owner1同时有大量upstream与inner ACK逻辑等待。它解释了为什么两个owner的推进形态不同，但不是独立的端到端延迟分布。
+
+### 无报告丢失的off-CPU补充
+
+独立I1窗口使用FP栈与每CPU4096 mmap pages，先核对实际ELF中HEV关键函数的frame pointer prologue；采集器等owned profiler退出后才读取最终日志和停止VPP。五窗最终lost均0，I1的SDK元数据185057条记录、kernel/userspace lost与truncated-stack均0；完整Build ID与symbols核对通过。它保留并补充此前1738 lost窗口，不替换原始记录。[最终采集/reader检查](../../build-output/vpn-wait-cause-20261021/sampler-final.json) · [精确调用链](../../build-output/vpn-wait-cause-20261021/waits.json)。
+
+I1 worker0记录off-CPU8.668秒，其中8.143秒在TUN write的tun_rx_batched抢占栈、0.471秒在UID sendto抢占栈；VPP epoll等待仅0.042秒。worker1 off-CPU11.366秒，其中VPP epoll约9.824秒。worker0的长runnable间隔因此须与单TUN lane上的graph工作、OS抢占结合解释，不能宣称“HEV在无数据时烧满CPU”。FP链省略inline helper，分类器依据实际外层VPP/HEV scheduler区分epoll，原始完整栈仍保留。无报告丢失也不能恢复记录末尾尚未闭合的off-CPU区间，故不宣称完整等待占比。
+
+38项真实HEV Host回归通过，含held-ACK/loss/backpressure/FIN；普通VPN证据校验通过。真实Android unchanged repeat为0 Rust编译、0 Ninja actions、823个编译文件mtime保持及12个native字节一致（两次约0.76秒）。五窗native零债务和reader/gate检查通过，设备自动恢复原APK、规则和Root grant，Openwrt_5G保持。ACK无用唤醒仍待因果验证，SAKAMOTO-292继续进行。

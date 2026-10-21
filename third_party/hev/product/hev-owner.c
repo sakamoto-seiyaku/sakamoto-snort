@@ -4,6 +4,7 @@
 #include "hev-socks5-session-udp.h"
 #include "hev-socks5-session-tcp.h"
 #include "kern/core/hev-task-system-private.h"
+#include "kern/task/hev-task-private.h"
 #include "lwip/init.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -26,6 +27,10 @@ typedef struct owner_session {
   void *receive_arg;
   hev_owner_facts_t facts;
   uint64_t id, deadline;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  uint64_t yield_ns;
+  unsigned wait_reason;
+#endif
   int closing, broker_state, tcp_accepted;
 } owner_session_t;
 
@@ -73,6 +78,40 @@ static uint64_t now_ms(void)
   if (clock_gettime(CLOCK_MONOTONIC, &t)) abort();
   return (uint64_t)t.tv_sec * 1000 + (unsigned long)t.tv_nsec / 1000000;
 }
+
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+enum { TCP_RUNNABLE, TCP_UPSTREAM, TCP_INNER_ACK, TCP_MEMORY,
+       TCP_UPLOAD, TCP_EOF, TCP_OTHER };
+static uint64_t now_ns(void)
+{
+  struct timespec t;
+  if (clock_gettime(CLOCK_MONOTONIC, &t)) abort();
+  return (uint64_t)t.tv_sec * 1000000000ULL + t.tv_nsec;
+}
+/* Snapshot folds the open interval; closed intervals use this same function.
+ * Thus subtracting snapshots does not lose waits crossing a sample boundary. */
+static void fold_tcp_wait(hev_owner_snapshot_t *stats,
+                          const owner_session_t *session, uint64_t now)
+{
+  if (!session->yield_ns || !session->task) return;
+  uint64_t ready = session->task->diagnostic_ready_ns;
+  if (!ready || ready > now) ready = now;
+  if (session->wait_reason != TCP_RUNNABLE)
+    stats->tcp_wait_ns[session->wait_reason] += ready - session->yield_ns;
+  stats->tcp_ready_ns[session->wait_reason] += now - ready;
+}
+static unsigned tcp_wait_reason(const HevSocks5SessionTCP *tcp)
+{
+  /* Mutually exclusive explanation, in order of retry dependency. */
+  if (tcp->direct_write_blocked) return TCP_MEMORY;
+  if (tcp->queue) return TCP_UPLOAD;
+  if (tcp->buffer->use_size == tcp->buffer->max_size ||
+      (tcp->buffer->rda_size && !tcp_sndbuf(tcp->pcb))) return TCP_INNER_ACK;
+  if (tcp->direct_read_blocked) return TCP_UPSTREAM;
+  if (tcp->direct_rx_eof) return TCP_EOF;
+  return TCP_OTHER;
+}
+#endif
 
 static int enter(hev_owner_t *owner, owner_scope_t *scope)
 {
@@ -569,6 +608,8 @@ static void tcp_session_task(void *opaque)
   trace(owner, "tcp_connected", session->id, transport, 0, socket_owner->fd, 6);
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
   unsigned registered_events = POLLIN | POLLOUT;
+  unsigned resume_origin = HEV_TASK_WAKE_START;
+  session->task->diagnostic_enabled = 1;
 #endif
   while (owner->stats.running && !session->closing && transport->pcb) {
     uint64_t sent_before = transport->direct_sent_bytes;
@@ -603,9 +644,14 @@ static void tcp_session_task(void *opaque)
       owner->stats.tcp_output_calls += transport->direct_output_calls;
       if (transport->direct_commits > owner->stats.tcp_commit_max)
         owner->stats.tcp_commit_max = transport->direct_commits;
-      if (transport->direct_sent_bytes == sent_before &&
+      int idle = transport->direct_sent_bytes == sent_before &&
           transport->direct_received_bytes == received_before &&
-          !transport->direct_commit_bytes) ++owner->stats.tcp_idle_rounds;
+          !transport->direct_commit_bytes;
+      if (idle) ++owner->stats.tcp_idle_rounds;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+      ++owner->stats.tcp_resume_rounds[resume_origin];
+      if (idle) ++owner->stats.tcp_resume_idle[resume_origin];
+#endif
     }
     if (transport->direct_write_error) {
       trace(owner, "tcp_write_deferred", session->id, transport,
@@ -654,7 +700,20 @@ static void tcp_session_task(void *opaque)
       registered_events = wanted;
     }
 #endif
-    hev_task_yield(sent > 0 || received > 0 ? HEV_TASK_YIELD : HEV_TASK_WAITIO);
+    int runnable = sent > 0 || received > 0;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+    session->wait_reason = runnable ? TCP_RUNNABLE : tcp_wait_reason(transport);
+    ++owner->stats.tcp_yields[session->wait_reason];
+    session->yield_ns = now_ns();
+    session->task->diagnostic_ready_ns = runnable ? session->yield_ns : 0;
+    session->task->diagnostic_origin = runnable ? HEV_TASK_WAKE_CONTINUE : HEV_TASK_WAKE_OTHER;
+#endif
+    hev_task_yield(runnable ? HEV_TASK_YIELD : HEV_TASK_WAITIO);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+    fold_tcp_wait(&owner->stats, session, now_ns());
+    session->yield_ns = 0;
+    resume_origin = session->task->diagnostic_origin;
+#endif
   }
 finished:
   if (graceful && session->pcb) {
@@ -1045,6 +1104,13 @@ hev_owner_snapshot_t hev_owner_snapshot(const hev_owner_t *owner)
   if (!owner || (owner->bound && !pthread_equal(owner->thread, pthread_self())))
     return result;
   result = owner->stats;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  uint64_t now = now_ns();
+  for (const owner_session_t *s = owner->sessions; s; s = s->next)
+    fold_tcp_wait(&result, s, now);
+  result.scheduler_io_polls = owner->scheduler->diagnostic_io_polls;
+  result.scheduler_io_events = owner->scheduler->diagnostic_io_events;
+#endif
   const hev_lwip_context_t *c = &owner->lwip;
   result.pbufs = c->pbufs; result.pbuf_peak = c->pbuf_peak;
   result.pcbs = c->pcbs; result.pcb_peak = c->pcb_peak;

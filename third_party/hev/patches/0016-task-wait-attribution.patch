@@ -1,0 +1,133 @@
+--- a/third-part/hev-task-system/src/kern/task/hev-task-private.h
++++ b/third-part/hev-task-system/src/kern/task/hev-task-private.h
+@@ -42,12 +42,32 @@
+     int priority;
+     int next_priority;
+     HevTaskState state;
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
++    /* Opt-in wall-clock wait attribution, never used for scheduling. */
++    uint64_t diagnostic_ready_ns;
++    unsigned int diagnostic_enabled, diagnostic_origin;
++#endif
+ 
+     jmp_buf context;
+ 
+     HevListNode list_node;
+ };
+ 
++/* First wake changes WAITING to RUNNING. Later notifications must not replace
++ * its origin or ready timestamp. Generic wakeups retain OTHER. */
++enum { HEV_TASK_WAKE_CONTINUE, HEV_TASK_WAKE_IO, HEV_TASK_WAKE_ACK,
++       HEV_TASK_WAKE_RECV, HEV_TASK_WAKE_POLL, HEV_TASK_WAKE_TIMER,
++       HEV_TASK_WAKE_OTHER, HEV_TASK_WAKE_START };
++static inline void hev_task_diagnostic_origin (HevTask *task, unsigned int origin)
++{
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
++    if (task && task->diagnostic_enabled && task->state == HEV_TASK_WAITING)
++        task->diagnostic_origin = origin;
++#else
++    (void)task; (void)origin;
++#endif
++}
++
+ extern void hev_task_execute (HevTask *self, void *executer);
+ 
+ #endif /* __HEV_TASK_PRIVATE_H__ */
+--- a/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c
++++ b/third-part/hev-task-system/src/kern/core/hev-task-system-schedule.c
+@@ -151,6 +151,13 @@
+     if (task->state == HEV_TASK_STOPPED)
+         abort ();
+ 
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
++    if (task->diagnostic_enabled) {
++        struct timespec now;
++        clock_gettime (CLOCK_MONOTONIC, &now);
++        task->diagnostic_ready_ns = (uint64_t)now.tv_sec * 1000000000ULL + now.tv_nsec;
++    }
++#endif
+     task->sched_key += hev_task_system_get_min_sched_key (ctx);
+ 
+     hev_task_system_insert_task (ctx, task);
+@@ -167,12 +174,17 @@
+ 
+     int limit = ctx->external_active ? 32 : 1024;
+     count = hev_task_io_reactor_wait (ctx->reactor, events, limit, timeout);
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
++    ++ctx->diagnostic_io_polls;
++    if (count > 0) ctx->diagnostic_io_events += count;
++#endif
+     if (ctx->external_active)
+         ctx->external_events_more = count == limit;
+     for (i = 0; i < count; i++) {
+         HevTaskSchedEntity *sched_entity;
+ 
+         sched_entity = hev_task_io_reactor_wait_event_get_data (&events[i]);
++        hev_task_diagnostic_origin (sched_entity->task, HEV_TASK_WAKE_IO);
+         hev_task_system_wakeup_task_with_context (ctx, sched_entity->task);
+     }
+ 
+--- a/third-part/hev-task-system/src/kern/core/hev-task-system-private.h
++++ b/third-part/hev-task-system/src/kern/core/hev-task-system-private.h
+@@ -56,6 +56,9 @@
+     HevList all_tasks;
+ 
+     /* Product external driver: one bounded nonblocking scheduling turn. */
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
++    uint64_t diagnostic_io_polls, diagnostic_io_events;
++#endif
+     unsigned int external_active;
+     unsigned int external_budget;
+     unsigned int external_quanta;
+--- a/third-part/hev-task-system/src/kern/time/hev-task-timer.c
++++ b/third-part/hev-task-system/src/kern/time/hev-task-timer.c
+@@ -10,6 +10,7 @@
+ #include <stdlib.h>
+ 
+ #include "hev-task-timer.h"
++#include "kern/task/hev-task-private.h"
+ #include "kern/core/hev-task-system-private.h"
+ #include "mem/api/hev-memory-allocator-api.h"
+ #include "lib/misc/hev-compiler.h"
+@@ -151,6 +152,7 @@
+     if (hev_task_timer_cmp (curr, &this->expire) < 0)
+         return;
+ 
++    hev_task_diagnostic_origin (this->task, HEV_TASK_WAKE_TIMER);
+     hev_task_system_wakeup_task_with_context (self->ctx, this->task);
+ }
+ 
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -28,6 +28,7 @@
+ #include "hev-socks5-tunnel.h"
+ 
+ #include "hev-socks5-session-tcp.h"
++#include "kern/task/hev-task-private.h"
+ 
+ #ifndef SAKAMOTO_HEV_DIRECT_ONLY
+ static int
+@@ -206,6 +207,7 @@
+         self->pcb_eof = 1;
+     }
+ 
++    hev_task_diagnostic_origin (self->data.task, HEV_TASK_WAKE_RECV);
+     hev_task_wakeup (self->data.task);
+     return ERR_OK;
+ }
+@@ -216,6 +218,7 @@
+     HevSocks5SessionTCP *self = arg;
+ 
+     hev_ring_buffer_read_release (self->buffer, len);
++    hev_task_diagnostic_origin (self->data.task, HEV_TASK_WAKE_ACK);
+     hev_task_wakeup (self->data.task);
+ 
+     return ERR_OK;
+@@ -236,6 +239,7 @@
+ {
+     HevSocks5SessionTCP *self = arg;
+     (void)pcb;
++    hev_task_diagnostic_origin (self->data.task, HEV_TASK_WAKE_POLL);
+     hev_task_wakeup (self->data.task);
+     return ERR_OK;
+ }

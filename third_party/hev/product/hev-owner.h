@@ -131,6 +131,12 @@ typedef struct {
   uint64_t tcp_ring_peak, tcp_pending_peak, tcp_flight_peak;
   uint32_t tcp_mss_min, tcp_mss_max, tcp_buffer_bytes;
   uint64_t tcp_interest_changes, tcp_read_pauses, tcp_read_resumes;
+  /* Opt-in TCP wait diagnostics. Reasons: runnable, upstream, inner_ack,
+   * memory, upload, eof, other. Origins: continue, io, ack, recv, poll,
+   * timer, other, start. Times sum session wall intervals, never CPU time. */
+  uint64_t tcp_yields[7], tcp_wait_ns[7], tcp_ready_ns[7];
+  uint64_t tcp_resume_rounds[8], tcp_resume_idle[8];
+  uint64_t scheduler_io_polls, scheduler_io_events;
   uint64_t task_quanta, steps, wrong_owner, stale_generation;
   uint32_t sessions, input_packets, input_peak, pbufs, pbuf_peak;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;

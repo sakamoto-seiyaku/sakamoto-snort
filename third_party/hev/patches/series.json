@@ -72,5 +72,10 @@
     "file": "0015-external-scheduler-single-poll.patch",
     "purpose": "Avoid a redundant nonblocking I/O scan at task selection after the external scheduler has already polled",
     "regression": "tests/host/hev_owner_scheduler_test.c"
+  },
+  {
+    "file": "0016-task-wait-attribution.patch",
+    "purpose": "Opt-in first wake origin and ready timestamp for TCP logical-wait versus scheduling-delay attribution",
+    "regression": "tests/host/hev_owner_scheduler_test.c; tests/host/hev_owner_tcp_test.c"
   }
 ]

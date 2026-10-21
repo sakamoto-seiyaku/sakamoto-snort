@@ -8,6 +8,7 @@
 #include <hev-task.h>
 #include <hev-task-system.h>
 #include "kern/core/hev-task-system-private.h"
+#include "kern/task/hev-task-private.h"
 
 typedef struct { unsigned turns, done, parked; } job_t;
 static unsigned io_scans;
@@ -36,7 +37,15 @@ static void parked_job (void *opaque)
 static void timer_job (void *opaque)
 {
   job_t *job = opaque;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  HevTask *self = hev_task_self();
+  self->diagnostic_enabled = 1;
+  self->diagnostic_origin = HEV_TASK_WAKE_OTHER;
+#endif
   hev_task_sleep (20);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  assert(self->diagnostic_ready_ns && self->diagnostic_origin == HEV_TASK_WAKE_TIMER);
+#endif
   job->done = 1;
 }
 typedef struct { int read_fd, write_fd; unsigned done; } io_job_t;
@@ -44,8 +53,16 @@ static void reader_job(void *opaque)
 {
   io_job_t *job = opaque;
   HevTask *self = hev_task_self();
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  self->diagnostic_enabled = 1;
+  self->diagnostic_ready_ns = 0;
+  self->diagnostic_origin = HEV_TASK_WAKE_OTHER;
+#endif
   assert(!hev_task_add_fd(self, job->read_fd, POLLIN));
   hev_task_yield(HEV_TASK_WAITIO);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  assert(self->diagnostic_ready_ns && self->diagnostic_origin == HEV_TASK_WAKE_IO);
+#endif
   char value;
   assert(read(job->read_fd, &value, 1) == 1 && value == 'x');
   hev_task_del_fd(self, job->read_fd);

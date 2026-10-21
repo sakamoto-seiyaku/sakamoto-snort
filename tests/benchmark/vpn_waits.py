@@ -11,10 +11,14 @@ import sys
 def category(names):
     if any('FwmarkClient::send' in name for name in names):
         return 'android_fwmark'
-    if 'vlib_file_poll' in names and 'do_epoll_wait' in names:
-        return 'vpp_file_poll'
-    if any('hev_task_system_io_poll' in name for name in names):
+    # FP chains omit inlined helpers: the actual outer scheduler distinguishes
+    # HEV's poll from VPP's file poll without inventing missing inline frames.
+    if any('hev_task_system_io_poll' in name for name in names) or (
+            'do_epoll_wait' in names and 'hev_task_system_schedule' in names):
         return 'hev_io_poll'
+    if 'do_epoll_wait' in names and any(name in names for name in
+            ('vlib_file_poll', 'vlib_worker_thread_fn', 'vlib_main')):
+        return 'vpp_file_poll'
     if any('futex' in name for name in names):
         return 'futex'
     if any('preempt_schedule' in name for name in names):

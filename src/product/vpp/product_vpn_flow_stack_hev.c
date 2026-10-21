@@ -177,6 +177,13 @@ product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_snapshot(
   COPY(tcp_mss_min); COPY(tcp_mss_max);
   COPY(tcp_buffer_bytes);
   COPY(tcp_interest_changes); COPY(tcp_read_pauses); COPY(tcp_read_resumes);
+  for (unsigned i = 0; i < 7; ++i) {
+    COPY(tcp_yields[i]); COPY(tcp_wait_ns[i]); COPY(tcp_ready_ns[i]);
+  }
+  for (unsigned i = 0; i < 8; ++i) {
+    COPY(tcp_resume_rounds[i]); COPY(tcp_resume_idle[i]);
+  }
+  COPY(scheduler_io_polls); COPY(scheduler_io_events);
   COPY(sessions); COPY(input_packets); COPY(pbufs); COPY(pbuf_peak); COPY(running); COPY(stopped);
   COPY(pcbs); COPY(pcb_peak); COPY(sockets); COPY(socket_peak); COPY(input_pbufs);
   COPY(pcb_allocations); COPY(pcb_frees);

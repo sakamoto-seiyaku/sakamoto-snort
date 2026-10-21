@@ -133,12 +133,15 @@ endif()
 option(SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
   "Gate socket readiness by the owner-local TCP ring and pending writes" OFF)
 if(SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_task PUBLIC
+    SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT=1)
   target_compile_definitions(sakamoto_hev_session PUBLIC
     SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT=1)
 endif()
 target_include_directories(sakamoto_hev_session PUBLIC
   "${HEV_SOURCE}/src" "${HEV_SOURCE}/src/core/src"
   "${HEV_SOURCE}/src/misc")
+target_include_directories(sakamoto_hev_session PRIVATE "${HEV_TASK}/src")
 target_link_libraries(sakamoto_hev_session PUBLIC sakamoto_hev_task sakamoto_hev_lwip)
 target_compile_options(sakamoto_hev_session PRIVATE -Wall -fvisibility=hidden
   -ffunction-sections -fdata-sections)

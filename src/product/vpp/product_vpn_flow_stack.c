@@ -459,6 +459,21 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
     (unsigned long long)s->tcp_pending_peak, (unsigned long long)s->tcp_flight_peak,
     s->tcp_mss_min, s->tcp_mss_max, s->tcp_buffer_bytes, (unsigned long long)s->tcp_interest_changes,
     (unsigned long long)s->tcp_read_pauses, (unsigned long long)s->tcp_read_resumes);
+  static const char *wait_names[] = {
+    "runnable", "upstream", "inner_ack", "memory", "upload", "eof", "other"};
+  static const char *wake_names[] = {
+    "continue", "io", "ack", "recv", "poll", "timer", "other", "start"};
+  for (unsigned i = 0; i < 7; ++i)
+    vlib_cli_output(vm, "flow_stack.tcp_wait owner=%u reason=%s yields=%llu wait_ns=%llu ready_ns=%llu session_wall=1",
+      index, wait_names[i], (unsigned long long)s->tcp_yields[i],
+      (unsigned long long)s->tcp_wait_ns[i], (unsigned long long)s->tcp_ready_ns[i]);
+  for (unsigned i = 0; i < 8; ++i)
+    vlib_cli_output(vm, "flow_stack.tcp_wake owner=%u origin=%s rounds=%llu idle=%llu first_wake=1",
+      index, wake_names[i], (unsigned long long)s->tcp_resume_rounds[i],
+      (unsigned long long)s->tcp_resume_idle[i]);
+  vlib_cli_output(vm, "flow_stack.scheduler_io owner=%u polls=%llu events=%llu",
+    index, (unsigned long long)s->scheduler_io_polls,
+    (unsigned long long)s->scheduler_io_events);
   vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu",
     index, (unsigned long long)s->tcp_rx_rounds,
     (unsigned long long)s->tcp_read_calls, (unsigned long long)s->tcp_read_blocked,
