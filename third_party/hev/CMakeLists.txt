@@ -110,6 +110,12 @@ if(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
   target_compile_definitions(sakamoto_hev_session PUBLIC
     SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT=1)
 endif()
+option(SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  "Gate socket readiness by the owner-local TCP ring and pending writes" OFF)
+if(SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_session PUBLIC
+    SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT=1)
+endif()
 target_include_directories(sakamoto_hev_session PUBLIC
   "${HEV_SOURCE}/src" "${HEV_SOURCE}/src/core/src"
   "${HEV_SOURCE}/src/misc")
@@ -157,7 +163,7 @@ if(SAKAMOTO_HEV_TESTS)
   add_test(NAME sakamoto-hev-owner-tcp6-test COMMAND ${HEV_TCP_TEST_COMMAND} ipv6)
   set_tests_properties(sakamoto-hev-owner-tcp4-test sakamoto-hev-owner-tcp6-test PROPERTIES TIMEOUT 30)
   foreach(family IN ITEMS ipv4 ipv6)
-    foreach(mode IN ITEMS refusal unreachable reset remote-fin underlay session-capacity pcb-capacity
+    foreach(mode IN ITEMS refusal unreachable reset remote-fin underlay hold-ack session-capacity pcb-capacity
                            socket-capacity packet-credit pbuf-capacity)
       add_test(NAME sakamoto-hev-owner-${family}-${mode}-test COMMAND ${HEV_TCP_TEST_COMMAND} ${family} ${mode})
       set_tests_properties(sakamoto-hev-owner-${family}-${mode}-test PROPERTIES TIMEOUT 30)

@@ -69,3 +69,28 @@ Android native stage contract通过；非法buffer配置、请求/已stage属性
 源码闭包 `2a030d3d5f1fbfa2e23459d855e97896b7c8f06d2d4fb7dce875893404a669b1`；小段APK `43c8102833556aa5934525ac1bc352e4a627f877e58a3e9809d32dc6579a669f`，大段APK `bdc0142d51dc11df001656169849fb5fed88dd1705add1885d81dc8ca406060e`。同DEX及11个相同native载荷，仅插件不同；[精确身份](../../build-output/vpn-large-common-pool-20261021/paired-build-identity.json)、各build.json与匹配symbols保留。
 
 第一阶段末恢复原October13 APK `844b339d7d848dee854ffc54b9e685bdf158f52f8d9720ef088c45ddc4531a03`，核对12个native、规则hash、Root grant及libc符号；Stopped2097、设备无VPP/load/monitor/simpleperf残留，Openwrt_5G保持不变。[只读审计](../../build-output/vpn-large-common-pool-20261021/final-readonly/result.json)。LAN peer仍由本任务独占，用于同一授权范围内的后续对照，不是设备残留。
+
+## 第二阶段：按ring容量门控socket readiness
+
+默认 OFF 的 `SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT` 在Direct连接完成后维护实际interest：ring满时不订阅POLLIN，仅在upload queue有数据时订阅POLLOUT；interest未变不调用 `epoll_ctl`。EPOLLERR/HUP仍可达，connect原有订阅不变。
+
+ACK仍由原owner的 `tcp_sent` 回调释放ring并唤醒任务；**每次被唤醒的round都会先尝试非阻塞readv，再决定下一轮interest**，即便POLLIN此前被暂停。kernel已有数据不需要等下一条外部edge。没有增加payload队列、helper transport执行或迁移owner；quanta8/max200µs及全部容量保持不变。
+
+新增双栈 `hold-ack` fixture：冻结所有内层download ACK（包括upload上的piggyback ACK）250ms，允许远端发送完整73728字节。释放ACK前以真实 `FIONREAD` 断言socket内有排队字节、server不再发送新payload；释放后须在200ms内读完，不能等1秒TCP poll救援。gated版还要求read暂停与恢复计数均发生。两侧12个TCP回归通过，加强的两个ACK用例再次通过；[gated真实执行输出](../../build-output/vpn-tcp-progress-20261021/host-gated-queued-details.log)、[control输出](../../build-output/vpn-tcp-progress-20261021/host-control-queued-details.log)及两侧host fixture二进制身份保留。
+
+本阶段两边都用MTU3000/MSS2940、3072-byte buffer/1517池、32KiB sndbuf/ring、TCP batch ON与UDP batch OFF。独立20s ABBA2098–2101：
+
+| 窗口 | readiness | Mbps | VPP CPU秒/GiB |
+| --- | --- | ---: | ---: |
+| A1 /2098 | 原订阅 | 205.04 | 35.03 |
+| B1 /2099 | 门控 | 206.26 | 33.08 |
+| B2 /2100 | 门控 | 208.30 | 32.80 |
+| A2 /2101 | 原订阅 | 208.05 | 34.78 |
+
+合并VPP CPU/GiB34.91→32.94，下降5.63%；吞吐均值206.54→207.28Mbps（+0.36%），没有建立增吞证据。TCP receive轮次/GiB229254→109101（−52.41%），空推进/GiB156868→39398（−74.88%），driver node/GiB107097→33159，readiness callback/GiB89203→4543。实际新增interest变化约1139/GiB；没有用高频 `epoll_ctl` 交换原有每次唤醒。
+
+TUN write/GiB392628→391777（−0.22%，基本不变）。inclusive HEV scheduling成本0.894→0.487 CPU秒/GiB，TUN completion15.71→16.31，说明这项主要减少无效推进；不能宣称已解决TUN返回或owner间等待差异。OUTPUT_CAPACITY103→25，primary拒绝17464/19090/20520/20364仍保留。该阶段同样不是完整策略Q或延迟资格。
+
+源码闭包 `8cdb2e3d75e744670fc47eab166d27b7b9d8ac8f66f034eea3e6028f54978dd2`；control APK `04d915f140a38f9ac6d919dc64d58ca8733a2d4d5fd661d80b34fa3e5c40a626`，gated APK `b60f2e39f664731051022a4b766171f13aca5189cfd865e2e8227bf8893ba102`。同DEX/11个native，仅插件不同；新flag非法值与APK stage不匹配均拒绝。warm build0.79s，999个编译输出mtime不变、零编译且12个native相同。四窗native-zero、精确symbols与lost0均通过；结束恢复原APK/规则/Root grant/Stopped2101及Openwrt_5G，[审计](../../build-output/vpn-tcp-progress-20261021/final-readonly/result.json)。
+
+[第二阶段汇总与火焰图](../../build-output/vpn-tcp-progress-20261021/index.html) · [计数与CPU重算](../../build-output/vpn-tcp-progress-20261021/summary.json) · [冻结协议](../../build-output/vpn-tcp-progress-20261021/protocol.json)

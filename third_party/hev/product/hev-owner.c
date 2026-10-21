@@ -567,6 +567,9 @@ static void tcp_session_task(void *opaque)
   }
   if (!owner->stats.running || session->closing) goto finished;
   trace(owner, "tcp_connected", session->id, transport, 0, socket_owner->fd, 6);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+  unsigned registered_events = POLLIN | POLLOUT;
+#endif
   while (owner->stats.running && !session->closing && transport->pcb) {
     uint64_t sent_before = transport->direct_sent_bytes;
     uint64_t received_before = transport->direct_received_bytes;
@@ -630,6 +633,27 @@ static void tcp_session_task(void *opaque)
       graceful = 1;
       break;
     }
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+    /* A full ring cannot consume socket data. Keep the original owner and
+     * transport state, but suppress new-data edges until space exists. ACK
+     * callbacks still wake this task; every resumed round tries nonblocking
+     * receive before considering its subscription, even with POLLIN disabled.
+     * Thus queued data never depends on a new socket edge after ACK release. */
+    unsigned wanted = POLLERR;
+    if (!transport->direct_rx_eof &&
+        transport->buffer->use_size < transport->buffer->max_size) wanted |= POLLIN;
+    if (!transport->direct_tx_eof && transport->queue) wanted |= POLLOUT;
+    if (wanted != registered_events) {
+      if (hev_task_mod_fd(session->task, socket_owner->fd, wanted)) {
+        failure(owner, HEV_OWNER_FAULT_SOCKET_IO, session->id, errno);
+        break;
+      }
+      ++owner->stats.tcp_interest_changes;
+      if ((registered_events & POLLIN) && !(wanted & POLLIN)) ++owner->stats.tcp_read_pauses;
+      if (!(registered_events & POLLIN) && (wanted & POLLIN)) ++owner->stats.tcp_read_resumes;
+      registered_events = wanted;
+    }
+#endif
     hev_task_yield(sent > 0 || received > 0 ? HEV_TASK_YIELD : HEV_TASK_WAITIO);
   }
 finished:

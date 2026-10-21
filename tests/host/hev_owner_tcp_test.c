@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
@@ -41,13 +42,17 @@ typedef struct {
   int broker_pending, fd, index, family, refusal, reset, remote_fin;
   int drop_syn, dropped, reject_data, drop_data, rejected_data, dropped_data;
   uint16_t port;
-  uint32_t send_seq, receive_seq, acked, sent, received;
+  uint32_t send_seq, receive_seq, acked, sent, received, held_ack_seq;
   unsigned head, tail, outputs, syns, fins, rsts, destroyed, connects, connect_failed;
   unsigned direct_reads, direct_writes, max_data_length;
   int established, fin_sent;
   int pressure, pressure_done;
   int unreachable;
   unsigned other_outputs;
+  int hold_ack, ack_released;
+  unsigned held_acks;
+  unsigned queued_at_ack_release;
+  uint64_t ack_release_after, resumed_deadline;
   packet_t packets[QUEUE];
 } fixture_t;
 
@@ -173,7 +178,8 @@ static hev_owner_input_result_t inject_port(fixture_t *f, uint16_t port, uint8_t
   }
   uint8_t *tcp = packet + ip_length;
   write16(tcp, port); write16(tcp + 2, f->port);
-  write32(tcp + 4, seq); write32(tcp + 8, f->receive_seq);
+  write32(tcp + 4, seq);
+  write32(tcp + 8, f->hold_ack && !f->ack_released ? f->held_ack_seq : f->receive_seq);
   tcp[12] = (uint8_t)((tcp_header / 4) << 4);
   tcp[13] = flags; write16(tcp + 14, 32768);
   if (flags & 2) { tcp[20] = 2; tcp[21] = 4; write16(tcp + 22, CLIENT_MSS); }
@@ -217,6 +223,7 @@ static void consume(fixture_t *f)
       if (f->drop_syn && !f->dropped) { f->dropped = 1; continue; }
       assert((tcp[13] & 16) && read32(tcp + 8) == 100001);
       f->receive_seq = seq + 1;
+      f->held_ack_seq = f->receive_seq;
       f->send_seq = 100001;
       f->established = 1;
       inject(f, 16, f->send_seq, 0, 0);
@@ -232,7 +239,12 @@ static void consume(fixture_t *f)
     if ((tcp[13] & 1) && seq + length == f->receive_seq) {
       ++f->receive_seq; ++f->fins;
     }
-    if (length || (tcp[13] & 1)) inject(f, 16, f->send_seq, 0, 0);
+    if (length || (tcp[13] & 1)) {
+      if (f->hold_ack && !f->ack_released) {
+        if (!f->ack_release_after) f->ack_release_after = millis() + 250;
+        ++f->held_acks;
+      } else inject(f, 16, f->send_seq, 0, 0);
+    }
   }
 }
 
@@ -285,6 +297,7 @@ int main(int argc, char **argv)
   int reset = argc > 2 && !strcmp(argv[2], "reset");
   int remote_fin = argc > 2 && !strcmp(argv[2], "remote-fin");
   int underlay = argc > 2 && !strcmp(argv[2], "underlay");
+  int hold_ack = argc > 2 && !strcmp(argv[2], "hold-ack");
   int pressure = 0;
   backpressure = argc <= 2;
   static const char *const pressure_names[] = {"session-capacity", "pcb-capacity",
@@ -303,11 +316,12 @@ int main(int argc, char **argv)
     f->index = i; f->family = family; f->generation = 24000 + i;
     f->port = port; f->fd = -1;
     f->refusal = refusal; f->reset = reset; f->remote_fin = remote_fin;
+    f->hold_ack = hold_ack;
     f->unreachable = unreachable;
     f->pressure = i == 0 ? pressure : 0;
-    f->drop_syn = !pressure && !refusal && !reset && !remote_fin && !underlay && i == 1;
-    f->reject_data = !pressure && !refusal && !reset && !remote_fin && !underlay && i == 0;
-    f->drop_data = !pressure && !refusal && !reset && !remote_fin && !underlay && i == 1;
+    f->drop_syn = !pressure && !refusal && !reset && !remote_fin && !underlay && !hold_ack && i == 1;
+    f->reject_data = !pressure && !refusal && !reset && !remote_fin && !underlay && !hold_ack && i == 0;
+    f->drop_data = !pressure && !refusal && !reset && !remote_fin && !underlay && !hold_ack && i == 1;
     hev_owner_config_t config = {.generation = f->generation, .owner_index = (uint32_t)i,
       .max_sessions = 4, .max_input_packets = 64, .max_pbufs = 128,
       .max_packet_bytes = MTU, .task_stack_bytes = 65536, .broker_timeout_ms = 1000,
@@ -372,7 +386,8 @@ int main(int argc, char **argv)
         f->pressure_done = 1;
       }
       if (f->established && (!f->pressure || f->pressure_done) &&
-          f->sent < PAYLOAD && f->received == f->sent) {
+          f->sent < PAYLOAD && (hold_ack ? (!f->sent || f->acked == f->send_seq)
+                                       : f->received == f->sent)) {
         /* A full receive-window burst exercises actual HEV pbuf-chain writes
          * and the return ring crossing its boundary on later bursts. */
         unsigned limit = f->sent + (f->pressure >= 4 ? 1024 : 32768);
@@ -384,6 +399,20 @@ int main(int argc, char **argv)
           f->send_seq += bytes; f->sent += bytes;
         }
       }
+      if (f->hold_ack && !f->ack_released && f->held_acks && millis() >= f->ack_release_after) {
+        /* Release after the remote has queued more bytes than the ring can
+         * hold. The owner must consume those already-readable bytes without
+         * waiting for another EPOLLET transition or unrelated packet. */
+        assert(server_bytes[0] == PAYLOAD && server_bytes[1] == PAYLOAD);
+        int queued = 0;
+        assert(ioctl(f->fd, FIONREAD, &queued) == 0 && queued > 0);
+        f->queued_at_ack_release = (unsigned)queued;
+        f->ack_released = 1;
+        f->resumed_deadline = millis() + 200;
+        inject(f, 16, f->send_seq, 0, 0);
+      }
+      if (f->hold_ack && f->ack_released && f->received < PAYLOAD)
+        assert(millis() < f->resumed_deadline); /* No 1s TCP poll rescue. */
       if (f->received == PAYLOAD && !f->fin_sent && (!remote_fin || f->fins)) {
         if (underlay) assert(!hev_owner_invalidate_underlay(f->owner, f->generation, 50 + i));
         else inject(f, reset ? 20 : 17, f->send_seq, 0, 0);
@@ -408,7 +437,7 @@ int main(int argc, char **argv)
     assert(blocked_writes > 0);
     printf("TCP%d real sendmsg EAGAIN=%u existing stream recovered\n", family, blocked_writes);
   }
-  if (!pressure && !refusal && !reset && !remote_fin && !underlay) {
+  if (!pressure && !refusal && !reset && !remote_fin && !underlay && !hold_ack) {
     assert(fixtures[1].syns >= 2 && fixtures[0].syns == 1);
     assert(fixtures[0].rejected_data && fixtures[1].dropped_data);
   }
@@ -449,6 +478,12 @@ int main(int argc, char **argv)
       assert(s.tcp_mss_min == CLIENT_MSS && s.tcp_mss_max == CLIENT_MSS);
       assert(s.tcp_idle_rounds <= s.tcp_rx_rounds);
       assert(s.tcp_ring_peak && s.tcp_pending_peak <= s.tcp_ring_peak);
+      if (hold_ack) {
+        assert(f->held_acks && f->ack_released && f->queued_at_ack_release);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT
+        assert(s.tcp_read_pauses && s.tcp_read_resumes && s.tcp_interest_changes >= 2);
+#endif
+      }
 #ifdef SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT
       /* Credit fixtures intentionally drip <=1024-byte bursts on owner0. */
       if (f->pressure < 4) assert(f->max_data_length > 2000);
@@ -470,6 +505,10 @@ int main(int argc, char **argv)
         (unsigned long long)s.tcp_ring_peak, (unsigned long long)s.tcp_ring_full,
         (unsigned long long)s.tcp_sndbuf_full, (unsigned long long)s.tcp_window_full,
         (unsigned long long)s.tcp_cwnd_full, (unsigned long long)s.tcp_idle_rounds);
+      printf("TCP%d owner=%d interest_changes=%llu read_pauses=%llu read_resumes=%llu held_acks=%u kernel_queued_at_ack=%u\n",
+        family, i, (unsigned long long)s.tcp_interest_changes,
+        (unsigned long long)s.tcp_read_pauses, (unsigned long long)s.tcp_read_resumes,
+        f->held_acks, f->queued_at_ack_release);
     }
     assert(s.sessions_created == s.sessions_closed && s.sockets_created == s.sockets_closed);
     assert(s.pool_allocations == s.pool_frees && s.ram_allocations == s.ram_frees &&
@@ -495,6 +534,7 @@ int main(int argc, char **argv)
   printf("real HEV TCP%d Direct identical-tuple owners: %s PASS\n", family,
          refusal ? "refusal/RST" : reset ? "data/client RST" : remote_fin ? "remote FIN/TIME_WAIT" :
          underlay ? "underlay invalidation/RST, no byte-stream reconnect" :
+         hold_ack ? "withheld ACK, already-readable socket data resumed and FIN" :
          "147456 echoed bytes, window bursts, rejected/lost output, SYN retransmit and FIN");
   return 0;
 }

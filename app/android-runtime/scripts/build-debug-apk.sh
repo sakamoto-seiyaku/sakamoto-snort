@@ -45,6 +45,11 @@ if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 ]] ||
   echo "SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES must be 2048 or 3072; large segments require 3072" >&2
   exit 2
 fi
+vpn_tcp_progress_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT:-OFF}"
+if [[ "$vpn_tcp_progress_experiment" != ON && "$vpn_tcp_progress_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
 vpn_tcp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT:-OFF}"
 if [[ "$vpn_tcp_batch_experiment" != ON && "$vpn_tcp_batch_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT must be ON or OFF" >&2
@@ -606,6 +611,7 @@ build_native_stage() {
     "-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=$root_batch_experiment"
     "-DSAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT=$vpn_udp_batch_experiment"
     "-DSAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT=$vpn_tcp_batch_experiment"
+    "-DSAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT=$vpn_tcp_progress_experiment"
     "-DSAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=$vpn_large_segment_experiment"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=$root_verdict_batch_experiment"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE=$root_verdict_batch_mode"
@@ -823,6 +829,7 @@ quicVersion=1
 rootBatchExperiment=$root_batch_experiment
 vpnUdpBatchExperiment=$vpn_udp_batch_experiment
 vpnTcpBatchExperiment=$vpn_tcp_batch_experiment
+vpnTcpProgressExperiment=$vpn_tcp_progress_experiment
 vpnLargeSegmentExperiment=$vpn_large_segment_experiment
 vpnTunMtu=$vpn_tun_mtu
 vpnTcpMss=$vpn_tcp_mss
@@ -909,6 +916,7 @@ PY
   echo "rootBatchExperiment=$root_batch_experiment"
   echo "vpnUdpBatchExperiment=$vpn_udp_batch_experiment"
   echo "vpnTcpBatchExperiment=$vpn_tcp_batch_experiment"
+  echo "vpnTcpProgressExperiment=$vpn_tcp_progress_experiment"
   echo "vpnLargeSegmentExperiment=$vpn_large_segment_experiment"
   echo "vpnTunMtu=$vpn_tun_mtu"
   echo "vpnTcpMss=$vpn_tcp_mss"
@@ -1032,6 +1040,9 @@ build_apk_only() {
   staged_vpn_udp_batch="${staged_vpn_udp_batch:-OFF}"
   staged_vpn_tcp_batch="$(sed -n 's/^vpnTcpBatchExperiment=//p' "$product_manifest")"
   staged_vpn_tcp_batch="${staged_vpn_tcp_batch:-OFF}"
+  local staged_vpn_tcp_progress
+  staged_vpn_tcp_progress="$(sed -n 's/^vpnTcpProgressExperiment=//p' "$product_manifest")"
+  staged_vpn_tcp_progress="${staged_vpn_tcp_progress:-OFF}"
   staged_vpn_large_segment="$(sed -n 's/^vpnLargeSegmentExperiment=//p' "$product_manifest")"
   staged_vpn_large_segment="${staged_vpn_large_segment:-OFF}"
   local staged_vpn_mtu staged_vpn_mss staged_vpn_buffer
@@ -1052,6 +1063,7 @@ build_apk_only() {
   [[ "$staged_batch" == "$root_batch_experiment" &&
      "$staged_vpn_udp_batch" == "$vpn_udp_batch_experiment" &&
      "$staged_vpn_tcp_batch" == "$vpn_tcp_batch_experiment" &&
+     "$staged_vpn_tcp_progress" == "$vpn_tcp_progress_experiment" &&
      "$staged_vpn_large_segment" == "$vpn_large_segment_experiment" &&
      "$staged_vpn_mtu" == "$vpn_tun_mtu" &&
      "$staged_vpn_mss" == "$vpn_tcp_mss" &&

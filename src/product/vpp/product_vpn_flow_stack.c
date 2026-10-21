@@ -445,13 +445,14 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
     (unsigned long long)owner->timer_arms, (unsigned long long)owner->ready_samples,
     (unsigned long long)owner->ready_delay_ns, (unsigned long long)owner->ready_delay_max_ns,
     (unsigned long long)owner->ready_delay_over_1ms);
-  vlib_cli_output(vm, "flow_stack.tcp_progress owner=%u idle_rounds=%llu ring_full=%llu sndbuf_full=%llu window_full=%llu cwnd_full=%llu pending_rounds=%llu ring_peak=%llu pending_peak=%llu flight_peak=%llu mss_min=%u mss_max=%u entry_observations=1",
+  vlib_cli_output(vm, "flow_stack.tcp_progress owner=%u idle_rounds=%llu ring_full=%llu sndbuf_full=%llu window_full=%llu cwnd_full=%llu pending_rounds=%llu ring_peak=%llu pending_peak=%llu flight_peak=%llu mss_min=%u mss_max=%u interest_changes=%llu read_pauses=%llu read_resumes=%llu entry_observations=1",
     index, (unsigned long long)s->tcp_idle_rounds,
     (unsigned long long)s->tcp_ring_full, (unsigned long long)s->tcp_sndbuf_full,
     (unsigned long long)s->tcp_window_full, (unsigned long long)s->tcp_cwnd_full,
     (unsigned long long)s->tcp_pending_rounds, (unsigned long long)s->tcp_ring_peak,
     (unsigned long long)s->tcp_pending_peak, (unsigned long long)s->tcp_flight_peak,
-    s->tcp_mss_min, s->tcp_mss_max);
+    s->tcp_mss_min, s->tcp_mss_max, (unsigned long long)s->tcp_interest_changes,
+    (unsigned long long)s->tcp_read_pauses, (unsigned long long)s->tcp_read_resumes);
   vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu",
     index, (unsigned long long)s->tcp_rx_rounds,
     (unsigned long long)s->tcp_read_calls, (unsigned long long)s->tcp_read_blocked,

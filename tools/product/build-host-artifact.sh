@@ -43,6 +43,11 @@ if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 ]] ||
   echo "SAKAMOTO_PRODUCT_VPN_BUFFER_DATA_BYTES must be 2048 or 3072; large segments require 3072" >&2
   exit 2
 fi
+vpn_tcp_progress_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT:-OFF}"
+if [[ "$vpn_tcp_progress_experiment" != ON && "$vpn_tcp_progress_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
 vpn_tcp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT:-OFF}"
 if [[ "$vpn_tcp_batch_experiment" != ON && "$vpn_tcp_batch_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT must be ON or OFF" >&2
@@ -269,6 +274,7 @@ product_configure_cached "$plugin_build" \
   -DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT="$root_batch_experiment" \
   -DSAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT="$vpn_udp_batch_experiment" \
   -DSAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT="$vpn_tcp_batch_experiment" \
+  -DSAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT="$vpn_tcp_progress_experiment" \
   -DSAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT="$vpn_large_segment_experiment" \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT="$root_verdict_batch_experiment" \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE="$root_verdict_batch_mode" \
@@ -335,6 +341,7 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "experiment.root.batch=$root_batch_experiment"
   echo "experiment.vpn.udp.batch=$vpn_udp_batch_experiment"
   echo "experiment.vpn.tcp.batch=$vpn_tcp_batch_experiment"
+  echo "experiment.vpn.tcp.progress=$vpn_tcp_progress_experiment"
   echo "experiment.vpn.large.segment=$vpn_large_segment_experiment"
   echo "experiment.vpn.tun.mtu=$vpn_tun_mtu"
   echo "experiment.vpn.tcp.mss=$vpn_tcp_mss"

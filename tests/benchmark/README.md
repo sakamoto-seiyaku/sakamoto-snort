@@ -113,6 +113,13 @@ round-entry observations, `flow_stack.driver` reports ready delay/empty steps,
 and `tun.return_detail`/`tun.write_size` distinguish return rejection and actual
 packet sizes. See [long TCP evidence](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
+`SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT` defaultsOFF. It gates socket
+readiness by writable ring space and queued upload data, without changing owner
+or budgets. Existing ACK wakeups proactively consume queued kernel data even
+when read interest was paused. `interest_changes`, `read_pauses` and
+`read_resumes` show actual mask transitions; the real `hold-ack` fixture checks
+queued socket data resumes before a periodic timer could rescue it.
+
 It runs Root, then ordinary VPN. Each mode uses this fixed order:
 
 1. Start normally; warm the actual LAN/trace path; TCP fixed multi-flow download.
