@@ -1,8 +1,60 @@
 # Root NFQUEUE verdict optimization memo
 
-Updated: 2026-10-13. Current VPP-native C Product work, distinct from the historical
+Updated: 2026-10-21. Current VPP-native C Product work, distinct from the historical
 [Android/VPP POC memo](ANDROID_VPP_POC_DECISION_MEMO.md). Source findings, measured
 results and candidate choices retain their separate scope.
+
+## 2026-10-21 — optimization focus moves to ordinary VPN
+
+Root whole-path batch, packed independent verdicts, collision-safe pending
+identities, match-evidence reuse and the selected composite defaults are committed
+as `a5fd9f0b`. The installed APK and all 1339 current Product source files still
+match the October 13 default-adoption artifact. Root keeps 128 normal receive
+slots, 48 credits, read budget 16, a 1 MiB socket request and maxlen 4096; VPN
+keeps 32 credits. Production connection-stable queue placement remains in use.
+[Default adoption and its limits](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md).
+
+The latest Root capacity campaign with CPU flamegraphs still has a majority of
+VPP on-CPU samples in the kernel:
+
+| Retained group | Kernel samples | Performance qualification |
+| --- | ---: | --- |
+| UDP 8kpps, original default A | 75.97% | Both windows fully supported |
+| UDP 16kpps, composite Z | 71.15% | One of two windows fully supported |
+| UDP 64kpps, composite Z | 71.07% | Delivery/coverage qualification failed |
+| TCP, composite Z | 79.02% | Coverage failed; measurement actually used one lane |
+
+These group aggregates retain all their failed windows. They describe CPU in
+the VPP process, not whole-device CPU, off-CPU waiting or achievable savings.
+The later installed-default smoke has no new flamegraph: its 8kpps check passed,
+whereas 16kpps delivered all payload but retained four primary rejections.
+The existing kernel majority supports the user's choice to move optimization
+attention to VPN; it does not establish that all remaining Root cost is unavoidable.
+[Raw weighted profiles](../../build-output/root-capacity-tuning-20261013/profile-weighted.json),
+[campaign qualifications](../testing/2026-10-13_ROOT_NFQUEUE_CAPACITY_TUNING.md).
+
+The existing ordinary-VPN B0 provides starting clues, not a current-version
+performance baseline. Fixed TCP download showed a large TUN return write path
+and primary admission rejections; fixed UDP showed substantial underlay send
+work with both workers near saturation. New UDP tuples exercised session and
+Flow capacity limits, so their low delivered rate cannot be treated as the same
+steady-flow throughput bottleneck. Old B0 kernel shares were 63.24% for fixed
+TCP and 56.93% for fixed UDP; moving focus to VPN is not a claim that it avoids
+kernel costs. Its stripped/unknown plugin leaves also do not identify a specific
+HEV or lwIP function as the dominant target.
+[Existing VPN measurements and symbol limits](../testing/2026-10-09_PIXEL6A_QUICK_BASELINE_AND_HOTSPOTS.md#vpn两个场景的热点与边界不同).
+
+The next VPN investigation starts with a separately identified baseline of the
+current ordinary Product VPN and exact matching symbols. Keep fixed TCP/UDP
+delivery, admission and CPU separate from new-connection capacity behavior;
+retain TUN/underlay operations, per-owner session/credit facts, rejection reasons,
+RTT, and stop evidence. Evaluate TUN, owner-local HEV/lwIP and underlay work
+within [ADR-0007](../adr/0007-owner-local-lwip-direct-egress.md), using actual
+profiles before choosing a code change. This focus decision adds no new device
+load, performance result, capacity increase or architecture change.
+
+The sections below retain the October 13 and earlier findings, restoration
+states and candidate judgments in their original scope.
 
 The match-evidence reuse is now installed and tested onPixel. Both APKs pass
 256 ALLOW/256 DROP semantics; all60000 payload packets across six fixed AB/BA/AB
