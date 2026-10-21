@@ -267,3 +267,9 @@ worker0保留区间中的off-CPU约9.09秒，其中raw prev_state256的约8.44�
 Host真实primary/completion批量回归、external batch及policy batch通过；普通VPN collector的generation/推进/native debts/保留删除日志检查通过。13窗停止均满足generation对应的native债务零，阻塞reader完成、FIFO gate移除、remote日志SHA与本地停止日志相同。最终恢复原October13 APK及12个native、规则hash、Root grant和Stopped2123，Openwrt_5G全程保持，VPP/socket-load/simpleperf无残留；本轮LAN peer经PID/starttime/exe/argv/hash核对后由pidfd关闭。[设备最终审计](../../build-output/vpn-progress-20261021/final-readonly/result.json) · [专用peer清理](../../build-output/vpn-progress-20261021/peer-cleanup.json)。
 
 以上为阶段测量和清理结果，不代表SAKAMOTO-292完成。后续诊断须分别解释用户态无进展调度、逻辑等待条件、已被唤醒但尚未运行的时长及内核off-CPU区间，保留已有失败和候选被证伪的记录。
+
+## 第六阶段：按等待与唤醒原因继续定位（进行中）
+
+真实HEV调度器最小复现确认了一个额外系统调用：external schedule已做一次非阻塞I/O扫描，随后pick_current_task在同时存在RUNNING/WAITING任务时再次扫描。一个任务quantum包含入口及yield后的扫描即可，修复前实测3次，修复后2次。[RED](../../build-output/vpn-wait-cause-20261021/scheduler-red.log) · [GREEN及I/O回归](../../build-output/vpn-wait-cause-20261021/scheduler-coverage.log)。补丁0015只跳过external路径中紧接着的重复扫描，standalone调度器保留阻塞I/O与timer扫描；回归实际运行混合任务、真实pipe事件、standalone timer唤醒及清理。
+
+这是已证实的局部CPU空耗，尚未证明它是整体吞吐瓶颈。设备侧原始症状仍须用相同插桩的对照和等待账本验证，SAKAMOTO-292保持进行中。另一个曾考虑的“上传队列空时返回1而busy-yield”假设，经完整已应用源码核对被排除：实际空队列返回0，不能根据不完整patch片段修改它。
