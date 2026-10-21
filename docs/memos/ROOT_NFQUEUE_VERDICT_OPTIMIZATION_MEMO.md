@@ -85,6 +85,16 @@ original APK/rules/Stopped restored, Wi-Fi retained. No new-connection/UDP/Root
 performance gate was added to this scoped experiment.
 [Fixed TCP implementation, raw outcomes and limits](../testing/2026-10-21_VPN_FIXED_TCP_BATCH.md).
 
+Three subsequent TCP-only20s ABBA stages isolate larger inner segments,
+readiness gating and send buffering. MTU3000/MSS2940 gives102.32→206.35Mbps
+and estimated VPP CPU/GiB−47.70% with a common1517-buffer pool. Readiness gating
+reduces empty turns/GiB−74.88% and CPU/GiB−5.63% with similar throughput.
+65528-byte buffering adds6.10% throughput but raises return-credit rejection
+39→1620 and sampled RSS about2.4MiB; it remains a conditional candidate.
+All defaults stayOFF, failures and exact symbols are retained, and the original
+APK/rules/Stopped/Openwrt_5G state is restored. See the
+[long TCP implementation and all three outcomes](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
+
 The sections below retain the October 13 and earlier findings, restoration
 states and candidate judgments in their original scope.
 

@@ -1,4 +1,4 @@
-# 普通 VPN：长连接 TCP 下载的大分段与推进观测
+# 普通 VPN：长连接 TCP 下载的大分段、推进与缓冲
 
 日期：2026-10-21。用户限定性能基线为 TCP 长下载；本记录没有 UDP、CPS 或 Root 性能负载。参考依据见[源码调查](../reviews/2026-10-21_VPN_TCP_REFERENCE_OPTIMIZATIONS.md)。
 
@@ -94,3 +94,36 @@ TUN write/GiB392628→391777（−0.22%，基本不变）。inclusive HEV schedu
 源码闭包 `8cdb2e3d75e744670fc47eab166d27b7b9d8ac8f66f034eea3e6028f54978dd2`；control APK `04d915f140a38f9ac6d919dc64d58ca8733a2d4d5fd661d80b34fa3e5c40a626`，gated APK `b60f2e39f664731051022a4b766171f13aca5189cfd865e2e8227bf8893ba102`。同DEX/11个native，仅插件不同；新flag非法值与APK stage不匹配均拒绝。warm build0.79s，999个编译输出mtime不变、零编译且12个native相同。四窗native-zero、精确symbols与lost0均通过；结束恢复原APK/规则/Root grant/Stopped2101及Openwrt_5G，[审计](../../build-output/vpn-tcp-progress-20261021/final-readonly/result.json)。
 
 [第二阶段汇总与火焰图](../../build-output/vpn-tcp-progress-20261021/index.html) · [计数与CPU重算](../../build-output/vpn-tcp-progress-20261021/summary.json) · [冻结协议](../../build-output/vpn-tcp-progress-20261021/protocol.json)
+
+## 第三阶段：独立扩大发送缓冲
+
+在第一/二阶段已观测到ring/sndbuf受限后，新增默认 OFF 的 `SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT`，只把 `TCP_SND_BUF` 和同一Direct ring从32768扩大到65528字节。`TCP_WND=32768`不变；MTU3000/MSS2940、readiness门控、batch、VPP pool1517及每owner128返回credit两边相同。运行期不resize、不跨owner借资源。
+
+每session增加32760字节ring payload容量，64条流名义增加约2MiB；512个session上限对应约16MiB额外ring payload，不包括其它transport开销。实际容量通过native `buffer_bytes`核对。host暂缓ACK场景的ring峰值32768/65528，内核剩余队列40960/8200字节；两版均在ACK恢复后完成73728字节的逐字节/checksum、wrap、FIN与资源结清检查。两侧12个真实双栈TCP回归通过；expanded资格运行前后可执行文件digest一致并保留二进制。[Host身份](../../build-output/vpn-tcp-buffer-20261021/host-expanded-identity.json)、[实际测试输出](../../build-output/vpn-tcp-buffer-20261021/host-expanded-details.log)。首次测试启动与构建重叠的记录单独保留，未用于资格结论。
+
+本阶段仍为同一64流、20s固定下载ABBA2102–2105：
+
+| 窗口 | sndbuf/ring | Mbps | VPP CPU秒/GiB | 进程RSS采样峰值MiB |
+| --- | ---: | ---: | ---: | ---: |
+| A1 /2102 | 32768 | 204.67 | 32.88 | 123.20 |
+| B1 /2103 | 65528 | 217.63 | 31.87 | 125.57 |
+| B2 /2104 | 65528 | 218.63 | 31.88 | 125.85 |
+| A2 /2105 | 32768 | 206.49 | 33.08 | 123.43 |
+
+吞吐均值205.58→218.13Mbps（+6.10%），合并VPP CPU/GiB32.98→31.87（−3.37%）。成功TUN write/GiB392052→377639（−3.68%），所以不能将收益全部归因于减少等待：MSS虽不变，实际小段/分段packing也发生变化。inclusive TUN completion16.40→15.74 CPU秒/GiB，HEV receive/splice6.35→6.01；这些路径仍重叠。
+
+RSS采样峰值的两窗均值增加2454KiB（约2.40MiB）。这是同一个VPP进程在测量窗内的 `/proc/.../stat` RSS采样，**每时刻只取主tid一份，不累加三个线程共享的RSS**；不是全部额外内存的逐项归因或整机峰值保证。
+
+代价明确：OUTPUT_CAPACITY从39→1620次，按端点GiB归一化40.72→1594.22，约39倍。新分原因计数证实它们全部是**返回credit不足**，stamp和VPP buffer allocation拒绝均为零。primary拒绝为15366/38200/40054/17378，也增加了。没有扩大返回allowance来掩盖这一代价。四窗均正常停止且native debts零，但这些拒绝不能因端点多交付了字节而省略；完整策略Q和匹配负载延迟仍未取得资格。延迟成功样本259/337/127/211，timeout3/1/4/4原样保留。
+
+因此64KiB保留为**默认关闭的条件候选**，没有根据这组小幅增吞直接采用为默认。返回credit背压是这组额外容量的实测代价，不是全局buffer池再次耗尽。大段是本轮最明显的增吞来源；readiness门控主要省CPU。三个阶段是独立对照，不把跨阶段比例相乘充作同一组配对实验。
+
+源码闭包 `2089511501687412466f1853efddb32ea04864dae0e2e93bab6f576e456f3f7f`；control APK `31f5eda70662cf3243ee58c8eb279ecaee00c5084a9f3f424b68d1aa6a08e3b0`，expanded APK `0de7ba2f250abfa4554f1d9b221ba71807d586e0de06b20fc8adcf8571005a83`。同DEX/11个native，仅插件不同；新flag非法值与buffer stage不符均拒绝。persistent native重复构建零编译、编译mtime和12个载荷一致。最终native stage contract通过，四个perf lost0、精确符号及native-zero通过。
+
+[第三阶段汇总与火焰图](../../build-output/vpn-tcp-buffer-20261021/index.html) · [CPU/计数/RSS重算](../../build-output/vpn-tcp-buffer-20261021/summary.json) · [冻结协议](../../build-output/vpn-tcp-buffer-20261021/protocol.json)
+
+## 最终状态
+
+三个新优化开关均默认OFF；未做UDP/CPS/Root性能扩展。最终恢复原October13 APK、全部12个native、原规则hash和Root grant，Stopped2105，Openwrt_5G不变，设备无VPP/load/monitor/simpleperf残留。[最终只读审计](../../build-output/vpn-tcp-buffer-20261021/final-readonly/result.json)。
+
+12个成功窗口的阻塞日志reader均已完成，FIFO gate已删除；本任务LAN peer在核对PID、exe、argv、启动时间和hash后退出。[reader审计](../../build-output/vpn-tcp-buffer-20261021/retained-reader-audit.json) · [peer退出](../../build-output/vpn-tcp-buffer-20261021/peer-cleanup.json)。所有失败尝试、原始perf、源码闭包、APK与精确符号保留。

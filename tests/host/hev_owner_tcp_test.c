@@ -478,6 +478,12 @@ int main(int argc, char **argv)
       assert(s.tcp_mss_min == CLIENT_MSS && s.tcp_mss_max == CLIENT_MSS);
       assert(s.tcp_idle_rounds <= s.tcp_rx_rounds);
       assert(s.tcp_ring_peak && s.tcp_pending_peak <= s.tcp_ring_peak);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
+      assert(s.tcp_buffer_bytes == 65528 && s.tcp_ring_peak <= 65528);
+      if (hold_ack) assert(s.tcp_ring_peak > 32768);
+#else
+      assert(s.tcp_buffer_bytes == 32768 && s.tcp_ring_peak <= 32768);
+#endif
       if (hold_ack) {
         assert(f->held_acks && f->ack_released && f->queued_at_ack_release);
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_PROGRESS_EXPERIMENT

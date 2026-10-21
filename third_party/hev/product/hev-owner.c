@@ -789,6 +789,7 @@ hev_owner_t *hev_owner_create(const hev_owner_config_t *config)
   hev_owner_t *owner = calloc(1, sizeof(*owner));
   if (!owner) return NULL;
   owner->config = *config;
+  owner->stats.tcp_buffer_bytes = TCP_SND_BUF;
   if (!owner->config.max_pcbs) owner->config.max_pcbs = config->max_sessions + 2;
   if (!owner->config.max_sockets) owner->config.max_sockets = config->max_sessions;
   owner->scratch = malloc(config->max_packet_bytes - 28);

@@ -16,7 +16,11 @@
 #define TCP_MSS 1360
 #endif
 #define TCP_WND 32768
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
+#define TCP_SND_BUF 65528
+#else
 #define TCP_SND_BUF 32768
+#endif
 #define TCP_OVERSIZE 0
 /* Exhaustion rejects the current allocation, not another flow's queued data. */
 #define PBUF_POOL_FREE_OOSEQ 0

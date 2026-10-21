@@ -120,6 +120,13 @@ when read interest was paused. `interest_changes`, `read_pauses` and
 `read_resumes` show actual mask transitions; the real `hold-ack` fixture checks
 queued socket data resumes before a periodic timer could rescue it.
 
+`SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT` defaultsOFF and changes only the
+TCP send buffer and Direct ring32768→65528, keeping `TCP_WND` unchanged. Native
+`buffer_bytes` and ring/flight peaks show actual capacity; RSS samples refer to
+one process and must not be summed across threads. The fixed-download evidence
+also records increased return-credit rejection, so this is a conditional
+experiment, not a default-capacity recommendation.
+
 It runs Root, then ordinary VPN. Each mode uses this fixed order:
 
 1. Start normally; warm the actual LAN/trace path; TCP fixed multi-flow download.

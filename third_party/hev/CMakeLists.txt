@@ -71,6 +71,12 @@ if(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT)
   target_compile_definitions(sakamoto_hev_lwip PUBLIC
     SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=1)
 endif()
+option(SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
+  "Use 65528-byte owner-local TCP sndbuf/ring with unchanged receive window" OFF)
+if(SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_lwip PUBLIC
+    SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT=1)
+endif()
 
 # Product allocator is separate so lower-level fault fixtures can substitute
 # their own heap without replacing real lwIP pbuf/PCB implementations.
