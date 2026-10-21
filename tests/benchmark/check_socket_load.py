@@ -62,6 +62,9 @@ def main():
                     text=True, timeout=2))
                 assert .45 <= time.monotonic() - started < 2
                 assert client["bytes"] > 0
+                assert len(client["worker_tids"]) == client["threads"] == 2
+                assert len(set(client["worker_tids"])) == 2
+                assert all(tid > 0 and tid != client["pid"] for tid in client["worker_tids"])
                 assert client["offered_rate"] == client["pacing_scheduled"] == client["pacing_missed"] == 0
                 stats = quick.peer_query("127.0.0.1", port, index)
                 if case.startswith("tcp"):

@@ -100,7 +100,10 @@ Freeze diagnostic controls in the manifest before collection:
 - `trace_offcpu: true` adds scheduler tracing to the existing CPU-clock record.
   Report on-CPU and off-CPU modes separately. `vpn_waits.py` clips retained
   scheduler intervals to the actual client window and records loss explicitly;
-  a lossy profile does not provide a complete wait-time budget.
+  a lossy profile does not provide a complete wait-time budget. The helper
+  reports `worker_tids` from each real TCP/UDP worker. The analyzer uses these
+  identities to count switches to the receive threads, including switches in
+  `tun_rx_batched`; a matching process name alone does not establish identity.
 - `profiler_callgraph: "fp"`, `profiler_mmap_pages: 4096` and
   `profiler_await_exit: true` select lighter stack recording, a larger kernel
   buffer and completed-log collection. Verify frame pointers in the actual
@@ -110,6 +113,11 @@ Freeze diagnostic controls in the manifest before collection:
   Its exec wrapper retains the actual inherited `Cpus_allowed` status and the
   collector verifies that mask; warmup and Product CPU placement stay fixed.
   A placement diagnosis is a separate cohort, not a Product optimization.
+  Keep receiver placement equal within implementation comparisons. On the
+  Pixel single-flow test, sharing the TUN worker's core with the receiver
+  caused frequent preemption and changed automatic frequency selection.
+  Record native direct controls and actual flow ownership as well as affinity;
+  a 64-flow aggregate can hide this single-flow problem.
 - `primary_handoff_credits: 32` or `48` uses the existing diagnostic CLI once
   before warmup, with primary64/completion128 queue slots unchanged. The graph
   must be active and empty; failed configuration makes the run incomplete.

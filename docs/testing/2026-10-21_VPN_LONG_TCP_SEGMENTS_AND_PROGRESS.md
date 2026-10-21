@@ -391,3 +391,74 @@ Pixel实测CPU0–3 capacity160、4–5 capacity498、6–7 capacity1024；worke
 正式的可用CPU能力选择和按负载性能策略尚未修改，SAKAMOTO-292保留进行中；本阶段没有将全局持续高频、CPU4,5跨设备硬编码或TUN结构重构设为产品默认。25个成功VPN窗口均核对generation对应native债务归零、25个保留日志reader完成且gate删除、远程日志SHA与本地一致；1个大核启动失败保留，另1次频率测试在设置前失败。五个实际使用的collector版本已逐一按run中SHA恢复并冻结。
 
 最终原October13 APK及全部12个native、规则、Root grant、worker1,2偏好、两个簇min/max/governor及Openwrt_5G均恢复，runtime停止且VPP/socket-load/simpleperf无残留；专用LAN peer核对exe/argv/PID/starttime/hash后经pidfd关闭。[完整最终审计](../../build-output/vpn-diagnosis-final-native-20261021/final-audit.json) · [collector身份](../../build-output/vpn-diagnosis-final-native-20261021/collector-identities.json) · [专用peer退出](../../build-output/vpn-diagnosis-owner-20261021/peer-cleanup.json)。
+
+## 定位130–160 Mbps单流瓶颈：TUN写入期间被接收线程抢占
+
+用户要求继续确认慢窗口中的具体瓶颈。以下证据把前节的核心/频率观察进一步收窄：在本次owner1单流下载中，worker0向TUN写包时频繁被同机下载客户端的接收线程抢占，拖长了串行回注和ACK周转。接收线程的放置也改变自动调频状态。保持VPP两个worker在CPU1、2，只将客户端约束到另一个小核CPU3，即可消除该抢占模式并恢复约500Mbps。不能将此前结果解释为“小核之间handoff只能跑130Mbps”。
+
+### 慢窗口逐包时序与缓冲区反例
+
+临时探针仅记录目标源端口，使用预分配、预触页的每owner65536条内存记录，测量窗口内不逐包打印、不分配、不加共享锁；结束后由CLI导出。包token连接回程生成、completion发布/到达、TUN write起止、ACK捕获、owner输入起止；累计ACK按TCP序列号匹配。TUN write同时记录wall time和线程CPU时间，差值只作为非线程执行时间估计，包含抢占/中断。ACK捕获前的间隔仍包含内核产生ACK与用户态取包，不能单独称作内核ACK延迟。探针有观测成本，完整20秒吞吐与短trace gate吞吐分别报告。
+
+最关键的32KiB窗口：20秒159.22Mbps，内部两秒trace **151.77Mbps**，确实处于目标慢区间。平均flight26755字节，约79.5%的已覆盖时间达到32768字节；回程包生成到对应累计ACK完成lwIP输入平均约1414µs：
+
+| 阶段 | 平均µs，约值 |
+| --- | ---: |
+| 回程生成到completion发布 | 196 |
+| completion发布到worker0取得frame | 91 |
+| frame内等待此前各包完成TUN write | 326 |
+| 本包TUN write | 200，其中线程CPU91、非线程执行时间109 |
+| write返回到ACK被TUN捕获 | 336 |
+| ACK捕获到owner输入 | 249 |
+| lwIP处理ACK | 16 |
+
+上述是同一包的端到端阶段，不是各worker的CPU占用总和。completion发布到frame取得仅约6.5%；frame内串行等待、本包write及write后到ACK捕获合计约61%。ACK完成到下一次receive round平均92µs；1213个有效receive round共读取约38MB，累计wall279ms/线程CPU269ms。满ring说明ACK周转限制继续读取，尚不能证明“把ring做大”能解决限制。
+
+同源码、同worker1,2、同owner1的32/64/64/32反事实直接检验这一点：
+
+| ring/sndbuf | 20秒Mbps | trace Mbps | trace内回程至ACK完成，µs |
+| --- | ---: | ---: | ---: |
+| 32768，前控制 | 159.22 | 151.77 | 1414 |
+| 65528，第一次 | 134.73 | 129.70 | 2986 |
+| 65528，第二次 | 136.01 | 142.85 | 2728 |
+| 32768，回切 | 149.91 | 单独保留 | 单独保留 |
+
+扩大缓冲区增加了flight和排队，未提高吞吐，不采用默认扩容。自动频率仍有变化，故此处结论是该干预没有解决慢场景，而非证明任意频率下容量都无关。[原始ABBA与精确构建](../../build-output/vpn-path-buffer-v2-20261021/) · [逐包分析](../../build-output/vpn-path-buffer-v2-20261021/path-summary.json)。
+
+其他trace保留其真实速率：早期20秒140.51Mbps窗口的一秒gate仅120.59Mbps；后续20秒138.89Mbps的两秒gate仅92.01Mbps，并有较长receive round尾部。这些窗口不能冒充130–160Mbps内部时序；目标速率结论采用上面的151.77Mbps gate。[第一版原始数据](../../build-output/vpn-path-latency-20261021/) · [细分completion后的数据](../../build-output/vpn-path-latency-detail-20261021/)。
+
+### 只改变接收客户端放置
+
+保持同一32KiB诊断APK、worker0/1固定CPU1、2、单TUN lane、实际owner1、自动频率及所有队列容量，仅对测量客户端应用`taskset 8`，退出即失效；实际亲和性从继承的`/proc/self/status`核对。无simpleperf的ABBA结果：
+
+| 窗口 | 客户端放置 | 20秒Mbps | 独立1秒trace Mbps | TUN write wall/非线程时间，µs | 回程至ACK完成，µs |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A1 | 自由调度 | 153.71 | 126.35 | 241 / 130 | 1692 |
+| B1 | CPU3 | 503.10 | 494.79 | 42 / 1.1 | 375 |
+| B2 | CPU3 | 504.62 | 542.50 | 37 / 1.0 | 344 |
+| A2 | 自由调度 | 103.38 | 87.82 | 282 / 153 | 2020 |
+
+反向窗口更慢也完整保留，没有择优删除。frame内等待从A1约380µs降至B1/B2约28/26µs；ACK捕获前间隔从400µs降至67/71µs。小核簇平均驻留频率同时从A1/A2约0.820/0.680GHz升至B1/B2约1.389/1.404GHz，中核簇保持约0.43GHz。这确认了接收端放置的因果影响，也说明不能将全部吞吐差额归为纯context switch成本。[原始对照](../../build-output/vpn-path-client-placement-20261021/campaign-result.json) · [完整时序](../../build-output/vpn-path-client-placement-20261021/path-summary.json) · [频率与归属汇总](../../build-output/vpn-path-final-20261021/summary.json)。
+
+### 内核切换中的接收线程身份
+
+为排除“同名socket-load其实是监控进程”的歧义，helper在每个实际TCP/UDP worker启动时保存`gettid()`，结束后将`worker_tids`写入JSON；没有逐包新操作。新helper再次通过真实loopback、固定源端口冲突、pacing及边界检查，host/Android第二次构建均零编译、mtime/hash一致。两窗FP/off-CPU机制采集关闭逐包探针，使用相同诊断APK与worker1,2，均最终lost0、精确ELF Build ID匹配：
+
+| 客户端 | 采集时Mbps | TUN路径切出次数 | 紧接着运行实际接收TID的次数 |
+| --- | ---: | ---: | ---: |
+| 自由调度，接收TID21775 | 138.23 | 41706 | 41538，99.60% |
+| CPU3，接收TID22523 | 387.62 | 107 | 0 |
+
+切出记录的原始`prev_state`均256，主要完整栈为`write → tun_chr_write_iter → tun_get_user → tun_rx_batched → local_bh_enable → preempt_schedule → __schedule`。138Mbps窗口在目标慢区间直接证明：worker0尚未从TUN write返回，就在内核允许抢占处让出CPU，紧接着运行的绝大多数是下载接收线程。结合上一组只改变接收端放置后抢占/串行等待/ACK周期同时收缩，可将该调度耦合确定为本场景的主要瓶颈。
+
+切出后的off-CPU区间可能还包含其他任务；不能把整段时间全记成接收线程CPU。采样影响吞吐，138/388仅是机制窗口，不和无profiling的154/503/505混算。worker1的protected上游socket读取spin占其CPU约7.6%→1.1%，仍未识别内核锁持有者，不将其改称为VPP队列锁。[准确TID、完整栈与次数](../../build-output/vpn-path-scheduler-20261021/scheduler.json) · [通用分析器输出](../../build-output/vpn-path-scheduler-20261021/waits-client-free.json) · [CPU3对应输出](../../build-output/vpn-path-scheduler-20261021/waits-client-cpu3.json)。`tests/benchmark/vpn_waits.py`现按真实TID输出switch次数；旧结果无TID时保留未知，不按名称或PID偏移猜测。
+
+### 普通默认APK复核、范围与清理
+
+复用前节未带临时探针的普通默认APK`b92e51202821d64e2a5571dea02998fcee19eaceaa1370e9348e407964a94a78`，batch/progress/buffer实验开关均OFF，同样worker1,2、owner1、无profiling。客户端自由/CPU3/CPU3/自由四窗为 **251.93 / 496.62 / 535.54 / 265.39 Mbps**；最后VPN停止、同helper同CPU3客户端的原生直连为 **507.15 Mbps**。不同时间窗口有网络波动，不把535.54高于单个直连控制解释成VPN增加链路能力；这些结果验证普通构建同样可恢复约500Mbps量级。[默认ABBA](../../build-output/vpn-client-placement-default-20261021/campaign-result.json) · [最终原生控制](../../build-output/vpn-path-final-20261021/direct-cpu3/result.json)。
+
+因此，本轮具体因果链是：接收线程与TUN worker的CPU调度耦合，叠加自动调频变化，拖长逐包TUN串行服务与ACK回路；32KiB额度长时间未被ACK释放，owner1表现为满ring等待。现有单TUN/handoff/32KiB结构在隔离接收端后仍可达到当前链路速度。用户应用也可能产生这类调度耦合，不能因此将问题排除为无关测试噪声；将测试进程绑到CPU3只验证机制，不等于已交付适用于任意应用/设备的产品调度方案。SAKAMOTO-292保持进行中，产品默认绑核、频率和容量未改。
+
+临时Product探针和六处hook已撤下，并逐字节核对工作前版本；[冻结源码、diff与身份](../../build-output/vpn-path-scheduler-20261021/temporary-product-instrumentation/)及各APK的完整source/精确符号保留。64KiB实验首次在MSS9940下触发lwIP的`TCP_SNDLOWAT`编译保护，失败日志保留；修正为与32KiB基线相同的低水位表达式，不禁用sanity，未修改默认容量。32/64构建来自同一修正源码；这是让既有实验配置可构建的独立小修复，不是本轮吞吐修复。撤下探针后显式重新configure确认staged源码匹配，64KiB/MSS9940的Host回归38/38通过；unchanged repeat零编译，1315个编译产物mtime/hash不变。普通VPN evidence校验及新TID分析器对两份真实记录的对账均通过。[失败记录](../../build-output/vpn-path-buffer-20261021/) · [最终Host构建与回归记录](../../build-output/vpn-path-final-20261021/)。
+
+18个新VPN窗口全部通过generation对应native零债务、retained reader完成/gate删除/远程与本地日志SHA一致检查；两窗最终perf lost0。原October13 APK与12个native、规则、Root grant、worker1,2偏好、原min/max/governor及Openwrt_5G均恢复，设备无VPP/socket-load/simpleperf残留。专用LAN peer按PID/starttime/exe/argv/hash核对后由pidfd关闭。[最终审计](../../build-output/vpn-path-final-20261021/final-audit.json) · [peer退出](../../build-output/vpn-path-latency-20261021/peer-cleanup.json)。

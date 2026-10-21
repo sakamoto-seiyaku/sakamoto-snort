@@ -164,6 +164,7 @@ typedef struct { int fd, connected, sent, received; uint64_t since; header h, re
 typedef struct { pthread_barrier_t ready, start; uint64_t begin, end; } paced_clock;
 typedef struct {
   int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride, offered_rate, burst_size; const char *ip; uint64_t begin, end;
+  pid_t tid;
   uint64_t bytes, packets, attempts, completed, errors, timeouts, cancelled, tuples, exhausted;
   uint64_t offered_packets, probe_requests, pacing_cursor, pacing_scheduled, pacing_missed, pacing_capacity_missed;
   uint64_t pacing_behind_events, pacing_max_behind_ns;
@@ -234,6 +235,7 @@ static void open_conn(worker *w, int ep, client_conn *c, int i, int probe) {
 }
 static void *tcp_worker(void *arg) {
   worker *w = arg; int ep = epoll_create1(EPOLL_CLOEXEC), total = w->flows + (w->mode == 0);
+  w->tid = gettid();
   client_conn *c = calloc((size_t)total, sizeof(*c)); if (!c || ep < 0) die("client allocation");
   for (int i = 0; i < total; i++) { c[i].fd = -1; if (!w->offered_rate) open_conn(w, ep, &c[i], i, i == w->flows); }
   pacing_start(w);
@@ -302,6 +304,7 @@ static void *tcp_worker(void *arg) {
 }
 static void *udp_worker(void *arg) {
   worker *w = arg; int *fds = calloc((size_t)w->flows, sizeof(int)); if (!fds) die("calloc");
+  w->tid = gettid();
   unsigned char *used = calloc((size_t)w->flows, 1); if (!used) die("calloc");
   struct sockaddr_in dest = address(w->ip, w->port), local = address("0.0.0.0", 0);
   int probe = sock(SOCK_DGRAM);
@@ -413,6 +416,9 @@ static int client(int argc, char **argv) {
   printf("{\"case\":\"%s\",\"case_id\":%d,\"pid\":%d,\"uid\":%d,\"start_monotonic_ns\":%"PRIu64",\"end_monotonic_ns\":%"PRIu64",\"requested_ms\":%d,\"threads\":%d,\"flows_per_thread\":%d,\"bytes\":%"PRIu64",\"packets\":%"PRIu64",\"attempts\":%"PRIu64",\"completed\":%"PRIu64",\"errors\":%"PRIu64",\"timeouts\":%"PRIu64",\"cancelled_at_deadline\":%"PRIu64",\"input_unique_udp_tuples\":%"PRIu64",\"tuple_space_exhausted\":%"PRIu64",\"latency_samples\":%"PRIu64",\"latency_overflow_samples\":%"PRIu64",\"p99_upper_us\":",names[mode],id,getpid(),getuid(),begin,finished,ms,threads,flows,sum.bytes,sum.packets,sum.attempts,sum.completed,sum.errors,sum.timeouts,sum.cancelled,sum.tuples,sum.exhausted,sum.samples,sum.hist[HIST-1]);
   if (!p99 || p99 >= HIST) printf("null"); else printf("%d",p99*100);
   printf(",\"burst_size\":%d",burst_size);
+  printf(",\"worker_tids\":[");
+  for (int i = 0; i < threads; i++) printf("%s%d", i ? "," : "", (int)w[i].tid);
+  printf("]");
   printf(",\"generator_cpu_seconds\":%.6f,\"generator_maxrss_kib\":%ld,\"fixed_source_port_base\":%d,\"fixed_source_port_stride\":%d,\"offered_rate\":%d,\"offered_rate_unit\":\"%s\",\"offered_packets\":%"PRIu64",\"udp_send_errors\":%"PRIu64",\"offered_connections\":%"PRIu64",\"probe_requests\":%"PRIu64",\"pacing_scheduled\":%"PRIu64",\"pacing_missed\":%"PRIu64",\"pacing_capacity_missed\":%"PRIu64",\"pacing_behind_events\":%"PRIu64",\"pacing_max_behind_ns\":%"PRIu64",\"pacing_setup_ns\":%"PRIu64"}\n",cpu,after.ru_maxrss,fixed_port_base,fixed_port_stride,offered_rate,mode == 2 ? "payload_packets_per_second" : mode == 1 ? "connection_attempts_per_second" : "unsupported",sum.offered_packets,sum.offered_packets-sum.packets,mode < 2 ? sum.attempts : 0,sum.probe_requests,sum.pacing_scheduled,sum.pacing_missed,sum.pacing_capacity_missed,sum.pacing_behind_events,sum.pacing_max_behind_ns,pacing_setup_ns); free(w); return 0;
 }
 static int monitor(int pid, int ms) {

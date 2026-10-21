@@ -42,6 +42,7 @@ def main():
         raise ValueError('complete diagnostic window required')
     case, = run['cases']
     begin, end = [case['client'][key] for key in ('start_monotonic_ns', 'end_monotonic_ns')]
+    receiver_tids = case['client'].get('worker_tids')
     lib = ReportLib()
     lib.SetRecordFile(str(args.record))
     lib.SetSymfs(str(args.symfs))
@@ -52,7 +53,7 @@ def main():
                     (part.split('=', 1) for part in metadata['record_stat'].split(','))}
     lossy = any(value for key, value in record_stats.items() if 'lost' in key)
     lib.SetTraceOffCpuMode('off-cpu')
-    threads = defaultdict(lambda: dict(states=Counter(), categories=Counter(), stacks=Counter(), next_threads=Counter(), intervals=0))
+    threads = defaultdict(lambda: dict(states=Counter(), categories=Counter(), stacks=Counter(), next_threads=Counter(), next_tasks=Counter(), tun_next_tasks=Counter(), intervals=0))
     while (sample := lib.GetNextSample()) is not None:
         if sample.pid != case['vpp_pid']:
             continue
@@ -73,8 +74,20 @@ def main():
         row['categories'][category(names)] += duration
         row['next_threads'][str(raw['next_comm'])] += duration
         row['stacks'][(state, tuple(names))] += duration
+        # Count switch events only when the event itself is inside the load
+        # window, independently of the clipped interval accounting above.
+        if begin <= sample.time < end:
+            next_task = (str(raw['next_comm']), int(raw['next_pid']))
+            row['next_tasks'][next_task] += 1
+            if 'tun_rx_batched' in names:
+                row['tun_next_tasks'][next_task] += 1
     lib.Close()
     output = []
+    def task_counts(counts):
+        return [dict(name=name, tid=tid, switches=count,
+                     is_client_receive_thread=tid in receiver_tids if receiver_tids is not None else None)
+                for (name, tid), count in counts.most_common()]
+
     for (tid, name), row in sorted(threads.items()):
         duration = sum(row['states'].values())
         if duration > (end - begin) * 1.01:
@@ -85,11 +98,14 @@ def main():
             raw_prev_state_seconds={str(k): v / 1e9 for k, v in row['states'].items()},
             category_seconds={k: v / 1e9 for k, v in row['categories'].items()},
             next_thread_on_switch_seconds={k: v / 1e9 for k, v in row['next_threads'].most_common(12)},
+            next_task_switches=task_counts(row['next_tasks']),
+            tun_rx_batched_next_task_switches=task_counts(row['tun_next_tasks']),
             top_stacks=[dict(raw_prev_state=k[0], stack=k[1], seconds=v / 1e9)
                         for k, v in row['stacks'].most_common(12)],
         ))
     report = dict(
-        schema='vpn-waits/v1', generation=case['generation'], window_seconds=(end - begin) / 1e9,
+        schema='vpn-waits/v2', generation=case['generation'], window_seconds=(end - begin) / 1e9,
+        client_pid=case['client']['pid'], client_receive_tids=receiver_tids,
         profile_integrity='LOSSY' if lossy else 'NO_REPORTED_LOSS',
         complete_wait_accounting=False, record_stats=record_stats,
         record_sha256=hashlib.sha256(args.record.read_bytes()).hexdigest(), threads=output,
@@ -99,6 +115,7 @@ def main():
             'Lost scheduler records can bias interval attribution; retained intervals are not a complete or unbiased wait-time budget.',
             'Stack categories describe where a thread switched out, not what caused its wakeup or all end-to-end latency.',
             'next_thread_on_switch names only the immediate successor; interval duration is not that successor thread CPU time.',
+            'Switch counts use events starting inside the load window; receiver membership requires gettid() identities in the client result, not a process-name or PID-offset guess.',
             'Raw prev_state is retained; a preempted stack is not proof of lock contention or a blocking syscall.',
             'Build ID and symbol identity must be verified separately against the same record.',
         ],
