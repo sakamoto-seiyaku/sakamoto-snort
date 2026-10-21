@@ -348,3 +348,46 @@ Pixel实测CPU0–3 capacity160、4–5 capacity498、6–7 capacity1024；worke
 [可复算CPU账本](../../build-output/vpn-diagnosis-contention-20261021/cpu-accounting.json) · [分析脚本](../../build-output/vpn-diagnosis-contention-20261021/analyze.py)。完成窗口均通过普通VPN推进和generation对应native零债务检查；每轮finally恢复原October13 APK、规则、Root grant和worker1,2偏好，原始数据与失败尝试均保留。
 
 上述结果证明了这台设备上的owner/核心组合有重大影响，还没有把具体耗时唯一归因于计算、唤醒或handoff。此阶段不推广CPU4,5为跨设备默认值、不声称功耗改善，也不宣布SAKAMOTO-292完成。
+
+
+### 调用栈、分开换核与频率因果对照
+
+单流owner1的两窗FP/off-CPU使用精确ELF与每CPU4096 mmap pages，最终分别58606/249972条记录、lost0。采集本身使吞吐变为102.01/444.37 Mbps，故它们只用于机制诊断，不与无profiling吞吐混算。在小核窗口，worker1自身CPU采样29.7%位于`queued_spin_lock_slowpath → _raw_spin_lock_bh → lock_sock_nested → tcp_recvmsg → readv → tcp_session_task`，中核同一路径约1.9%。这是读取protected上游TCP socket时的内核锁等待；没有据此推定VPP handoff队列锁故障，也没有确定该内核锁的具体持有者。worker0仍有TUN回注与抢占，worker1离CPU区间主要在VPP epoll。off-CPU边界仍有未闭合/窗口尾部区间限制。[精确身份与CPU分析](../../build-output/vpn-diagnosis-profile-20261021/) · [完整分线程栈](../../build-output/vpn-diagnosis-profile-20261021/stacks.json)。
+
+保持owner1，分别只改变一个角色：worker0/1绑核1,5得到176.36 Mbps，绑核4,2得到132.78 Mbps，均未保留两个worker都在4,5时的收益。频率驻留显示自动调频状态也随负载分布变化：小核基线约809MHz、中核簇约431MHz；两个worker在4,5时中核簇约2118MHz；混合1,5时中核簇仍约460MHz。以上均为快照窗口按驻留时间加权的频率，不是指令执行期间的加权频率，也不推定`sched_pixel`内部算法。[单角色对照](../../build-output/vpn-diagnosis-mixed-cpus-20261021/cpu-accounting.json)。
+
+为隔离调频影响，保持worker1,2、同一诊断APK和owner1，仅短时改变一个簇的`scaling_min_freq`，最高不超过原`scaling_max_freq`。每窗有独立45秒设备端FIFO看门狗，结束即恢复；governor、max频率和thermal控制未改。
+
+| 临时频率条件，worker固定1,2 | Mbps |
+| --- | ---: |
+| 仅小核簇下限升至原上限1.803GHz | 372.27 |
+| 仅中核簇下限升至原上限2.253GHz | 263.39 |
+| 全部恢复原下限，自动调频 | 161.79 |
+| 两簇同时维持各自原上限 | 355.54 |
+
+两种单独干预都产生明显变化，确认调频参与限制；组合结果没有叠加收益，也没有达到中核绑核的吞吐，不能将全部差距只归为频率。第一尝试在任何频率写入前因watchdog上传目录权限失败，原样保留；后续使用shell可写目录。有效窗口的原min/max/governor恢复均通过，看门狗均未超时。[单簇及回切](../../build-output/vpn-diagnosis-frequency-v2-20261021/campaign-result.json) · [组合反例](../../build-output/vpn-diagnosis-frequency-combined-20261021/campaign-result.json)。
+
+### 普通默认构建复核
+
+前面的诊断APK启用了batch/progress；不能把它的结果直接当作默认配置。为此同一Product源码重新构建普通默认APK `b92e51202821d64e2a5571dea02998fcee19eaceaa1370e9348e407964a94a78`，TCP batch、progress及buffer实验开关全部OFF，保留已采用的MTU10000、10240-byte VPP data、2048 buffers及32KiB ring/sndbuf。实际Android持久缓存的两次unchanged构建均零Rust编译/零Ninja动作，1087个编译文件mtime与12个native内容相同。
+
+默认APK的20秒单流、固定实际owner1、无profiling ABBA：
+
+| 窗口 | worker0/1 CPU | Mbps | 所在簇平均驻留频率 |
+| --- | --- | ---: | ---: |
+| A1 | 1,2 | 249.84 | 1.134GHz |
+| B1 | 4,5 | 359.72 | 1.599GHz |
+| B2 | 4,5 | 430.82 | 1.886GHz |
+| A2 | 1,2 | 130.77 | 0.768GHz |
+
+中核仍有显著收益，但自动调频下变动明显，不能承诺只改绑核就稳定480Mbps。[默认ABBA](../../build-output/vpn-diagnosis-default-20261021/campaign-result.json) · [频率驻留](../../build-output/vpn-diagnosis-default-20261021/frequency-residency.json) · [真实warm cache](../../build-output/vpn-diagnosis-default-20261021/cache-warm-proof/result.json)。
+
+最后保持默认APK和worker4,5，仅以同样看门狗将中核簇维持原上限2.253GHz，两次20秒分别470.91/480.68 Mbps；两侧恢复全部设置后的直连控制分别484.28/510.28 Mbps。VPN均值475.79 Mbps，约为两侧直连均值497.28 Mbps的95.7%。这些有限窗口显示：保留32KiB缓冲、单TUN lane和既有handoff路径，仍可接近当时链路速度；没有证据要求为达到这个量级重构TUN线程或扩大ring。不能将频率锁定作为普通rootless VPN的生产方案，也没有证明功耗或温升改善。[默认高频复核与native对照](../../build-output/vpn-diagnosis-default-frequency-20261021/summary.json)。
+
+### 本阶段结论与恢复
+
+已由可逆干预确认：该Pixel上CPU放置和动态频率显著限制单连接性能，不能仅由平均CPU未满推出算力/平台调度无关；worker1所在核长期被其它task占满的假设不符合本次CPU账本。HEV读空/满ring等待与kernel socket读锁、TUN回注/抢占处于不同层次。它们的具体成本随核心与频率改变；单个热点或所有逻辑等待之和仍不能代替完整因果分解。64流约500Mbps被原生链路控制夹住，单流CPU敏感差距则被聚合掩盖，这是重新诊断修正的主要测量错误。
+
+正式的可用CPU能力选择和按负载性能策略尚未修改，SAKAMOTO-292保留进行中；本阶段没有将全局持续高频、CPU4,5跨设备硬编码或TUN结构重构设为产品默认。25个成功VPN窗口均核对generation对应native债务归零、25个保留日志reader完成且gate删除、远程日志SHA与本地一致；1个大核启动失败保留，另1次频率测试在设置前失败。五个实际使用的collector版本已逐一按run中SHA恢复并冻结。
+
+最终原October13 APK及全部12个native、规则、Root grant、worker1,2偏好、两个簇min/max/governor及Openwrt_5G均恢复，runtime停止且VPP/socket-load/simpleperf无残留；专用LAN peer核对exe/argv/PID/starttime/hash后经pidfd关闭。[完整最终审计](../../build-output/vpn-diagnosis-final-native-20261021/final-audit.json) · [collector身份](../../build-output/vpn-diagnosis-final-native-20261021/collector-identities.json) · [专用peer退出](../../build-output/vpn-diagnosis-owner-20261021/peer-cleanup.json)。
