@@ -27,6 +27,9 @@ typedef struct {
   unsigned enabled, stop_requested, stopped, ready, trace;
   int timer_fd;
   u32 reactor_file, timer_file, broker_file;
+  /* Valid only during this owner's synchronous native node invocation. */
+  vlib_node_runtime_t *output_node;
+  u32 output_next;
 } product_vpn_stack_owner_t;
 
 /* Fixed shard registry, not shared PCB/task state. The control plane creates
@@ -99,7 +102,8 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
   product_vpn_stack_owner_t *owner = opaque;
   if (__atomic_load_n(&owner->stop_requested, __ATOMIC_ACQUIRE))
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_REJECTED;
-  return product_vpn_tun_submit_return(vlib_get_main(), spans, count, total,
+  return product_vpn_tun_submit_return(vlib_get_main(), owner->output_node,
+                                       owner->output_next, spans, count, total,
                                        platform, generation, serial, epoch,
                                        flow_incarnation);
 }
@@ -293,7 +297,7 @@ int product_vpn_flow_stack_driver_reject_after(uint32_t index, uint32_t packets)
 }
 
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
-  vlib_main_t *vm, const uint8_t *l3, size_t length,
+  vlib_main_t *vm, vlib_node_runtime_t *node, const uint8_t *l3, size_t length,
   const product_platform_packet_facts_t *platform, uint64_t generation,
   uint64_t flow_incarnation)
 {
@@ -310,9 +314,12 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
       vm->thread_index, (unsigned long long)generation, (unsigned long long)owner->input_calls);
     return PRODUCT_VPN_FLOW_STACK_NO_CAPACITY;
   }
+  owner->output_node = node;
+  owner->output_next = 1; /* product-vpn-egress -> product-packet-admit */
   product_vpn_flow_stack_input_result_t result =
     product_vpn_flow_stack_input_copy(owner->stack, l3, length, platform,
       generation, flow_incarnation);
+  owner->output_node = NULL;
   schedule(vm); /* Admission and rejection-with-close can both wake HEV tasks. */
   return result;
 }
@@ -348,7 +355,10 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
         (unsigned long long)owner->snapshot.output_accepted);
     product_vpn_flow_stack_quiesce(owner->stack);
   }
+  owner->output_node = node;
+  owner->output_next = 0; /* product-vpn-flow-stack-input -> product-packet-admit */
   product_vpn_flow_stack_step_result_t result = product_vpn_flow_stack_step(owner->stack, 8, 200);
+  owner->output_node = NULL;
   owner->snapshot = product_vpn_flow_stack_snapshot(owner->stack);
   if (result.stopped && !product_packet_graph_buffer_debt() &&
       !product_packet_graph_obligation_debt() && !product_packet_graph_completion_frame_debt()) {
@@ -378,6 +388,7 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
 VLIB_REGISTER_NODE(product_vpn_flow_stack_input_node) = {
   .name = "product-vpn-flow-stack-input", .type = VLIB_NODE_TYPE_INPUT,
   .state = VLIB_NODE_STATE_DISABLED,
+  .n_next_nodes = 1, .next_nodes = {[0] = "product-packet-admit"},
 };
 
 static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
@@ -388,6 +399,17 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
   for (u32 index = 0; index < PRODUCT_VPN_RETURN_WORKERS; ++index) {
   product_vpn_stack_owner_t *owner = &owners[index];
   product_vpn_flow_stack_snapshot_t *s = &owner->snapshot;
+  vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu",
+    index, (unsigned long long)s->tcp_rx_rounds,
+    (unsigned long long)s->tcp_read_calls, (unsigned long long)s->tcp_read_blocked,
+    (unsigned long long)s->tcp_commits, (unsigned long long)s->tcp_commit_bytes,
+    (unsigned long long)s->tcp_write_blocked, (unsigned long long)s->tcp_output_calls,
+    (unsigned long long)s->tcp_commit_max);
+  vlib_cli_output(vm, "flow_stack.udp_send owner=%u calls=%llu requested=%llu datagrams=%llu partial=%llu blocked=%llu max=%llu",
+    index, (unsigned long long)s->udp_send_calls,
+    (unsigned long long)s->udp_send_requested, (unsigned long long)s->udp_send_datagrams,
+    (unsigned long long)s->udp_send_partial, (unsigned long long)s->udp_send_blocked,
+    (unsigned long long)s->udp_send_max);
   vlib_cli_output(vm, "flow_stack.limits owner=%u sessions=%u pcbs=%u sockets=%u packets=%u pbufs=%u live_resize=0",
     index, limits.max_sessions, limits.max_pcbs, limits.max_sockets,
     limits.max_input_packets, limits.max_pbufs);

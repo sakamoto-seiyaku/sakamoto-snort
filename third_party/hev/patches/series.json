@@ -57,5 +57,15 @@
     "file": "0007-bionic-system-fd-set.patch",
     "purpose": "Use bionic's public fd_set in the supported Product NDK instead of a conflicting historical kernel typedef",
     "regression": "app/android-runtime/scripts/build-debug-apk.sh --stage-only"
+  },
+  {
+    "file": "0013-bounded-direct-udp-send.patch",
+    "purpose": "Bounded same-session Direct UDP ready-prefix sends, scalar control and exact actual request count; no payload copy or timer",
+    "regression": "tests/host/hev_direct_receive_test.c"
+  },
+  {
+    "file": "0014-bounded-direct-tcp-batch.patch",
+    "purpose": "Bounded ready TCP commits per receive round, syscall/progress counters and retained ring ownership",
+    "regression": "tests/host/hev_owner_tcp_test.c"
   }
 ]

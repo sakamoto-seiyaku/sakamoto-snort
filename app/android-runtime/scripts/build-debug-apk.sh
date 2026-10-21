@@ -21,6 +21,16 @@ root_verdict_sender_default=sendmmsg
 if [[ "$root_verdict_batch_experiment" == ON ]]; then root_verdict_sender_default=packed; fi
 root_verdict_batch_mode="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE:-$root_verdict_sender_default}"
 policy_qualification_counters="${SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS:-$root_batch_experiment}"
+vpn_udp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT:-OFF}"
+if [[ "$vpn_udp_batch_experiment" != ON && "$vpn_udp_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+vpn_tcp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT:-OFF}"
+if [[ "$vpn_tcp_batch_experiment" != ON && "$vpn_tcp_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
 if [[ "$root_batch_experiment" != ON && "$root_batch_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT must be ON or OFF" >&2
   exit 2
@@ -575,6 +585,8 @@ build_native_stage() {
     "-DVPP_VAPI_CPP_GEN=$vapi_cpp_gen"
     "-DVPP_LIBRARY_DIR=$stage_dir/lib"
     "-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=$root_batch_experiment"
+    "-DSAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT=$vpn_udp_batch_experiment"
+    "-DSAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT=$vpn_tcp_batch_experiment"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=$root_verdict_batch_experiment"
     "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE=$root_verdict_batch_mode"
     "-DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS=$policy_qualification_counters"
@@ -789,6 +801,8 @@ quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c
 domainMatcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible
 quicVersion=1
 rootBatchExperiment=$root_batch_experiment
+vpnUdpBatchExperiment=$vpn_udp_batch_experiment
+vpnTcpBatchExperiment=$vpn_tcp_batch_experiment
 rootVerdictBatchExperiment=$root_verdict_batch_experiment
 rootVerdictBatchMode=$root_verdict_batch_mode
 policyQualificationCounters=$policy_qualification_counters
@@ -869,6 +883,8 @@ PY
   echo "versionCode=$version_code"
   echo "vppRevision=$expected_revision"
   echo "rootBatchExperiment=$root_batch_experiment"
+  echo "vpnUdpBatchExperiment=$vpn_udp_batch_experiment"
+  echo "vpnTcpBatchExperiment=$vpn_tcp_batch_experiment"
   echo "rootVerdictBatchExperiment=$root_verdict_batch_experiment"
   echo "rootVerdictBatchMode=$root_verdict_batch_mode"
   echo "policyQualificationCounters=$policy_qualification_counters"
@@ -983,7 +999,11 @@ build_apk_only() {
   require_product_manifest_line "androidApi=$android_api"
   require_product_manifest_line "vppRevision=$expected_revision"
   # Older qualified stages predate these optional experiment fields and are OFF.
-  local staged_batch staged_verdict_batch staged_verdict_mode staged_qualification
+  local staged_batch staged_verdict_batch staged_verdict_mode staged_qualification staged_vpn_udp_batch staged_vpn_tcp_batch
+  staged_vpn_udp_batch="$(sed -n 's/^vpnUdpBatchExperiment=//p' "$product_manifest")"
+  staged_vpn_udp_batch="${staged_vpn_udp_batch:-OFF}"
+  staged_vpn_tcp_batch="$(sed -n 's/^vpnTcpBatchExperiment=//p' "$product_manifest")"
+  staged_vpn_tcp_batch="${staged_vpn_tcp_batch:-OFF}"
   staged_batch="$(sed -n 's/^rootBatchExperiment=//p' "$product_manifest")"
   staged_verdict_batch="$(sed -n 's/^rootVerdictBatchExperiment=//p' "$product_manifest")"
   staged_verdict_batch="${staged_verdict_batch:-OFF}"
@@ -993,6 +1013,8 @@ build_apk_only() {
   staged_batch="${staged_batch:-OFF}"
   staged_qualification="${staged_qualification:-OFF}"
   [[ "$staged_batch" == "$root_batch_experiment" &&
+     "$staged_vpn_udp_batch" == "$vpn_udp_batch_experiment" &&
+     "$staged_vpn_tcp_batch" == "$vpn_tcp_batch_experiment" &&
      "$staged_verdict_batch" == "$root_verdict_batch_experiment" &&
      "$staged_verdict_mode" == "$root_verdict_batch_mode" &&
      "$staged_qualification" == "$policy_qualification_counters" ]] || \

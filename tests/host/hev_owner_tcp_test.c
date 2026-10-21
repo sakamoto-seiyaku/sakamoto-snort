@@ -431,6 +431,22 @@ int main(int argc, char **argv)
     hev_owner_quiesce(f->owner); tick(f);
     hev_owner_snapshot_t s = hev_owner_snapshot(f->owner);
     assert(s.stopped && !s.sessions && !s.pbufs && !s.input_packets);
+    if (!refusal) {
+      assert(s.tcp_rx_rounds && s.tcp_read_calls && s.tcp_commits);
+      assert(s.tcp_commit_bytes == PAYLOAD);
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+      assert(s.tcp_commit_max <= 8);
+      if (!pressure && !reset && !remote_fin && !underlay)
+        assert(s.tcp_commit_max >= 4);
+#else
+      assert(s.tcp_commit_max <= 2); /* A wrapped ring can have two short spans. */
+#endif
+      printf("TCP%d owner=%d rx_rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu max_commits=%llu output_calls=%llu\n",
+        family, i, (unsigned long long)s.tcp_rx_rounds,
+        (unsigned long long)s.tcp_read_calls, (unsigned long long)s.tcp_read_blocked,
+        (unsigned long long)s.tcp_commits, (unsigned long long)s.tcp_commit_bytes,
+        (unsigned long long)s.tcp_commit_max, (unsigned long long)s.tcp_output_calls);
+    }
     assert(s.sessions_created == s.sessions_closed && s.sockets_created == s.sockets_closed);
     assert(s.pool_allocations == s.pool_frees && s.ram_allocations == s.ram_frees &&
            s.ref_allocations == s.ref_frees && s.lwip_heap_live == 2);

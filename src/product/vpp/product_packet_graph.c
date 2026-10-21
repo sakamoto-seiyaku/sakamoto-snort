@@ -1970,7 +1970,7 @@ VLIB_NODE_FN(product_vpn_egress_node)
         lease.facts.l4_status == PRODUCT_PACKET_L4_COMPLETE &&
         product_vpn_flow_stack_driver_enabled()) {
       product_vpn_flow_stack_input_result_t result = product_vpn_flow_stack_driver_input(
-        vm, vlib_buffer_get_current(buffer), buffer->current_length,
+        vm, node, vlib_buffer_get_current(buffer), buffer->current_length,
         &lease.platform, metadata.generation,
         product_vpn_tun_product_mode() ? product_flow_entry_current_incarnation(
           product_packet_graph_main.flow_pools[vlib_get_worker_index(vm->thread_index)],
@@ -1990,8 +1990,8 @@ VLIB_NODE_FN(product_vpn_egress_node)
 }
 VLIB_REGISTER_NODE(product_vpn_egress_node) = {
   .name = "product-vpn-egress", .vector_size = sizeof(u32),
-  .type = VLIB_NODE_TYPE_INTERNAL, .n_next_nodes = 1,
-  .next_nodes = {[0] = "product-packet-terminal"},
+  .type = VLIB_NODE_TYPE_INTERNAL, .n_next_nodes = 2,
+  .next_nodes = {[0] = "product-packet-terminal", [1] = "product-packet-admit"},
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -4442,14 +4442,15 @@ product_packet_graph_policy_on_owner (
   return result;
 }
 
-#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
-u32
-product_packet_graph_submit_external_batch (
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
+static u32
+product_packet_graph_submit_external_batch_internal (
   vlib_main_t *vm, const product_packet_graph_external_item_t *items,
-  u32 count, u8 *accepted)
+  u32 count, u8 *accepted, vlib_node_runtime_t *source_node, u32 next)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   vlib_frame_t *frame = 0;
+  u32 native_indices[VLIB_FRAME_SIZE];
   u32 *to = 0, submitted = 0;
   if (!items || !accepted || count > VLIB_FRAME_SIZE)
     return 0;
@@ -4486,23 +4487,57 @@ product_packet_graph_submit_external_batch (
       clib_memcpy_fast (buffer->opaque, &saved, sizeof (saved));
       product_metadata_store (buffer, &metadata);
       product_packet_graph_set_platform_facts (buffer, platform, metadata.generation);
-      if (!frame)
+      if (!source_node && !frame)
         {
           frame = vlib_get_frame_to_node (vm, product_packet_admit_node.index);
           to = vlib_frame_vector_args (frame);
         }
-      to[submitted++] = items[i].buffer_index;
+      if (source_node) native_indices[submitted] = items[i].buffer_index;
+      else to[submitted] = items[i].buffer_index;
+      ++submitted;
       accepted[i] = 1;
       clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
     }
   if (submitted)
     {
-      frame->n_vectors = submitted;
-      vlib_put_frame_to_node (vm, product_packet_admit_node.index, frame);
+      if (source_node)
+        vlib_buffer_enqueue_to_single_next (vm, source_node, native_indices, next, submitted);
+      else
+        {
+          frame->n_vectors = submitted;
+          vlib_put_frame_to_node (vm, product_packet_admit_node.index, frame);
+        }
     }
   return submitted;
 }
+
+u32
+product_packet_graph_submit_external_batch (
+  vlib_main_t *vm, const product_packet_graph_external_item_t *items,
+  u32 count, u8 *accepted)
+{
+  return product_packet_graph_submit_external_batch_internal(vm, items, count,
+                                                            accepted, 0, 0);
+}
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+int product_packet_graph_submit_vpn_return_next (
+  vlib_main_t *vm, vlib_node_runtime_t *node, u32 next, u32 buffer_index,
+  const product_platform_packet_facts_t *platform,
+  const product_adapter_obligation_t *obligation)
+{
+  if (!node || !platform || !obligation ||
+      platform->provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN ||
+      obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
+    return 0;
+  product_packet_graph_external_item_t item = {
+    .buffer_index = buffer_index, .platform = *platform, .obligation = *obligation,
+  };
+  u8 accepted = 0;
+  return product_packet_graph_submit_external_batch_internal(vm, &item, 1,
+                                                            &accepted, node, next) == 1;
+}
+#endif
 #endif
 
 int

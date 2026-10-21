@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare once, then measure 8 real Pixel workloads under a 120 s deadline."""
+"""Prepare once, then measure a frozen Pixel workload suite within 120 seconds."""
 import argparse
 import hashlib
 import json
@@ -18,6 +18,10 @@ PACKAGE = "com.sakamoto.snort.androidruntime"
 SERIAL = "28201JEGR0XPAJ"
 CASES = ("tcp-fixed", "udp-fixed", "tcp-new", "udp-new")
 SOURCE = Path(__file__).with_name("socket_load.c")
+VPN_SUITE = "ordinary-vpn-v1"
+VPN_FRESH_SUITE = "ordinary-vpn-fresh-v1"
+VPN_TCP_SUITE = "ordinary-vpn-tcp-fixed-v1"
+VPN_SUITES = (VPN_SUITE, VPN_FRESH_SUITE, VPN_TCP_SUITE)
 NDK_CLANG = Path("/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang")
 
 
@@ -37,20 +41,30 @@ def peer_query(host, port, case_id, operation="Q"):
 
 
 class Device:
-    def __init__(self, serial, output, deadline=None):
+    def __init__(self, serial, output, deadline=None, control_timeout=5):
         self.prefix = [str(ROOT / "dev/adb"), "-s", serial]
         self.output, self.deadline = output, deadline
+        self.control_timeout = control_timeout
         self.helper = None
 
-    def command(self, *args, timeout=5, check=True, cleanup=False):
+    def command(self, *args, timeout=None, check=True, cleanup=False):
         started = time.monotonic()
+        timeout = self.control_timeout if timeout is None else timeout
         if self.deadline is not None and not cleanup:
             timeout = min(timeout, self.deadline - started)
             if timeout <= 0:
                 raise TimeoutError("global 120-second deadline")
-        completed = subprocess.run(self.prefix + list(map(str, args)),
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   text=True, errors="replace", timeout=timeout)
+        try:
+            completed = subprocess.run(self.prefix + list(map(str, args)),
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       text=True, errors="replace", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with (self.output / "operations.jsonl").open("a") as log:
+                log.write(json.dumps({"started_monotonic": started,
+                                      "elapsed_seconds": time.monotonic() - started,
+                                      "args": list(map(str, args)), "timeout_seconds": timeout,
+                                      "error": "TimeoutExpired"}) + "\n")
+            raise
         value = completed.stdout.replace("\r", "")
         with (self.output / "operations.jsonl").open("a") as log:
             log.write(json.dumps({"started_monotonic": started,
@@ -141,6 +155,34 @@ class Device:
                 process.terminate()
                 process.wait(timeout=1)
 
+    def retain_vpn_log(self, destination):
+        """Hold the log inode across RuntimeService's normal profile deletion.
+
+        Start only after the measured window. The bounded shell reader copies
+        after native exit, so it adds no polling to the performance samples.
+        """
+        log = "/data/data/" + PACKAGE + "/files/profiles/vpn/vpp/logs/vpp-stdout.log"
+        q = shlex.quote
+        script = ("exec 3< " + q(log) + " || exit 1; touch " + q(destination + ".ready")
+                  + "; n=0; while [ ! -f " + q(destination + ".copy")
+                  + " ] && [ $n -lt 150 ]; do sleep .1; n=$((n+1)); done; "
+                  + "[ -f " + q(destination + ".copy") + " ] || exit 2; "
+                  + "cat <&3 > " + q(destination) + " && touch " + q(destination + ".done"))
+        value = self.root("sh -c " + q(script) + " >/dev/null 2>&1 </dev/null & echo reader=$!")
+        if not properties(value).get("reader", "").isdigit():
+            raise RuntimeError("native log reader did not start")
+        self.root("n=0; while [ ! -f " + q(destination + ".ready")
+                  + " ] && [ $n -lt 50 ]; do sleep .02; n=$((n+1)); done; test -f "
+                  + q(destination + ".ready"), timeout=2)
+
+    def read_retained_vpn_log(self, destination):
+        q = shlex.quote
+        return self.root("touch " + q(destination + ".copy")
+                         + "; n=0; while [ ! -f " + q(destination + ".done")
+                         + " ] && [ $n -lt 50 ]; do sleep .02; n=$((n+1)); done; "
+                         + "test -f " + q(destination + ".done") + " && cat "
+                         + q(destination), timeout=2)
+
 
 def prepare(args):
     output = args.output.resolve()
@@ -180,6 +222,15 @@ def prepare(args):
                 "peer_host": args.peer, "peer_port": args.port,
                 "cell_ms": args.cell_ms, "threads": 4, "flows_per_thread": 16,
                 "profiling": not args.no_profile, "prepared_utc_ns": time.time_ns()}
+    if args.suite in VPN_SUITES:
+        manifest.update(suite=args.suite, profiles=["vpn"],
+                        cases=["tcp-fixed"] if args.suite == VPN_TCP_SUITE else list(CASES),
+                        collector_sha256=digest(__file__),
+                        native_stop_evidence="retained-open-log-inode")
+        if args.suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE):
+            manifest['fresh_lifetime_each_case'] = True
+        if args.suite == VPN_TCP_SUITE:
+            manifest['control_timeout_seconds'] = 15
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (output / "device-before.json").write_text(json.dumps(initial, indent=2) + "\n")
     print(json.dumps({"prepared": str(output / "manifest.json"),
@@ -238,6 +289,36 @@ def monitor_summary(raw, client):
             "rss_peak_bytes": max(t["rss_pages"] * s["page_size"] for s in samples for t in s["threads"])}
 
 
+def validate_vpn_window(generation, client, before, after):
+    for raw in (before, after):
+        tun = rows(raw, "tun.status ")
+        stack = rows(raw, "flow_stack.status ")
+        if (len(tun) != 1 or tun[0].get("generation") != str(generation)
+                or tun[0].get("enabled") != "1" or tun[0].get("attached") != "1"
+                or len(stack) != 2 or {v.get("owner") for v in stack} != {"0", "1"}
+                or any(v.get("generation") != str(generation) or v.get("ready") != "1"
+                       for v in stack)):
+            raise RuntimeError("VPN capture/owner generation or readiness changed")
+    if any(client.get(k, 0) for k in ("bytes", "packets", "completed", "input_unique_udp_tuples")):
+        if int(rows(after, "tun.status ")[0]["captured"]) <= int(rows(before, "tun.status ")[0]["captured"]):
+            raise RuntimeError("VPN capture made no progress despite endpoint traffic")
+    validate_capture_window("vpn", client, before, after)
+
+
+def validate_vpn_stop(raw, generation):
+    owners = rows(raw, "s237 event=owner_stopped ")
+    stop = rows(raw, "s213 event=stop ")
+    if (len(owners) != 2 or {v.get("owner") for v in owners} != {"0", "1"}
+            or any(v.get("generation") != str(generation)
+                   or any(v.get(k) != "0" for k in ("sessions", "inputs", "pbufs", "buffers", "obligations", "frames"))
+                   or v.get("timer_fd") != "-1" or v.get("broker_fd") != "-1"
+                   or v.get("sockets_created") != v.get("sockets_closed") for v in owners)
+            or len(stop) != 1 or stop[0].get("generation") != str(generation)
+            or any(stop[0].get(k) != "0" for k in ("pending", "buffers", "frames", "obligations"))
+            or stop[0].get("tun_fd") != "-1"):
+        raise RuntimeError("VPN native stop audit does not settle this generation")
+
+
 def score(client, peer, cpu, diagnostic, before):
     seconds = (client["end_monotonic_ns"] - client["start_monotonic_ns"]) / 1e9
     case = client["case"]
@@ -276,10 +357,24 @@ def run(args):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     manifest = json.loads(args.manifest.read_text())
+    suite = manifest.get("suite", "root-vpn-v1")
+    if suite not in ("root-vpn-v1", *VPN_SUITES):
+        raise RuntimeError("unknown benchmark suite")
+    vpn_only = suite in VPN_SUITES
+    fresh_each_case = suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE)
+    if fresh_each_case and manifest.get('fresh_lifetime_each_case') is not True:
+        raise RuntimeError("fresh VPN suite must freeze independent lifetimes")
+    profiles = ("vpn",) if vpn_only else ("root", "vpn")
+    cases = ("tcp-fixed",) if suite == VPN_TCP_SUITE else CASES
+    if vpn_only and (manifest.get("profiles") != ["vpn"] or manifest.get("cases") != list(cases)):
+        raise RuntimeError("VPN suite must freeze its exact workload list")
     result = {"schema": 1, "status": "INCOMPLETE", "manifest": manifest,
               "runner_sha256": digest(__file__), "cases": [], "errors": [],
               "started_utc_ns": time.time_ns(), "deadline_seconds": 120}
-    device = Device(manifest["serial"], output, entry + 120)
+    control_timeout = manifest.get('control_timeout_seconds', 5)
+    if control_timeout not in (5, 15) or (control_timeout != 5 and suite != VPN_TCP_SUITE):
+        raise RuntimeError('control timeout is outside the frozen suite contract')
+    device = Device(manifest["serial"], output, entry + 120, control_timeout)
     active = False
     initial = None
     sampler_pids = {}
@@ -287,6 +382,8 @@ def run(args):
     device.helper = helper
     run_remote = manifest["remote"] + "/run-" + hashlib.sha256(str(output).encode()).hexdigest()[:12]
     try:
+        if vpn_only and manifest.get("collector_sha256") != digest(__file__):
+            raise RuntimeError("VPN collector changed; prepare a new frozen manifest")
         if digest(SOURCE) != manifest["source_sha256"] or digest(manifest["android_binary"]) != manifest["android_sha256"]:
             raise RuntimeError("prepared helper source/artifact changed; prepare a new version")
         initial = device.state()
@@ -299,8 +396,8 @@ def run(args):
         (output / "network-before.txt").write_text(device.command("shell", "ip", "-4", "addr"))
         peer_query(manifest["peer_host"], manifest["peer_port"], 0)
         device.root("mkdir " + shlex.quote(run_remote))
-        for profile in ("root", "vpn"):
-            for case in CASES:
+        for profile in profiles:
+            for case in cases:
                 # Never shorten a cell or omit a profile to claim a successful deadline.
                 if entry + 120 - time.monotonic() < manifest["cell_ms"] / 1000 + 5:
                     raise TimeoutError("not enough global budget for a complete next cell and cleanup")
@@ -308,7 +405,7 @@ def run(args):
                 cell = output / (profile + "-" + case)
                 cell.mkdir()
                 started = time.monotonic()
-                fresh_lifetime = case in ("tcp-fixed", "udp-new")
+                fresh_lifetime = fresh_each_case or case in ("tcp-fixed", "udp-new")
                 if fresh_lifetime:
                     active = True  # ambiguous start failure still requires normal stop
                     (cell / "start.txt").write_text(device.action("--ez", "runtimeStart", "true", "--es", "runtimeProfile", profile))
@@ -332,7 +429,12 @@ def run(args):
                     warm_result = json.loads(warm_value)
                     if not warm_result.get("bytes"):
                         raise RuntimeError("phone cannot deliver warmup data from the selected LAN peer")
-                diagnostic = device.cli(profile, ["show threads", "show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows"])
+                commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows"]
+                if vpn_only:
+                    commands.append("show product flow-stack")
+                if suite == VPN_TCP_SUITE:
+                    commands.append("show runtime")
+                diagnostic = device.cli(profile, ["show threads", *commands])
                 (cell / "before-cli.txt").write_text(diagnostic)
                 layout = []
                 for line in diagnostic.splitlines():
@@ -378,7 +480,7 @@ def run(args):
                 client = json.loads(value)
                 if client["uid"] != (manifest["uid"] if profile == "root" else 2000):
                     raise RuntimeError("traffic helper UID is outside the intended capture profile")
-                after = device.cli(profile, ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows"])
+                after = device.cli(profile, commands)
                 (cell / "after-cli.txt").write_text(after)
                 peer = peer_query(manifest["peer_host"], manifest["peer_port"], case_id)
                 peer["measurement_cpu_seconds"] = peer["peer_cpu_seconds"] - peer_before["peer_cpu_seconds"]
@@ -399,6 +501,8 @@ def run(args):
                     log = device.root("cat " + shlex.quote(remote_perf + ".log"))
                     (cell / "perf.log").write_text(log)
                 try:
+                    if vpn_only:
+                        validate_vpn_window(running["generation"], client, diagnostic, after)
                     validate_capture_window(profile, client, diagnostic, after)
                 except RuntimeError:
                     if profile == 'root':
@@ -406,8 +510,11 @@ def run(args):
                             'cat /proc/net/netfilter/nfnetlink_queue; iptables -t mangle -nvL',
                             check=False, cleanup=True))
                     raise
-                stopped_lifetime = case in ("tcp-new", "udp-new")
+                stopped_lifetime = fresh_each_case or case in ("tcp-new", "udp-new")
                 if stopped_lifetime:
+                    if vpn_only:
+                        retained_log = run_remote + "/" + case + "-native.log"
+                        device.retain_vpn_log(retained_log)
                     device.action("--ez", "runtimeStop", "true")
                     final = device.wait_state("stopped")
                     device.wait_process_gone("libvpp_runtime.so")
@@ -418,6 +525,10 @@ def run(args):
                     device.wait_process_gone(PACKAGE + ":runtime")
                     active = False
                     (cell / "stopped.json").write_text(json.dumps(final, indent=2) + "\n")
+                    if vpn_only:
+                        native_stop = device.read_retained_vpn_log(retained_log)
+                        (cell / "native-stop.txt").write_text(native_stop)
+                        validate_vpn_stop(native_stop, running["generation"])
                 if profile == "root" and stopped_lifetime:
                     tail = device.command("shell", "run-as", PACKAGE, "tail", "-n", "12", "files/product-state/s242-last-stop.log")
                     (cell / "native-stop.txt").write_text(tail)
@@ -438,7 +549,7 @@ def run(args):
                 score_value = result["cases"][-1]["score"]
                 print(profile, case, json.dumps({key: score_value[key] for key in
                       ("delivered_mbps", "completed_cps", "input_unique_udp_tuples_per_second", "p99_upper_us", "latency_samples", "flow_capacity_misses", "root_unadmitted_accepts")}), flush=True)
-        if len(result["cases"]) == 8:
+        if len(result["cases"]) == len(profiles) * len(cases):
             result["status"] = "COMPLETE"
     except Exception as error:
         result["errors"].append(type(error).__name__ + ": " + str(error))
@@ -490,6 +601,8 @@ def main():
     prep.add_argument("--cell-ms", type=int, choices=(5000, 6000, 8000, 10000), default=5000,
                       help="fixed measurement window, frozen in the manifest before B0")
     prep.add_argument("--no-profile", action="store_true")
+    prep.add_argument("--suite", choices=("root-vpn-v1", *VPN_SUITES), default="root-vpn-v1",
+                      help="VPN suites freeze their workloads; ordinary-vpn-tcp-fixed-v1 measures only fixed TCP download")
     measure = sub.add_parser("run")
     measure.add_argument("--manifest", type=Path, required=True)
     measure.add_argument("--output", type=Path, required=True)

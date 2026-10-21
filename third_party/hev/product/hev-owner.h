@@ -120,6 +120,11 @@ typedef struct {
   uint64_t output_calls, output_accepted, output_rejected;
   uint64_t sessions_created, sessions_closed, sockets_created, sockets_closed;
   uint64_t direct_sent, direct_received, broker_requested, broker_completed;
+  uint64_t udp_send_calls, udp_send_requested, udp_send_datagrams;
+  uint64_t udp_send_partial, udp_send_blocked, udp_send_max;
+  uint64_t tcp_rx_rounds, tcp_read_calls, tcp_read_blocked;
+  uint64_t tcp_commits, tcp_commit_bytes, tcp_write_blocked, tcp_output_calls;
+  uint64_t tcp_commit_max;
   uint64_t task_quanta, steps, wrong_owner, stale_generation;
   uint32_t sessions, input_packets, input_peak, pbufs, pbuf_peak;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;

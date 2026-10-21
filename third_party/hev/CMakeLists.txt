@@ -82,7 +82,19 @@ add_library(sakamoto_hev_session STATIC
   "${HEV_SOURCE}/src/core/src/hev-socks5-udp.c")
 set_target_properties(sakamoto_hev_session PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(sakamoto_hev_session PRIVATE c_std_11)
-target_compile_definitions(sakamoto_hev_session PRIVATE SAKAMOTO_HEV_DIRECT_ONLY=1)
+target_compile_definitions(sakamoto_hev_session PRIVATE SAKAMOTO_HEV_DIRECT_ONLY=1 _GNU_SOURCE)
+option(SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT
+  "Send bounded ready UDP datagrams in one owner-local syscall" OFF)
+if(SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_session PUBLIC
+    SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT=1)
+endif()
+option(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+  "Bound ready TCP splice work and aggregate native VPN graph frames" OFF)
+if(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
+  target_compile_definitions(sakamoto_hev_session PUBLIC
+    SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT=1)
+endif()
 target_include_directories(sakamoto_hev_session PUBLIC
   "${HEV_SOURCE}/src" "${HEV_SOURCE}/src/core/src"
   "${HEV_SOURCE}/src/misc")

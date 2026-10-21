@@ -53,6 +53,38 @@ within [ADR-0007](../adr/0007-owner-local-lwip-direct-egress.md), using actual
 profiles before choosing a code change. This focus decision adds no new device
 load, performance result, capacity increase or architecture change.
 
+Later on October 21, the current installed ordinary VPN baseline completed with
+exact symbols. An experimental same-session UDP ready-send batch then completed
+a separate four-lifetime ABBA: endpoint UDP means 237.23→357.22 Mbps and estimated
+VPP CPU per delivered GiB −33.81%, with admission/loss and sparse latency limits.
+TCP-new completion/timeout results do not establish no regression. The candidate
+remains default OFF; the original APK, rules and Stopped state are restored, and
+Wi-Fi remains Openwrt_5G at the user's later request. The aborted two-lifetime
+attempt is retained separately. This is new scoped evidence, not a historical
+B0 reclassification or production adoption.
+[VPN baseline, implementation and all experiment outcomes](../testing/2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md).
+
+The user then clarified the ongoing optimization scope: prioritize established
+TCP connections and fixed UDP flows; investigate session/new-connection behavior
+alongside that work, without making TCP-new CPS alone a blocker. The existing
+fixed-flow profiles show UDP scheduling/input costs per delivered byte falling,
+while TCP still spends about46% of on-CPU time in TUN return completion and has
+worker CPU headroom. The [fixed-flow caller analysis](../testing/2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md#固定流火焰图继续分析)
+separates kernel socket/driver callers, return-capacity unknowns and bounded TCP
+splice candidates. This clarification adds no device run or default adoption.
+
+The user next authorized a batching candidate with device validation restricted
+to fixed TCP download. The candidate combines bounded eight-commit TCP receive
+rounds, native return next frames and ready TUN capture graph batches. Four
+TCP-only ABBA windows show readv/delivered GiB−62.03%, receive rounds/GiB−52.97%
+and estimated VPP CPU/GiB−6.17%; endpoint means110.44→103.48Mbps do not establish
+a throughput benefit. TUN writes/GiB remain essentially unchanged. Two ADB
+failures before measurement are retained; the completed campaign uses the repo
+wrapper with a Linux client to the existing ADB server. Candidate defaultsOFF,
+original APK/rules/Stopped restored, Wi-Fi retained. No new-connection/UDP/Root
+performance gate was added to this scoped experiment.
+[Fixed TCP implementation, raw outcomes and limits](../testing/2026-10-21_VPN_FIXED_TCP_BATCH.md).
+
 The sections below retain the October 13 and earlier findings, restoration
 states and candidate judgments in their original scope.
 

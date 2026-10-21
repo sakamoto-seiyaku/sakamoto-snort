@@ -47,6 +47,58 @@ rtk proxy python3 tests/benchmark/pixel_quick.py run \
   --output build-output/pixel-quick-B0
 ```
 
+For a separate ordinary VPN baseline, prepare with
+`--suite ordinary-vpn-v1`. This freezes four VPN cells with the same workload
+order, two lifetimes and 120-second deadline. It is a distinct series from the
+eight-cell Root+VPN B0. The default suite still requires all eight cells.
+
+```sh
+rtk proxy python3 tests/benchmark/pixel_quick.py prepare \
+  --suite ordinary-vpn-v1 --peer <reachable-LAN-peer> --port 41720 \
+  --output build-output/vpn-prepared-<unique-id>
+rtk proxy python3 tests/benchmark/pixel_quick.py run \
+  --manifest build-output/vpn-prepared-<unique-id>/manifest.json \
+  --output build-output/vpn-baseline-<unique-id>
+```
+
+Start the manifest's host peer separately before running. The VPN suite requires
+ordinary `protectionRunning=true`, same-generation TUN progress, both ready
+owners and the existing warmup UID/Flow checks. Before/after CLI records also
+include `show product flow-stack`: per-owner limits, sessions, sockets, input
+packets, copy counts, broker facts and rejection reasons. Capacity and rejection
+counters remain explicit even when endpoint delivery succeeds.
+
+After each lifetime's last measured window, the collector opens the native log
+and holds its inode through normal stop and profile deletion. Only after VPP
+exit does it copy the log, requiring this generation's two settled owners and
+TUN stop record. This avoids borrowing historical validation/Root archives and
+adds no reader polling during performance samples. Missing native evidence
+makes the run `INCOMPLETE`; it does not change the ordinary startup path.
+
+`--suite ordinary-vpn-fresh-v1` separately freezes a normal start/warmup/stop
+for **each** of the four cells. Use it when isolating workloads from retained
+Flow/session occupancy matters. It keeps the same initial occupancy guard,
+capacity, four workloads and 120-second deadline, and requires native stop
+evidence for all four generations. It is a distinct configuration from both
+the two-lifetime VPN suite and the original eight-cell B0.
+
+`--suite ordinary-vpn-tcp-fixed-v1` freezes **only ordinary VPN fixed TCP
+download**, with one normal start/warmup/5-second load/stop lifetime. It retains
+the same concurrency, UID/Flow/occupancy checks, 120-second total deadline and
+generation-matched native stop audit. It is a distinct suite; it does not run
+UDP, new-connection pressure or Root. Its manifest records a 15-second control
+transport timeout and its CLI snapshots additionally retain `show runtime`.
+`report.py compare` requires exactly that one cell for this suite.
+
+The default-OFF `SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT` combines at most eight
+existing one-MSS TCP commits per receive round, native return next-frame
+aggregation and at most64 ready TUN capture graph submissions per batch. It
+does not change MTU/MSS, pool counts, ring/sndbuf size or TUN packet boundaries.
+`flow_stack.tcp_receive` exposes rounds/read calls/commits/bytes/blocked/output
+calls; `max_commits` is a lifetime maximum, not a delta. `tun.capture_batch`
+measures graph publication, not fewer TUN read syscalls; `show runtime` gives
+actual vectors/call. See the [fixed TCP experiment](../../docs/testing/2026-10-21_VPN_FIXED_TCP_BATCH.md).
+
 It runs Root, then ordinary VPN. Each mode uses this fixed order:
 
 1. Start normally; warm the actual LAN/trace path; TCP fixed multi-flow download.
@@ -107,12 +159,15 @@ build IDs; a cache from another APK is not a symbol identity proof. The comparis
 rejects incomplete or over-budget runs and changed benchmark parameters. APK
 identity may differ across optimizations; device, rules, helper, load and collection
 parameters must stay fixed. It produces standalone HTML and machine-readable JSON.
+Graphs explicitly select on-CPU samples. Comparisons require the same suite,
+all its cells in their frozen order, and the VPN suite's native stop evidence.
 
 ## Tool correctness
 
 ```sh
 rtk proxy python3 tests/benchmark/check_socket_load.py
 rtk proxy python3 tests/benchmark/check_capture.py
+rtk proxy python3 tests/benchmark/check_vpn_baseline.py
 rtk proxy python3 tests/benchmark/check_root_batch.py
 rtk proxy python3 tests/benchmark/check_udp_burst.py
 rtk proxy python3 tests/host/product_nfqueue_verdict_batch_test.py
@@ -260,3 +315,28 @@ maxlen1024；128槽接收池和身份账本配套调整，reserve仍8。原64记
 窗口完整通过，但未证明整体CPU效率收益；32k/64k及TCP不合格，TCP名义双lane实际只一lane。
 扩容档不作为原固定预算batch规格的默认采用验收。原APK/配置/Stopped已恢复，
 见[全部结果与界限](../../docs/testing/2026-10-13_ROOT_NFQUEUE_CAPACITY_TUNING.md)。
+
+## Ordinary VPN UDP ready-send experiment
+
+`SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT=ON` selects bounded `sendmmsg`
+inside an existing owner-local HEV Direct UDP session; the default is OFF.
+Android and Host builders pass and record the switch. APK assembly rejects a
+stage built with a different setting. There is no delay to collect a batch:
+one task turn sends at most eight already queued datagrams, with at most 64
+pbuf spans across the call, then returns to receive/scheduling. All messages
+use the same successfully bound/protected connected socket. Packet, session,
+PCB, Flow and return-credit capacities are unchanged.
+
+`show product flow-stack` includes `flow_stack.udp_send` per owner: actual
+`calls`, `requested`, successfully consumed `datagrams`, positive-prefix
+`partial`, transient `blocked`, and lifetime request `max`. Use same-generation
+counter deltas; `max` is a lifetime maximum and must not be subtracted. Configured
+batch size alone does not prove runtime density. A positive prefix frees only
+its own queued pbufs; unsent messages retain ownership for later scheduling.
+EAGAIN/EINTR retains the queue; terminal failure closes the session and drains
+remaining input ownership without replay. The tests exercise actual sockets,
+partial send capacity, zero-length/chained datagrams, and descriptor limits.
+
+The October 21 independent baseline, failed two-lifetime campaign and separate
+four-lifetime comparison are recorded in
+[`2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md`](../../docs/testing/2026-10-21_ORDINARY_VPN_BASELINE_AND_UDP_SEND.md).

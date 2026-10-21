@@ -314,13 +314,22 @@ static void session_task(void *opaque)
     uint64_t now = now_ms();
     if (now >= session->deadline) break;
     sent = hev_socks5_session_udp_direct_send(transport);
+    unsigned requested = transport->direct_send_requested;
+    if (requested) {
+      ++owner->stats.udp_send_calls;
+      owner->stats.udp_send_requested += requested;
+      if (requested > owner->stats.udp_send_max) owner->stats.udp_send_max = requested;
+      if (!sent) ++owner->stats.udp_send_blocked;
+      if (sent > 0 && (unsigned)sent < requested) ++owner->stats.udp_send_partial;
+    }
     if (sent < 0) {
       failure(owner, HEV_OWNER_FAULT_SOCKET_IO, session->id, errno);
       break;
     }
     if (sent) {
-      --owner->stats.input_packets;
-      ++owner->stats.direct_sent;
+      owner->stats.input_packets -= (unsigned)sent;
+      owner->stats.direct_sent += (unsigned)sent;
+      owner->stats.udp_send_datagrams += (unsigned)sent;
       session->deadline = now + owner->config.udp_idle_timeout_ms;
     }
     owner->output_session = session;
@@ -565,6 +574,17 @@ static void tcp_session_task(void *opaque)
     int send_error = sent == -2 ? errno : 0;
     int received = sent == -2 ? -2 : hev_socks5_session_tcp_direct_receive(transport);
     int receive_error = received == -2 ? errno : 0;
+    if (sent != -2) {
+      ++owner->stats.tcp_rx_rounds;
+      owner->stats.tcp_read_calls += transport->direct_read_calls;
+      owner->stats.tcp_read_blocked += transport->direct_read_blocked;
+      owner->stats.tcp_commits += transport->direct_commits;
+      owner->stats.tcp_commit_bytes += transport->direct_commit_bytes;
+      owner->stats.tcp_write_blocked += transport->direct_write_blocked;
+      owner->stats.tcp_output_calls += transport->direct_output_calls;
+      if (transport->direct_commits > owner->stats.tcp_commit_max)
+        owner->stats.tcp_commit_max = transport->direct_commits;
+    }
     if (transport->direct_write_error) {
       trace(owner, "tcp_write_deferred", session->id, transport,
             transport->direct_deferred_bytes, transport->direct_write_error,

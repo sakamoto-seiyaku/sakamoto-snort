@@ -1,0 +1,125 @@
+--- a/src/hev-socks5-session-udp.h
++++ b/src/hev-socks5-session-udp.h
+@@ -37,6 +37,8 @@
+     /* Product Direct sessions retain this class's PCB, frame queue and fd
+      * ownership. Zero preserves the upstream SOCKS configuration path. */
+     unsigned int direct_frame_limit;
++    /* Actual ready datagrams submitted by the most recent Direct send call. */
++    unsigned int direct_send_requested;
+ };
+ 
+ struct _HevSocks5SessionUDPClass
+@@ -60,7 +62,9 @@
+  * send/receive only after successful broker completion and Direct connect. */
+ HevSocks5SessionUDP *hev_socks5_session_udp_direct_new (
+     struct udp_pcb *pcb, HevTaskMutex *mutex, unsigned int frame_limit);
+-/* 1 = one datagram consumed, 0 = would block/no work, -1 = socket failure.
++/* send consumes a successful prefix of 1..8 datagrams (scalar builds: 1).
++ * receive consumes one datagram. Zero = would block/no work, -1 = terminal
++ * socket failure: the caller closes the session, without retrying its queue.
+  * An output callback error consumes only that return datagram; it does not
+  * disable reception. output_result is meaningful only when receive returns 1.
+  * scratch must hold at least the configured maximum UDP payload. */
+--- a/src/hev-socks5-session-udp.c
++++ b/src/hev-socks5-session-udp.c
+@@ -252,40 +252,76 @@
+ hev_socks5_session_udp_direct_send (HevSocks5SessionUDP *self)
+ {
+     struct iovec spans[64];
+-    struct msghdr msg = { 0 };
+-    HevSocks5UDPFrame *frame;
++    struct mmsghdr messages[8] = { 0 };
+     HevListNode *node;
+-    struct pbuf *p;
+-    ssize_t result;
+-    unsigned int count = 0;
+-
++    unsigned int count = 0, span_count = 0;
++    unsigned int budget = 1;
++    int result;
++#ifdef SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT
++    budget = 8;
++#endif
++    self->direct_send_requested = 0;
+     if (!self->direct_frame_limit || self->base.fd < 0)
+         return -1;
+     node = hev_list_first (&self->frame_list);
+-    if (!node)
++    while (node && count < budget) {
++        HevSocks5UDPFrame *frame = container_of (node, HevSocks5UDPFrame, node);
++        struct pbuf *p;
++        unsigned int first = span_count;
++        for (p = frame->data; p && span_count < 64; p = p->next) {
++            spans[span_count].iov_base = p->payload;
++            spans[span_count++].iov_len = p->len;
++        }
++        /* Bound descriptors across the whole call. A later long chain waits
++         * for the next turn; an unrepresentable first packet is terminal. */
++        if (p) {
++            if (!count) { errno = EMSGSIZE; return -1; }
++            break;
++        }
++        messages[count].msg_hdr.msg_iov = spans + first;
++        messages[count++].msg_hdr.msg_iovlen = span_count - first;
++        node = hev_list_node_next (node);
++    }
++    if (!count)
+         return 0;
+-    frame = container_of (node, HevSocks5UDPFrame, node);
+-    for (p = frame->data; p; p = p->next) {
+-        if (count == sizeof (spans) / sizeof (spans[0]))
+-            return -1;
+-        spans[count].iov_base = p->payload;
+-        spans[count++].iov_len = p->len;
+-    }
+-    msg.msg_iov = spans;
+-    msg.msg_iovlen = count;
+-    result = sendmsg (self->base.fd, &msg, MSG_DONTWAIT | MSG_NOSIGNAL);
++    self->direct_send_requested = count;
++#ifdef SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT
++    result = sendmmsg (self->base.fd, messages, count,
++                      MSG_DONTWAIT | MSG_NOSIGNAL);
++#else
++    {
++        ssize_t bytes = sendmsg (self->base.fd, &messages[0].msg_hdr,
++                                 MSG_DONTWAIT | MSG_NOSIGNAL);
++        result = bytes < 0 ? -1 : 1;
++        if (bytes >= 0) messages[0].msg_len = (unsigned int) bytes;
++    }
++#endif
+     if (result < 0) {
+         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+             return 0;
+         return -1;
+     }
+-    if ((size_t) result != frame->data->tot_len)
+-        return -1;
+-    hev_list_del (&self->frame_list, node);
+-    pbuf_free (frame->data);
+-    hev_free (frame);
+-    self->frames--;
+-    return 1;
++    if ((unsigned int) result > count) { errno = EIO; return -1; }
++    /* Datagram sends are atomic. Validate all consumed lengths before queue
++     * mutation; any impossible short result closes the session, never replays
++     * a possibly sent datagram. Positive partial sends ignore stale errno. */
++    node = hev_list_first (&self->frame_list);
++    for (int i = 0; i < result; ++i) {
++        HevSocks5UDPFrame *frame = container_of (node, HevSocks5UDPFrame, node);
++        if (messages[i].msg_len != frame->data->tot_len) {
++            errno = EIO; return -1;
++        }
++        node = hev_list_node_next (node);
++    }
++    for (int i = 0; i < result; ++i) {
++        node = hev_list_first (&self->frame_list);
++        HevSocks5UDPFrame *frame = container_of (node, HevSocks5UDPFrame, node);
++        hev_list_del (&self->frame_list, node);
++        pbuf_free (frame->data);
++        hev_free (frame);
++        self->frames--;
++    }
++    return result;
+ }
+ 
+ int

@@ -167,9 +167,85 @@ static void run(void *unused)
   assert(recv(pair[1], sent, sizeof(sent), 0) == 3 && !memcmp(sent, "abc", 3));
   close(pair[0]); close(pair[1]); session->base.fd = old_fd;
   puts("real datagram sendmsg EAGAIN retained one frame and recovered");
+#ifdef SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT
+  /* A ready burst spans two bounded calls, preserving datagram boundaries,
+   * order, chained storage and a zero-length datagram without payload copies. */
+  session->direct_frame_limit = 16;
+  for (unsigned i = 0; i < 12; ++i) {
+    unsigned char value[2] = { (unsigned char)i, (unsigned char)(i + 16) };
+    head = pbuf_alloc(PBUF_RAW, i == 3 ? 0 : 1, PBUF_RAM); assert(head);
+    if (i != 3) assert(pbuf_take(head, value, 1) == ERR_OK);
+    if (i == 4) {
+      tail = pbuf_alloc(PBUF_RAW, 1, PBUF_RAM); assert(tail);
+      assert(pbuf_take(tail, value + 1, 1) == ERR_OK); pbuf_cat(head, tail);
+    }
+    pcb->recv(pcb->recv_arg, pcb, head, &pcb->remote_ip, pcb->remote_port);
+  }
+  assert(session->frames == 12);
+  assert(hev_socks5_session_udp_direct_send(session) == 8);
+  assert(session->frames == 4);
+  assert(hev_socks5_session_udp_direct_send(session) == 4);
+  assert(!session->frames && allocations == baseline);
+  for (unsigned i = 0; i < 12; ++i) {
+    assert(poll(&ready, 1, 1000) == 1 && (ready.revents & POLLIN));
+    ssize_t length = recv(sender, sent, sizeof(sent), 0);
+    assert(length == (i == 3 ? 0 : i == 4 ? 2 : 1));
+    if (length) assert((unsigned char)sent[0] == i);
+    if (i == 4) assert((unsigned char)sent[1] == i + 16);
+  }
+  /* Descriptor budget is shared across the batch. A complete 64-span head
+   * sends alone, leaving the following datagram for the next bounded call. */
+  head = pbuf_alloc(PBUF_RAW, 1, PBUF_RAM); assert(head);
+  for (unsigned i = 1; i < 64; ++i) {
+    tail = pbuf_alloc(PBUF_RAW, 1, PBUF_RAM); assert(tail); pbuf_cat(head, tail);
+  }
+  pcb->recv(pcb->recv_arg, pcb, head, &pcb->remote_ip, pcb->remote_port);
+  head = pbuf_alloc(PBUF_RAW, 1, PBUF_RAM); assert(head);
+  pcb->recv(pcb->recv_arg, pcb, head, &pcb->remote_ip, pcb->remote_port);
+  assert(session->frames == 2 && hev_socks5_session_udp_direct_send(session) == 1);
+  assert(session->frames == 1 && session->direct_send_requested == 1);
+  assert(hev_socks5_session_udp_direct_send(session) == 1);
+  char chained[64];
+  assert(recv(sender, chained, sizeof(chained), 0) == 64);
+  assert(recv(sender, chained, sizeof(chained), 0) == 1);
+  assert(!session->frames && allocations == baseline);
+  assert(!socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair));
+  session->base.fd = pair[0]; filled = 0;
+  while (filled < 4096 && send(pair[0], "x", 1, MSG_DONTWAIT) == 1) ++filled;
+  assert(filled > 2 && filled < 4096 && (errno == EAGAIN || errno == EWOULDBLOCK));
+  for (unsigned i = 0; i < 8; ++i) {
+    unsigned char value = (unsigned char)i;
+    head = pbuf_alloc(PBUF_RAW, 1, PBUF_RAM); assert(head);
+    assert(pbuf_take(head, &value, 1) == ERR_OK);
+    pcb->recv(pcb->recv_arg, pcb, head, &pcb->remote_ip, pcb->remote_port);
+  }
+  retained = allocations;
+  assert(hev_socks5_session_udp_direct_send(session) == 0);
+  assert(session->frames == 8 && allocations == retained);
+  /* Free precisely two skb slots: the real sendmmsg must consume only that
+   * prefix, retaining all six unsent frames. A later turn resumes at packet 2. */
+  for (unsigned i = 0; i < 2; ++i) assert(recv(pair[1], sent, sizeof(sent), 0) == 1);
+  assert(hev_socks5_session_udp_direct_send(session) == 2);
+  assert(session->frames == 6);
+  for (unsigned i = 2; i < filled; ++i) assert(recv(pair[1], sent, sizeof(sent), 0) == 1 && sent[0] == 'x');
+  for (unsigned i = 0; i < 2; ++i) assert(recv(pair[1], sent, sizeof(sent), 0) == 1 && (unsigned char)sent[0] == i);
+  assert(hev_socks5_session_udp_direct_send(session) == 6);
+  assert(!session->frames && allocations == baseline);
+  for (unsigned i = 2; i < 8; ++i) assert(recv(pair[1], sent, sizeof(sent), 0) == 1 && (unsigned char)sent[0] == i);
+  close(pair[0]); close(pair[1]); session->base.fd = old_fd;
+  puts("bounded UDP batch, zero/chained datagrams and real positive-prefix backpressure passed");
+#endif
   head = pbuf_alloc(PBUF_RAW, 3, PBUF_RAM); assert(head);
   pcb->recv(pcb->recv_arg, pcb, head, &pcb->remote_ip, pcb->remote_port);
   assert(session->frames == 1);
+  /* A terminal socket error retains queue ownership for normal destruction;
+   * neither the failed operation nor teardown retries the datagram. */
+  assert(!socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair));
+  session->base.fd = pair[0]; close(pair[1]);
+  retained = allocations;
+  assert(hev_socks5_session_udp_direct_send(session) == -1);
+  assert(session->frames == 1 && allocations == retained);
+  close(pair[0]); session->base.fd = old_fd;
   int original_fd = session->base.fd;
   hev_object_unref(HEV_OBJECT(session));
   assert(fcntl(original_fd, F_GETFD) == -1 && errno == EBADF);

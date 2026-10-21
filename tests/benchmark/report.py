@@ -37,6 +37,9 @@ def collect(args):
         lib = ReportLib()
         try:
             lib.SetRecordFile(str(record))
+            offcpu_recorded = lib.MetaInfo().get("trace_offcpu") == "true"
+            if offcpu_recorded:
+                lib.SetTraceOffCpuMode("on-cpu")
             if args.symfs:
                 lib.SetSymfs(str(args.symfs.resolve()))
             metadata = lib.MetaInfo()
@@ -49,6 +52,8 @@ def collect(args):
                 if sample.pid != case["vpp_pid"] or not begin <= sample.time < end:
                     outside += 1
                     continue
+                if lib.GetEventOfCurrentSample().name != "cpu-clock":
+                    raise RuntimeError("unexpected event in CPU profile")
                 symbol = lib.GetSymbolOfCurrentSample()
                 samples += 1
                 first = sample.time if first is None else min(first, sample.time)
@@ -65,10 +70,13 @@ def collect(args):
         command = [sys.executable, str(args.sdk / "inferno/inferno.py"), "--skip_collection", "--no_browser",
                    "--record_file", str(record), "--include-pid", str(case["vpp_pid"]),
                    "--filter-file", str(filter_path), "--report_path", str(report_path), "--title", name]
+        if offcpu_recorded:
+            command += ["--trace-offcpu", "on-cpu"]
         if args.symfs:
             command += ["--symfs", str(args.symfs.resolve())]
         subprocess.run(command, check=True, cwd=output)
         data = {"case": name, "record_sha256": quick.digest(record), "metadata": metadata,
+                "profile_mode": "on-cpu", "event": "cpu-clock",
                 "samples": samples, "outside_workload_samples": outside, "unknown_leaf_samples": unknown,
                 "first_sample_offset_seconds": (first - begin) / 1e9,
                 "last_sample_offset_seconds": (last - begin) / 1e9,
@@ -92,13 +100,32 @@ def compare(args):
     fixed = ("serial", "model", "uid", "rules_sha256", "source_sha256", "android_sha256",
              "cell_ms", "threads", "flows_per_thread", "profiling", "peer_host", "peer_port")
     for path, run in zip(args.runs, runs):
-        if run["status"] != "COMPLETE" or len(run["cases"]) != 8 or run["elapsed_seconds"] > 120:
-            raise RuntimeError("a comparison requires complete eight-cell runs within 120 seconds")
+        suite = run["manifest"].get("suite", "root-vpn-v1")
+        if suite != runs[0]["manifest"].get("suite", "root-vpn-v1"):
+            raise RuntimeError("benchmark suite differs")
+        if suite in quick.VPN_SUITES:
+            collector = run["manifest"].get("collector_sha256")
+            if (not collector or run.get("runner_sha256") != collector
+                    or collector != runs[0]["manifest"].get("collector_sha256")):
+                raise RuntimeError("VPN collector identity differs")
+        profiles = ["vpn"] if suite in quick.VPN_SUITES else ["root", "vpn"]
+        cases = ('tcp-fixed',) if suite == quick.VPN_TCP_SUITE else quick.CASES
+        expected = [(p, c) for p in profiles for c in cases]
+        if (suite not in ("root-vpn-v1", *quick.VPN_SUITES) or run["status"] != "COMPLETE"
+                or [(c["profile"], c["case"]) for c in run["cases"]] != expected
+                or run["elapsed_seconds"] > 120):
+            raise RuntimeError("a comparison requires a complete frozen suite within 120 seconds")
         for case in run['cases']:
             cell = path.parent / (case['profile'] + '-' + case['case'])
             quick.validate_capture_window(case['profile'], case['client'],
                                           (cell / 'before-cli.txt').read_text(),
                                           (cell / 'after-cli.txt').read_text())
+            if suite in quick.VPN_SUITES:
+                quick.validate_vpn_window(case['generation'], case['client'],
+                                          (cell / 'before-cli.txt').read_text(),
+                                          (cell / 'after-cli.txt').read_text())
+                if suite in (quick.VPN_FRESH_SUITE, quick.VPN_TCP_SUITE) or case['case'] in ('tcp-new', 'udp-new'):
+                    quick.validate_vpn_stop((cell / 'native-stop.txt').read_text(), case['generation'])
         for key in fixed:
             if run["manifest"][key] != runs[0]["manifest"][key]:
                 raise RuntimeError("benchmark parameter differs: " + key)
@@ -132,7 +159,7 @@ def compare(args):
     headings = ("Version", "Profile", "Case", "Metric", "Value", "Δ B0 %", "p99 upper µs", "Samples", "Flow creates", "Capacity misses", "Errors", "Timeouts", "VPP CPU s")
     document = """<!doctype html><meta charset=utf-8><title>Pixel 6a quick baseline</title>
 <style>body{font:15px system-ui;margin:28px;color:#17202b}table{border-collapse:collapse;width:100%}td,th{padding:9px;border-bottom:1px solid #ddd;text-align:right}th{background:#eee;position:sticky;top:0}td:nth-child(-n+4){text-align:left}</style>
-<h1>Pixel 6a · Root + VPN · TCP + UDP</h1><p>Actual endpoint delivery and new-tuple pressure. Capacity misses and bypass remain explicit. These quick runs describe trends; they do not establish thermal steady state or full policy-path throughput.</p><table><thead><tr>"""
+<h1>Pixel 6a · TCP + UDP</h1><p>Actual endpoint delivery and new-tuple pressure. Capacity misses and bypass remain explicit. These quick runs describe trends; they do not establish thermal steady state or full policy-path throughput.</p><table><thead><tr>"""
     document += "".join("<th>" + html.escape(h) + "</th>" for h in headings) + "</tr></thead><tbody>" + "\n".join(rows) + "</tbody></table>"
     (output / "index.html").write_text(document)
     (output / "comparison.json").write_text(json.dumps(comparison, indent=2) + "\n")

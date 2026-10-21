@@ -65,6 +65,7 @@ static struct {
   u64 policy_drops, runtime_drops, transport_unavailable, errors, rejected;
   u64 transport_unsupported;
   u64 tun_write_attempts, tun_writes, tun_write_failed;
+  u64 capture_batch_calls, capture_batch_packets, capture_batch_max;
   u64 stack_accepted_originals, stack_rejected_originals;
   u64 fault_write_at;
   u64 pregraph_returns, local, remote;
@@ -99,7 +100,8 @@ int product_vpn_tun_return_held(vlib_main_t *vm,
 }
 
 product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
-  vlib_main_t *vm, const product_vpn_flow_stack_span_t *spans, unsigned count,
+  vlib_main_t *vm, vlib_node_runtime_t *source_node, u32 source_next,
+  const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t epoch,
   uint64_t flow_incarnation)
@@ -194,7 +196,19 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
     fprintf(stderr, "s237 event=fault_pre_accept generation=%llu serial=%llu buffer=%u token=%llu\n",
       (unsigned long long)generation, (unsigned long long)serial, bi, (unsigned long long)token);
   }
-  if (rejected || !product_packet_graph_submit_external(vm, bi, platform, &obligation)) {
+  int accepted = 0;
+  if (!rejected) {
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+    if (source_node)
+      accepted = product_packet_graph_submit_vpn_return_next(vm, source_node,
+        source_next, bi, platform, &obligation);
+    else
+#else
+    (void)source_node; (void)source_next;
+#endif
+      accepted = product_packet_graph_submit_external(vm, bi, platform, &obligation);
+  }
+  if (!accepted) {
     vlib_buffer_free(vm, &bi, 1);
     if (!product_vpn_return_stamp_release(&owner->stamps, generation, token)) abort();
     if (product_vpn_return_credit_release(&owner->credit, generation)) abort();
@@ -309,20 +323,44 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
       PRODUCT_VPN_RETURN_CAPACITY);
 }
 
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+static void tun_submit_captured(vlib_main_t *vm,
+  product_packet_graph_external_item_t *items, u32 count)
+{
+  if (!count) return;
+  u8 accepted[64];
+  product_packet_graph_submit_external_batch(vm, items, count, accepted);
+  ++tun.capture_batch_calls;
+  tun.capture_batch_packets += count;
+  if (count > tun.capture_batch_max) tun.capture_batch_max = count;
+  for (u32 i = 0; i < count; ++i) {
+    if (accepted[i]) { ++tun.submitted; continue; }
+    tun_pending_t *pending = &tun.obligations[items[i].obligation.token % TUN_PENDING];
+    pending->active = 0; --tun.pending; ++tun.pregraph_returns;
+    ++tun.transport_unavailable;
+    vlib_buffer_free(vm, &items[i].buffer_index, 1);
+  }
+}
+#endif
+
 static clib_error_t *tun_read_ready (clib_file_t *file) {
   vlib_main_t *vm = vlib_get_main ();
   if (vm->thread_index != vlib_get_worker_thread_index (0)
       || file->file_descriptor != (u32) tun.tun_fd) return clib_error_return (0, "TUN lane mismatch");
   if (__atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE)) return 0;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+  product_packet_graph_external_item_t batch[64];
+  u32 count = 0;
+#endif
   for (u32 budget = 0; budget < 64 && tun.pending < TUN_PENDING; ++budget) {
     u64 token = tun.next_token + 1;
     if (!token || token >= (1ULL << 63)) {
-      __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); tun.errors++; return 0;
+      __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); tun.errors++; break;
     }
     tun_pending_t *pending = &tun.obligations[token % TUN_PENDING];
-    if (pending->active) return 0;
+    if (pending->active) break;
     u32 bi;
-    if (vlib_buffer_alloc (vm, &bi, 1) != 1) return 0;
+    if (vlib_buffer_alloc (vm, &bi, 1) != 1) break;
     vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
     vlib_buffer_reset (buffer);
     clib_memset (buffer->opaque, 0, sizeof (buffer->opaque));
@@ -333,8 +371,8 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
     if (length <= 0) {
       int error = errno;
       vlib_buffer_free (vm, &bi, 1);
-      if (length < 0 && (error == EAGAIN || error == EWOULDBLOCK || error == EINTR)) return 0;
-      tun.errors++; __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); return 0;
+      if (length < 0 && (error == EAGAIN || error == EWOULDBLOCK || error == EINTR)) break;
+      tun.errors++; __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); break;
     }
     tun.captured++;
     if ((u32) length >= capacity) {
@@ -375,12 +413,23 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       for (ssize_t i = 0; i < length; ++i) fprintf (stderr, "%02x", data[i]);
       fprintf (stderr, "\n"); funlockfile (stderr);
     }
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+    batch[count++] = (product_packet_graph_external_item_t){
+      .buffer_index = bi, .platform = platform, .obligation = obligation,
+    };
+#else
+    ++tun.capture_batch_calls; ++tun.capture_batch_packets; tun.capture_batch_max = 1;
     if (!product_packet_graph_submit_external (vm, bi, &platform, &obligation)) {
       pending->active = 0; tun.pending--; tun.pregraph_returns++;
       tun.transport_unavailable++;
       vlib_buffer_free (vm, &bi, 1);
     } else tun.submitted++;
+#endif
   }
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+  /* Publish all ready captures even when the final read/allocation failed. */
+  tun_submit_captured(vm, batch, count);
+#endif
   return 0;
 }
 
@@ -580,6 +629,10 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.stack_rejected_originals);
   vlib_cli_output(vm, "tun.copies calls=%llu bytes=%llu",
     (unsigned long long)copy_calls, (unsigned long long)copy_bytes);
+  vlib_cli_output(vm, "tun.capture_batch calls=%llu packets=%llu max=%llu",
+    (unsigned long long)tun.capture_batch_calls,
+    (unsigned long long)tun.capture_batch_packets,
+    (unsigned long long)tun.capture_batch_max);
   vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=%llu nfq_verdicts=0 direct_egress_ready=0",
     (unsigned long long) tun.generation, tun.enabled, tun.tun_fd >= 0, tun.tun_fd,
     vlib_get_worker_thread_index (0), __atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE),

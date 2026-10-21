@@ -320,7 +320,7 @@ int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                           const product_platform_packet_facts_t *platform,
                                           const product_adapter_obligation_t *obligation);
 
-#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
 /* The current synchronous caller owns all items until scheduling accepts
  * them. Each accepted[i] is independent; rejected items remain caller-owned.
  * Count is bounded by VLIB_FRAME_SIZE. No payload pointer is retained. */
@@ -333,6 +333,16 @@ typedef struct
 u32 product_packet_graph_submit_external_batch (
   vlib_main_t *vm, const product_packet_graph_external_item_t *items,
   u32 count, u8 *accepted);
+#endif
+
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+/* Same ownership acceptance as submit_external; append a VPN return to the
+ * producing node's native next frame. The registered next must be admit.
+ * No private pending packet storage and no recursive graph execution. */
+int product_packet_graph_submit_vpn_return_next (
+  vlib_main_t *vm, vlib_node_runtime_t *node, u32 next, u32 buffer_index,
+  const product_platform_packet_facts_t *platform,
+  const product_adapter_obligation_t *obligation);
 #endif
 
 int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,

@@ -24,7 +24,8 @@ u64 product_vpn_tun_captured (void);
 int product_vpn_tun_return_held(vlib_main_t *vm,
   const product_packet_completion_frame_t *completion);
 product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
-  vlib_main_t *vm, const product_vpn_flow_stack_span_t *spans, unsigned count,
+  vlib_main_t *vm, vlib_node_runtime_t *source_node, u32 source_next,
+  const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t underlay_epoch,
   uint64_t flow_incarnation);

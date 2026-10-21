@@ -1,0 +1,95 @@
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -103,15 +103,20 @@
+      * A temporary sndbuf/pbuf shortage must not advance the ring or abort TCP. */
+     struct iovec iov[2];
+     int res = 0, iovc;
++    self->direct_read_calls = self->direct_read_blocked = 0;
++    self->direct_commits = self->direct_commit_bytes = 0;
++    self->direct_write_blocked = self->direct_output_calls = 0;
+     if (!self->pcb)
+         return -2;
+     if (!self->direct_rx_eof) {
+         iovc = hev_ring_buffer_writing (self->buffer, iov);
+         if (iovc) {
++            ++self->direct_read_calls;
+             ssize_t s = readv (HEV_SOCKS5 (self)->fd, iov, iovc);
+             if (s < 0) {
+                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+                     return -2;
++                ++self->direct_read_blocked;
+             } else if (s == 0) {
+                 self->direct_rx_eof = 1;
+             } else {
+@@ -122,35 +127,54 @@
+         }
+     }
+     hev_task_mutex_lock (self->mutex);
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
++    /* Drain only already-ready bytes. Each write keeps the existing one-MSS
++     * transaction bound; the round has a fixed eight-commit fairness bound. */
++    for (unsigned int commit = 0; commit < 8; ++commit) {
++        iovc = hev_ring_buffer_reading (self->buffer, iov);
++        if (!iovc)
++            break;
++        size_t length = iov[0].iov_len;
++#else
+     iovc = hev_ring_buffer_reading (self->buffer, iov);
+     for (int i = 0; i < iovc; ++i) {
+         size_t length = iov[i].iov_len;
++#endif
+         if (length > tcp_sndbuf (self->pcb))
+             length = tcp_sndbuf (self->pcb);
+-        /* tcp_write is transactional for its whole byte range. Bound each
+-         * commit to one negotiated MSS, so a large ring span cannot require
+-         * more segment/pbuf credit than can ever become available at once. */
+         if (length > tcp_mss (self->pcb))
+             length = tcp_mss (self->pcb);
+         if (!length)
+             break;
+-        err_t err = tcp_write (self->pcb, iov[i].iov_base, (u16_t)length, 0);
++#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
++        void *data = iov[0].iov_base;
++#else
++        void *data = iov[i].iov_base;
++#endif
++        err_t err = tcp_write (self->pcb, data, (u16_t)length, 0);
+         if (err != ERR_OK) {
++            if (err == ERR_MEM) ++self->direct_write_blocked;
+             self->direct_write_error = err;
+             self->direct_deferred_bytes = length;
+             if (err != ERR_MEM)
+                 res = -2;
+             break;
+         }
++        ++self->direct_commits;
++        self->direct_commit_bytes += length;
+         hev_ring_buffer_read_finish (self->buffer, length);
+         res = 1;
++#ifndef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+         if (length != iov[i].iov_len)
+             break;
++#endif
+     }
+     /* Callback rejection is one output-submission result. lwIP retains its
+      * segment for retry; later VPP Policy DROP is not even reported here. */
+-    if (self->pcb && res != -2)
++    if (self->pcb && res != -2) {
++        ++self->direct_output_calls;
+         (void)tcp_output (self->pcb);
++    }
+     if (self->pcb && self->direct_rx_eof && !self->buffer->rda_size &&
+         !self->direct_fin_sent) {
+         err_t err = tcp_shutdown (self->pcb, 0, 1);
+--- a/src/hev-socks5-session-tcp.h
++++ b/src/hev-socks5-session-tcp.h
+@@ -40,6 +40,9 @@
+     int direct_write_error;
+     unsigned int direct_deferred_bytes;
+     uint64_t direct_sent_bytes, direct_received_bytes;
++    /* Last Direct receive round, consumed by the owner before the next call. */
++    unsigned int direct_read_calls, direct_read_blocked, direct_commits;
++    unsigned int direct_commit_bytes, direct_write_blocked, direct_output_calls;
+ };
+ 
+ struct _HevSocks5SessionTCPClass

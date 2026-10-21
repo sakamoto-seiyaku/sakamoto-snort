@@ -19,6 +19,16 @@ root_verdict_sender_default=sendmmsg
 if [[ "$root_verdict_batch_experiment" == ON ]]; then root_verdict_sender_default=packed; fi
 root_verdict_batch_mode="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE:-$root_verdict_sender_default}"
 policy_qualification_counters="${SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS:-$root_batch_experiment}"
+vpn_udp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT:-OFF}"
+if [[ "$vpn_udp_batch_experiment" != ON && "$vpn_udp_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+vpn_tcp_batch_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT:-OFF}"
+if [[ "$vpn_tcp_batch_experiment" != ON && "$vpn_tcp_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
 if [[ "$root_batch_experiment" != ON && "$root_batch_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT must be ON or OFF" >&2
   exit 2
@@ -238,6 +248,8 @@ product_configure_cached "$plugin_build" \
   -DSAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256="$source_tree_sha256" \
   -DSAKAMOTO_PRODUCT_HOST_EVIDENCE="$host_evidence" \
   -DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT="$root_batch_experiment" \
+  -DSAKAMOTO_PRODUCT_VPN_UDP_BATCH_EXPERIMENT="$vpn_udp_batch_experiment" \
+  -DSAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT="$vpn_tcp_batch_experiment" \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT="$root_verdict_batch_experiment" \
   -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE="$root_verdict_batch_mode" \
   -DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS="$policy_qualification_counters" \
@@ -301,6 +313,8 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "vpp.stage.profile=host"
   echo "product.host.evidence=$host_evidence"
   echo "experiment.root.batch=$root_batch_experiment"
+  echo "experiment.vpn.udp.batch=$vpn_udp_batch_experiment"
+  echo "experiment.vpn.tcp.batch=$vpn_tcp_batch_experiment"
   echo "experiment.root.verdict.batch=$root_verdict_batch_experiment"
   echo "experiment.root.verdict.mode=$root_verdict_batch_mode"
   echo "experiment.policy.qualification=$policy_qualification_counters"
