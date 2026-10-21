@@ -111,7 +111,7 @@ def initialize(raw, relative, build_output, namespace, key, encoded):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo-root', type=Path, required=True)
-    parser.add_argument('--namespace', choices=('android', 'host', 'apk'), required=True)
+    parser.add_argument('--namespace', choices=('android', 'host', 'apk', 'android-vpp'), required=True)
     parser.add_argument('--destination', type=Path, required=True)
     parser.add_argument('--input', action='append', default=[])
     parser.add_argument('--file', action='append', default=[])

@@ -4,3 +4,4 @@
 0004-ip4-custom-retained-exits.patch
 0005-ip6-custom-retained-exits.patch
 0006-vlib-ordered-worker-cpus.patch
+0007-vlib-virtual-buffer-pool.patch

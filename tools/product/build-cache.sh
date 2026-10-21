@@ -20,8 +20,9 @@ product_open_build_cache() {
 
 product_configure_cached() {
   local build="$1" arguments cache_hash state
+  local cmake_program="${product_build_cache_cmake:-cmake}"
   shift
-  arguments="$(printf '%s\0' "$@" | sha256sum | awk '{print $1}')"
+  arguments="$(printf '%s\0' "$cmake_program" "$@" | sha256sum | awk '{print $1}')"
   state="$build/.product-configure-identity"
   if [[ -f "$build/CMakeCache.txt" ]]; then
     cache_hash="$(sha256sum "$build/CMakeCache.txt" | awk '{print $1}')"
@@ -32,7 +33,7 @@ product_configure_cached() {
       return 0
     fi
   fi
-  cmake "$@" || return
+  "$cmake_program" "$@" || return
   cache_hash="$(sha256sum "$build/CMakeCache.txt" | awk '{print $1}')"
   printf '%s %s\n' "$arguments" "$cache_hash" >"$state"
 }

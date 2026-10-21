@@ -111,7 +111,7 @@ while IFS= read -r patch_name || [[ -n "$patch_name" ]]; do
   git -C "$work_dir" apply --whitespace=error "$patch_file"
 done < "$series"
 
-expected_paths=$'src/vlib/buffer_funcs.c\nsrc/vlib/buffer_funcs.h\nsrc/vlib/buffer_node.h\nsrc/vlib/threads.c\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_full_reass.h\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.h\nsrc/vnet/ip/reass/ip6_sv_reass.c'
+expected_paths=$'src/vlib/buffer.c\nsrc/vlib/buffer.h\nsrc/vlib/buffer_funcs.c\nsrc/vlib/buffer_funcs.h\nsrc/vlib/buffer_node.h\nsrc/vlib/threads.c\nsrc/vnet/ip/reass/ip4_full_reass.c\nsrc/vnet/ip/reass/ip4_full_reass.h\nsrc/vnet/ip/reass/ip4_sv_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.c\nsrc/vnet/ip/reass/ip6_full_reass.h\nsrc/vnet/ip/reass/ip6_sv_reass.c'
 changed_paths="$({
   git -C "$work_dir" diff --name-only
   git -C "$work_dir" ls-files --others --exclude-standard

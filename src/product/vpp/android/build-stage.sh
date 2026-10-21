@@ -139,16 +139,16 @@ if [[ -e "$stage_dir" || -L "$stage_dir" ]]; then
   assert_owned_stage
 fi
 
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-172-vpp-stage.XXXXXX")"
-ccache_dir="${SAKAMOTO_S172_CCACHE_DIR:-$work_dir/ccache}"
-mkdir -p -- "$ccache_dir"
-export CCACHE_DIR="$ccache_dir"
+profile_dir="$(mktemp -d "${TMPDIR:-/tmp}/sakamoto-vpp-profile.XXXXXX")"
+work_dir="$profile_dir"
 candidate_dir=""
 cleanup() {
   if [[ -n "$candidate_dir" && -e "$candidate_dir" ]]; then
     rm -rf -- "$candidate_dir"
   fi
-  rm -rf -- "$work_dir"
+  # Only the source preparation is transient. Dependency compilations and
+  # their exact source identity stay in the owned Product cache after failure.
+  rm -rf -- "$profile_dir"
 }
 trap cleanup EXIT
 
@@ -180,6 +180,39 @@ core_patch_series_sha256="$(
 [[ "$patch_series_sha256" == "$expected_patch_series_sha256" ]] || \
   die "profile patch series hash does not match the product allowlist"
 
+source "$repo_root/tools/product/build-cache.sh"
+product_open_build_cache android-vpp "$stage_dir" \
+  --input "revision=$source_head" --input "api=$android_api" --input "abi=$android_abi" \
+  --input "profile=$profile_name" --input "core_patch=$core_patch_series_sha256" \
+  --input "android_patch=$patch_series_sha256" --input build_type=Release \
+  --input "compiler_version=$($ndk_root/toolchains/llvm/prebuilt/linux-x86_64/bin/clang --version)" \
+  --input "cmake=$($cmake_bin --version)" \
+  --file "ndk_identity=$ndk_root/source.properties" --file "toolchain=$toolchain_file"
+
+source_content_sha256() {
+  (
+    cd "$1"
+    git diff --binary HEAD
+    git ls-files --others --exclude-standard -z | LC_ALL=C sort -z | xargs -0 -r sha256sum
+  ) | sha256sum | awk '{print $1}'
+}
+candidate_source="$patched_source"
+work_dir="$product_build_cache_dir"
+patched_source="$work_dir/patched-source"
+if [[ -e "$patched_source" ]]; then
+  [[ -d "$patched_source" && ! -L "$patched_source" &&
+     "$(git -C "$patched_source" rev-parse HEAD)" == "$source_head" &&
+     "$(source_content_sha256 "$patched_source")" == \
+       "$(source_content_sha256 "$candidate_source")" ]] || \
+    die "cached VPP source differs from the verified patch closure"
+else
+  mv -- "$candidate_source" "$patched_source"
+fi
+cp -- "$profile_dir/profile.log" "$work_dir/profile.log"
+ccache_dir="${SAKAMOTO_S172_CCACHE_DIR:-$work_dir/ccache}"
+mkdir -p -- "$ccache_dir"
+export CCACHE_DIR="$ccache_dir"
+
 export PYTHONPATH="$python_path${PYTHONPATH:+:$PYTHONPATH}"
 build_dir="$work_dir/build"
 install_dir="$work_dir/install"
@@ -201,6 +234,8 @@ configure_args=(
   -DVPP_BUILD_TESTS=OFF
   -DVPP_BUILD_VPPINFRA_TESTS=OFF
   -DVPP_BUILD_PYTHON_API=OFF
+  "-DVPP_APIGEN=$python_bin;$repo_root/tools/product/vpp-apigen-cache.py;$patched_source/src/tools/vppapigen/vppapigen"
+  "-DVPPAPIGEN_SUBMODULES=$patched_source/src/tools/vppapigen/vppapigen_c.py;$patched_source/src/tools/vppapigen/vppapigen_json.py"
   -DVPP_MARCH_VARIANT_OCTEONTX2=OFF
   -DVPP_MARCH_VARIANT_THUNDERX2T99=OFF
   -DVPP_MARCH_VARIANT_CORTEXA72=OFF
@@ -209,7 +244,9 @@ configure_args=(
   -DSAKAMOTO_VPP_NO_IPSEC=ON
   -DSAKAMOTO_VPP_ANDROID_IDLE_PROFILE=ON
 )
-if ! "$cmake_bin" "${configure_args[@]}" >"$work_dir/configure.log" 2>&1; then
+if ! product_build_cache_cmake="$cmake_bin" \
+    product_configure_cached "$build_dir" "${configure_args[@]}" \
+    >"$work_dir/configure.log" 2>&1; then
   sed -n '1,220p' "$work_dir/configure.log" >&2
   die "direct NDK Android configure failed"
 fi

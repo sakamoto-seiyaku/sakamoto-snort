@@ -1,1 +1,3 @@
 experiments/vpp-nfq-poc/patches/*.patch -whitespace
+# Diff context preserves upstream tabs/blank lines; apply-core checks added source.
+src/product/vpp/patches/core/*.patch -whitespace

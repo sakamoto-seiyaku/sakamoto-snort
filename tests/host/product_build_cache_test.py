@@ -45,6 +45,7 @@ class BuildCacheTest(unittest.TestCase):
         self.assertNotEqual(original, self.prepare(toolchain='ndk30').stdout.strip())
         self.assertNotEqual(original, self.prepare(namespace='host').stdout.strip())
         self.assertNotEqual(original, self.prepare(namespace='apk').stdout.strip())
+        self.assertNotEqual(original, self.prepare(namespace='android-vpp').stdout.strip())
         self.env['CFLAGS'] = '-DANOTHER_BUILD=1'
         self.assertNotEqual(original, self.prepare().stdout.strip())
 

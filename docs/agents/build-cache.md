@@ -27,6 +27,11 @@ repeated acceptance builds, and local build/test helpers.
   Source deletion, changed inputs, missing or modified output must rebuild the
   component. Version-code allocation, manifest packaging and signing still run
   for each APK publication.
+- The Android VPP runtime builder uses `android-vpp/` in the same owned cache,
+  keyed by the immutable pinned VPP/core/profile patch closure and NDK target.
+  It prepares and verifies source separately from its persistent CMake tree.
+  Reuse the repository API depfile wrapper and cached configure identity so an
+  unchanged repeat does not rebuild API consumers or compiler-capability probes.
 - Keep generated VAPI paths stable. Cargo must track changes to owned/VPP/generated
   headers and compiler selections, as well as source files; a cache hit never
   bypasses input validation, VPP closure checks or artifact identity checks.

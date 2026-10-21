@@ -1,0 +1,153 @@
+--- a/src/vlib/buffer.h
++++ b/src/vlib/buffer.h
+@@ -491,6 +491,9 @@
+ 
+   /* logging */
+   vlib_log_class_t log_default;
++
++  /* Software-only pools may span ordinary physical pages. No buffer DMA. */
++  u8 virtual_only;
+ } vlib_buffer_main_t;
+ 
+ clib_error_t *vlib_buffer_main_init (struct vlib_main_t *vm);
+--- a/src/vlib/buffer.c
++++ b/src/vlib/buffer.c
+@@ -449,6 +449,23 @@
+   return alloc_size;
+ }
+ 
++/* Match the normal pool's existing default selection. Virtual-only mode
++ * resolves the unprivileged default even when the caller has privilege. */
++static u32
++vlib_buffer_configured_count (vlib_main_t *vm, u32 numa_node, u8 unpriv)
++{
++  vlib_buffer_main_t *bm = vm->buffer_main;
++  u32 count = bm->buffers_per_numa[numa_node];
++  if (count == (u32) ~0)
++    count = bm->default_buffers_per_numa;
++  else
++    return count;
++  if (count == 0)
++    count = unpriv ? VLIB_BUFFER_DEFAULT_BUFFERS_PER_NUMA_UNPRIV :
++                     VLIB_BUFFER_DEFAULT_BUFFERS_PER_NUMA;
++  return count;
++}
++
+ u8
+ vlib_buffer_pool_create (vlib_main_t *vm, u32 data_size, u32 physmem_map_index,
+ 			 char *fmt, ...)
+@@ -538,8 +555,10 @@
+       vlib_buffer_t *b;
+       u32 bi;
+ 
+-      /* skip if buffer spans across page boundary */
+-      if (((uword) p & page_mask) != ((uword) (p + alloc_size) & page_mask))
++      /* DMA pools need physical contiguity. Software-only pools use the
++       * entire virtually contiguous map, with its real page table intact. */
++      if (!bm->virtual_only &&
++          ((uword) p & page_mask) != ((uword) (p + alloc_size) & page_mask))
+ 	continue;
+ 
+       b = (vlib_buffer_t *) (p + bm->ext_hdr_size);
+@@ -549,6 +568,14 @@
+       vlib_get_buffer (vm, bi);
+     }
+ 
++  if (bm->virtual_only)
++    {
++      u32 count = vlib_buffer_configured_count (vm, m->numa_node, 1);
++      if (bp->n_avail < count)
++        clib_panic ("virtual-only pool has fewer buffers than configured");
++      /* Page/alignment rounding must not silently increase the capacity. */
++      bp->n_avail = count;
++    }
+   bp->n_buffers = bp->n_avail;
+ 
+   return bp->index;
+@@ -655,8 +682,8 @@
+ 				  u8 unpriv)
+ {
+   vlib_buffer_main_t *bm = vm->buffer_main;
+-  u32 default_buffers_per_numa = bm->default_buffers_per_numa;
+-  u32 buffers_per_numa = bm->buffers_per_numa[numa_node];
++  u32 buffers_per_numa =
++    vlib_buffer_configured_count (vm, numa_node, bm->virtual_only ? 1 : unpriv);
+   clib_error_t *error;
+   u32 buffer_size;
+   uword n_pages, pagesize;
+@@ -671,20 +698,21 @@
+   buffer_size = vlib_buffer_alloc_size (bm->ext_hdr_size,
+ 					vlib_buffer_get_default_data_size
+ 					(vm));
+-  if (buffer_size > pagesize)
++  if (!bm->virtual_only && buffer_size > pagesize)
+     return clib_error_return (0, "buffer size (%llu) is greater than page "
+ 			      "size (%llu)", buffer_size, pagesize);
+-
+-  if (default_buffers_per_numa == 0)
+-    default_buffers_per_numa = unpriv ?
+-				       VLIB_BUFFER_DEFAULT_BUFFERS_PER_NUMA_UNPRIV :
+-				       VLIB_BUFFER_DEFAULT_BUFFERS_PER_NUMA;
+-
+-  if (buffers_per_numa == ~0)
+-    buffers_per_numa = default_buffers_per_numa;
++  if (bm->virtual_only &&
++      (bm->default_data_size < 64 || bm->default_data_size > 65535))
++    return clib_error_return (0, "virtual-only data size must be 64..65535");
+ 
+   name = format (0, "buffers-numa-%d%c", numa_node, 0);
+-  n_pages = (buffers_per_numa - 1) / (pagesize / buffer_size) + 1;
++  if (bm->virtual_only)
++    /* One leading alignment slot and one trailing guard for the pool's
++     * strict end check. Ordinary pages are not claimed to be contiguous PA. */
++    n_pages = (((uword) buffers_per_numa + 2) * buffer_size + pagesize - 1) /
++              pagesize;
++  else
++    n_pages = (buffers_per_numa - 1) / (pagesize / buffer_size) + 1;
+   error = vlib_physmem_shared_map_create (vm, (char *) name,
+ 					  n_pages * pagesize,
+ 					  min_log2 (pagesize), numa_node,
+@@ -701,7 +729,12 @@
+   u32 physmem_map_index;
+   clib_error_t *error;
+ 
+-  if (bm->log2_page_size == CLIB_MEM_PAGE_SZ_UNKNOWN)
++  if (bm->virtual_only)
++    {
++      error = vlib_buffer_main_init_numa_alloc (
++        vm, numa_node, &physmem_map_index, CLIB_MEM_PAGE_SZ_DEFAULT, 1);
++    }
++  else if (bm->log2_page_size == CLIB_MEM_PAGE_SZ_UNKNOWN)
+     {
+       error = vlib_buffer_main_init_numa_alloc (vm, numa_node,
+ 						&physmem_map_index,
+@@ -954,6 +987,8 @@
+       if (unformat (input, "buffers-per-numa %u",
+ 		    &bm->default_buffers_per_numa))
+ 	;
++      else if (unformat (input, "virtual-only"))
++        bm->virtual_only = 1;
+       else if (unformat (input, "page-size %U", unformat_log2_page_size,
+ 			 &bm->log2_page_size))
+ 	;
+@@ -974,6 +1009,9 @@
+     }
+ 
+   unformat_free (input);
++  if (bm->virtual_only && bm->log2_page_size != CLIB_MEM_PAGE_SZ_UNKNOWN)
++    return clib_error_return (
++      0, "virtual-only selects ordinary pages; page-size conflicts");
+   return 0;
+ }
+ 
+--- a/src/vlib/buffer_funcs.h
++++ b/src/vlib/buffer_funcs.h
+@@ -405,6 +405,8 @@
+ always_inline uword
+ vlib_buffer_get_pa (vlib_main_t * vm, vlib_buffer_t * b)
+ {
++  if (PREDICT_FALSE (vm->buffer_main->virtual_only))
++    clib_panic ("physical buffer address requested from virtual-only pool");
+   return vlib_physmem_get_pa (vm, b->data);
+ }
+ 
