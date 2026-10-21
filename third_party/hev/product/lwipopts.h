@@ -18,6 +18,10 @@
 #define TCP_WND 32768
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
 #define TCP_SND_BUF 65528
+/* Keep the 32KiB profile's low-water threshold. Deriving it from 65528
+ * exceeds lwIP's 16-bit safety margin at MSS9940. The raw owner path has
+ * LWIP_SOCKET/LWIP_NETCONN disabled; do not disable the sanity checks. */
+#define TCP_SNDLOWAT LWIP_MIN(LWIP_MAX(16384, (2 * TCP_MSS) + 1), 32767)
 #else
 #define TCP_SND_BUF 32768
 #endif
