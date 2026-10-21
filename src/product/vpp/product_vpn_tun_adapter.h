@@ -15,7 +15,7 @@ enum {
 int product_vpn_tun_enabled (void);
 int product_vpn_tun_product_mode (void);
 void product_vpn_tun_mode_init (void);
-/* Product readiness requires the TUN, graph and both egress shards. */
+/* Product readiness requires the TUN, graph and every configured egress shard. */
 int product_vpn_tun_product_ready (void);
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation);
 u64 product_vpn_tun_attached (void);

@@ -61,6 +61,7 @@ typedef struct {
 _Static_assert(PRODUCT_VPN_RETURN_STAMP_SLOTS == PRODUCT_VPN_RETURN_CAPACITY,
                "return stamps share the return-credit bound");
 static tun_return_owner_t returns[PRODUCT_VPN_RETURN_WORKERS];
+static u32 active_owner_count(void) { return product_packet_graph_worker_count(); }
 /* Written only with workers at the control barrier; workers only read. */
 static f64 return_hold_until[PRODUCT_VPN_RETURN_WORKERS];
 static struct {
@@ -101,7 +102,7 @@ int product_vpn_tun_return_held(vlib_main_t *vm,
   const product_adapter_obligation_t *o = &completion->obligation;
   return o->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
     o->queue_generation == tun.generation && o->packet_id &&
-    o->packet_id <= PRODUCT_VPN_RETURN_WORKERS &&
+    o->packet_id <= active_owner_count() &&
     (completion->flags & PRODUCT_COMPLETION_FLOW_STACK_RETURN) &&
     return_hold_until[o->packet_id - 1] > vlib_time_now(vm);
 }
@@ -114,7 +115,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   uint64_t flow_incarnation)
 {
   if (!vm || !vm->thread_index ||
-      vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS)
+      vlib_get_worker_index(vm->thread_index) >= active_owner_count())
     return PRODUCT_VPN_FLOW_STACK_OUTPUT_REJECTED;
   u32 owner_index = vlib_get_worker_index(vm->thread_index);
   tun_return_owner_t *owner = &returns[owner_index];
@@ -240,7 +241,7 @@ int product_vpn_tun_return_incarnation (u64 generation, u64 token,
 {
   if (!(token & (1ULL << 63))) return 0;
   u32 owner_index = (u32)((token >> 62) & 1U);
-  if (owner_index >= PRODUCT_VPN_RETURN_WORKERS) return 0;
+  if (owner_index >= active_owner_count()) return 0;
   return product_vpn_return_stamp_lookup(&returns[owner_index].stamps,
     generation, token, incarnation);
 }
@@ -259,7 +260,7 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
   }
   int returned = o->packet_id != 0;
   if (returned) {
-    if (o->packet_id > PRODUCT_VPN_RETURN_WORKERS ||
+    if (o->packet_id > active_owner_count() ||
         !(frame->flags & PRODUCT_COMPLETION_FLOW_STACK_RETURN) ||
         (o->token >> 62) != (2U + o->packet_id - 1) ||
         !product_vpn_return_credit_used(&returns[o->packet_id - 1].credit)) {
@@ -356,7 +357,7 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
   const product_adapter_obligation_t *o = &frame->obligation;
   if (!o->packet_id) return; /* Original TUN capture uses its existing ledger. */
   if (vm->thread_index != vlib_get_worker_thread_index(tun.origin_worker) ||
-      o->packet_id > PRODUCT_VPN_RETURN_WORKERS ||
+      o->packet_id > active_owner_count() ||
       (frame->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ||
       !product_vpn_return_stamp_release(&returns[o->packet_id - 1].stamps,
                                          o->queue_generation, o->token) ||
@@ -520,9 +521,9 @@ static int tun_stop (void) {
   clib_memset(return_hold_until, 0, sizeof(return_hold_until));
   product_vpn_flow_stack_driver_quiesce();
   product_packet_graph_quiesce (tun.vm);
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (product_vpn_return_credit_used(&returns[i].credit)) return 1;
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (!product_vpn_return_stamp_empty(&returns[i].stamps)) abort();
   if (tun.pending || product_packet_graph_buffer_debt ()
       || product_packet_graph_obligation_debt ()
@@ -631,8 +632,8 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
         vlib_num_workers ())) return 0;
   tun.origin_worker = (u8) product_runtime_topology_current (
     PRODUCT_TOPOLOGY_VPN).tun_io_worker;
-  if (product_packet_graph_worker_count() != PRODUCT_VPN_RETURN_WORKERS) return 0;
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  if (!active_owner_count() || active_owner_count() > PRODUCT_VPN_RETURN_WORKERS) return 0;
+  for (u32 i = 0; i < active_owner_count(); ++i)
     {
       if (product_vpn_return_credit_init(&returns[i].credit, generation,
                                          PRODUCT_VPN_RETURN_CAPACITY)) return 0;
@@ -673,7 +674,7 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
 static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command) {
   (void) input; (void) command;
   u64 packets = 0, submitted = 0, copy_calls = 0, copy_bytes = 0;
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i) {
+  for (u32 i = 0; i < active_owner_count(); ++i) {
     tun_return_owner_t *owner = &returns[i];
     packets += owner->packets; submitted += owner->submitted;
     copy_calls += owner->copy_calls; copy_bytes += owner->copy_bytes;
@@ -741,7 +742,7 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
   u32 after = 0;
   u32 owner_index = 0;
   (void)unformat(input, "owner %u", &owner_index);
-  if (owner_index >= PRODUCT_VPN_RETURN_WORKERS)
+  if (owner_index >= active_owner_count())
     return clib_error_return(0, "invalid return owner");
   tun_return_owner_t *owner = &returns[owner_index];
   u64 *target = NULL, current = 0;
@@ -782,7 +783,7 @@ static clib_error_t *tun_return_hold(vlib_main_t *vm, unformat_input_t *input,
   u32 owner = ~0U, milliseconds = 0;
   if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
       tun.draining || !unformat(input, "%u %u", &owner, &milliseconds) ||
-      owner >= PRODUCT_VPN_RETURN_WORKERS || milliseconds > 10000 ||
+      owner >= active_owner_count() || milliseconds > 10000 ||
       unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
     return clib_error_return(0, "expected active validation: <owner> <0..10000 ms>");
   return_hold_until[owner] = milliseconds ? vlib_time_now(vm) + milliseconds * .001 : 0;

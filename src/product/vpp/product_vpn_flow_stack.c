@@ -39,6 +39,7 @@ typedef struct {
 /* Fixed shard registry, not shared PCB/task state. The control plane creates
  * it before traffic; each worker subsequently drives only its own element. */
 static product_vpn_stack_owner_t owners[PRODUCT_VPN_RETURN_WORKERS];
+static u32 active_owner_count(void) { return product_packet_graph_worker_count(); }
 static product_vpn_flow_stack_config_t limits = {
   .max_sessions = 256, .max_input_packets = 1024, .max_pbufs = 8192,
   .max_pcbs = 258, .max_sockets = 256,
@@ -225,13 +226,13 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
   const char *enabled = getenv("SAKAMOTO_PRODUCT_VPN_HEV");
   if (!enabled || strcmp(enabled, "1")) return 1;
   if (!vm || vm->thread_index || !generation ||
-      product_packet_graph_worker_count() != PRODUCT_VPN_RETURN_WORKERS) return 0;
+      !active_owner_count() || active_owner_count() > PRODUCT_VPN_RETURN_WORKERS) return 0;
   /* Capture reads need spare space to detect a potentially truncated packet. */
   if (vlib_buffer_get_default_data_size(vm) <= limits.max_packet_bytes) return 0;
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (owners[i].enabled) return 0;
   /* Validation may reduce real startup limits, never resize live storage or
-   * enlarge the development baseline. Both owners retain independent quotas. */
+   * enlarge the development baseline. Owners retain independent quotas. */
   const char *configured = getenv("SAKAMOTO_PRODUCT_VPN_HEV_LIMITS");
   if (configured && *configured) {
     u32 values[5], maximum[] = {256, 258, 256, 1024, 8192};
@@ -251,7 +252,7 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
     limits.max_sockets = values[2]; limits.max_input_packets = values[3];
     limits.max_pbufs = values[4];
   }
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i) {
+  for (u32 i = 0; i < active_owner_count(); ++i) {
     if (start_owner(generation, i)) continue;
     /* No worker has adopted a shard yet: roll back the whole startup under
      * the barrier, rather than silently running a smaller worker layout. */
@@ -266,7 +267,7 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
     }
     return 0;
   }
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i) {
+  for (u32 i = 0; i < active_owner_count(); ++i) {
     vlib_main_t *worker = vlib_get_main_by_index(vlib_get_worker_thread_index(i));
     vlib_node_set_state(worker, product_vpn_flow_stack_input_node.index, VLIB_NODE_STATE_INTERRUPT);
     schedule(worker);
@@ -276,7 +277,7 @@ int product_vpn_flow_stack_driver_start(vlib_main_t *vm, uint64_t generation)
 
 int product_vpn_flow_stack_driver_attach(int fd, uint32_t index)
 {
-  if (index >= PRODUCT_VPN_RETURN_WORKERS) { if (fd >= 0) close(fd); return -1; }
+  if (index >= active_owner_count()) { if (fd >= 0) close(fd); return -1; }
   product_vpn_stack_owner_t *owner = &owners[index];
   if (!owner->enabled || owner->broker.fd >= 0 || owner->stop_requested) {
     if (fd >= 0) close(fd);
@@ -293,7 +294,7 @@ int product_vpn_flow_stack_driver_attach(int fd, uint32_t index)
 
 void product_vpn_flow_stack_driver_quiesce(void)
 {
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i) {
+  for (u32 i = 0; i < active_owner_count(); ++i) {
     __atomic_store_n(&owners[i].stop_requested, 1, __ATOMIC_RELEASE);
     if (owners[i].enabled && !__atomic_load_n(&owners[i].stopped, __ATOMIC_ACQUIRE))
       schedule(vlib_get_main_by_index(vlib_get_worker_thread_index(i)));
@@ -301,21 +302,23 @@ void product_vpn_flow_stack_driver_quiesce(void)
 }
 int product_vpn_flow_stack_driver_stopped(void)
 {
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (owners[i].enabled && !__atomic_load_n(&owners[i].stopped, __ATOMIC_ACQUIRE)) return 0;
   return 1;
 }
 int product_vpn_flow_stack_driver_enabled(void) { return owners[0].enabled; }
 int product_vpn_flow_stack_driver_ready(void)
 {
-  for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
+  if (!active_owner_count() || active_owner_count() > PRODUCT_VPN_RETURN_WORKERS)
+    return 0;
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (!__atomic_load_n(&owners[i].ready, __ATOMIC_ACQUIRE)) return 0;
   return 1;
 }
 
 int product_vpn_flow_stack_driver_reject_after(uint32_t index, uint32_t packets)
 {
-  if (index >= PRODUCT_VPN_RETURN_WORKERS || !owners[index].enabled ||
+  if (index >= active_owner_count() || !owners[index].enabled ||
       !packets || packets > 64 || owners[index].reject_input_at)
     return -1;
   owners[index].reject_input_at = owners[index].input_calls + packets;
@@ -328,7 +331,7 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   uint64_t flow_incarnation)
 {
   if (!vm || !vm->thread_index ||
-      vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS)
+      vlib_get_worker_index(vm->thread_index) >= active_owner_count())
     return PRODUCT_VPN_FLOW_STACK_NOT_RUNNING;
   product_vpn_stack_owner_t *owner = &owners[vlib_get_worker_index(vm->thread_index)];
   if (!owner->stack || !__atomic_load_n(&owner->ready, __ATOMIC_ACQUIRE) ||
@@ -355,7 +358,7 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
 {
   (void)frame;
   if (!vm->thread_index ||
-      vlib_get_worker_index(vm->thread_index) >= PRODUCT_VPN_RETURN_WORKERS) return 0;
+      vlib_get_worker_index(vm->thread_index) >= active_owner_count()) return 0;
   product_vpn_stack_owner_t *owner = &owners[vlib_get_worker_index(vm->thread_index)];
   if (!owner->stack) return 0;
   ++owner->node_calls;
@@ -437,7 +440,7 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
 {
   (void)input; (void)command;
   /* Normal CLI worker barrier makes this owner-published snapshot stable. */
-  for (u32 index = 0; index < PRODUCT_VPN_RETURN_WORKERS; ++index) {
+  for (u32 index = 0; index < active_owner_count(); ++index) {
   product_vpn_stack_owner_t *owner = &owners[index];
   product_vpn_flow_stack_snapshot_t *s = &owner->snapshot;
   vlib_cli_output(vm, "flow_stack.driver owner=%u schedules=%llu ready_wakes=%llu timer_wakes=%llu nodes=%llu empty_steps=%llu timer_arms=%llu ready_samples=%llu ready_delay_ns=%llu ready_max_ns=%llu ready_over_1ms=%llu",
@@ -528,7 +531,7 @@ static clib_error_t *hold(vlib_main_t *vm, unformat_input_t *input,
   u32 index = 0;
   (void)unformat(input, "owner %u", &index);
   if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
-      index >= PRODUCT_VPN_RETURN_WORKERS ||
+      index >= active_owner_count() ||
       !unformat(input, "%u", &ms) || ms > 5000 ||
       unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
     return clib_error_return(0, "active HEV validation and hold <0..5000 ms> required");
@@ -549,7 +552,7 @@ static clib_error_t *broker_fault(vlib_main_t *vm, unformat_input_t *input,
     return clib_error_return(0, "broker faults are unavailable in Product VPN mode");
   u32 index, after, operation;
   if (!product_vpn_tun_enabled() || !product_vpn_flow_stack_driver_ready() ||
-      !unformat(input, "owner %u", &index) || index >= PRODUCT_VPN_RETURN_WORKERS)
+      !unformat(input, "owner %u", &index) || index >= active_owner_count())
     return clib_error_return(0, "active HEV validation owner required");
   if (unformat(input, "protect after %u", &after)) operation = PRODUCT_VPN_BROKER_ERROR_PROTECT;
   else if (unformat(input, "bind after %u", &after)) operation = PRODUCT_VPN_BROKER_ERROR_BIND;

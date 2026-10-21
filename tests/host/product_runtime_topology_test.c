@@ -25,8 +25,8 @@ int main (void)
 
   product_runtime_topology_t dedicated_one = { 1, 2, 1 };
   product_runtime_topology_t dedicated_three = { 3, 4, 3 };
-  assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
-                                           dedicated_one, 2));
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
+                                          dedicated_one, 2));
   assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN,
                                            dedicated_three, 4));
   assert (!product_runtime_topology_is_owner (dedicated_three,
@@ -53,7 +53,10 @@ int main (void)
   assert (root.tun_io_worker == UINT32_MAX);
   assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 1));
   assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 2));
-  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN).owner_count);
+  vpn = product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN);
+  assert (vpn.owner_count == 1 && vpn.vpp_worker_count == 2
+          && vpn.tun_io_worker == 1);
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_VPN, vpn, 2));
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "3", 1) == 0);
   root = product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT);
   assert (root.owner_count == 3 && root.vpp_worker_count == 3);

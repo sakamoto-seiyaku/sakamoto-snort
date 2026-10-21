@@ -68,8 +68,8 @@ public final class WorkerCpuPlacement {
     }
 
     public String vpnStartupConfig(String tunIoCpuId) {
-        if (ownerCount != 2)
-            throw new IllegalArgumentException("VPN currently requires two FlowOwner CPU IDs");
+        if (ownerCount > 2)
+            throw new IllegalArgumentException("VPN currently supports one or two FlowOwner CPU IDs");
         int cpu = parseTunIoCpuId(tunIoCpuId);
         return "cpu {\n  main-core 0\n  workers " + (ownerCount + 1)
                 + "\n  ordered-workers " + encode() + "," + cpu + "\n}\n\n";

@@ -30,9 +30,9 @@ product_runtime_topology_current (product_runtime_topology_profile_t profile)
         return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
       owners = (uint32_t) parsed;
     }
-  /* SAKAMOTO-297 keeps the VPN Flow Stack at two owners. The third worker is
-   * exclusively the TUN origin lane and is never a canonical owner. */
-  if (profile == PRODUCT_TOPOLOGY_VPN && owners != 2)
+  /* SAKAMOTO-299 admits one or two VPN owners. The appended worker remains
+   * exclusively the TUN origin lane, never a canonical owner. */
+  if (profile == PRODUCT_TOPOLOGY_VPN && owners > 2)
     return (product_runtime_topology_t) { .tun_io_worker = UINT32_MAX };
   if (profile == PRODUCT_TOPOLOGY_VPN)
     {
@@ -70,7 +70,7 @@ product_runtime_topology_valid (product_runtime_topology_profile_t profile,
     return topology.vpp_worker_count == topology.owner_count
            && topology.tun_io_worker == UINT32_MAX;
   if (profile == PRODUCT_TOPOLOGY_VPN)
-    return topology.owner_count == 2
+    return topology.owner_count <= 2
            && topology.vpp_worker_count == topology.owner_count + 1
            && topology.tun_io_worker == topology.owner_count;
   return 0;

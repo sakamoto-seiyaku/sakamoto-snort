@@ -31,6 +31,9 @@ public final class WorkerCpuPlacementTest {
         require(forward.vpnStartupConfig(4).equals(
                 "cpu {\n  main-core 0\n  workers 3\n  ordered-workers 1,3,4\n}\n\n"),
                 "VPN appends explicit I/O CPU after owners");
+        require(single.vpnStartupConfig(4).equals(
+                "cpu {\n  main-core 0\n  workers 2\n  ordered-workers 3,4\n}\n\n"),
+                "VPN N=1 starts one owner and one distinct I/O worker");
         for (String invalidIo : new String[] {null, "", "0", "1", "3", "1024", "x", "4,5"}) {
             try {
                 forward.vpnStartupConfig(invalidIo);

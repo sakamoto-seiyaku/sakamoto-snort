@@ -34,10 +34,14 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--fault', choices=['none', 'write'], default='none')
     parser.add_argument('--owner', type=int, choices=[0, 1], default=0)
+    parser.add_argument('--owner-count', type=int, choices=[1, 2], default=2)
     parser.add_argument('--preselect-other-io-cpu', action='store_true')
     parser.add_argument('--stress-ingress', action='store_true')
     parser.add_argument('--ordinary-product', action='store_true')
+    parser.add_argument('--flow-end-mode', choices=['none', 'close', 'expiry'], default='none')
     a = parser.parse_args()
+    assert a.owner < a.owner_count
+    assert a.flow_end_mode == 'none' or a.owner_count == 1
     assert not a.ordinary_product or a.fault == 'none'
     endpoint_ip = ipaddress.ip_address(a.endpoint_address)
     assert not (endpoint_ip.is_loopback or endpoint_ip.is_unspecified
@@ -56,8 +60,15 @@ def main():
         (a.output / name).write_text(text)
         return text
     def adb(*args, check=True):
-        r = subprocess.run([str(ROOT / 'dev/adb'), '-s', SERIAL, *args],
-            capture_output=True, text=True, errors='replace', timeout=30)
+        for attempt in range(4):
+            r = subprocess.run([str(ROOT / 'dev/adb'), '-s', SERIAL, *args],
+                capture_output=True, text=True, errors='replace', timeout=30)
+            if (r.returncode and
+                    ('UtilAcceptVsock' in r.stderr or 'UtilBindVsock' in r.stderr)
+                    and attempt < 3):
+                time.sleep(.3 * (attempt + 1))
+                continue
+            break
         if check and r.returncode: raise RuntimeError(r.stdout + r.stderr)
         return (r.stdout + r.stderr).replace('\r', '')
     def app(path): return adb('shell', 'run-as', PKG, 'cat', path, check=False)
@@ -80,8 +91,10 @@ def main():
             ['set terminal pager off', *commands, 'quit']) + ' | toybox nc -U -w 2 -q 1 ' + BASE + 'runtime/cli.sock'
         return save(name + '.txt', adb('shell', 'su', '-c', shlex.quote(command)))
 
-    result = dict(status='HOLD', scope='s298-dedicated-io-udp4-return',
+    result = dict(status='HOLD', scope='s299-vpn-n1-udp4-return' if a.owner_count == 1
+                  else 's298-dedicated-io-udp4-return', owner_count=a.owner_count,
                   fault=a.fault,
+                  flow_end_mode=a.flow_end_mode,
                   started_ns=time.time_ns(), apk_sha256=chain.digest(apk), serial=SERIAL)
     result['product_source_sha256'] = hashlib.sha256(
         chain.encode(chain.source_files())).hexdigest()
@@ -137,7 +150,7 @@ def main():
                 src=tun_ip.packed.rjust(16, b'\0').hex(),
                 dst=endpoint_ip.packed.rjust(16, b'\0').hex(), src_port=port,
                 dst_port=endpoint_port, icmp_known=0)
-            if oracle.owner(facts) == a.owner: break
+            if oracle.assignment(facts, workers=a.owner_count)['owner'] == a.owner: break
         else: raise RuntimeError('no source port for requested canonical owner')
         result.update(endpoint=str(endpoint_ip), endpoint_port=endpoint_port, source_port=port)
         if a.preselect_other_io_cpu:
@@ -150,12 +163,15 @@ def main():
             wait('preselect-stopped', STATE, dict(state='stopped', mayBeActive='false', errorCode=''))
             previous = props(app(STATE))
         active = True
+        placement = ('--es', 'runtimeWorkerCpuIds', '1' if a.owner_count == 1 else '1,2')
+        io_cpu = str(a.owner_count + 1)
         if a.ordinary_product:
             save('start.txt', action('--ez', 'runtimeStart', 'true',
-                '--es', 'runtimeProfile', 'vpn', '--es', 'runtimeTunIoCpuId', '3'))
+                '--es', 'runtimeProfile', 'vpn', '--es', 'runtimeTunIoCpuId', io_cpu,
+                *placement))
         else:
             save('start.txt', action('--ez', 'debugVpnHevValidation', 'true',
-                '--es', 'runtimeTunIoCpuId', '3'))
+                '--es', 'runtimeTunIoCpuId', io_cpu, *placement))
         state = wait('running', STATE, dict(state='running', profile='vpn',
                      protectionRunning='true' if a.ordinary_product else 'false', errorCode=''))
         result['generation'] = int(state['generation'])
@@ -164,10 +180,22 @@ def main():
         before_topology = (a.output / 'before.txt').read_text()
         lane = next(line for line in before_topology.splitlines()
                     if line.startswith('topology.tun_io_lane='))
-        assert 'actual_core=3' in lane and 'thread_index=3' in lane, lane
-        assert 'origin_thread=3' in before_topology, before_topology
+        assert f'actual_core={io_cpu}' in lane and f'thread_index={a.owner_count + 1}' in lane, lane
+        assert f'origin_thread={a.owner_count + 1}' in before_topology, before_topology
         assert all(f'enabled=1 owner={i} ready=1' in (a.output / 'before.txt').read_text()
-                   for i in (0, 1))
+                   for i in range(a.owner_count))
+        assert f'enabled=1 owner={a.owner_count} ' not in before_topology
+        threads = dict((match.group(1), int(match.group(2)))
+                       for line in before_topology.splitlines()
+                       if (match := re.search(r'^\d+\s+vpp_(main|wk_\d+)\s+(?:workers\s+)?(\d+)\s+', line)))
+        assert set(threads) == {'main', *(f'wk_{i}' for i in range(a.owner_count + 1))}, threads
+        for role, cpu in [('main', 0), *( (f'wk_{i}', i + 1)
+                                              for i in range(a.owner_count + 1))]:
+            lwp = threads[role]
+            affinity = save('affinity-' + role + '.txt', adb('shell', 'su', '-c',
+                shlex.quote(f'cat /proc/{threads["main"]}/task/{lwp}/status')))
+            assert re.search(r'^Cpus_allowed_list:\s*' + str(cpu) + r'\s*$',
+                             affinity, re.MULTILINE), (role, affinity)
         if not a.ordinary_product:
             cli('trace', ['product packet-trace limit 4096'])
         flood = None
@@ -227,6 +255,38 @@ def main():
         # mask a receive-path failure in the second datagram.
         if not a.ordinary_product:
             assert 'sockets_created=1 sockets_closed=0 broker_requests=1 broker_replies=1' in after
+        if a.flow_end_mode != 'none':
+            before_flow = cli('flow-before', ['show product flows', 'show product flow-end',
+                                              'show product expiry'])
+            entries = [dict(re.findall(r'(\w+)=([^\s]+)', line))
+                       for line in before_flow.splitlines() if line.startswith('flow.entry ')]
+            matches = [entry for entry in entries if entry.get('worker') == '0'
+                       and {entry.get('port_a'), entry.get('port_b')} ==
+                           {str(port), str(endpoint_port)}]
+            assert len(matches) == 1, matches
+            target = matches[0]
+            result['flow_slot'] = target['slot']
+            result['flow_incarnation'] = target['incarnation']
+            assert int(target['orig_packets']) >= 3 and int(target['reply_packets']) >= 3
+            if a.flow_end_mode == 'close':
+                requested = cli('flow-close', [f'product flow-end close owner 0 '
+                    f'slot {target["slot"]} generation {result["generation"]} '
+                    f'incarnation {target["incarnation"]}'])
+                assert 'flow-end.close=queued owner=0' in requested, requested
+            deadline = time.monotonic() + (50 if a.flow_end_mode == 'expiry' else 8)
+            while time.monotonic() < deadline:
+                after_flow = cli('flow-after', ['show product flows', 'show product flow-end',
+                                                'show product expiry'])
+                if not any(line.startswith('flow.entry worker=0 ')
+                           and f'slot={target["slot"]} ' in line
+                           and f'incarnation={target["incarnation"]} ' in line
+                           for line in after_flow.splitlines()):
+                    break
+                time.sleep(.25)
+            else:
+                raise RuntimeError('FlowEntry did not reach FlowEnd/expiry')
+            assert 'flow-end.owner=0 ' in after_flow and 'expiry.owner=0 ' in after_flow
+            assert 'flow-end.owner=1 ' not in after_flow and 'expiry.owner=1 ' not in after_flow
         result['status'] = 'SMOKE_ECHO_COMPLETE' if a.fault == 'none' else 'SAME_SESSION_RECOVERY_COMPLETE'
     except Exception as error:
         result['error'] = repr(error)
@@ -278,7 +338,8 @@ def main():
                     final = save('native-stop.log', app('files/product-state/s237-last-stop.log'))
                     stopped = [dict(re.findall(r'(\w+)=([^\s]+)', line)) for line in final.splitlines()
                                if line.startswith('s237 event=owner_stopped ')]
-                    assert len(stopped) == 2 and {s['owner'] for s in stopped} == {'0', '1'}
+                    assert len(stopped) == a.owner_count and \
+                        {s['owner'] for s in stopped} == {str(i) for i in range(a.owner_count)}
                     for shard in stopped:
                         assert shard['generation'] == str(result['generation'])
                         assert all(shard[k] == '0' for k in ['sessions', 'inputs', 'pbufs', 'buffers', 'obligations', 'frames'])

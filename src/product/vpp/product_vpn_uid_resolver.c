@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_vpn_uid_resolver.h"
 #include "product_vpn_tun_adapter.h"
+#include "product_packet_graph.h"
 #include <vlib/file.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -67,6 +68,7 @@ _Static_assert(sizeof(uid_request_t) == 64, "UID request wire size");
 _Static_assert(sizeof(uid_response_t) == 28, "UID response wire size");
 
 static uid_owner_t owners[UID_OWNERS];
+static u32 active_owner_count(void) { return product_packet_graph_worker_count(); }
 
 static u64 now_ns (void)
 {
@@ -96,7 +98,7 @@ static void close_owner (uid_owner_t *owner)
 static clib_error_t *read_ready (clib_file_t *file)
 {
   u32 index = (u32)file->private_data;
-  if (index >= UID_OWNERS) return 0;
+  if (index >= active_owner_count()) return 0;
   uid_owner_t *owner = &owners[index];
   if (owner->fd != file->file_descriptor) return 0;
   for (u32 budget = 0; budget < 32; ++budget) {
@@ -150,14 +152,15 @@ static clib_error_t *read_ready (clib_file_t *file)
 
 void product_vpn_uid_resolver_start (u64 generation)
 {
-  for (u32 i = 0; i < UID_OWNERS; ++i) {
+  if (!active_owner_count() || active_owner_count() > UID_OWNERS) return;
+  for (u32 i = 0; i < active_owner_count(); ++i) {
     owners[i] = (uid_owner_t){.generation = generation, .fd = -1, .file = ~0U};
   }
 }
 
 int product_vpn_uid_resolver_attach (int fd, u32 index)
 {
-  if (fd < 0 || index >= UID_OWNERS || !product_vpn_tun_product_mode() ||
+  if (fd < 0 || index >= active_owner_count() || !product_vpn_tun_product_mode() ||
       !owners[index].generation || owners[index].fd >= 0) {
     if (fd >= 0) close(fd);
     return -1;
@@ -180,8 +183,9 @@ int product_vpn_uid_resolver_attach (int fd, u32 index)
 
 int product_vpn_uid_resolver_ready (void)
 {
-  if (!product_vpn_tun_product_mode()) return 0;
-  for (u32 i = 0; i < UID_OWNERS; ++i)
+  if (!product_vpn_tun_product_mode() || !active_owner_count()
+      || active_owner_count() > UID_OWNERS) return 0;
+  for (u32 i = 0; i < active_owner_count(); ++i)
     if (!__atomic_load_n(&owners[i].ready, __ATOMIC_ACQUIRE)) return 0;
   return 1;
 }
@@ -196,7 +200,7 @@ static int owner_for (vlib_main_t *vm, product_flow_runtime_t *pool,
       (facts->protocol != 6 && facts->protocol != 17) ||
       (facts->ip_family != 4 && facts->ip_family != 6)) return 0;
   u32 index = vlib_get_worker_index(vm->thread_index);
-  if (index >= UID_OWNERS || assignment->execution_owner != index) return 0;
+  if (index >= active_owner_count() || assignment->execution_owner != index) return 0;
   uid_owner_t *owner = &owners[index];
   if (owner->generation != generation) return 0;
   owner->pool = pool;

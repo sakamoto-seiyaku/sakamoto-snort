@@ -263,6 +263,7 @@ public class DebugControlActivity extends Activity {
                     intent.getBooleanExtra("debugVpnHevUnknownContext", false),
                     intent.getStringExtra("debugVpnHevLimits"),
                     intent.getIntExtra("debugVpnFlowEntries", 0),
+                    intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS),
                     intent.getStringExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID));
             handled = true;
         } else if (debuggable && intent.getBooleanExtra("debugVpnGraphValidation", false)) {

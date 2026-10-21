@@ -42,14 +42,49 @@ def payload(raw):
     assert len(packet) == int.from_bytes(packet[2:4], 'big')
     return packet[offset + 8:]
 
+def verify_flow_end():
+    if result.get('flow_end_mode', 'none') == 'none':
+        return
+    before_flow = records(run / 'flow-before.txt', 'flow.entry ')
+    after_flow = records(run / 'flow-after.txt', 'flow.entry ')
+    assert one(before_flow, worker=0, slot=result['flow_slot'],
+               incarnation=result['flow_incarnation'])
+    assert not [row for row in after_flow if row['worker'] == '0'
+                and row['slot'] == result['flow_slot']
+                and row['incarnation'] == result['flow_incarnation']]
+    before_end = one(records(run / 'flow-before.txt', 'flow-end.owner='), owner=0)
+    after_end = one(records(run / 'flow-after.txt', 'flow-end.owner='), owner=0)
+    assert int(after_end['released']) > int(before_end['released'])
+    assert not records(run / 'flow-after.txt', 'flow-end.owner=1 ')
+    if result['flow_end_mode'] == 'close':
+        assert 'flow-end.close=queued owner=0' in (run / 'flow-close.txt').read_text()
+    else:
+        before_expiry = one(records(run / 'flow-before.txt', 'expiry.owner='), owner=0)
+        after_expiry = one(records(run / 'flow-after.txt', 'expiry.owner='), owner=0)
+        assert int(after_expiry['closed']) > int(before_expiry['closed'])
+
 owner = result['owner']
+owner_count = result.get('owner_count', 2)
+assert owner_count in (1, 2) and 0 <= owner < owner_count
 owner_thread = str(owner + 1)
+io_thread = str(owner_count + 1)
 generation = str(result['generation'])
 topology = one(records(run / 'before.txt', 'topology.profile='), profile='vpn')
-lane = one(records(run / 'before.txt', 'topology.tun_io_lane='), worker=2)
-assert topology['owner_count'] == '2' and topology['vpp_worker_count'] == '3'
-assert lane['thread_index'] == '3' and lane['actual_core'] == '3'
+lane = one(records(run / 'before.txt', 'topology.tun_io_lane='), worker=owner_count)
+assert topology['owner_count'] == str(owner_count) and topology['vpp_worker_count'] == io_thread
+assert lane['thread_index'] == io_thread and lane['actual_core'] == io_thread
 assert lane['is_flow_owner'] == '0'
+assert one(records(run / 'before.txt', 'topology.main '))['actual_core'] == '0'
+for i in range(owner_count):
+    placed = one(records(run / 'before.txt', 'topology.owner='), owner=i)
+    assert placed['thread_index'] == str(i + 1) and placed['actual_core'] == str(i + 1)
+assert not [row for row in records(run / 'before.txt', 'topology.owner=')
+            if int(row['owner']) >= owner_count]
+if owner_count == 1:
+    for role, cpu in (('main', 0), ('wk_0', 1), ('wk_1', 2)):
+        affinity = (run / ('affinity-' + role + '.txt')).read_text()
+        assert re.search(r'^Cpus_allowed_list:\s*' + str(cpu) + r'\s*$',
+                         affinity, re.MULTILINE), (role, affinity)
 probe = dict(line.split('=', 1) for line in (run / 'probe.properties').read_text().splitlines() if '=' in line)
 assert probe['nonce'] == result['nonce']
 assert all(probe['packet.' + str(i)] == ('timeout' if fault_write and i == 1 else 'echo')
@@ -62,14 +97,15 @@ if result.get('ordinary_product'):
     assert stack['enabled'] == stack['ready'] == '1'
     assert int(stack['return_packets']) >= 3 and int(stack['write_succeeded']) >= 3
     assert stack['write_failed'] == '0'
-    assert status['origin_thread'] == '3' and status['attached'] == '1'
+    assert status['origin_thread'] == io_thread and status['attached'] == '1'
     assert all(status[k] == '0' for k in ('pending', 'frames', 'buffers', 'obligations', 'errors'))
     running = dict(line.split('=', 1) for line in (run / 'running.properties').read_text().splitlines() if '=' in line)
     assert running['protectionRunning'] == 'true'
     stopped = dict(line.split('=', 1) for line in (run / 'stopped.properties').read_text().splitlines() if '=' in line)
     assert stopped['state'] == 'stopped' and stopped['mayBeActive'] == 'false'
     assert 'libvpp_runtime.so' not in (run / 'processes-after.txt').read_text()
-    print(f"S298 ordinary Product generation={generation} UDP byte-equal echoes, write/status debt zero, clean stop: PASS")
+    verify_flow_end()
+    print(f"S{'299' if owner_count == 1 else '298'} ordinary Product generation={generation} UDP byte-equal echoes, write/status debt zero, clean stop: PASS")
     raise SystemExit(0)
 
 log = (run / 'vpp.log').read_text()
@@ -92,20 +128,20 @@ free = events('s203 event=buffer_free ')
 for i in range(3):
     expected = (result['nonce'] + ':' + str(i)).encode()
     origin = one([row for row in capture if payload(row['raw']) == expected])
-    assert origin['thread'] == '3' and origin['generation'] == generation
+    assert origin['thread'] == io_thread and origin['generation'] == generation
     token, buffer = origin['token'], origin['buffer']
     owner_admit = one(admit, obligation=token)
-    assert owner_admit['thread'] == '3' and owner_admit['owner'] == str(owner)
+    assert owner_admit['thread'] == io_thread and owner_admit['owner'] == str(owner)
     assert owner_admit['buffer'] == buffer
     assert one(primary_pub, token=token)['buffer'] == buffer
     assert one(primary_get, token=token)['thread'] == owner_thread
     assert one(policy, obligation=token)['thread'] == owner_thread
     assert one(completion_pub, token=token)['buffer'] == buffer
-    assert one(return_get, token=token)['thread'] == '3'
+    assert one(return_get, token=token)['thread'] == io_thread
     settled = one(completion, token=token)
-    assert settled['buffer'] == buffer and settled['thread'] == '3'
+    assert settled['buffer'] == buffer and settled['thread'] == io_thread
     assert settled['transport_outcome'] == 'ADMITTED'
-    assert one(free, obligation=token)['thread'] == '3'
+    assert one(free, obligation=token)['thread'] == io_thread
 
     wire = one([row for row in return_wire if payload(row['raw']) == expected])
     return_token, return_buffer = wire['token'], wire['buffer']
@@ -116,14 +152,14 @@ for i in range(3):
     assert one(admit, obligation=return_token)['buffer'] == return_buffer
     assert one(policy, obligation=return_token)['thread'] == owner_thread
     assert one(completion_pub, token=return_token)['buffer'] == return_buffer
-    assert one(return_pub, token=return_token)['target_thread'] == '3'
-    assert one(return_get, token=return_token)['thread'] == '3'
+    assert one(return_pub, token=return_token)['target_thread'] == io_thread
+    assert one(return_get, token=return_token)['thread'] == io_thread
     attempted = one(write_wire, token=return_token)
-    assert attempted['thread'] == '3' and attempted['buffer'] == return_buffer
+    assert attempted['thread'] == io_thread and attempted['buffer'] == return_buffer
     assert attempted['raw'] == wire['raw']
     assert attempted['requested'] == ('0' if fault_write and i == 1 else wire['bytes'])
     completed = one(completion, token=return_token)
-    assert completed['thread'] == '3' and completed['buffer'] == return_buffer
+    assert completed['thread'] == io_thread and completed['buffer'] == return_buffer
     if fault_write and i == 1:
         assert completed['transport_outcome'] == 'TUN_WRITE_FAILED'
         assert completed['write_result'] == '-1' and completed['write_errno'] == '22'
@@ -131,7 +167,7 @@ for i in range(3):
     else:
         assert completed['transport_outcome'] == 'TUN_WRITE_SUCCEEDED'
         assert completed['write_result'] == wire['bytes'] and completed['write_errno'] == '0'
-    assert one(free, obligation=return_token)['thread'] == '3'
+    assert one(free, obligation=return_token)['thread'] == io_thread
 
 if result.get('stress_ingress'):
     assert hashlib.sha256((run / 'tun-ingress-flood').read_bytes()).hexdigest() == result['flood_sha256']
@@ -164,6 +200,7 @@ if not result.get('ordinary_product'):
 stopped = dict(line.split('=', 1) for line in (run / 'stopped.properties').read_text().splitlines() if '=' in line)
 assert stopped['state'] == 'stopped' and stopped['mayBeActive'] == 'false'
 assert 'libvpp_runtime.so' not in (run / 'processes-after.txt').read_text()
-print(f"S298 owner={owner} generation={generation} "
+verify_flow_end()
+print(f"S{'299' if owner_count == 1 else '298'} owner={owner} generation={generation} "
       f"{'two echoes and one classified write failure' if fault_write else 'three UDP echoes'}, "
       "exact return bytes/index, one attempt per return, zero debt: PASS")

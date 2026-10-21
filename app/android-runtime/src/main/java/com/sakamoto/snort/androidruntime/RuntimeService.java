@@ -928,9 +928,9 @@ public final class RuntimeService extends VpnService {
             String ids = explicitIds == null ? getSharedPreferences("worker-placement",
                     MODE_PRIVATE).getString("workerCpuIds", "1,2") : explicitIds;
             WorkerCpuPlacement selection = WorkerCpuPlacement.parse(ids);
-            if (profile == RuntimeProfile.VPN && selection.ownerCount != 2) {
+            if (profile == RuntimeProfile.VPN && selection.ownerCount > 2) {
                 publishError("invalid_worker_cpu_ids",
-                        "VPN currently requires two FlowOwner CPU IDs",
+                        "VPN currently supports one or two FlowOwner CPU IDs",
                         currentMayBeActive(), currentPid());
                 return false;
             }
@@ -1362,7 +1362,7 @@ public final class RuntimeService extends VpnService {
                     if (platformNetworkSnapshots == null || platformNetworkSnapshots.currentUnderlay() == null)
                         throw new IOException("No subscribed underlay is available for Direct VPN handoff");
                     final long brokerGeneration = generation;
-                    for (int shard = 0; shard < vpnSocketBrokers.length; ++shard) {
+                    for (int shard = 0; shard < activeWorkerPlacement.ownerCount; ++shard) {
                         vpnSocketBrokers[shard] = VpnSocketBroker.start(this, runtime.getPath(), generation, shard,
                                 hevUnknownContext,
                                 () -> enqueueLifecycle(() -> {
@@ -1377,10 +1377,10 @@ public final class RuntimeService extends VpnService {
                     final VpnSocketBroker[] generationBrokers = vpnSocketBrokers.clone();
                     platformNetworkSnapshots.setUnderlayListener((selectedUnderlay, invalidatedEpoch) -> {
                         for (VpnSocketBroker broker : generationBrokers)
-                            broker.updateUnderlay(selectedUnderlay, invalidatedEpoch);
+                            if (broker != null) broker.updateUnderlay(selectedUnderlay, invalidatedEpoch);
                     });
                     if (vpnProductFlowStack) {
-                        for (int owner = 0; owner < vpnUidBrokers.length; ++owner) {
+                        for (int owner = 0; owner < activeWorkerPlacement.ownerCount; ++owner) {
                             vpnUidBrokers[owner] = VpnUidBroker.start(this, runtime.getPath(),
                                     generation, owner,
                                     () -> enqueueLifecycle(() -> {
@@ -5106,7 +5106,7 @@ public final class RuntimeService extends VpnService {
                 && status.productGraphTunIoWorkerIndex ==
                         (activeProfile == RuntimeProfile.VPN ? activeWorkerPlacement.ownerCount : -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
-                && (activeWorkerPlacement.ownerCount != 1
+                && (activeWorkerPlacement.ownerCount != 1 || activeProfile == RuntimeProfile.VPN
                     || status.productGraphVppWorker1ThreadIndex == -1
                         && status.productGraphVppWorker1Core == -1)
                 && status.productGraphWorkerLayoutReady != 0;

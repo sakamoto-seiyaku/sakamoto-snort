@@ -106,8 +106,15 @@ public final class RuntimeControlBackend {
     public StartResult startVpnHevValidation(Context context, boolean unknownIdentity,
                                               boolean unknownContext, String limits, int flowEntries,
                                               String tunIoCpuId) {
+        return startVpnHevValidation(context, unknownIdentity, unknownContext, limits,
+                flowEntries, null, tunIoCpuId);
+    }
+
+    public StartResult startVpnHevValidation(Context context, boolean unknownIdentity,
+                                              boolean unknownContext, String limits, int flowEntries,
+                                              String workerCpuIds, String tunIoCpuId) {
         return startVpnGraphValidation(context, true, unknownIdentity, unknownContext,
-                limits, flowEntries, tunIoCpuId);
+                limits, flowEntries, workerCpuIds, tunIoCpuId);
     }
 
     private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity, boolean unknownContext) {
@@ -123,6 +130,13 @@ public final class RuntimeControlBackend {
     private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity,
                                                  boolean unknownContext, String limits, int flowEntries,
                                                  String tunIoCpuId) {
+        return startVpnGraphValidation(context, hev, unknownIdentity, unknownContext,
+                limits, flowEntries, null, tunIoCpuId);
+    }
+
+    private StartResult startVpnGraphValidation(Context context, boolean hev, boolean unknownIdentity,
+                                                 boolean unknownContext, String limits, int flowEntries,
+                                                 String workerCpuIds, String tunIoCpuId) {
         if (!RuntimeService.notificationsReady(context)) return StartResult.NOTIFICATION_REQUIRED;
         Intent intent = requestIntent(context, RuntimeControlRequest.start(RuntimeProfile.VPN));
         intent.putExtra("debugVpnGraphValidation", true);
@@ -131,6 +145,8 @@ public final class RuntimeControlBackend {
         intent.putExtra("debugVpnHevUnknownContext", unknownContext);
         intent.putExtra("debugVpnHevLimits", limits);
         intent.putExtra("debugVpnFlowEntries", flowEntries);
+        if (workerCpuIds != null)
+            intent.putExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS, workerCpuIds);
         if (tunIoCpuId != null)
             intent.putExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID, tunIoCpuId);
         context.startForegroundService(intent);
