@@ -127,7 +127,7 @@ public final class RuntimeEvidenceFormatterTest {
         return new RuntimeControlNative.Status(1, 1, 14, 14, 42L,
                 true, false, false, true, true, true,
                 " artifact\n42 ", " api\rv1 ", " vpp\n26 ", detail, "", "",
-                0L, 0L, 0L,
+                0L, 0L, 0L, -1,
                 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0, 0, 0, 0, 0, 0, 0,

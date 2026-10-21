@@ -14,7 +14,7 @@ _Static_assert (offsetof (sakamoto_product_status_t, artifact_id) == 52U,
                 "status identity ABI changed");
 _Static_assert (sizeof (sakamoto_product_policy_snapshot_t) == 264U,
                 "policy snapshot ABI changed");
-_Static_assert (sizeof (sakamoto_product_status_t) == 1304U,
+_Static_assert (sizeof (sakamoto_product_status_t) == 1312U,
                 "status ABI changed");
 
 static int

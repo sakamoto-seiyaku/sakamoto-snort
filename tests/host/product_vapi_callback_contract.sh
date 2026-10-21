@@ -92,6 +92,7 @@ typedef struct {
   uint64_t product_graph_hash_seed;
   uint32_t product_graph_handoff_credits;
   uint32_t product_graph_vpp_worker_count;
+  uint32_t product_graph_tun_io_worker_index;
   uint32_t product_graph_vpp_main_core;
   uint32_t product_graph_vpp_worker0_thread_index;
   uint32_t product_graph_vpp_worker0_core;

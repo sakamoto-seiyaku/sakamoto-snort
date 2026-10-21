@@ -11,6 +11,7 @@
 #include "product_vpn_uid_resolver.h"
 #include "product_vpn_return_credit.h"
 #include "product_vpn_return_stamp.h"
+#include "product_runtime_topology.h"
 #include <vlib/file.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -75,7 +76,7 @@ static struct {
   u64 pregraph_returns, local, remote;
   u32 pending, test_uid, tun_file, listener_file, snapshot_interface;
   int tun_fd, listener_fd;
-  u8 enabled, draining, test_uid_known;
+  u8 enabled, draining, test_uid_known, origin_worker;
   char path[sizeof (((struct sockaddr_un *)0)->sun_path)];
   tun_pending_t obligations[TUN_PENDING];
   tun_control_t controls[TUN_CONTROL_SLOTS];
@@ -180,7 +181,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   owner->copy_bytes += total;
   product_adapter_obligation_t obligation = {.token = token,
     .queue_generation = generation, .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
-    .origin_worker = 0, .origin_lane = 0, .packet_id = owner_index + 1};
+    .origin_worker = tun.origin_worker, .origin_lane = 0, .packet_id = owner_index + 1};
   if (!product_vpn_return_stamp_publish(&owner->stamps, generation, token,
                                          flow_incarnation)) abort();
   if (serial <= product_packet_graph_trace_limit()) {
@@ -248,7 +249,8 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
   tun_pending_t *pending = &tun.obligations[o->token % TUN_PENDING];
   if (o->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
       || o->queue_generation != tun.generation || o->origin_lane != 0
-      || o->origin_worker != 0 || vm->thread_index != vlib_get_worker_thread_index (0)
+      || o->origin_worker != tun.origin_worker
+      || vm->thread_index != vlib_get_worker_thread_index (tun.origin_worker)
       || (frame->flags & PRODUCT_COMPLETION_REPLAY_PROBE)) {
     tun.rejected++;
     return 0;
@@ -325,7 +327,7 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
 {
   const product_adapter_obligation_t *o = &frame->obligation;
   if (!o->packet_id) return; /* Original TUN capture uses its existing ledger. */
-  if (vm->thread_index != vlib_get_worker_thread_index(0) ||
+  if (vm->thread_index != vlib_get_worker_thread_index(tun.origin_worker) ||
       o->packet_id > PRODUCT_VPN_RETURN_WORKERS ||
       (frame->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ||
       !product_vpn_return_stamp_release(&returns[o->packet_id - 1].stamps,
@@ -362,7 +364,7 @@ static void tun_submit_captured(vlib_main_t *vm,
 
 static clib_error_t *tun_read_ready (clib_file_t *file) {
   vlib_main_t *vm = vlib_get_main ();
-  if (vm->thread_index != vlib_get_worker_thread_index (0)
+  if (vm->thread_index != vlib_get_worker_thread_index (tun.origin_worker)
       || file->file_descriptor != (u32) tun.tun_fd) return clib_error_return (0, "TUN lane mismatch");
   if (__atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE)) return 0;
   u64 started_ns = trace_monotonic_ns();
@@ -418,7 +420,8 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
     if (platform.network_context_id) platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
     product_adapter_obligation_t obligation = {
       .token = token, .queue_generation = tun.generation,
-      .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN, .origin_worker = 0, .origin_lane = 0,
+      .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
+      .origin_worker = tun.origin_worker, .origin_lane = 0,
     };
     if (tun.captured <= product_packet_graph_trace_limit ()) {
       const sakamoto_product_network_snapshot_t *snapshot = product_network_snapshot_current ();
@@ -474,13 +477,13 @@ static int tun_attach (int fd, u32 uid, int uid_known) {
   tun.tun_fd = fd;
   clib_file_t file = {0};
   file.read_function = tun_read_ready;
-  file.polling_thread_index = vlib_get_worker_thread_index (0);
+  file.polling_thread_index = vlib_get_worker_thread_index (tun.origin_worker);
   file.file_descriptor = fd;
   file.description = format (0, "sakamoto-product-tun%c", 0);
   tun.tun_file = clib_file_add (&file_main, &file);
   fprintf (stderr, "s213 event=attach generation=%llu fd=%d interface=%s origin_thread=%u uid_source=CONTROLLED_TEST_PROVIDER uid=%u direct_egress_ready=0\n",
     (unsigned long long) tun.generation, fd, interface.ifr_name,
-    vlib_get_worker_thread_index (0), uid);
+    vlib_get_worker_thread_index (tun.origin_worker), uid);
   return 1;
 }
 
@@ -594,6 +597,12 @@ static clib_error_t *tun_control_accept (clib_file_t *file) {
 int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   const char *runtime = getenv ("SAKAMOTO_VPP_RUNTIME_DIR");
   if (!product_vpn_tun_enabled () || !runtime || tun.enabled || !generation) return 0;
+  if (!vm || !product_runtime_topology_valid (
+        PRODUCT_TOPOLOGY_VPN,
+        product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
+        vlib_num_workers ())) return 0;
+  tun.origin_worker = (u8) product_runtime_topology_current (
+    PRODUCT_TOPOLOGY_VPN).tun_io_worker;
   if (product_packet_graph_worker_count() != PRODUCT_VPN_RETURN_WORKERS) return 0;
   for (u32 i = 0; i < PRODUCT_VPN_RETURN_WORKERS; ++i)
     {
@@ -614,6 +623,7 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   }
   if (!product_packet_graph_start_external (vm, generation,
         PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)) {
+    clib_warning ("VPN graph startup rejected before TUN capture");
     close (fd); unlink (tun.path); return 0;
   }
   if (!product_vpn_flow_stack_driver_start(vm, generation)) {
@@ -670,9 +680,10 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.capture_budget_exits,
     (unsigned long long)tun.capture_callback_ns,
     (unsigned long long)tun.capture_callback_max_ns);
-  vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=%llu nfq_verdicts=0 direct_egress_ready=0",
+  vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_worker=%u origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=%llu nfq_verdicts=0 direct_egress_ready=0",
     (unsigned long long) tun.generation, tun.enabled, tun.tun_fd >= 0, tun.tun_fd,
-    vlib_get_worker_thread_index (0), __atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE),
+    tun.origin_worker, vlib_get_worker_thread_index (tun.origin_worker),
+    __atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE),
     (unsigned long long) tun.captured, (unsigned long long) tun.submitted,
     (unsigned long long) tun.completed, tun.pending,
     (unsigned long long) tun.policy_drops, (unsigned long long) tun.runtime_drops,

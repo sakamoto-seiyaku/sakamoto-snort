@@ -25,6 +25,7 @@
 #include "product_vpn_flow_stack_driver.h"
 #include "product_vpn_uid_resolver.h"
 #include "product_network_snapshot.h"
+#include "product_runtime_topology.h"
 #include "product_diagnostic_hex.h"
 
 #include <vlib/vlib.h>
@@ -553,6 +554,8 @@ static void product_packet_graph_policy_writer_unlock (
   product_packet_graph_main_t *graph);
 static int product_packet_graph_flow_pools_reset (
   product_packet_graph_main_t *graph);
+static void product_packet_graph_flow_pools_abort (
+  product_packet_graph_main_t *graph);
 static void product_packet_graph_flow_pools_flush (
   product_packet_graph_main_t *graph);
 static void product_packet_graph_flow_observe (
@@ -562,13 +565,29 @@ static void product_packet_graph_flow_observe (
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 static int product_fragment_dispatch (vlib_main_t *, vlib_node_runtime_t *,
                                       u32, const product_buffer_metadata_t *);
-static void product_fragment_start (vlib_main_t *);
+static int product_fragment_start (vlib_main_t *);
+static void product_fragment_abort (void);
 static void product_fragment_terminal (vlib_main_t *, vlib_node_runtime_t *,
                                        u32, const product_buffer_metadata_t *,
                                        const product_packet_lease_t *);
 static void product_fragment_origin_check (vlib_main_t *, u32,
                                            const product_packet_completion_frame_t *);
 #endif
+
+static int
+product_packet_graph_origin_valid (const product_packet_graph_main_t *graph,
+                                   const product_adapter_obligation_t *obligation)
+{
+  if (!graph || !obligation || obligation->kind != graph->adapter_kind)
+    return 0;
+  product_runtime_topology_profile_t profile =
+    obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+      ? PRODUCT_TOPOLOGY_ROOT : PRODUCT_TOPOLOGY_VPN;
+  product_runtime_topology_t topology = product_runtime_topology_current (profile);
+  return profile == PRODUCT_TOPOLOGY_ROOT
+    ? product_runtime_topology_is_owner (topology, obligation->origin_worker)
+    : obligation->origin_worker == topology.tun_io_worker;
+}
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 #define PRODUCT_EVIDENCE_ADD(field, value)                                    \
@@ -2577,7 +2596,7 @@ product_packet_graph_replay_completion (vlib_main_t *vm,
   u16 thread;
   if (!vm || !completion || !graph->accepting || !graph->enabled
       || !(completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)
-      || completion->obligation.origin_worker >= PRODUCT_GRAPH_WORKERS
+      || !product_packet_graph_origin_valid (graph, &completion->obligation)
       || vlib_buffer_alloc (vm, &bi, 1) != 1)
     return 0;
   thread = vlib_get_worker_thread_index (completion->obligation.origin_worker);
@@ -2614,10 +2633,17 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
                                      product_adapter_obligation_kind_t adapter_kind)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
+  product_runtime_topology_profile_t profile =
+    adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+      ? PRODUCT_TOPOLOGY_ROOT : PRODUCT_TOPOLOGY_VPN;
+  product_runtime_topology_t topology = product_runtime_topology_current (profile);
 
   if (vm == 0 || generation == 0
       || (adapter_kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-          && adapter_kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN))
+          && adapter_kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
+      || topology.owner_count != PRODUCT_GRAPH_WORKERS
+      || !product_runtime_topology_valid (profile, topology,
+                                          vlib_num_workers ()))
     return 0;
   if (clib_atomic_load_acq_n (&graph->enabled)
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
@@ -2635,7 +2661,8 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   clib_memset (product_packet_batch_stats, 0, sizeof (product_packet_batch_stats));
 #endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-  product_fragment_start (vm);
+  if (!product_fragment_start (vm))
+    return 0;
 #endif
   graph->trace_packets = 0;
   /* Controlled probes retain their bounded wire trace. Ordinary VPN must
@@ -2654,7 +2681,12 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   graph->completion_pending_returns = 0;
 #endif
   if (!product_packet_graph_flow_pools_reset (graph))
-    return 0;
+    {
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      product_fragment_abort ();
+#endif
+      return 0;
+    }
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[0], __ATOMIC_SEQ_CST) == 0);
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[1], __ATOMIC_SEQ_CST) == 0);
   product_policy_domains_clear (graph);
@@ -2666,7 +2698,13 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   clib_atomic_store_rel_n (&graph->lifecycle_settlements, 0);
   clib_atomic_store_rel_n (&graph->lifecycle_returns, 0);
   if (!product_core_policy_start (generation))
-    return 0;
+    {
+      product_packet_graph_flow_pools_abort (graph);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+      product_fragment_abort ();
+#endif
+      return 0;
+    }
   clib_atomic_store_rel_n (&graph->enabled, 1);
   clib_atomic_store_rel_n (&graph->accepting, 1);
   return 1;
@@ -2684,6 +2722,9 @@ product_packet_graph_stop_external (vlib_main_t *vm)
     clib_panic ("cannot stop graph with live packet/FlowEnd buffers");
   clib_atomic_store_rel_n (&graph->accepting, 0);
   clib_atomic_store_rel_n (&graph->enabled, 0);
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  product_fragment_abort ();
+#endif
   product_packet_graph_policy_writer_lock (graph);
   product_packet_graph_flow_pools_flush (graph);
   product_policy_domains_clear (graph);
@@ -2779,9 +2820,7 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
     return 0;
   if (product_flow_end_buffer_debt ())
     return 0;
-  product_flow_end_unbind ();
-  product_observation_unbind ();
-  clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
+  product_packet_graph_flow_pools_abort (graph);
   clib_memset (graph->policy_workers, 0, sizeof (graph->policy_workers));
   graph->policy_packet_lock_acquisitions = 0;
   graph->policy_publications = 0;
@@ -2791,32 +2830,36 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   if (!graph->flow_capacity)
     graph->flow_capacity = 1024;
   for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
-    {
-      product_flow_runtime_destroy (graph->flow_pools[worker]);
-      graph->flow_pools[worker] = 0;
-    }
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
     if (product_flow_runtime_create (
           &graph->flow_pools[worker], (u16) worker, PRODUCT_GRAPH_WORKERS,
           graph->generation, graph->flow_capacity) != PRODUCT_FLOW_ENTRY_STATUS_OK)
-      {
-        for (u32 cleanup = 0; cleanup < PRODUCT_GRAPH_WORKERS; cleanup++)
-          {
-            product_flow_runtime_destroy (graph->flow_pools[cleanup]);
-            graph->flow_pools[cleanup] = 0;
-          }
-        return 0;
-      }
+      goto failed;
   if (!product_flow_end_start (graph->generation, graph->flow_pools,
                                PRODUCT_GRAPH_WORKERS))
-    return 0;
+    goto failed;
   if (!product_observation_bind (graph->generation, graph->flow_pools))
-    return 0;
+    goto failed;
   clib_atomic_store_rel_n (&graph->flow_active_policy_revision, 0);
   clib_atomic_store_rel_n (&graph->flow_active_snapshot_hash, 0);
   clib_atomic_store_rel_n (&graph->flow_flush_count, 0);
   clib_atomic_store_rel_n (&graph->flow_pools_initialized, 1);
   return 1;
+failed:
+  product_packet_graph_flow_pools_abort (graph);
+  return 0;
+}
+
+static void
+product_packet_graph_flow_pools_abort (product_packet_graph_main_t *graph)
+{
+  product_observation_unbind ();
+  product_flow_end_unbind ();
+  for (u32 worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+    {
+      product_flow_runtime_destroy (graph->flow_pools[worker]);
+      graph->flow_pools[worker] = 0;
+    }
+  clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
 }
 
 static void
@@ -4467,10 +4510,14 @@ product_packet_graph_submit_external_batch_internal (
         obligation->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
         platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
         platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
-        obligation->origin_worker == 0 && obligation->origin_lane == 0 &&
+        product_packet_graph_origin_valid (graph, obligation) &&
+        obligation->origin_lane == 0 &&
+        product_runtime_topology_is_owner (
+          product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
+          vlib_get_worker_index (vm->thread_index)) &&
         obligation->packet_id == vlib_get_worker_index (vm->thread_index) + 1 &&
         obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
-      if (!vm || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS ||
+      if (!vm || !product_packet_graph_origin_valid (graph, obligation) ||
           (platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return) ||
           (!vpn_return && vm->thread_index !=
             vlib_get_worker_thread_index (obligation->origin_worker)) ||
@@ -4568,10 +4615,14 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
     obligation->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
     platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
     platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
-    obligation->origin_worker == 0 && obligation->origin_lane == 0 &&
+    product_packet_graph_origin_valid (graph, obligation) &&
+    obligation->origin_lane == 0 &&
+    product_runtime_topology_is_owner (
+      product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
+      vlib_get_worker_index (vm->thread_index)) &&
     obligation->packet_id == vlib_get_worker_index(vm->thread_index) + 1 &&
     obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
-  if (!vm || !obligation || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS
+  if (!vm || !product_packet_graph_origin_valid (graph, obligation)
       || (platform && platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return)
       || (!vpn_return &&
           vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker))

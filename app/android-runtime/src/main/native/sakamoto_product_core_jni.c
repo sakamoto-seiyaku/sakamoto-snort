@@ -351,7 +351,7 @@ enum
   STATUS_VIEW_VALUE_COUNT = 7,
   STATUS_ASSOCIATION_VALUE_COUNT = 3,
   STATUS_WIRE_VALUE_COUNT = STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
-                             + STATUS_ASSOCIATION_VALUE_COUNT,
+                            + STATUS_ASSOCIATION_VALUE_COUNT + 1,
   CONNECT_VALUE_COUNT = STATUS_WIRE_VALUE_COUNT + 1,
 };
 
@@ -359,6 +359,7 @@ static void
 status_reset (sakamoto_product_status_t *status, uint64_t generation)
 {
   memset (status, 0, sizeof (*status));
+  status->product_graph_tun_io_worker_index = UINT32_MAX;
   status->abi_version = SAKAMOTO_PRODUCT_ABI_VERSION;
   status->api_version = SAKAMOTO_PRODUCT_API_VERSION;
   status->generation = generation;
@@ -452,6 +453,7 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   char product_graph_hash_seed[32];
   char product_graph_handoff_credits[32];
   char product_graph_vpp_worker_count[32];
+  char product_graph_tun_io_worker_index[32];
   char product_graph_vpp_main_core[32];
   char product_graph_vpp_worker0_thread_index[32];
   char product_graph_vpp_worker0_core[32];
@@ -671,6 +673,9 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   snprintf (product_graph_vpp_worker_count,
             sizeof (product_graph_vpp_worker_count), "%" PRIu32,
             status->product_graph_vpp_worker_count);
+  snprintf (product_graph_tun_io_worker_index,
+            sizeof (product_graph_tun_io_worker_index), "%" PRIu32,
+            status->product_graph_tun_io_worker_index);
   snprintf (product_graph_vpp_main_core,
             sizeof (product_graph_vpp_main_core), "%" PRIu32,
             status->product_graph_vpp_main_core);
@@ -1014,6 +1019,7 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   fields[index++] = policy_l4_typed_match_policy_key;
   fields[index++] = policy_l4_typed_match_probe_key;
   fields[index++] = policy_l4_last_evaluation_probe_key;
+  fields[index++] = product_graph_tun_io_worker_index;
 
   for (int value_index = 0; value_index < index; ++value_index)
     {

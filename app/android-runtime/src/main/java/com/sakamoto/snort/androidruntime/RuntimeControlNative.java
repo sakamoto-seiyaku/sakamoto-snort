@@ -12,7 +12,7 @@ public final class RuntimeControlNative {
     private static final int STATUS_ASSOCIATION_VALUE_COUNT = 3;
     private static final int STATUS_WIRE_VALUE_COUNT =
             STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
-                    + STATUS_ASSOCIATION_VALUE_COUNT;
+                    + STATUS_ASSOCIATION_VALUE_COUNT + 1;
     private static final int CONNECT_VALUE_COUNT = STATUS_WIRE_VALUE_COUNT + 1;
     private static final boolean LOADED;
 
@@ -86,6 +86,7 @@ public final class RuntimeControlNative {
                     parseLongAt(values, offset + 142, 0L),
                     parseLongAt(values, offset + 143, 0L),
                     parseLongAt(values, offset + 144, 0L),
+                    parseIntAt(values, offset + 145, -1),
                     parseInt(values[offset + 14], 0),
                     parseInt(values[offset + 15], 0),
                     parseInt(values[offset + 16], 0),
@@ -779,6 +780,8 @@ public final class RuntimeControlNative {
         public final long productGraphHashSeed;
         public final int productGraphHandoffCredits;
         public final int productGraphVppWorkerCount;
+        /** Logical VPP worker position, or -1 when this runtime has no TUN lane. */
+        public final int productGraphTunIoWorkerIndex;
         public final int productGraphVppMainCore;
         public final int productGraphVppWorker0ThreadIndex;
         public final int productGraphVppWorker0Core;
@@ -880,7 +883,7 @@ public final class RuntimeControlNative {
             this(abiVersion, apiVersion, code, legacyVppRetval, generation,
                     coreReady, adapterAvailable, protectionRunning, pluginLoaded,
                     vapiHandleLive, generationLive, artifactId, apiIdentity,
-                    vppRevision, errorDetail, program, version, 0L, 0L, 0L,
+                    vppRevision, errorDetail, program, version, 0L, 0L, 0L, -1,
                     0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                     0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                     0, 0, 0, 0, 0, 0, 0,
@@ -907,6 +910,7 @@ public final class RuntimeControlNative {
                        long policyL4TypedMatchPolicyKey,
                        long policyL4TypedMatchProbeKey,
                        long policyL4LastEvaluationProbeKey,
+                       int productGraphTunIoWorkerIndex,
                        int rootNfqueueQueueId, int rootNfqueueQueueLast,
                        int rootNfqueueLaneCount, int rootNfqueueReadyLaneMask,
                        long rootNfqueueGeneration,
@@ -1095,6 +1099,7 @@ public final class RuntimeControlNative {
             this.productGraphHashSeed = productGraphHashSeed;
             this.productGraphHandoffCredits = productGraphHandoffCredits;
             this.productGraphVppWorkerCount = productGraphVppWorkerCount;
+            this.productGraphTunIoWorkerIndex = productGraphTunIoWorkerIndex;
             this.productGraphVppMainCore = productGraphVppMainCore;
             this.productGraphVppWorker0ThreadIndex = productGraphVppWorker0ThreadIndex;
             this.productGraphVppWorker0Core = productGraphVppWorker0Core;
@@ -1217,6 +1222,7 @@ public final class RuntimeControlNative {
                     base.policyL4TypedMatchPolicyKey,
                     base.policyL4TypedMatchProbeKey,
                     base.policyL4LastEvaluationProbeKey,
+                    base.productGraphTunIoWorkerIndex,
                     base.rootNfqueueQueueId,
                     base.rootNfqueueQueueLast, base.rootNfqueueLaneCount,
                     base.rootNfqueueReadyLaneMask, base.rootNfqueueGeneration,

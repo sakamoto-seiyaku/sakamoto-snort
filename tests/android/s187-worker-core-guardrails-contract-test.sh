@@ -133,7 +133,7 @@ for token in (
         "public final long productGraphHandoffDebt"):
     if token not in native_status:
         raise AssertionError("S187 native status missing " + token)
-if "_Static_assert(sizeof(sakamoto_product_status_t) == 1304U" not in abi_header:
+if "_Static_assert(sizeof(sakamoto_product_status_t) == 1312U" not in abi_header:
     raise AssertionError("S187 Product Core ABI must include graph guardrail fields")
 PY
 
@@ -146,7 +146,7 @@ for token in \
   'product_graph_vpp_worker_count: value.product_graph_vpp_worker_count' \
   'value.product_graph_worker_count = status.product_graph_worker_count' \
   'value.product_graph_vpp_worker_count = status.product_graph_vpp_worker_count' \
-  'assert_eq!(size_of::<ProductStatus>(), 1304)'; do
+  'assert_eq!(size_of::<ProductStatus>(), 1312)'; do
   grep -Fq -- "$token" "${rust_sources[@]}"
 done
 

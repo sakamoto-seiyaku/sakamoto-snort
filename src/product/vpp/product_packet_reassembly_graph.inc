@@ -509,6 +509,14 @@ product_fragment_startup_config (vlib_main_t *vm, unformat_input_t *input)
 VLIB_CONFIG_FUNCTION(product_fragment_startup_config, "product-reassembly");
 
 static void
+product_fragment_abort (void)
+{
+  product_fragment_main.accepting = 0;
+  for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++)
+    product_fragment_table_destroy (&product_fragment_main.tables[i]);
+}
+
+static int
 product_fragment_start (vlib_main_t *vm)
 {
   if (!product_fragment_main.initialized) {
@@ -529,7 +537,11 @@ product_fragment_start (vlib_main_t *vm)
     if (!product_fragment_table_init(&product_fragment_main.tables[i],
           product_fragment_config.contexts, product_fragment_config.originals,
           (u64)product_fragment_config.timeout_ms*1000))
-      clib_panic("product reassembly startup allocation/configuration failed");
+      {
+        clib_warning ("Product fragment table allocation failed before capture");
+        product_fragment_abort ();
+        return 0;
+      }
   }
   clib_memset(product_fragment_main.threads, 0, sizeof(product_fragment_main.threads));
   product_fragment_main.injected = 0;
@@ -537,6 +549,7 @@ product_fragment_start (vlib_main_t *vm)
   product_fragment_main.max_originals = product_fragment_config.originals;
   product_fragment_main.accepting = 1;
   (void)vm;
+  return 1;
 }
 
 void

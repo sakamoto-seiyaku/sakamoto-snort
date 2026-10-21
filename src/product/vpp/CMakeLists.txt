@@ -192,9 +192,9 @@ if(NOT "${SAKAMOTO_PRODUCT_MANIFEST_VPP_REVISION}"
   message(FATAL_ERROR
     "artifact manifest VPP revision does not match pinned-vpp-revision.txt")
 endif()
-if(NOT "${SAKAMOTO_PRODUCT_ABI_VERSION}" STREQUAL "1"
+if(NOT "${SAKAMOTO_PRODUCT_ABI_VERSION}" STREQUAL "2"
    OR NOT "${SAKAMOTO_PRODUCT_API_VERSION}" STREQUAL "1")
-  message(FATAL_ERROR "the Host Product Core ABI/API version is not version 1")
+  message(FATAL_ERROR "the Host Product Core requires ABI 2 and API 1")
 endif()
 if(NOT "${SAKAMOTO_PRODUCT_PLUGIN}" STREQUAL "product_core_plugin.so")
   message(FATAL_ERROR "the product manifest must allow exactly product_core_plugin.so")
@@ -279,6 +279,7 @@ add_vpp_plugin(product_core
     product_flow_sni.c
     product_flow_quic.c
     product_flow_end.c
+    product_runtime_topology.c
     product_flow_expiry.c
     product_observation.c
     product_blocked_observation.c

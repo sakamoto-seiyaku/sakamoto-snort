@@ -44,15 +44,19 @@ static inline void vlib_worker_thread_barrier_release(vlib_main_t *vm) { (void)v
 typedef struct { int unused; } vlib_buffer_t;
 typedef struct { const char *message; } clib_error_t;
 typedef struct { int unused; } unformat_input_t;
+#define UNFORMAT_END_OF_INPUT 0
+static inline int unformat_check_input(unformat_input_t *input) { (void) input; return 0; }
 typedef struct vlib_cli_command vlib_cli_command_t;
 struct vlib_cli_command {
   const char *path;
+  const char *short_help;
   clib_error_t *(*function)(vlib_main_t *, unformat_input_t *, vlib_cli_command_t *);
 };
 #define VLIB_CLI_COMMAND(name, storage) storage vlib_cli_command_t name __attribute__((used))
 static inline void vlib_cli_output(vlib_main_t *vm, const char *format, ...) {
   (void) vm; (void) format;
 }
+static inline void clib_warning(const char *format, ...) { (void) format; }
 extern clib_error_t sakamoto_test_error;
 static inline clib_error_t *
 sakamoto_test_error_return (int ignored, const char *format, ...)
@@ -260,6 +264,7 @@ typedef struct {
   uint64_t product_graph_hash_seed;
   uint32_t product_graph_handoff_credits;
   uint32_t product_graph_vpp_worker_count;
+  uint32_t product_graph_tun_io_worker_index;
   uint32_t product_graph_vpp_main_core;
   uint32_t product_graph_vpp_worker0_thread_index;
   uint32_t product_graph_vpp_worker0_core;
@@ -435,7 +440,7 @@ cat >"$work_dir/product_core_identity.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #ifndef SAKAMOTO_PRODUCT_ABI_VERSION
-#define SAKAMOTO_PRODUCT_ABI_VERSION 1
+#define SAKAMOTO_PRODUCT_ABI_VERSION 2
 #endif
 #ifndef SAKAMOTO_PRODUCT_API_VERSION
 #define SAKAMOTO_PRODUCT_API_VERSION 1
@@ -719,6 +724,7 @@ cc -std=c11 -Wall -Wextra -Werror \
   "$repo_root/src/product/vpp/product_domains_memory.c" \
   "$repo_root/src/product/vpp/product_domains_rax.c" \
   "$repo_root/src/product/vpp/product_vpn_tun_mode.c" \
-  "$work_dir/harness.c" -lm -o "$work_dir/plugin-init-contract"
+  "$work_dir/harness.c" "$repo_root/src/product/vpp/product_runtime_topology.c" \
+  -lm -o "$work_dir/plugin-init-contract"
 "$work_dir/plugin-init-contract"
 echo "sakamoto production VPP plugin init contract: PASS"

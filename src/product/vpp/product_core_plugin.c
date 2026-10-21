@@ -32,6 +32,7 @@
 #include "product_rule_config.h"
 #include "product_core_policy.h"
 #include "product_observation.h"
+#include "product_runtime_topology.h"
 
 #ifndef SAKAMOTO_PRODUCT_VPP_REVISION
 #error "the product plugin must be compiled with the pinned VPP revision"
@@ -77,6 +78,7 @@ typedef struct
 } product_core_main_t;
 
 product_core_main_t product_core_main;
+static u32 product_core_worker_ready_count;
 static product_rule_config_t *product_source_config;
 static int product_core_waiting_for_policy;
 extern vlib_node_registration_t product_core_start_adapters_node;
@@ -142,6 +144,23 @@ product_core_profile_is_root (void)
   return profile != 0 && strcmp (profile, "root") == 0;
 }
 
+static product_runtime_topology_profile_t
+product_core_topology_profile (void)
+{
+  const char *profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
+  if (profile && strcmp (profile, "root") == 0)
+    return PRODUCT_TOPOLOGY_ROOT;
+  if (profile && strcmp (profile, "vpn") == 0)
+    return PRODUCT_TOPOLOGY_VPN;
+  return PRODUCT_TOPOLOGY_INVALID;
+}
+
+static product_runtime_topology_t
+product_core_topology (void)
+{
+  return product_runtime_topology_current (product_core_topology_profile ());
+}
+
 static int
 product_core_adapter_available (void)
 {
@@ -189,8 +208,52 @@ product_core_vpp_worker_core (u32 worker)
 static u32
 product_core_graph_worker_layout_ready (void)
 {
-  return vlib_num_workers () == product_packet_graph_worker_count () ? 1 : 0;
+  product_runtime_topology_profile_t profile = product_core_topology_profile ();
+  product_runtime_topology_t topology = product_core_topology ();
+  return topology.owner_count == product_packet_graph_worker_count ()
+         && product_runtime_topology_valid (profile, topology,
+                                             vlib_num_workers ());
 }
+
+static clib_error_t *
+product_core_topology_status_cli (vlib_main_t *vm, unformat_input_t *input,
+                                  vlib_cli_command_t *command)
+{
+  const char *runtime_profile = getenv ("SAKAMOTO_RUNTIME_PROFILE");
+  product_runtime_topology_profile_t profile;
+  product_runtime_topology_t topology;
+  (void) command;
+  if (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    return clib_error_return (0, "show product topology takes no arguments");
+  if (runtime_profile && strcmp (runtime_profile, "root") == 0)
+    profile = PRODUCT_TOPOLOGY_ROOT;
+  else if (runtime_profile && strcmp (runtime_profile, "vpn") == 0)
+    profile = PRODUCT_TOPOLOGY_VPN;
+  else
+    return clib_error_return (0, "runtime profile is not Root or VPN");
+  topology = product_runtime_topology_current (profile);
+  vlib_cli_output (vm,
+    "topology.profile=%s owner_count=%u vpp_worker_count=%u actual_vpp_workers=%u worker_init_ready=%u vpn_mode_enabled=%u ready=%u",
+    runtime_profile, topology.owner_count, topology.vpp_worker_count,
+    vlib_num_workers (), clib_atomic_load_acq_n (&product_core_worker_ready_count),
+    product_vpn_tun_enabled (),
+    product_core_graph_worker_layout_ready ());
+  if (profile == PRODUCT_TOPOLOGY_VPN)
+    vlib_cli_output (vm,
+      "topology.tun_io_lane=0 worker=%u thread_index=%u is_flow_owner=%u",
+      topology.tun_io_worker,
+      product_core_vpp_worker_thread_index (topology.tun_io_worker),
+      product_runtime_topology_is_owner (topology, topology.tun_io_worker));
+  else
+    vlib_cli_output (vm, "topology.tun_io_lane=none");
+  return 0;
+}
+
+VLIB_CLI_COMMAND (product_core_topology_status_command, static) = {
+  .path = "show product topology",
+  .short_help = "show product topology",
+  .function = product_core_topology_status_cli,
+};
 
 static void
 product_core_set_policy_status_fields (vl_api_product_core_status_reply_t *rmp)
@@ -468,6 +531,8 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                     htonl (product_packet_graph_handoff_credits ());
                   rmp->product_graph_vpp_worker_count =
                     htonl (vlib_num_workers ());
+                  rmp->product_graph_tun_io_worker_index =
+                    htonl (product_core_topology ().tun_io_worker);
                   rmp->product_graph_vpp_main_core =
                     htonl (product_core_vpp_main_core ());
                   rmp->product_graph_vpp_worker0_thread_index =
@@ -933,14 +998,13 @@ VLIB_INIT_FUNCTION (product_core_init);
 
 /* Worker clones initially contain the main epoll fd. Wait until worker init
  * has created each worker's own file-poll state before assigning an fd. */
-static u32 product_core_worker_ready_mask;
 
 static clib_error_t *
 product_core_worker_ready (vlib_main_t *vm)
 {
-  if (vm->thread_index == 1 || vm->thread_index == 2)
-    clib_atomic_fetch_or (&product_core_worker_ready_mask,
-                          1U << (vm->thread_index - 1));
+  product_runtime_topology_t topology = product_core_topology ();
+  if (vm->thread_index > 0 && vm->thread_index <= topology.vpp_worker_count)
+    __atomic_fetch_add (&product_core_worker_ready_count, 1, __ATOMIC_RELEASE);
   return 0;
 }
 
@@ -973,10 +1037,24 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
   (void)node; (void)frame;
   if (!product_core_profile_is_root () && !product_vpn_tun_enabled ())
     return 0;
-  while (clib_atomic_load_acq_n (&product_core_worker_ready_mask) != 3)
+  if (!product_core_graph_worker_layout_ready ())
+    {
+      clib_warning ("Product topology rejected before adapter capture: expected %u VPP workers, found %u",
+                    product_core_topology ().vpp_worker_count,
+                    vlib_num_workers ());
+      return 0;
+    }
+  u32 expected_workers = product_core_topology ().vpp_worker_count;
+  while (clib_atomic_load_acq_n (&product_core_worker_ready_count) !=
+         expected_workers)
     {
       if (vlib_time_now (vm) >= deadline)
-        return 0;
+        {
+          clib_warning ("Product adapter startup stopped: %u/%u VPP workers initialized",
+                        clib_atomic_load_acq_n (&product_core_worker_ready_count),
+                        expected_workers);
+          return 0;
+        }
       vlib_process_wait_for_event_or_clock (vm, 0.001);
     }
   for (;;)

@@ -1345,6 +1345,19 @@ public final class AndroidRuntimeContractTest {
         parser.setAccessible(true);
         RuntimeControlNative.Status status = (RuntimeControlNative.Status) parser.invoke(
                 null, (Object) nativeValues, 0);
+        String[] vpnTopologyValues = Arrays.copyOf(nativeValues, 146);
+        vpnTopologyValues[145] = "0";
+        RuntimeControlNative.Status vpnTopology =
+                (RuntimeControlNative.Status) parser.invoke(
+                        null, (Object) vpnTopologyValues, 0);
+        check(vpnTopology.productGraphTunIoWorkerIndex == 0,
+                "VPN status identifies the current TUN origin worker");
+        vpnTopologyValues[145] = "4294967295";
+        RuntimeControlNative.Status rootTopology =
+                (RuntimeControlNative.Status) parser.invoke(
+                        null, (Object) vpnTopologyValues, 0);
+        check(rootTopology.productGraphTunIoWorkerIndex == -1,
+                "Root status has no VPN TUN lane");
         check(status.code == 7, "native status code stays in the code field");
         check(status.abiVersion == 2, "native ABI version stays in the ABI field");
         check(status.apiVersion == 3, "native API version stays in the API field");
@@ -1688,7 +1701,7 @@ public final class AndroidRuntimeContractTest {
         return new RuntimeControlNative.Status(abiVersion, apiVersion, code, code, generation,
                 true, false, false, true, true, true, artifactId, apiIdentity, vppRevision,
                 "", "", "",
-                0L, 0L, 0L,
+                0L, 0L, 0L, -1,
                 0, 0, 0, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 0, 0, 0, 0, 0, 0, 0,

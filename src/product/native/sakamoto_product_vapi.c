@@ -929,6 +929,8 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
     reply->product_graph_handoff_credits;
   call->status->product_graph_vpp_worker_count =
     reply->product_graph_vpp_worker_count;
+  call->status->product_graph_tun_io_worker_index =
+    reply->product_graph_tun_io_worker_index;
   call->status->product_graph_vpp_main_core =
     reply->product_graph_vpp_main_core;
   call->status->product_graph_vpp_worker0_thread_index =

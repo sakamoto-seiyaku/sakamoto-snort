@@ -80,8 +80,8 @@ done
 
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$native_status"
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
-grep -Fq 'sizeof(sakamoto_product_status_t) == 1304U' "$abi"
-grep -Fq 'size_of::<ProductStatus>(), 1304' "$rust"
+grep -Fq 'sizeof(sakamoto_product_status_t) == 1312U' "$abi"
+grep -Fq 'size_of::<ProductStatus>(), 1312' "$rust"
 
 grep -Fq 'nm->ingress_identity_missing++' "$root_adapter"
 grep -Fq 'nm->graph_submit_fail_opens++' "$root_adapter"

@@ -117,8 +117,10 @@ graph_prefix=r'''
 #include <string.h>
 #include "product_packet.h"
 #include "product_root_defaults.h"
+#include "product_runtime_topology.h"
 typedef uint32_t u32;typedef uint64_t u64;
 typedef struct {u32 thread_index;} vlib_main_t;
+#define PRODUCT_GRAPH_WORKERS 2
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 #define SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT 1
 #define clib_memset memset
@@ -129,7 +131,7 @@ typedef struct {
  vlib_main_t *vlib_main;product_adapter_obligation_kind_t adapter_kind;
  u64 generation,lifecycle_obligations,lifecycle_buffers,lifecycle_handoffs,lifecycle_completion_frames;
  u32 enabled,accepting,trace_packets,trace_limit,policy_hold_next_us[2],misroute_next;
- u64 primary_published,primary_received,primary_rejected,owner_delivery_checks,owner_delivery_failures;
+ u64 primary_published,primary_received,primary_rejected,primary_rejected_credit,primary_rejected_enqueue,owner_delivery_checks,owner_delivery_failures;
  u64 completion_returns,completion_deferred,completion_retry_attempts,completion_pending_returns;
  u32 l4_policy_bank_readers[2],l4_policy_active_bank,policy_publish_sequence;
  u64 l4_policy_banks[2],l4_policy_view_active,lifecycle_terminal_intents,lifecycle_settlements,lifecycle_returns;
@@ -139,12 +141,15 @@ static product_packet_graph_main_t product_packet_graph_main;
 static u64 product_packet_batch_stats[3];
 static unsigned calls,flow_end_debt,vpn_mode,policy_ready=1;
 static unsigned product_flow_end_buffer_debt(void){return flow_end_debt;}
-static void product_fragment_start(vlib_main_t *vm){assert(vm);calls++;}
+static u32 vlib_num_workers(void){return 2;}
+static int product_fragment_start(vlib_main_t *vm){assert(vm);calls++;return 1;}
+static void product_fragment_abort(void){calls++;}
 static unsigned product_vpn_tun_product_mode(void){return vpn_mode;}
 static void product_capacity_configure_empty(product_packet_graph_main_t *g,u32 credits,u32 primary,u32 completion){
  assert(g && primary==64 && completion==128);g->configured_credits=credits;calls++;
 }
 static int product_packet_graph_flow_pools_reset(product_packet_graph_main_t *g){assert(g);calls++;return 1;}
+static void product_packet_graph_flow_pools_abort(product_packet_graph_main_t *g){assert(g);calls++;}
 static void product_policy_domains_clear(product_packet_graph_main_t *g){assert(g);calls++;}
 static int product_core_policy_start(u64 gen){assert(gen);calls++;return policy_ready;}
 '''
@@ -173,5 +178,7 @@ int main(void){
 with tempfile.TemporaryDirectory(prefix='graph-defaults-') as folder:
     path=Path(folder);(path/'test.c').write_text(graph_code)
     subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror',
-                    '-I',str(ROOT/'src/product/vpp'),str(path/'test.c'),'-o',str(path/'test')],check=True)
+                    '-I',str(ROOT/'src/product/vpp'),str(path/'test.c'),
+                    str(ROOT/'src/product/vpp/product_runtime_topology.c'),
+                    '-o',str(path/'test')],check=True)
     subprocess.run([str(path/'test')],check=True,timeout=15)

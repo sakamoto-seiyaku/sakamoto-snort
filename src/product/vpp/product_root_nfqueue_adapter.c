@@ -15,6 +15,7 @@
 
 #include "product_packet_graph.h"
 #include "product_packet_batch.h"
+#include "product_runtime_topology.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -2172,6 +2173,11 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
     return 1;
   if (vm == 0 || generation == 0)
     return 0;
+  if (!product_runtime_topology_valid (
+        PRODUCT_TOPOLOGY_ROOT,
+        product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT),
+        vlib_num_workers ()))
+    return 0;
   if (!product_root_nfqueue_maxlen_from_env (&queue_maxlen))
     {
       clib_warning ("Root NFQUEUE maxlen must be 1..65536");
@@ -2182,8 +2188,7 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
   nm->queue_id = product_root_nfqueue_queue_from_env ();
   nm->lane_count = product_root_nfqueue_lanes_from_env ();
   if (nm->lane_count != PRODUCT_ROOT_NFQUEUE_MAX_LANES
-      || nm->queue_id > UINT16_MAX - (nm->lane_count - 1)
-      || vlib_num_workers () != 2)
+      || nm->queue_id > UINT16_MAX - (nm->lane_count - 1))
     return 0;
   nm->queue_last = nm->queue_id + nm->lane_count - 1;
   if (!product_root_nfqueue_uid_from_env (&nm->uid_owner))

@@ -3442,6 +3442,7 @@ public final class RuntimeService extends VpnService {
                 + "\nworker_cpu_ids=" + (activeWorkerPlacement == null ? "unknown" : activeWorkerPlacement.encode())
                 + "\nvpp_main_core=" + status.productGraphVppMainCore
                 + "\nvpp_worker_count=" + status.productGraphVppWorkerCount
+                + "\ntun_io_worker_index=" + status.productGraphTunIoWorkerIndex
                 + "\nvpp_worker0_thread_index=" + status.productGraphVppWorker0ThreadIndex
                 + "\nvpp_worker0_core=" + status.productGraphVppWorker0Core
                 + "\nvpp_worker1_thread_index=" + status.productGraphVppWorker1ThreadIndex
@@ -5064,6 +5065,8 @@ public final class RuntimeService extends VpnService {
         }
         return status.productGraphWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
                 && status.productGraphVppWorkerCount == parseFixedInt(PRODUCT_CORE_WORKER_COUNT, -1)
+                && status.productGraphTunIoWorkerIndex ==
+                        (activeProfile == RuntimeProfile.VPN ? 0 : -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
                 && status.productGraphVppWorker0Core == activeWorkerPlacement.worker0CpuId
                 && status.productGraphVppWorker1Core == activeWorkerPlacement.worker1CpuId

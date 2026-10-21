@@ -20,6 +20,7 @@ sakamoto_product_status_reset (sakamoto_product_status_t *status,
   if (status == NULL)
     return;
   memset (status, 0, sizeof (*status));
+  status->product_graph_tun_io_worker_index = UINT32_MAX;
   status->abi_version = SAKAMOTO_PRODUCT_ABI_VERSION;
   status->api_version = SAKAMOTO_PRODUCT_API_VERSION;
   status->generation = generation;

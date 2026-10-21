@@ -80,7 +80,7 @@ _Static_assert (sizeof (sakamoto_product_policy_rule_entry_t) == 120U,
                 "typed product policy rule size is part of the ABI");
 _Static_assert (sizeof (sakamoto_product_policy_bundle_t) == 15496U,
                 "typed product policy bundle size is part of the ABI");
-_Static_assert (sizeof (sakamoto_product_status_t) == 1304U,
+_Static_assert (sizeof (sakamoto_product_status_t) == 1312U,
                 "product status size is part of the ABI");
 
 static void

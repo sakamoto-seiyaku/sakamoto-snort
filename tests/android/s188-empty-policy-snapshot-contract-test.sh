@@ -166,7 +166,7 @@ grep -Fq 'sakamoto_product_core_apply_empty_policy' "$ffi"
 grep -Fq 'sakamoto_product_core_reconcile_empty_policy' "$ffi"
 grep -Fq 'sakamoto_product_session_apply_policy' "$abi"
 grep -Fq 'sizeof(sakamoto_product_policy_snapshot_t) == 264U' "$abi"
-grep -Fq 'sizeof(sakamoto_product_status_t) == 1304U' "$abi"
+grep -Fq 'sizeof(sakamoto_product_status_t) == 1312U' "$abi"
 
 for token in \
   'EMPTY_POLICY_STORE_DIR: &str = "product-policy"' \
@@ -180,7 +180,7 @@ for token in \
   'sakamoto_product_core_reconcile_empty_policy' \
   'fnv1a64' \
   'assert_eq!(size_of::<ProductPolicySnapshot>(), 264)' \
-  'assert_eq!(size_of::<ProductStatus>(), 1304)'; do
+  'assert_eq!(size_of::<ProductStatus>(), 1312)'; do
   grep -Fq "$token" "${rust_sources[@]}"
 done
 

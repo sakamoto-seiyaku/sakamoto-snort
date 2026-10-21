@@ -27,6 +27,7 @@ static void product_flow_end_quiesce(vlib_main_t *vm) {
   assert(vm && workers_ready); ++calls;
 }
 static void product_observation_quiesce(void) { ++calls; }
+static void product_fragment_abort(void) { ++calls; }
 static int product_packet_graph_buffer_debt(void) { ++calls; return debt; }
 static void clib_panic(const char *s) { (void)s; assert(!"live carrier stop"); }
 static void product_packet_graph_policy_writer_lock(product_packet_graph_main_t *g) { (void)g; ++calls; }
@@ -43,7 +44,7 @@ int main(void) {
   vlib_main_t vm={0}; workers_ready=1;
   product_packet_graph_main.accepting=product_packet_graph_main.enabled=1;
   product_packet_graph_stop_external(&vm);
-  assert(calls==7 && !product_packet_graph_main.accepting && !product_packet_graph_main.enabled);
+  assert(calls==8 && !product_packet_graph_main.accepting && !product_packet_graph_main.enabled);
   return 0;
 }
 '''

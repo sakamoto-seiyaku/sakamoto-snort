@@ -453,6 +453,7 @@ fn status_to_ffi(status: &Status) -> ProductStatus {
     value.product_graph_hash_seed = status.product_graph_hash_seed;
     value.product_graph_handoff_credits = status.product_graph_handoff_credits;
     value.product_graph_vpp_worker_count = status.product_graph_vpp_worker_count;
+    value.product_graph_tun_io_worker_index = status.product_graph_tun_io_worker_index;
     value.product_graph_vpp_main_core = status.product_graph_vpp_main_core;
     value.product_graph_vpp_worker0_thread_index = status.product_graph_vpp_worker0_thread_index;
     value.product_graph_vpp_worker0_core = status.product_graph_vpp_worker0_core;

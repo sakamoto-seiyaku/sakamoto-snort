@@ -181,6 +181,8 @@ define product_core_status_reply {
     string api_identity[96];
     string vpp_revision[48];
     string policy_snapshot_identity[96];
+    /* Logical VPP worker position of VPN TUN lane; ~0 for Root. */
+    u32 product_graph_tun_io_worker_index;
 };
 
 /**

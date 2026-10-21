@@ -85,7 +85,7 @@ for field in \
 done
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$native_status"
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
-grep -Fq 'sizeof(sakamoto_product_status_t) == 1304U' "$abi"
+grep -Fq 'sizeof(sakamoto_product_status_t) == 1312U' "$abi"
 
 grep -Fq 'EXTRA_DEBUG_TRAFFIC_NONCE' "$debug_activity"
 grep -Fq 'EXTRA_DEBUG_UDP_TRAFFIC_NONCE' "$debug_activity"

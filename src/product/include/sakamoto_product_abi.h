@@ -14,7 +14,10 @@ extern "C" {
 #endif
 
 /* This is a deliberately small, fixed-width, non-unwinding seam. */
-#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(1)
+/* ABI 2 appends TUN lane identity to status. JNI, Rust and VAPI are always
+ * published together in one content-verified Product artifact/APK; callers
+ * must never mix native libraries from different artifact generations. */
+#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(2)
 #define SAKAMOTO_PRODUCT_API_VERSION UINT32_C(1)
 #define SAKAMOTO_PRODUCT_ARTIFACT_ID_MAX UINT32_C(96)
 #define SAKAMOTO_PRODUCT_API_IDENTITY_MAX UINT32_C(96)
@@ -324,6 +327,7 @@ typedef struct {
   uint64_t policy_l4_typed_match_policy_key;
   uint64_t policy_l4_typed_match_probe_key;
   uint64_t policy_l4_last_evaluation_probe_key;
+  uint32_t product_graph_tun_io_worker_index;
 } sakamoto_product_status_t;
 
 /* Compile every consumer against the same layout, not just the bridge. */
@@ -352,7 +356,7 @@ static_assert(offsetof(sakamoto_product_status_t, generation) == 16U,
               "product status generation ABI changed");
 static_assert(offsetof(sakamoto_product_status_t, artifact_id) == 52U,
               "product status identity ABI changed");
-static_assert(sizeof(sakamoto_product_status_t) == 1304U,
+static_assert(sizeof(sakamoto_product_status_t) == 1312U,
               "product status ABI changed");
 #else
 _Static_assert(sizeof(sakamoto_product_bytes_t) == 16U,
@@ -379,7 +383,7 @@ _Static_assert(offsetof(sakamoto_product_status_t, generation) == 16U,
                "product status generation ABI changed");
 _Static_assert(offsetof(sakamoto_product_status_t, artifact_id) == 52U,
                "product status identity ABI changed");
-_Static_assert(sizeof(sakamoto_product_status_t) == 1304U,
+_Static_assert(sizeof(sakamoto_product_status_t) == 1312U,
                "product status ABI changed");
 #endif
 

@@ -284,9 +284,10 @@ pub struct ProductStatus {
     pub policy_l4_typed_match_policy_key: u64,
     pub policy_l4_typed_match_probe_key: u64,
     pub policy_l4_last_evaluation_probe_key: u64,
+    pub product_graph_tun_io_worker_index: u32,
 }
 
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[repr(C)]
 pub struct ProductNetworkSnapshot {
@@ -513,6 +514,7 @@ pub struct Status {
     pub policy_l4_typed_match_policy_key: u64,
     pub policy_l4_typed_match_probe_key: u64,
     pub policy_l4_last_evaluation_probe_key: u64,
+    pub product_graph_tun_io_worker_index: u32,
 }
 
 impl Status {
@@ -586,6 +588,7 @@ impl Status {
             product_graph_hash_seed: value.product_graph_hash_seed,
             product_graph_handoff_credits: value.product_graph_handoff_credits,
             product_graph_vpp_worker_count: value.product_graph_vpp_worker_count,
+            product_graph_tun_io_worker_index: value.product_graph_tun_io_worker_index,
             product_graph_vpp_main_core: value.product_graph_vpp_main_core,
             product_graph_vpp_worker0_thread_index: value.product_graph_vpp_worker0_thread_index,
             product_graph_vpp_worker0_core: value.product_graph_vpp_worker0_core,
@@ -817,6 +820,7 @@ impl Status {
             product_graph_hash_seed: 0,
             product_graph_handoff_credits: 0,
             product_graph_vpp_worker_count: 0,
+            product_graph_tun_io_worker_index: u32::MAX,
             product_graph_vpp_main_core: 0,
             product_graph_vpp_worker0_thread_index: 0,
             product_graph_vpp_worker0_core: 0,
@@ -914,7 +918,7 @@ mod tests {
         assert_eq!(align_of::<ProductPolicyRuleEntry>(), 8);
         assert_eq!(size_of::<ProductPolicyBundle>(), 15_496);
         assert_eq!(align_of::<ProductPolicyBundle>(), 8);
-        assert_eq!(size_of::<ProductStatus>(), 1304);
+        assert_eq!(size_of::<ProductStatus>(), 1312);
         assert_eq!(align_of::<ProductStatus>(), 8);
     }
 
@@ -941,8 +945,8 @@ mod tests {
             validate_status_identity(&status),
             Err(ProductError::AbiVersion {
                 expected: ABI_VERSION,
-                actual: 2
-            })
+                actual
+            }) if actual == ABI_VERSION + 1
         ));
         status.abi_version = ABI_VERSION;
         status.api_version = API_VERSION + 1;

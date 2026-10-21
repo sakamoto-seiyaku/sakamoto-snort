@@ -53,6 +53,7 @@ prefix = r'''
 #include <stdlib.h>
 #include <string.h>
 #include "product_packet.h"
+#include "product_runtime_topology.h"
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef int16_t i16;
@@ -76,6 +77,7 @@ typedef struct { u8 opaque[40], opaque2[56]; } vlib_buffer_t;
 typedef struct {
   u64 generation, trace_packets, trace_limit;
   u32 enabled, accepting, lifecycle_buffers, lifecycle_obligations;
+  product_adapter_obligation_kind_t adapter_kind;
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
 static struct { u32 index; } product_packet_admit_node = { 19 };
@@ -126,7 +128,8 @@ static void vlib_buffer_enqueue_to_single_next(vlib_main_t *vm,
 
 dependencies = "\n".join(function(source, name) for name in (
     "product_metadata_load", "product_metadata_store",
-    "product_packet_graph_set_platform_facts"))
+    "product_packet_graph_set_platform_facts",
+    "product_packet_graph_origin_valid"))
 production = "\n".join(function(source, name) for name in (
     "product_packet_graph_submit_external_batch_internal",
     "product_packet_graph_submit_external_batch", "product_packet_graph_submit_external"))
@@ -176,6 +179,7 @@ static void reset(void) {
   product_packet_graph_main = (product_packet_graph_main_t) {
     .generation = 7041, .trace_limit = 2, .enabled = 1, .accepting = 1,
     .lifecycle_buffers = 17, .lifecycle_obligations = 29,
+    .adapter_kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
   };
   memset(storage, 0xa5, sizeof(storage));
   memset(&published_frame, 0, sizeof(published_frame));
@@ -296,6 +300,7 @@ static void frame_bound(void) {
 
 static void vpn_return(void) {
   reset();
+  product_packet_graph_main.adapter_kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
   vlib_main_t vm = {.thread_index = 5};
   product_packet_graph_external_item_t items[8];
   for (u32 i = 0; i < 8; ++i) {
@@ -312,9 +317,11 @@ static void vpn_return(void) {
   items[4].obligation.kind = PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE;
   items[6].platform.direction = PRODUCT_PACKET_DIRECTION_OUTPUT;
   items[7].obligation.origin_worker = 1;
-  const u8 mask[] = {1,0,1,0,0,1,0,0};
+  /* A Root obligation cannot enter a VPN generation. */
+  const u8 mask[] = {0,0,1,0,0,1,0,0};
   batch(&vm, items, 8, mask);
   reset();
+  product_packet_graph_main.adapter_kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
   items[0] = root_item(30, 0);
   items[0].obligation.kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;
   items[0].platform.provenance = PRODUCT_PACKET_PROVENANCE_VPN_TUN;
@@ -369,6 +376,7 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-external-batch-") as temporary
     c_source.write_text(prefix + types + dependencies + production + suffix)
     subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra",
                     "-Werror", "-I", str(ROOT / "src/product/vpp"),
-                    str(c_source), "-o", str(executable)], check=True, timeout=30)
+                    str(c_source), str(ROOT / "src/product/vpp/product_runtime_topology.c"),
+                    "-o", str(executable)], check=True, timeout=30)
     subprocess.run([str(executable)], check=True, timeout=5)
 print("production_source_sha256=" + hashlib.sha256(source.encode()).hexdigest())
