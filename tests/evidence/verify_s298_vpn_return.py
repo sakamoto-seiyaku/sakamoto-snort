@@ -4,21 +4,31 @@ import argparse
 import hashlib
 import json
 import re
+import zipfile
 from pathlib import Path
 
 p = argparse.ArgumentParser()
 p.add_argument('run', type=Path)
+p.add_argument('--apk', type=Path)
 a = p.parse_args()
 run = a.run.resolve()
 result = json.loads((run / 'result.json').read_text())
 assert result['status'] in ('SMOKE_ECHO_COMPLETE', 'SAME_SESSION_RECOVERY_COMPLETE')
-fault_write = result.get('fault') == 'write'
-assert result.get('fault') in ('none', 'write')
+fault = result.get('fault')
+fault_write = fault != 'none'
+assert fault in ('none', 'write', 'write-short', 'write-eagain')
 assert hashlib.sha256((run / 'udp-endpoint').read_bytes()).hexdigest() == result['endpoint_sha256']
 assert (run / 'installed-apk.txt').read_text().split()[0] == result['apk_sha256']
 installed = {Path(line.split()[1]).name: line.split()[0]
              for line in (run / 'installed-native.txt').read_text().splitlines()}
 assert all(len(value) == 64 for value in installed.values())
+if a.apk:
+    assert hashlib.sha256(a.apk.read_bytes()).hexdigest() == result['apk_sha256']
+    with zipfile.ZipFile(a.apk) as archive:
+        native = {Path(name).name: hashlib.sha256(archive.read(name)).hexdigest()
+                  for name in archive.namelist()
+                  if name.startswith('lib/arm64-v8a/') and name.endswith('.so')}
+    assert installed == native
 for name, digest in result['test_inputs'].items():
     assert hashlib.sha256((run / 'test-source' / name).read_bytes()).hexdigest() == digest
 
@@ -56,6 +66,7 @@ def verify_flow_end():
     after_end = one(records(run / 'flow-after.txt', 'flow-end.owner='), owner=owner)
     assert int(after_end['released']) > int(before_end['released'])
     assert {int(row['owner']) for row in records(run / 'flow-after.txt', 'flow-end.owner=')} == set(range(owner_count))
+    assert {int(row['owner']) for row in records(run / 'flow-after.txt', 'expiry.owner=')} == set(range(owner_count))
     if result['flow_end_mode'] == 'close':
         assert f'flow-end.close=queued owner={owner}' in (run / 'flow-close.txt').read_text()
     else:
@@ -99,10 +110,12 @@ if owner_count in (1, 3):
         assert re.search(r'^Cpus_allowed_list:\s*' + str(cpu) + r'\s*$',
                          affinity, re.MULTILINE), (role, affinity)
 probe = dict(line.split('=', 1) for line in (run / 'probe.properties').read_text().splitlines() if '=' in line)
-if owner_count == 3:
-    channels = records(run / 'after.txt', 'observation.channel=')
-    assert {int(row['channel']) for row in channels} == set(range(6))
-    assert {int(row['owner']) for row in records(run / 'after.txt', 'tun.return owner=')} == set(range(3))
+channels = records(run / 'after.txt', 'observation.channel=')
+assert {int(row['channel']) for row in channels} == set(range(2 * owner_count))
+assert int(one(channels, channel=2 * owner)['allow_packets']) >= 3
+returns_by_owner = records(run / 'after.txt', 'tun.return owner=')
+assert {int(row['owner']) for row in returns_by_owner} == set(range(owner_count))
+assert all(row['in_use'] == '0' for row in returns_by_owner)
 assert probe['nonce'] == result['nonce']
 assert all(probe['packet.' + str(i)] == ('timeout' if fault_write and i == 1 else 'echo')
            for i in range(3))
@@ -176,12 +189,15 @@ for i in range(3):
     attempted = one(write_wire, token=return_token)
     assert attempted['thread'] == io_thread and attempted['buffer'] == return_buffer
     assert attempted['raw'] == wire['raw']
-    assert attempted['requested'] == ('0' if fault_write and i == 1 else wire['bytes'])
+    assert attempted['requested'] == ('0' if fault == 'write' and i == 1 else wire['bytes'])
     completed = one(completion, token=return_token)
     assert completed['thread'] == io_thread and completed['buffer'] == return_buffer
     if fault_write and i == 1:
-        assert completed['transport_outcome'] == 'TUN_WRITE_FAILED'
-        assert completed['write_result'] == '-1' and completed['write_errno'] == '22'
+        expected = {'write': ('TUN_WRITE_FAILED', '-1', '22'),
+                    'write-short': ('TUN_WRITE_SHORT', str(int(wire['bytes']) - 1), '0'),
+                    'write-eagain': ('TUN_WRITE_EAGAIN', '-1', '11')}[fault]
+        assert (completed['transport_outcome'], completed['write_result'],
+                completed['write_errno']) == expected
         assert len([x for x in completion if x['token'] == return_token]) == 1
     else:
         assert completed['transport_outcome'] == 'TUN_WRITE_SUCCEEDED'
@@ -207,8 +223,9 @@ status = one(records(run / 'after.txt', 'tun.status '), generation=generation)
 for key in ('pending', 'frames', 'buffers', 'obligations', 'rejected'):
     assert status[key] == '0', (key, status[key])
 write_status = one(records(run / 'after.txt', 'tun.write_result '))
-assert write_status['short'] == write_status['eagain'] == '0'
-assert write_status['error'] == ('1' if fault_write else '0')
+assert write_status['short'] == ('1' if fault == 'write-short' else '0')
+assert write_status['eagain'] == ('1' if fault == 'write-eagain' else '0')
+assert write_status['error'] == ('1' if fault == 'write' else '0')
 if fault_write:
     stack = one(records(run / 'after.txt', 'tun.flow_stack '))
     assert stack['write_attempts'] == '3' and stack['write_succeeded'] == '2'

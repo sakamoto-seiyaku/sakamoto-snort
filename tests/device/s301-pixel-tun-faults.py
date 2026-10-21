@@ -35,15 +35,21 @@ def main():
     p.add_argument('--helper', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--ordinary-product', action='store_true')
+    p.add_argument('--owner-cpus', default='1,2,1')
+    p.add_argument('--io-cpu', default='3')
     p.add_argument('--stop-during-congestion', action='store_true')
     p.add_argument('--prestop-draining', action='store_true')
     a = p.parse_args()
     assert not (a.stop_during_congestion or a.prestop_draining) or not a.ordinary_product
     assert not (a.stop_during_congestion and a.prestop_draining)
+    owner_cpus = a.owner_cpus.split(',')
+    assert all(cpu.isdecimal() for cpu in owner_cpus) and owner_cpus
+    assert a.io_cpu.isdecimal()
     a.output.mkdir(parents=True, exist_ok=False)
     apk, restore, helper = (path.resolve() for path in (a.apk, a.restore_apk, a.helper))
     def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
     result = dict(status='HOLD', started_ns=time.time_ns(), ordinary_product=a.ordinary_product,
+                  requested_owner_cpus=a.owner_cpus, requested_tun_io_cpu=a.io_cpu,
                   apk_sha256=digest(apk), restore_sha256=digest(restore),
                   helper_sha256=digest(helper),
                   source_sha256=digest(Path(__file__)),
@@ -133,14 +139,12 @@ def main():
         active = True
         if a.ordinary_product:
             save('start.txt', action('--ez', 'runtimeStart', 'true', '--es',
-                'runtimeProfile', 'vpn', '--es', 'runtimeWorkerCpuIds', '1,2,1',
-                '--es', 'runtimeTunIoCpuId', '3'))
+                'runtimeProfile', 'vpn', '--es', 'runtimeWorkerCpuIds', a.owner_cpus,
+                '--es', 'runtimeTunIoCpuId', a.io_cpu))
         else:
-            save('start.txt', action('--ez',
-                                     'debugVpnHevValidation' if (a.stop_during_congestion or
-                                                                  a.prestop_draining)
-                                     else 'debugVpnGraphValidation', 'true',
-                                     '--es', 'runtimeTunIoCpuId', '3'))
+            save('start.txt', action('--ez', 'debugVpnHevValidation', 'true',
+                                     '--es', 'runtimeWorkerCpuIds', a.owner_cpus,
+                                     '--es', 'runtimeTunIoCpuId', a.io_cpu))
         state = wait_state('running', dict(state='running', profile='vpn', errorCode='',
             protectionRunning='true' if a.ordinary_product else 'false'))
         generation = state['generation']
@@ -269,9 +273,16 @@ def main():
                 completion_after_cutoff=sum(row['line'] > cutoff[0] for row in completed))
             result['status'] = 'RAW_COMPLETE'
             return
-        save('completion-burst-send.txt', root('/data/local/tmp/s301-tun-packets ' +
-                                               shlex.quote(interface) + ' valid 64'))
-        congested = drain('completion-congested', int(recovered[0]['captured']) + 64)
+        for burst in range(6):
+            save(f'completion-burst-send-{burst}.txt',
+                 root('/data/local/tmp/s301-tun-packets ' +
+                      shlex.quote(interface) + ' valid 64'))
+            congested = drain('completion-congested',
+                              int(recovered[0]['captured']) + 64 * (burst + 1))
+            if int(congested[2]['deferred']) > int(recovered[2]['deferred']) and \
+                    int(congested[2]['retries']) > int(recovered[2]['retries']):
+                break
+        result['completion_bursts'] = burst + 1
         assert int(congested[2]['deferred']) > int(recovered[2]['deferred'])
         assert int(congested[2]['retries']) > int(recovered[2]['retries'])
         assert congested[2]['pending_returns'] == congested[2]['handoff_debt'] == '0'

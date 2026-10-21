@@ -963,6 +963,21 @@ public final class RuntimeService extends VpnService {
         }
     }
 
+    private WorkerCpuPlacement.NativeStartupFailure nativePlacementStartupFailure(File profileRoot) {
+        File stdout = new File(new File(profileRoot, "logs"), "vpp-stdout.log");
+        byte[] prefix = new byte[8192];
+        try (InputStream input = new FileInputStream(stdout)) {
+            int length = input.read(prefix);
+            if (length > 0)
+                return WorkerCpuPlacement.nativeStartupFailure(
+                        new String(prefix, 0, length, StandardCharsets.UTF_8),
+                        activeProfile == RuntimeProfile.VPN ? activeTunIoCpuId : null);
+        } catch (IOException ignored) {
+            // An absent log retains the Product Core connection failure.
+        }
+        return null;
+    }
+
     private void startRuntime(RuntimeProfile requestedProfile) {
         if (destroying || stopRequested || isSupersededServiceInstance()) {
             return;
@@ -1223,9 +1238,13 @@ public final class RuntimeService extends VpnService {
             RuntimeControlNative.Session session = connectProductCoreSession(
                     new File(runtime, "api.sock"), process, adapter);
             if (session == null) {
-                failProductCoreGeneration(productCoreConnectFailureCode.isEmpty()
+                WorkerCpuPlacement.NativeStartupFailure placementFailure =
+                        nativePlacementStartupFailure(profileRoot);
+                failProductCoreGeneration(placementFailure != null ? placementFailure.code
+                        : productCoreConnectFailureCode.isEmpty()
                                 ? "product_core_not_ready" : productCoreConnectFailureCode,
-                        productCoreConnectFailureMessage.isEmpty()
+                        placementFailure != null ? placementFailure.message
+                        : productCoreConnectFailureMessage.isEmpty()
                                 ? "Product Core did not become ready on its generation"
                                 : productCoreConnectFailureMessage);
                 return;

@@ -73,6 +73,21 @@ public final class WorkerCpuPlacementTest {
         } catch (IllegalArgumentException expected) {
             // VPN reserves one VPP worker slot after the owners.
         }
+        String absent = "libvpp_runtime.so: cpu_config: ordered-workers: CPU 9 absent or offline\n";
+        WorkerCpuPlacement.NativeStartupFailure rootFailure =
+                WorkerCpuPlacement.nativeStartupFailure(absent, null);
+        require(rootFailure != null && rootFailure.code.equals("invalid_worker_cpu_ids")
+                && rootFailure.message.equals("ordered-workers: CPU 9 absent or offline"),
+                "Root native CPU rejection reaches the user");
+        WorkerCpuPlacement.NativeStartupFailure vpnIoFailure =
+                WorkerCpuPlacement.nativeStartupFailure(absent, 9);
+        require(vpnIoFailure != null && vpnIoFailure.code.equals("invalid_tun_io_cpu_id"),
+                "VPN I/O CPU rejection keeps its distinct field");
+        require(WorkerCpuPlacement.nativeStartupFailure(absent, 3).code
+                .equals("invalid_worker_cpu_ids"), "VPN owner CPU rejection");
+        require(WorkerCpuPlacement.nativeStartupFailure(
+                "libvpp_runtime.so: unrelated startup fault\n", 9) == null,
+                "unrelated startup faults keep their original diagnosis");
         System.out.println("Worker CPU placement: ordered W2/default/roundtrip and "
                 + invalid.length + " invalid inputs PASS; native affinity remains a device gate");
     }

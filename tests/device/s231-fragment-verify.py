@@ -89,8 +89,12 @@ def udp_valid(p, body):
     assert checksum(pseudo+body) == 0, 'independent UDP checksum'
 
 
-def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoint, product_reassembly=False):
+def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoint,
+                product_reassembly=False, owner_count=2):
     generation = str(case['generation'])
+    lane_threads = {int(lane['lane']): lane['thread']
+                    for lane in rows(runtime, 'root.lane ')}
+    assert set(lane_threads) == set(range(4)), 'four independent Root lanes'
     nfq_rows = rows(trace,'s231 ')
     nfq, indexed = [], {}
     for row in nfq_rows:
@@ -179,7 +183,7 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
             assert admit['direction'] == original['hook'] and admit['provenance'] == '1' and admit['completion_kind'] == '1'
             assert admit['queue_generation'] == generation and admit['packet_id'] == original['packet']
         assert int(original['queue']) == 176+int(original['lane'])
-        assert int(original['thread']) == int(original['lane'])%2+1
+        assert original['thread'] == lane_threads[int(original['lane'])]
         intent = tables['terminal'][logical_token]['intent']
         assert intent in ('1','2'), 'unexpected capacity bypass in visibility test'
         for name in ('publish','consume','origin'): assert tables[name][token]['intent'] == intent
@@ -287,6 +291,7 @@ def verify_case(case, trace, runtime, wire_data, capture_log, send_logs, endpoin
         expected = collections.Counter(r['thread'] for r in table.values())
         if product_reassembly and name == 'product-packet-admit':
             expected.update(r['thread'] for r in fragment_ingress.values())
-        assert all(native[(str(t),name)] == expected[str(t)] for t in range(3)), 'native node/thread vectors '+name
+        assert all(native[(str(t),name)] == expected[str(t)]
+                   for t in range(owner_count+1)), 'native node/thread vectors '+name
     return dict(generation=generation,family=case['family'],hook=case['hook'],packets=len(nfq),raw=results,kernel_udp=kernel,
                 wire_records=record_count,ordinary_probes=len(case['probes']))

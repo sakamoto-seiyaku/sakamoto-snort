@@ -1,9 +1,40 @@
 package com.sakamoto.snort.androidruntime;
 
 import java.util.Arrays;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Startup-only ordered owner placement. CPU IDs never identify packet/flow owners. */
 public final class WorkerCpuPlacement {
+    public static final class NativeStartupFailure {
+        public final String code;
+        public final String message;
+
+        private NativeStartupFailure(String code, String message) {
+            this.code = code;
+            this.message = message;
+        }
+    }
+
+    /** Preserve a bounded VPP placement rejection before startup cleanup removes its log. */
+    public static NativeStartupFailure nativeStartupFailure(String stdout, Integer tunIoCpuId) {
+        if (stdout == null) return null;
+        for (String line : stdout.split("\\R")) {
+            int marker = line.indexOf("cpu_config: ");
+            if (marker < 0) continue;
+            String detail = line.substring(marker + "cpu_config: ".length()).trim();
+            if (!(detail.startsWith("ordered-workers: ") || detail.startsWith("main-core: "))
+                    || detail.length() > 240 || !detail.matches("[\\x20-\\x7e]+")) continue;
+            Matcher cpu = Pattern.compile("\\bCPU ([0-9]+)\\b").matcher(detail);
+            String code = "invalid_worker_cpu_ids";
+            if (tunIoCpuId != null && cpu.find()
+                    && Integer.toString(tunIoCpuId).equals(cpu.group(1)))
+                code = "invalid_tun_io_cpu_id";
+            return new NativeStartupFailure(code, detail);
+        }
+        return null;
+    }
+
     public static final int PINNED_VPP_MAX_WORKERS = 62;
     public static final int VPN_MAX_OWNER_COUNT = PINNED_VPP_MAX_WORKERS - 1;
     public static final WorkerCpuPlacement DEFAULT = new WorkerCpuPlacement(1, 2);

@@ -350,7 +350,7 @@ def main():
         written = 3 if a.fault == 'none' else 2
         if not a.ordinary_product:
             assert 'sent=3 received=3 outputs=3' in after
-            assert f'write_attempts=3 write_succeeded={written} write_failed={int(a.fault == "write")}' in after
+            assert f'write_attempts=3 write_succeeded={written} write_failed={int(a.fault != "none")}' in after
         # One session/socket and one authorization request: replacement cannot
         # mask a receive-path failure in the second datagram.
         if not a.ordinary_product:

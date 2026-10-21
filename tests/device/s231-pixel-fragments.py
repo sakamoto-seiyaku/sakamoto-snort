@@ -8,7 +8,7 @@ _cli_spec=importlib.util.spec_from_file_location('s233_cli',ROOT/'tests/device/s
 _cli_module=importlib.util.module_from_spec(_cli_spec);_cli_spec.loader.exec_module(_cli_module)
 _cli_target=_cli_module.Target.__new__(_cli_module.Target);_cli_target.pixel=True
 SERIAL="28201JEGR0XPAJ"; PKG="com.sakamoto.snort.androidruntime"
-a=argparse.ArgumentParser();a.add_argument('--apk',type=Path,required=True);a.add_argument('--reference-run',type=Path);a.add_argument('--output',type=Path,required=True);args=a.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+a=argparse.ArgumentParser();a.add_argument('--apk',type=Path,required=True);a.add_argument('--reference-run',type=Path);a.add_argument('--output',type=Path,required=True);a.add_argument('--worker-cpus',default='1,2');a.add_argument('--fragment-only',action='store_true');args=a.parse_args();args.output.mkdir(parents=True,exist_ok=False)
 def save(n,t): (args.output/n).write_text(t);return t
 def adb(*p,check=True):
  r=subprocess.run([str(ROOT/'dev/adb'),'-s',SERIAL,*p],text=True,errors="replace",stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
@@ -37,7 +37,7 @@ def start(label):
   if not any('ServiceRecord{' in l and '.RuntimeService' in l for l in services.splitlines()):break
   time.sleep(.2)
  else:raise RuntimeError('previous idle control query has not retired')
- save(label+'.start.txt',action('--ez','runtimeStart','true','--es','runtimeProfile','root'))
+ save(label+'.start.txt',action('--ez','runtimeStart','true','--es','runtimeProfile','root','--es','runtimeWorkerCpuIds',args.worker_cpus))
  return wait(label,STATE,{'state':'running','adapterReadiness':'root-nfqueue-tcp-udp-echo-dualstack-q2w2','protectionRunning':'true'})
 def logs(label):
  base='/data/user/0/'+PKG+'/files/profiles/root/vpp/'
@@ -121,7 +121,11 @@ def pull_binary(remote, local):
  assert hashlib.sha256(local.read_bytes()).hexdigest()==expected,'binary transfer hash'
  return expected
 result=dict(status='HOLD',started_ns=time.time_ns(),source='NFQ_CAPTURED',profile='root',
-            serial=SERIAL,apk_sha256=hashlib.sha256(args.apk.read_bytes()).hexdigest(),cases=[],generations=[])
+            serial=SERIAL,apk_sha256=hashlib.sha256(args.apk.read_bytes()).hexdigest(),
+            worker_cpus=args.worker_cpus,fragment_only=args.fragment_only,cases=[],generations=[],
+            runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            oracle_sha256=hashlib.sha256((ROOT/'tests/device/s231-fragment-verify.py').read_bytes()).hexdigest(),
+            cli_helper_sha256=hashlib.sha256((ROOT/'tests/device/s233-fail-open.py').read_bytes()).hexdigest())
 wifi=adb('shell','settings','get','global','wifi_on').strip()
 active=False;link=False;rules=[];echo_pid=None;capture_pid=None
 try:
@@ -136,8 +140,10 @@ try:
  assert save('installed-apk-sha256.txt',adb('shell','sha256sum',native.removesuffix('/lib/arm64')+'/base.apk')).split()[0]==result['apk_sha256']
  result['uid']=adb('shell','run-as',PKG,'id','-u').strip()
  adb('shell','pm','grant',PKG,'android.permission.POST_NOTIFICATIONS',check=False)
- helpers={'s231-net':ROOT/'build-output/s231-fragments/pixel-net','s231-policy':ROOT/'build-output/s210-capacity/policy-client',
+ helpers={'s231-net':ROOT/'build-output/s231-fragments/pixel-net',
           's231-echo':ROOT/'build-output/s207-owner/echo'}
+ if not args.fragment_only:
+  helpers['s231-policy']=ROOT/'build-output/s210-capacity/policy-client'
  result['helper_sha256']={n:hashlib.sha256(p.read_bytes()).hexdigest() for n,p in helpers.items()}
  for n,p in helpers.items():adb('push',str(p),'/data/local/tmp/'+n);adb('shell','chmod','755','/data/local/tmp/'+n)
  save('rules-before.txt',root('ip -4 rule show; ip -6 rule show'))
@@ -200,7 +206,8 @@ try:
     root(' && '.join(commands));save(label+'-'+phase+'-hooks.txt',root('iptables-save -t mangle; ip6tables-save -t mangle'))
     for protocol in (17,6):probe(phase,protocol)
     stable(phase+'-drain')
-   policy('allow',revision,0);baseline('before');clear()
+   if not args.fragment_only:policy('allow',revision,0)
+   baseline('before');clear()
    source,destination=(peer,local) if hook=='INPUT' else (local,peer)
    chain='SAKAMOTO_PRODUCT_S178_INPUT' if hook=='INPUT' else 'SAKAMOTO_PRODUCT_S176_OUTPUT'
    placement='-i s231rx' if hook=='INPUT' else '-o s231rx -m owner --uid-owner '+result['uid']
@@ -242,8 +249,11 @@ try:
    save(label+'-pcap-sha256.txt',pull_binary(remote_pcap,args.output/(label+'-wire.pcap'))+'\n')
    save(label+'-snmp-after.txt',root('cat /proc/net/snmp; cat /proc/net/snmp6'))
    save(label+'-conntrack.txt',root('cat /proc/net/nf_conntrack; cat /proc/sys/net/netfilter/nf_conntrack_count',check=False))
-   baseline('after');policy('drop-policy',revision+1,1);probe('drop',17,True);stable('drop-drain')
-   policy('allow-recovery',revision+2,0);probe('recovery',17);quiesce(label)
+   baseline('after')
+   if not args.fragment_only:
+    policy('drop-policy',revision+1,1);probe('drop',17,True);stable('drop-drain')
+    policy('allow-recovery',revision+2,0);probe('recovery',17)
+   quiesce(label)
    cli(label+'-runtime',['show product root lanes','show product completion','show product primary','show product flows','show runtime','show threads'])
    save(label+'-vpp.log',root('cat '+BASE+'logs/vpp-stdout.log'))
    save(label+'-case.json',json.dumps(case,indent=2));result['cases'].append(case)

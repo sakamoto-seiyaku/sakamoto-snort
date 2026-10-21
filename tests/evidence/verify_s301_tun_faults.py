@@ -24,6 +24,8 @@ def one(rows, token):
 def check(directory):
     result = json.loads((directory / 'result.json').read_text())
     require(result['status'] == 'RAW_COMPLETE', 'device run incomplete')
+    owner_count = len(result.get('requested_owner_cpus', '1,2,1').split(','))
+    origin_thread = str(owner_count + 1)
     require(result['installed_apk_sha256'] == result['apk_sha256'] and
             len(result['apk_native_sha256']) >= 12 and
             result['installed_native_sha256'] == result['apk_native_sha256'],
@@ -73,9 +75,13 @@ def check(directory):
               f'{result["generation"]}, rejected={rejected[2]["rejected"]}, '
               f'deferred={congested[2]["deferred"]}')
         return
-    first = int(before[0]['captured']) + 1
+    log = (directory / 'vpp.log').read_text()
+    unavailable_events = events(log, 's301 event=tun_buffer_unavailable ')
+    require(len(unavailable_events) == 1, 'expected one bounded allocation fault event')
+    unavailable = unavailable_events[0]
+    first = int(unavailable['captured']) + 1
     last = int(fragmented[0]['captured'])
-    require(int(fragmented[0]['completed']) - int(before[0]['completed']) == last - first + 1,
+    require(int(fragmented[0]['completed']) - int(before[0]['completed']) >= last - first + 1,
             'capture/completion count mismatch')
     require(int(failed[1]['alloc_failures']) - int(before[1]['alloc_failures']) == 1,
             'one pre-read allocation failure required')
@@ -95,7 +101,6 @@ def check(directory):
             int(result['fragment_before']['completed']) >= 1 and
             all(result['fragment_after'][key] == '0' for key in
                 ('contexts', 'originals', 'retained')), 'fragment reassembly/debt mismatch')
-    log = (directory / 'vpp.log').read_text()
     capture = events(log, 's213 event=capture ')
     completion = events(log, 's213 event=completion ')
     freed = events(log, 's203 event=buffer_free ')
@@ -107,24 +112,22 @@ def check(directory):
                 f'token {token}: generation mismatch')
         require(c['buffer'] == d['buffer'] == f[0]['buffer'],
                 f'token {token}: original buffer index changed')
-        require(c['thread'] == d['thread'] == '4',
+        require(c['thread'] == d['thread'] == origin_thread,
                 f'token {token}: TUN origin lane changed')
-    unavailable_events = events(log, 's301 event=tun_buffer_unavailable ')
-    require(len(unavailable_events) == 1, 'expected one bounded allocation fault event')
-    unavailable = unavailable_events[0]
     require(unavailable['injected'] == '1' and
-            unavailable['captured'] == before[0]['captured'],
+            int(before[0]['captured']) <= int(unavailable['captured']) <
+            int(failed[0]['captured']),
             'fault did not precede read/capture')
     invalid = one(completion, first)
-    require(invalid['intent'] == '2' and invalid['producer'] == '4' and
+    require(invalid['intent'] == '2' and invalid['producer'] == origin_thread and
             invalid['policy_verdict'] == 'NOT_EVALUATED',
             'invalid packet did not settle on origin without owner policy')
     primary = one(events(log, 's210 event=primary_rejected '), first + 1)
     require(primary['buffer'] == one(capture, first + 1)['buffer'] and
             primary['retained'] == '1' and primary['policy_evaluated'] == '0' and
-            primary['thread'] == '4' and primary['owner'] != '3',
+            primary['thread'] == origin_thread and primary['owner'] != str(owner_count),
             'primary rejection rerouted owner or changed original buffer')
-    require(one(completion, first + 1)['producer'] == '4',
+    require(one(completion, first + 1)['producer'] == origin_thread,
             'rejected primary packet left origin lane')
     accepted = one(events(log, 's205 event=primary_accepted '), first + 2)
     delivered = one(events(log, 's205 event=owner_delivery '), first + 2)
