@@ -30,6 +30,7 @@
 
 #define TUN_PENDING PRODUCT_VPN_TUN_CAPTURE_CAPACITY
 #define TUN_CAPTURE_BUDGET 64
+#define TUN_BUFFER_RETRY_SECONDS 0.05
 
 static u64 trace_monotonic_ns(void)
 {
@@ -89,17 +90,83 @@ static struct {
   u64 tun_write_bytes, tun_write_large, tun_write_max;
   u64 capture_batch_calls, capture_batch_packets, capture_batch_max;
   u64 capture_callbacks, capture_budget_exits, capture_callback_ns, capture_callback_max_ns;
+  u64 capture_alloc_attempts, capture_alloc_failures, capture_read_pauses, capture_read_resumes;
   u64 stack_accepted_originals, stack_rejected_originals;
-  u64 fault_write_at;
+  u64 fault_write_at, fault_capture_alloc_at;
   u64 pregraph_returns, local, remote;
   u32 pending, test_uid, tun_file, listener_file, snapshot_interface;
   int tun_fd, listener_fd;
-  u8 enabled, draining, test_uid_known, origin_worker;
+  u8 enabled, draining, test_uid_known, origin_worker, read_paused;
   char path[sizeof (((struct sockaddr_un *)0)->sun_path)];
   tun_pending_t obligations[TUN_PENDING];
   tun_control_t controls[TUN_CONTROL_SLOTS];
 } tun = { .tun_fd = -1, .listener_fd = -1,
           .tun_file = ~0U, .listener_file = ~0U };
+
+extern vlib_node_registration_t product_vpn_tun_buffer_retry_node;
+
+/* A readable TUN fd must not keep waking an I/O worker when no native buffer
+ * can be obtained. Keep the packet in the fd and temporarily remove only its
+ * epoll subscription. A returned native buffer resumes immediately; a bounded
+ * one-shot deadline covers a failure with no in-flight completion. */
+static void tun_resume_reads(vlib_main_t *vm)
+{
+  if (!tun.read_paused || tun.tun_file == ~0U || tun.tun_fd < 0 ||
+      __atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE) ||
+      vm->thread_index != vlib_get_worker_thread_index(tun.origin_worker)) return;
+  clib_file_t *file = clib_file_get(&file_main, tun.tun_file);
+  if (!file) return;
+  file_main.file_update(file, UNIX_FILE_UPDATE_ADD);
+  tun.read_paused = 0;
+  ++tun.capture_read_resumes;
+  if (tun.capture_read_resumes <= 4 || !(tun.capture_read_resumes & 63))
+    fprintf(stderr, "s301 event=tun_read_resume generation=%llu thread=%u captured=%llu alloc_failures=%llu\n",
+      (unsigned long long)tun.generation, vm->thread_index,
+      (unsigned long long)tun.captured, (unsigned long long)tun.capture_alloc_failures);
+}
+
+static void tun_pause_reads(vlib_main_t *vm, int retry_without_completion)
+{
+  if (tun.read_paused || tun.tun_file == ~0U) return;
+  clib_file_t *file = clib_file_get(&file_main, tun.tun_file);
+  if (!file) return;
+  file_main.file_update(file, UNIX_FILE_UPDATE_DELETE);
+  tun.read_paused = 1;
+  ++tun.capture_read_pauses;
+  if (tun.capture_read_pauses <= 4 || !(tun.capture_read_pauses & 63))
+    fprintf(stderr, "s301 event=tun_read_pause generation=%llu thread=%u captured=%llu pending=%u retry=%u\n",
+      (unsigned long long)tun.generation, vm->thread_index,
+      (unsigned long long)tun.captured, tun.pending, retry_without_completion);
+  if (retry_without_completion)
+    vlib_node_schedule(vm, product_vpn_tun_buffer_retry_node.index,
+                       TUN_BUFFER_RETRY_SECONDS);
+}
+
+static void tun_delete_read_file(void)
+{
+  if (tun.tun_file == ~0U) return;
+  /* clib_file_del issues EPOLL_CTL_DEL. Restore the subscription first if
+   * exhaustion already removed it, so deletion remains well formed. */
+  if (tun.read_paused) {
+    clib_file_t *file = clib_file_get(&file_main, tun.tun_file);
+    if (file) file_main.file_update(file, UNIX_FILE_UPDATE_ADD);
+    tun.read_paused = 0;
+  }
+  clib_file_del_by_index(&file_main, tun.tun_file);
+  tun.tun_file = ~0U;
+}
+
+VLIB_NODE_FN(product_vpn_tun_buffer_retry_node)
+(vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
+{
+  (void)node; (void)frame;
+  tun_resume_reads(vm);
+  return 0;
+}
+VLIB_REGISTER_NODE(product_vpn_tun_buffer_retry_node) = {
+  .name = "product-vpn-tun-buffer-retry", .type = VLIB_NODE_TYPE_SCHED,
+  .state = VLIB_NODE_STATE_INTERRUPT,
+};
 
 u64 product_vpn_tun_attached (void) { return tun.tun_fd >= 0; }
 u64 product_vpn_tun_captured (void) { return tun.captured; }
@@ -370,6 +437,7 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
                                   const product_packet_completion_frame_t *frame)
 {
   const product_adapter_obligation_t *o = &frame->obligation;
+  tun_resume_reads(vm);
   if (!o->packet_id) return; /* Original TUN capture uses its existing ledger. */
   if (vm->thread_index != vlib_get_worker_thread_index(tun.origin_worker) ||
       o->packet_id > active_owner_count() ||
@@ -424,9 +492,21 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); tun.errors++; break;
     }
     tun_pending_t *pending = &tun.obligations[token % TUN_PENDING];
-    if (pending->active) break;
+    if (pending->active) { tun_pause_reads(vm, 0); break; }
     u32 bi;
-    if (vlib_buffer_alloc (vm, &bi, 1) != 1) break;
+    ++tun.capture_alloc_attempts;
+    int injected = tun.capture_alloc_attempts == tun.fault_capture_alloc_at;
+    if (injected) tun.fault_capture_alloc_at = 0;
+    if (injected || vlib_buffer_alloc (vm, &bi, 1) != 1) {
+      ++tun.capture_alloc_failures;
+      if (tun.capture_alloc_failures <= 4 || !(tun.capture_alloc_failures & 63))
+        fprintf(stderr, "s301 event=tun_buffer_unavailable generation=%llu thread=%u attempt=%llu injected=%u captured=%llu\n",
+          (unsigned long long)tun.generation, vm->thread_index,
+          (unsigned long long)tun.capture_alloc_attempts, injected,
+          (unsigned long long)tun.captured);
+      tun_pause_reads(vm, 1);
+      break;
+    }
     vlib_buffer_t *buffer = vlib_get_buffer (vm, bi);
     vlib_buffer_reset (buffer);
     clib_memset (buffer->opaque, 0, sizeof (buffer->opaque));
@@ -494,6 +574,7 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
     } else tun.submitted++;
 #endif
   }
+  if (tun.pending == TUN_PENDING) tun_pause_reads(vm, 0);
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
   /* Publish all ready captures even when the final read/allocation failed. */
   tun_submit_captured(vm, batch, count);
@@ -525,6 +606,7 @@ static int tun_attach (int fd, u32 uid, int uid_known) {
   file.file_descriptor = fd;
   file.description = format (0, "sakamoto-product-tun%c", 0);
   tun.tun_file = clib_file_add (&file_main, &file);
+  tun.read_paused = 0;
   fprintf (stderr, "s213 event=attach generation=%llu fd=%d interface=%s origin_thread=%u uid_source=CONTROLLED_TEST_PROVIDER uid=%u direct_egress_ready=0\n",
     (unsigned long long) tun.generation, fd, interface.ifr_name,
     vlib_get_worker_thread_index (tun.origin_worker), uid);
@@ -533,6 +615,11 @@ static int tun_attach (int fd, u32 uid, int uid_known) {
 
 static int tun_stop (void) {
   __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE);
+  /* Stop epoll readability at quiesce, before waiting for owner/completion
+   * debt. Returning from a level-triggered read callback while the fd stays
+   * readable would otherwise wake this lane continuously during drain. */
+  if (tun.tun_file != ~0U && !tun.read_paused)
+    tun_pause_reads(tun.vm, 0);
   clib_memset(return_hold_until, 0, sizeof(return_hold_until));
   product_vpn_flow_stack_driver_quiesce();
   product_packet_graph_quiesce (tun.vm);
@@ -544,8 +631,8 @@ static int tun_stop (void) {
       || product_packet_graph_obligation_debt ()
       || product_packet_graph_completion_frame_debt ()
       || !product_vpn_flow_stack_driver_stopped()) return 1;
-  if (tun.tun_file != ~0U) clib_file_del_by_index (&file_main, tun.tun_file);
-  tun.tun_file = ~0U; tun.tun_fd = -1;
+  tun_delete_read_file();
+  tun.tun_fd = -1;
   product_vpn_uid_resolver_stop ();
   product_network_snapshot_stop ();
   tun.snapshot_interface = 0;
@@ -728,6 +815,11 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.capture_budget_exits,
     (unsigned long long)tun.capture_callback_ns,
     (unsigned long long)tun.capture_callback_max_ns);
+  vlib_cli_output(vm, "tun.capture_capacity alloc_attempts=%llu alloc_failures=%llu read_pauses=%llu read_resumes=%llu read_paused=%u",
+    (unsigned long long)tun.capture_alloc_attempts,
+    (unsigned long long)tun.capture_alloc_failures,
+    (unsigned long long)tun.capture_read_pauses,
+    (unsigned long long)tun.capture_read_resumes, tun.read_paused);
   vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_worker=%u origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=%llu nfq_verdicts=0 direct_egress_ready=0",
     (unsigned long long) tun.generation, tun.enabled, tun.tun_fd >= 0, tun.tun_fd,
     tun.origin_worker, vlib_get_worker_thread_index (tun.origin_worker),
@@ -752,11 +844,21 @@ static clib_error_t *tun_fault(vlib_main_t *vm, unformat_input_t *input,
                                vlib_cli_command_t *command)
 {
   (void)command;
-  if (product_vpn_tun_product_mode())
-    return clib_error_return(0, "TUN faults are unavailable in Product VPN mode");
   u32 after = 0;
   u32 owner_index = 0;
   (void)unformat(input, "owner %u", &owner_index);
+  if (unformat(input, "capture-alloc %u", &after)) {
+    if (!product_vpn_tun_enabled() || tun.tun_fd < 0 || tun.draining ||
+        !after || after > 64 || tun.fault_capture_alloc_at ||
+        unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
+      return clib_error_return(0, "expected attached validation: capture-alloc <1..64>");
+    tun.fault_capture_alloc_at = tun.capture_alloc_attempts + after;
+    vlib_cli_output(vm, "tun.fault armed=capture-alloc after=%u at=%llu", after,
+      (unsigned long long)tun.fault_capture_alloc_at);
+    return NULL;
+  }
+  if (product_vpn_tun_product_mode())
+    return clib_error_return(0, "Flow Stack and write faults are unavailable in Product VPN mode");
   if (owner_index >= active_owner_count())
     return clib_error_return(0, "invalid return owner");
   tun_return_owner_t *owner = &returns[owner_index];
@@ -827,7 +929,7 @@ VLIB_CLI_COMMAND (product_tun_stop_command, static) = {
 static clib_error_t *tun_exit (vlib_main_t *vm) {
   (void) vm;
   if (!tun.enabled) return 0;
-  if (tun.tun_file != ~0U) clib_file_del_by_index (&file_main, tun.tun_file);
+  tun_delete_read_file();
   if (tun.listener_file != ~0U) clib_file_del_by_index (&file_main, tun.listener_file);
   for (u32 i = 0; i < TUN_CONTROL_SLOTS; ++i)
     if (tun.controls[i].file != ~0U) clib_file_del_by_index (&file_main, tun.controls[i].file);

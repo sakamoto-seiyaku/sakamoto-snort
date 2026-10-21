@@ -2854,10 +2854,23 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   if (graph->owner_count > UINT32_MAX / graph->flow_capacity)
     goto failed;
   for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
-    if (product_flow_runtime_create (
-          &graph->flow_pools[worker], (u16) worker, product_packet_graph_worker_count (),
-          graph->generation, graph->flow_capacity) != PRODUCT_FLOW_ENTRY_STATUS_OK)
-      goto failed;
+    {
+      if (product_flow_runtime_create (
+            &graph->flow_pools[worker], (u16) worker, product_packet_graph_worker_count (),
+            graph->generation, graph->flow_capacity) != PRODUCT_FLOW_ENTRY_STATUS_OK)
+        goto failed;
+      /* Host Product startup probe: force failure only after real per-owner
+       * storage has been obtained, so rollback is exercised before capture. */
+      const char *enabled = getenv ("SAKAMOTO_PRODUCT_HOST_STARTUP_FAULTS");
+      const char *fault = getenv ("SAKAMOTO_PRODUCT_HOST_START_FAIL_AFTER_OWNER");
+      char expected[4];
+      snprintf (expected, sizeof (expected), "%u", worker);
+      if (enabled && !strcmp (enabled, "1") && fault && !strcmp (fault, expected))
+        {
+          clib_warning ("Product injected per-owner startup failure after owner=%u", worker);
+          goto failed;
+        }
+    }
   if (!product_flow_end_start (graph->generation, graph->flow_pools,
                                product_packet_graph_worker_count ()))
     goto failed;
