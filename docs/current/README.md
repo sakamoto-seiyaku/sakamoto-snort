@@ -1,6 +1,6 @@
 # Current mainline
 
-Baseline: 2026-09-13. This is the short implementation entry, not a backlog or a
+Baseline: 2026-10-22. This is the short implementation entry, not a backlog or a
 release announcement. Current task state belongs to Plane.
 
 Accepted design update, 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)
@@ -14,6 +14,19 @@ subsequent-connection control. The first-version scope is Root/NFQ and VPN using
 the same DNS core; KSU/libnetd integration is deferred to a future extension.
 This is not evidence that DNS ingress, filtering or association consumption has
 been implemented.
+
+Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
+selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
+worker, with direct TUN reads into VPP buffers and index-only owner transfer.
+Root Product now supports a startup-configured owner count and ordered CPU
+bindings, including repeated owner CPUs. VPN Product also supports resource-bounded
+`N >= 1` FlowOwners and a dedicated TUN I/O worker. Controlled Pixel 6a Root
+and VPN `N=1`/`N=3` paths passed the scoped [S303 functional qualification](../testing/2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md),
+including ordinary VPN protection, bounded faults and clean stops. The
+[S304 performance comparison](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md)
+records a CPU-cost and paced-UDP loss trade-off against the former local-owner
+VPN path. Adoption or rollback after those measurements remains the user's
+decision; neither ADR acceptance nor functional qualification chooses it.
 
 ## What exists
 
@@ -49,9 +62,8 @@ That identity describes the frozen Product sources, not every later docs/test co
 
 ## What that does not establish
 
-- Ordinary-user VPN product launch remains gated. Controlled debug validation
-  reports `protectionRunning=false`; successful packet tests are not a protection
-  or release promise.
+- Ordinary VPN `protectionRunning=true` passed S303's controlled Product functional
+  matrix; this does not establish a general release or supported-device promise.
 - The real 24-hour TCP ESTABLISHED expiry/reuse test is user-deferred and unverified.
 - Pixel cellular handover and real Linux physical Wi-Fi/Wired/Mobile coverage are
   not proved by the available hardware or controlled projections.

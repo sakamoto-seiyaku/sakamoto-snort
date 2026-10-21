@@ -18,6 +18,10 @@ not make every historical execution claim current.
   The first version targets Root/NFQ and VPN; KSU's system-resolver integration
   is a future extension. A design decision, not runtime evidence.
 - [Per-worker flow ownership](PER_WORKER_FLOW_OWNERSHIP.md).
+- [Configurable FlowOwners and dedicated VPN TUN I/O](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md):
+  accepted topology and direct-buffer contract; [S303](../testing/2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md)
+  qualifies scoped Root/VPN Product function on Pixel, while [S304](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md)
+  records performance trade-offs. Adoption or rollback remains a user decision.
 - [VPP packet metadata ownership](VPP_PACKET_METADATA_OWNERSHIP.md).
 - [L4 conntrack working decisions](L4_CONNTRACK_WORKING_DECISIONS.md).
 

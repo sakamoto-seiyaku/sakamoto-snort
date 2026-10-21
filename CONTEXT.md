@@ -681,19 +681,19 @@ The internal endpoint A/B order produced only to encode a Canonical Owner Key an
 _Avoid_: packet direction, flow direction, protocol direction, user-visible source/destination role
 
 **Worker Layout**:
-The runtime-start-fixed VPP logical worker count, Canonical Owner Key hash/seed mapping, and bounded worker-private flow/session and cache capacities. All launched packet workers participate equally in owner selection. It remains immutable while packet processing is active.
-_Avoid_: online worker reshard, policy apply changing flow ownership, queue topology as Worker Layout, CPU IDs in the owner hash, weighted software RETA
+The runtime-start-fixed count of FlowOwner-eligible VPP logical workers, Canonical Owner Key hash/seed mapping, and bounded worker-private flow/session and cache capacities. These workers participate equally in owner selection; a dedicated Platform I/O Lane does not become a FlowOwner merely because it runs on a VPP worker thread. The layout remains immutable while packet processing is active.
+_Avoid_: treating every VPP worker thread as a FlowOwner, online worker reshard, policy apply changing flow ownership, queue topology as Worker Layout, CPU IDs in the owner hash, weighted software RETA
 
 **Worker Placement**:
-The startup-only mapping from ordered VPP logical workers to distinct online Linux CPU IDs. An experimental product setting may let the user choose contiguous or non-contiguous worker CPU IDs; the product validates and applies the selection but does not classify cores, recommend an optimal big/middle/little mix, weight packet distribution, or migrate workers while running. A change requires a clean VPP runtime restart and does not alter Canonical Owner Key semantics.
-_Avoid_: CPU ID as owner identity, automatic heterogeneous-core optimization, live affinity migration, packet-hash weighting
+The startup-only explicit mapping from each ordered FlowOwner-eligible VPP logical worker to an online Linux CPU ID. Multiple FlowOwners may name the same CPU while retaining separate worker and flow state. The dedicated VPN/TUN I/O worker has a separately identified CPU distinct from the main thread and every FlowOwner CPU. Placement does not classify cores, recommend an optimal big/middle/little mix, weight packet distribution, or migrate workers while running. It does not alter Canonical Owner Key semantics.
+_Avoid_: requiring one distinct CPU per FlowOwner, CPU ID as owner identity, automatic CPU assignment, live affinity migration, packet-hash weighting
 
 **Initial Execution Placement**:
-The Adapter-selected VPP execution context on which a native Platform I/O Lane first admits an ingress packet. Root maps independent NFQUEUE lanes across VPP ingress workers without a central fan-in; the initial VPN lane starts from one I/O owner. This placement never establishes Flow owner.
+The Adapter-selected VPP execution context on which a native Platform I/O Lane first admits an ingress packet. Root maps independent NFQUEUE lanes across VPP ingress workers without a central fan-in; the initial VPN lane starts from one dedicated I/O worker. That worker may parse and select the canonical owner without joining the Worker Layout or owning flow state. Initial placement never establishes FlowOwner identity.
 _Avoid_: queue ID as Flow owner, central NFQUEUE gather thread, VPN single-fd topology imposed on Root, policy semantics
 
 **Primary Software Distribution**:
-The normal in-graph owner selection performed on the packet's Initial Execution Placement using the Canonical Owner Key and fixed Worker Layout. If the ExecutionOwner is the current worker, processing continues locally with no enqueue; otherwise exactly one Primary Handoff moves the buffer index and side metadata to that owner before owner-sensitive state. Root and VPN share this OwnerSelector despite different ingress topology.
+The normal in-graph owner selection performed on the packet's Initial Execution Placement using the Canonical Owner Key and fixed Worker Layout. Processing continues locally only when that context belongs to the Worker Layout and matches the ExecutionOwner; otherwise exactly one Primary Handoff moves the buffer index and side metadata to the owner before owner-sensitive state. Root and VPN share this OwnerSelector despite different ingress topology.
 _Avoid_: queue ID as owner, kernel queue-balance as owner selection, central fan-in, packet-byte movement, second owner calculation, corrective dispatch
 
 **Fragment Steering**:

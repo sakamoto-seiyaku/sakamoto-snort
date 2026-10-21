@@ -1,6 +1,6 @@
 # Per-worker single-owner flow runtime
 
-状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04，Canonical Owner Key、namespace discriminator、metadata 与 Worker Placement 边界更新于 2026-09-04。
+状态：accepted，2026-07-19；worker distribution 约束更新于 2026-07-20，conditional-wake 证据更新于 2026-08-04，Canonical Owner Key、namespace discriminator、metadata 与 Worker Placement 边界更新于 2026-09-04；2026-10-21 的可配置 owner 数量与 VPN 专用 TUN I/O worker 由 [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md) 补充。Root/VPN Product 已实现受资源限制的 `N >= 1` owner 与显式 CPU 绑定，VPN TUN I/O 由专用 VPP worker 执行；[S303](../testing/2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md) 是限定范围的 Android 功能证据，[S304](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md) 记录性能取舍，采纳或回退仍由用户决定。
 
 Sakamoto 的目标 VPP dataplane 使用 per-worker single-owner execution 与 per-flow single-owner state：
 Root/NFQUEUE 与 VPN/TUN Packet Capture Adapter 对每个合法 IPv4/IPv6 packet 执行稳定分流，
@@ -71,24 +71,33 @@ Canonical endpoint A/B 只用于无方向 key/owner，不定义语义方向；`L
 创建包的 device direction 为 `flowOriginDir`。后续 libprotoident 使用 `ORIG/REPLY`，不是设备
 方向或 endpoint 字典序。Gate/L4 之前被丢弃的 packet 没有 FlowEntry，因此没有 flow direction。
 
-Worker Layout 在 runtime 启动、接收流量之前一次性确定：VPP logical worker 数量、Canonical
-Owner Key hash/seed 到 worker 的等权映射、每个 worker 的 flow/session pool，以及 worker-private
-packet/cache 区域容量在运行期保持固定。Policy Apply 不改变 Worker Layout；第一版不支持在线
+Worker Layout 在 runtime 启动、接收流量之前一次性确定：参与 FlowOwner 的 VPP logical worker
+数量 `N >= 1`、Canonical Owner Key hash/seed 到这些 worker 的等权映射、每个 owner 的
+flow/session pool，以及 worker-private packet/cache 区域容量在运行期保持固定。选择仍直接
+使用 `hash % N`，不按 CPU 放置加权。VPN 专用 TUN I/O worker 不参加该映射。Policy Apply
+不改变 Worker Layout；第一版不支持在线
 增加 worker、修改 owner mapping 或把存量 FlowEntry reshard 到其他 worker。
 
-Worker Placement 与 Worker Layout 分离。实验性产品设置允许用户在启动前选择每个 VPP worker
-使用的 distinct online Linux CPU ID，CPU 可以连续或不连续；VPP runtime 据此生成并验证
-`corelist-workers`。产品只提供选择、校验、启动和实际 affinity 证据，不自动分类大小核、不推荐
+Worker Placement 与 Worker Layout 分离。实验性产品设置允许用户在启动前为每个 FlowOwner
+逐一明确绑定 online Linux CPU ID，CPU 可以连续、不连续，也可以重复；`N=3` 绑定
+`1,2,1` 表示三个等权 owner 线程共用两个 CPU，不改变 canonical hash。VPN 还要求单独
+明确指定一个 TUN I/O CPU，不得与 main 或任一 owner CPU 重合。VPP runtime 据此生成并
+验证线程配置；Root Product 已修订 `ordered-workers`，允许重复 CPU 绑定。
+产品只提供选择、校验、启动和实际 affinity 证据，不自动分类大小核、不推荐
 最优组合、不做加权分流或 live migration。变更 placement 必须 clean restart；CPU ID、CPU 类型与
 placement 顺序不进入 Canonical Owner Key 或 Owner Selector。
 
 Root/NFQUEUE 与 VPN/TUN 都必须经过同一个 Primary Software Distribution，但 Adapter 的
 Initial Execution Placement 可以不同。VPP-native Root Adapter 将多个 NFQUEUE queue lane
-直接分摊到 ingress execution contexts，不先汇聚到 main thread；VPN 受单一 TUN fd 限制，先由
-一个 native Platform I/O Lane 接收。
+直接分摊到 ingress execution contexts，不先汇聚到 main thread；VPN 受单一 TUN fd 限制，由
+一个专用 VPP worker 上的 native Platform I/O Lane 直接读入 VPP buffer、执行共享的无状态
+解析与 owner 选择，然后只传 buffer index 到选中的 FlowOwner。它不执行 owner-local policy、
+FlowEntry 或 HEV，也不新增 Adapter-to-VPP 整包复制。
 该初始位置只提供 receive parallelism，不是 Flow owner。软件分流器在当前 ingress context 上从
-Canonical Owner Key 计算最终 ExecutionOwner：命中当前 worker 时原地继续，否则只移动 buffer
-index 与 side metadata，执行一次 Primary Handoff。由于 Canonical Owner Key 与 Worker Layout
+Canonical Owner Key 计算最终 ExecutionOwner：只有 ingress context 本身属于 Worker Layout 且
+命中该 owner 时才原地继续；否则只移动 buffer index 与 side metadata，执行一次 Primary
+Handoff。VPN 的专用 I/O worker 因而对普通有效入站包总是投递一次 index。由于 Canonical Owner Key
+与 Worker Layout
 都是 direction-independent 且固定的，同一 flow 的正反包以及其他协议的对称地址 pair 最终进入
 同一 owner 是正确性保证，不是
 kernel queue affinity 的 best-effort 结果。
@@ -129,7 +138,8 @@ debt 结算和 clean teardown 仍是 release gate。
 补充上述 ACK/返回值的接口范围说明；不改变已有 `SUCCEEDED`、一次尝试和 buffer-return
 合同，也不加入 ACK 等待、packet 重试或新的在途义务表。
 
-VPN 首版从一个 native TUN Platform I/O Lane 接收并完成 Android TUN I/O。Android 仍负责创建
+VPN 首版从一个专用 VPP I/O worker 的 native TUN Platform I/O Lane 接收并完成 Android TUN I/O；
+该 worker 不参与 `hash % N` 的 FlowOwner 选择。Android 仍负责创建
 VpnService TUN、执行 `protect()` 所需的受控 broker 操作，并把平台资源交给受监督的 VPP Runtime；
 运行中的 TUN packet I/O、Adapter Completion 和 native buffer return 留在 C-only Adapter plugin。
 允许的 TUN-origin packet 在 canonical FlowOwner 进入独立的 VPN Flow Stack Packet Boundary，
