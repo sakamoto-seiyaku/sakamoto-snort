@@ -166,6 +166,10 @@ typedef struct
   uint32_t rule_count;
   uint8_t requires_flow; /* At least one whole rule is post-flow. */
   uint8_t dependencies; /* Conservative union for the entire application. */
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  uint16_t first_subtable;
+  uint16_t subtable_count;
+#endif
 } product_l4_policy_uid_bucket_t;
 
 /* Private fixed candidate index; entries always refer to whole rules. */
@@ -241,6 +245,11 @@ typedef struct
   uint32_t order;
   uint32_t winner_rank;
   uint32_t rule_index; /* Index in this protected snapshot, including cache hits. */
+  /* Actual work: unique whole-rule candidate tests (including factor rejection),
+   * binary-search comparisons, visited table descriptors, and collision entries
+   * passing rank pruning. Position/key/availability rejection remains counted;
+   * tables outside the experimental subject range are never charged.
+   * A prepared query charges its subject lookup only on its first consume. */
   uint32_t probes;
   uint32_t probe_limit;
   uint32_t subject_probes;
@@ -339,11 +348,45 @@ typedef struct {
  * No borrowed view/Flow pointer survives. Identity is from the protected packet
  * snapshot and the current observation, never a slot index or a fact version.
  * Full semantic results are retained; leaf/index work is zero on hits.
- * subject_probes includes the guard dependency lookup on both paths.
+ * subject_probes includes every subject lookup actually performed. The baseline
+ * miss includes the guard lookup and matcher lookup; the opt-in experiment uses
+ * one prepared lookup. Stable early NoMatch skips the experimental cache.
  * Errors are never cached. Caller owns the common attribution/accounting path. */
 product_l4_policy_status_t product_l4_policy_match_cached (
   product_policy_cache_t *, const product_l4_policy_view_t *,
   const product_l4_policy_packet_t *, const product_policy_cache_identity_t *,
   product_l4_policy_position_t, product_l4_policy_match_result_t *);
+
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+/* Synchronous snapshot borrow. Call prepare after the packet's UID enrichment;
+ * the view and all static packet fields must remain unchanged through its last
+ * consume. Dynamic facts, position and cache identity come from each consume.
+ * No pointer or query may outlive the snapshot protection or leave this node.
+ * Zero initialization is valid; only successful prepare enables consumption.
+ * The fields are module-private, including the checked subject and index key.
+ * subject_probes is charged once, to the first successful consume. */
+typedef struct {
+  const product_l4_policy_view_t *view;
+  const product_l4_policy_uid_bucket_t *subject;
+  product_l4_policy_packet_t static_packet;
+  uint8_t packet_key[PRODUCT_L4_INDEX_KEY_BYTES];
+  uint32_t subject_probes;
+  uint8_t no_match_reason;
+  uint8_t prepared;
+} product_l4_policy_prepared_query_t;
+
+product_l4_policy_status_t product_l4_policy_prepare (
+  const product_l4_policy_view_t *, const product_l4_policy_packet_t *,
+  product_l4_policy_prepared_query_t *);
+
+product_l4_policy_status_t product_l4_policy_match_prepared (
+  product_l4_policy_prepared_query_t *, const product_l4_policy_packet_t *,
+  product_l4_policy_position_t, product_l4_policy_match_result_t *);
+
+product_l4_policy_status_t product_l4_policy_match_prepared_cached (
+  product_policy_cache_t *, product_l4_policy_prepared_query_t *,
+  const product_l4_policy_packet_t *, const product_policy_cache_identity_t *,
+  product_l4_policy_position_t, product_l4_policy_match_result_t *);
+#endif
 
 #endif

@@ -538,7 +538,8 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   if (bind (fd, (struct sockaddr *) &address, sizeof (address)) < 0 || listen (fd, 4) < 0) {
     close (fd); return 0;
   }
-  if (!product_packet_graph_start_external (vm, generation)) {
+  if (!product_packet_graph_start_external (vm, generation,
+        PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)) {
     close (fd); unlink (tun.path); return 0;
   }
   if (!product_vpn_flow_stack_driver_start(vm, generation)) {

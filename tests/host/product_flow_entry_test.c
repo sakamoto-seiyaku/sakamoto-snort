@@ -41,6 +41,80 @@ static void observe(product_flow_runtime_t *pool,const product_owner_assignment_
   assert(product_flow_entry_observe(pool,a,&p,PRODUCT_FLOW_ENTRY_VERDICT_PASS_NEXT,o)==PRODUCT_FLOW_ENTRY_STATUS_OK);
 }
 
+static void prefetch(product_flow_runtime_t *runtime,
+                     const product_owner_assignment_t *assignment) {
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_flow_runtime_prefetch(runtime,assignment,PRODUCT_FLOW_PREFETCH_BUCKET);
+  product_flow_runtime_prefetch(runtime,assignment,PRODUCT_FLOW_PREFETCH_INDEX);
+  product_flow_runtime_prefetch(runtime,assignment,PRODUCT_FLOW_PREFETCH_STATE);
+#else
+  (void)runtime;(void)assignment;
+#endif
+}
+
+static void prepared_window_order(void) {
+  /* Every future tuple is a miss during preparation. Adjacent and separated
+   * packets must still see earlier creates and ordered direction/accounting.
+   * Full-hash collisions force the compact index to compare complete keys. */
+  product_flow_runtime_t *prepared=NULL,*reference=NULL;
+  assert(!product_flow_runtime_create(&prepared,0,2,1,4));
+  assert(!product_flow_runtime_create(&reference,0,2,1,4));
+  product_owner_assignment_t keys[6];
+  const unsigned sequence[]={0,1,0,0,1,0};
+  for(unsigned i=0;i<6;i++) {
+    keys[i]=assign(facts(sequence[i]?6:4,17,23000+sequence[i]));
+    keys[i].execution_owner=0;
+    keys[i].canonical_hash=UINT64_C(0x123400001234);
+    if(i==2 || i==4)keys[i].source_is_a^=1;
+  }
+  product_flow_runtime_snapshot_t before=product_flow_runtime_snapshot(prepared);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  for(unsigned stage=PRODUCT_FLOW_PREFETCH_BUCKET;stage<=PRODUCT_FLOW_PREFETCH_STATE;stage++)
+    for(unsigned i=0;i<6;i++)
+      product_flow_runtime_prefetch(prepared,&keys[i],(product_flow_prefetch_stage_t)stage);
+  product_flow_runtime_prefetch(NULL,&keys[0],PRODUCT_FLOW_PREFETCH_STATE);
+  product_flow_runtime_prefetch(prepared,NULL,PRODUCT_FLOW_PREFETCH_STATE);
+  product_owner_assignment_t invalid=keys[0];invalid.valid=0;
+  prefetch(prepared,&invalid);
+  invalid=keys[0];invalid.execution_owner=1;prefetch(prepared,&invalid);
+  product_flow_runtime_prefetch(prepared,&keys[0],(product_flow_prefetch_stage_t)99);
+#endif
+  product_flow_runtime_snapshot_t after=product_flow_runtime_snapshot(prepared);
+  assert(!memcmp(&before,&after,sizeof before));
+  assert(!product_flow_entry_current_incarnation(prepared,&keys[0],1,1));
+  for(unsigned i=0;i<6;i++) {
+    product_flow_entry_observation_t a,b;
+    product_flow_entry_packet_t p=packet(i&1?1:3,40+i,i+1);
+    p.policy=(product_flow_policy_identity_t){1,1,101};
+    observe(prepared,&keys[i],p,&a);
+    observe(reference,&keys[i],p,&b);
+    prefetch(prepared,&keys[(i+1)%6]);
+    prefetch(prepared,&keys[i]);
+    assert(a.slot==b.slot && a.created==b.created && a.reused==b.reused);
+    assert(a.flow_direction==b.flow_direction && !memcmp(a.entry,b.entry,sizeof *a.entry));
+    assert(!product_flow_entry_set_decision(prepared,a.entry,&p.policy,1,91,7));
+    assert(!product_flow_entry_set_decision(reference,b.entry,&p.policy,1,91,7));
+    const product_flow_entry_t *interior=(const product_flow_entry_t *)((const char *)a.entry+1);
+    assert(product_flow_entry_set_decision(prepared,interior,&p.policy,1,91,7)
+           ==PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT);
+  }
+  const product_flow_entry_t *a=product_flow_runtime_entry(prepared,0);
+  const product_flow_entry_t *b=product_flow_runtime_entry(prepared,1);
+  assert(a->packets==4 && a->bytes==170 && a->side_packets[0]==3 && a->side_packets[1]==1);
+  assert(b->packets==2 && b->bytes==85 && b->side_packets[0]==1 && b->side_packets[1]==1);
+  before=product_flow_runtime_snapshot(prepared);after=product_flow_runtime_snapshot(reference);
+  assert(!memcmp(&before,&after,sizeof before));
+  prefetch(prepared,&keys[0]);
+  assert(!product_flow_runtime_flush(prepared));
+  prefetch(prepared,&keys[0]);
+  assert(!product_flow_entry_current_incarnation(prepared,&keys[0],1,7));
+  product_flow_entry_observation_t fresh;
+  observe(prepared,&keys[0],packet(3,64,7),&fresh);
+  assert(fresh.created && fresh.slot==0 && fresh.entry->incarnation>2);
+  assert(product_flow_runtime_snapshot(prepared).allocated_bytes==before.allocated_bytes);
+  product_flow_runtime_destroy(prepared);product_flow_runtime_destroy(reference);
+}
+
 static void mixed_capacity(void) {
   product_flow_runtime_t *runtime=NULL;
   assert(product_flow_runtime_create(&runtime,0,2,1,3)==PRODUCT_FLOW_ENTRY_STATUS_OK);
@@ -144,10 +218,12 @@ static void unknown_uid_enrichment(void) {
   assert(!product_flow_entry_enrich_uid(pool,&a,1,incarnation+1,12345,11));
   assert(product_flow_entry_enrich_uid(pool,&a,1,incarnation,12345,11)==1);
   assert(entry->uid==12345 && entry->packets==2 && entry->bytes==144);
+  prefetch(pool,&a);
   assert(product_flow_entry_enrich_uid(pool,&a,1,incarnation,23456,12)==2);
   assert(entry->uid==12345);
   assert(!product_flow_entry_current_incarnation(pool,&a,1,12));
   assert(ended_incarnation==incarnation);
+  prefetch(pool,&a);
   assert(product_flow_runtime_release_end(pool,ended_slot,1,incarnation,
       PRODUCT_FLOW_END_REPLACED)==PRODUCT_FLOW_ENTRY_STATUS_OK);
   product_flow_runtime_flush(pool);
@@ -206,6 +282,7 @@ static void stale_return_after_uid_replacement(void) {
 }
 
 int main(void) {
+  prepared_window_order();
   unknown_uid_enrichment();
   stale_return_after_uid_replacement();
   product_flow_runtime_t *invalid=NULL;

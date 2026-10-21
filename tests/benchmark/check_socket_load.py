@@ -2,7 +2,9 @@
 """Loopback correctness checks; these are never Pixel performance results."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import signal
 import socket
 import struct
 import subprocess
@@ -27,6 +29,8 @@ def choose_port():
                 udp.bind(("127.0.0.1", port + offset))
                 sockets.append(udp)
             return port
+        except PermissionError:
+            raise
         except OSError:
             continue
         finally:
@@ -53,6 +57,7 @@ def main():
                     text=True, timeout=2))
                 assert .45 <= time.monotonic() - started < 2
                 assert client["bytes"] > 0
+                assert client["offered_rate"] == client["pacing_scheduled"] == client["pacing_missed"] == 0
                 stats = quick.peer_query("127.0.0.1", port, index)
                 if case.startswith("tcp"):
                     assert client["latency_samples"] > 0 and client["p99_upper_us"] > 0
@@ -84,6 +89,89 @@ def main():
                 assert stats["tuple_capacity_overflow_packets"] == stats["sequence_overflow_packets"] == 0
                 assert 0 < stats["udp_received_packets"] <= result["packets"]
             print("fixed UDP tuple replay: PASS", flush=True)
+
+            def paced(case, rate, duration, case_id, flows=4, source=0):
+                quick.peer_query("127.0.0.1", port, case_id, "R")
+                result = json.loads(subprocess.check_output(
+                    [str(binary), "client", "127.0.0.1", str(port), str(case_id), case,
+                     str(duration), "4", str(flows), str(source), "1", str(rate)], text=True, timeout=2))
+                target = (rate * duration + 999) // 1000
+                offered = result["offered_packets"] if case == "udp-fixed" else result["attempts"]
+                assert result["offered_rate"] == rate and result["pacing_scheduled"] == target
+                assert offered + result["pacing_missed"] == target
+                assert result["pacing_missed"] <= max(4, target // 25), result
+                elapsed = (result["end_monotonic_ns"] - result["start_monotonic_ns"]) / 1e9
+                assert duration / 1000 <= elapsed < duration / 1000 + .15
+                assert result["timeouts"] == 0
+                stats = quick.peer_query("127.0.0.1", port, case_id)
+                if case == "udp-fixed":
+                    until = time.monotonic() + .5
+                    while stats["udp_received_packets"] < result["packets"] and time.monotonic() < until:
+                        stats = quick.peer_query("127.0.0.1", port, case_id)
+                    assert result["packets"] == stats["udp_received_packets"] == offered
+                    assert result["udp_send_errors"] == stats["udp_duplicates"] == stats["malformed"] == 0
+                    assert result["latency_samples"] >= 4 * duration // 40
+                    assert result["probe_requests"] <= 4 * ((duration + 19) // 20 + 1)
+                    assert result["cancelled_at_deadline"] <= 4
+                else:
+                    assert result["attempts"] == result["offered_connections"]
+                    assert result["attempts"] == sum(result[k] for k in ("completed", "errors", "timeouts", "cancelled_at_deadline"))
+                    assert result["completed"] <= stats["tcp_requests"] <= result["attempts"]
+                    assert result["completed"] >= offered - 4
+                print(f"paced {case} {rate}/s {duration} ms: scheduled={target} offered={offered} missed={result['pacing_missed']} PASS", flush=True)
+                quick.peer_query("127.0.0.1", port, case_id, "R")
+
+            paced("udp-fixed", 8000, 600, 4, source=38000)
+            paced("udp-fixed", 100, 500, 5)
+            paced("udp-fixed", 137, 175, 6)  # Fractional global schedule + partial deadline.
+            paced("tcp-new", 400, 600, 7)
+            paced("tcp-new", 137, 175, 8)
+
+            # A stalled peer fills real flow slots. It must consume scheduled
+            # misses rather than reconnect early or inflate deadline timeouts.
+            with socket.socket() as stalled:
+                stalled.bind(("127.0.0.1", 0)); stalled.listen(16)
+                stalled_port = stalled.getsockname()[1]
+                result = json.loads(subprocess.check_output(
+                    [str(binary), "client", "127.0.0.1", str(stalled_port), "9", "tcp-new",
+                     "300", "4", "1", "0", "1", "400"], text=True, timeout=2))
+                assert result["attempts"] == result["cancelled_at_deadline"] == 4
+                assert result["completed"] == result["errors"] == result["timeouts"] == 0
+                assert result["pacing_scheduled"] == 120
+                assert result["pacing_missed"] == result["pacing_capacity_missed"] == 116
+                assert .3 <= (result["end_monotonic_ns"] - result["start_monotonic_ns"]) / 1e9 < .45
+            print("paced TCP slots and partial-deadline conservation: PASS", flush=True)
+
+            # Force a real scheduler pause: one wake can issue at most sixteen
+            # due payloads per worker, so older debt is counted as missed.
+            quick.peer_query("127.0.0.1", port, 9, "R")
+            paused = subprocess.Popen([str(binary), "client", "127.0.0.1", str(port), "9",
+                                       "udp-fixed", "500", "4", "4", "0", "1", "1000"],
+                                      stdout=subprocess.PIPE, text=True)
+            try:
+                time.sleep(.05)
+                os.kill(paused.pid, signal.SIGSTOP)
+                time.sleep(.12)
+                os.kill(paused.pid, signal.SIGCONT)
+                raw, _ = paused.communicate(timeout=2)
+                assert paused.returncode == 0
+                result = json.loads(raw)
+                assert result["offered_packets"] + result["pacing_missed"] == result["pacing_scheduled"] == 500
+                assert result["pacing_missed"] > 0 and result["pacing_behind_events"] > 0
+                assert result["pacing_max_behind_ns"] >= 100000000
+                assert result["timeouts"] == 0
+            finally:
+                if paused.poll() is None:
+                    os.kill(paused.pid, signal.SIGCONT)
+                    paused.terminate(); paused.wait(timeout=2)
+            print("paced scheduler-pause debt is bounded and audited: PASS", flush=True)
+
+            for case in ("tcp-fixed", "udp-new"):
+                unsupported = subprocess.run([str(binary), "client", "127.0.0.1", str(port), "9",
+                                              case, "100", "4", "4", "0", "1", "100"],
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
+                assert unsupported.returncode == 2 and "supported only" in unsupported.stderr
+            print("unsupported paced cases reject explicitly: PASS", flush=True)
             # Independently inject a duplicate to verify received/lost/duplicate accounting.
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as endpoint:
                 packet = struct.pack("!IIIIQ", 0x53424e31, 0, ord("U"), 24, 100)

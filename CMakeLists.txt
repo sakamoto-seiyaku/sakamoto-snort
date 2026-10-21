@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 
 project(sakamoto_snort_workspace LANGUAGES C CXX)
+option(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  "Build the Root whole-path batch implementation" ON)
+option(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  "Record policy completion coupled to successful Root verdicts" OFF)
 add_subdirectory(third_party/libprotoident)
 add_subdirectory(third_party/mbedtls)
 
@@ -40,6 +44,10 @@ target_include_directories(sakamoto_product_l4_policy PUBLIC
 )
 target_compile_features(sakamoto_product_l4_policy PRIVATE c_std_11)
 target_compile_options(sakamoto_product_l4_policy PRIVATE -Wall -Wextra -Werror)
+if(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  target_compile_definitions(sakamoto_product_l4_policy PUBLIC
+    SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1)
+endif()
 
 add_executable(sakamoto-product-l4-policy-test
   tests/host/product_l4_policy_test.c
@@ -71,6 +79,10 @@ target_include_directories(sakamoto_product_flow_entry PUBLIC
 target_link_libraries(sakamoto_product_flow_entry PUBLIC sakamoto_lpi sakamoto_quic_crypto)
 target_compile_features(sakamoto_product_flow_entry PRIVATE c_std_11)
 target_compile_options(sakamoto_product_flow_entry PRIVATE -Wall -Wextra -Werror)
+if(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  target_compile_definitions(sakamoto_product_flow_entry PUBLIC
+    SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1)
+endif()
 
 add_executable(sakamoto-product-flow-entry-test
   tests/host/product_flow_entry_test.c
@@ -219,6 +231,26 @@ add_test(NAME sakamoto-product-vpp-contract
 add_test(NAME sakamoto-product-external-graph-ownership-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_external_graph_ownership_contract.sh")
+add_test(NAME sakamoto-product-external-batch-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_external_batch_test.py")
+add_test(NAME sakamoto-product-packet-batch-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_packet_batch_test.py")
+add_test(NAME sakamoto-product-policy-batch-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_policy_batch_test.py")
+add_test(NAME sakamoto-product-nfqueue-verdict-batch-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_nfqueue_verdict_batch_test.py")
+add_test(NAME sakamoto-product-root-pending-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_pending_test.py")
+add_test(NAME product_root_io
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_io_test.py")
+add_test(NAME product_root_capacity
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_capacity_test.py")
+add_test(NAME sakamoto-product-root-defaults-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_defaults_test.py")
+add_test(NAME sakamoto-product-l4-match-evidence-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_l4_match_evidence_test.py")
+add_test(NAME sakamoto-product-stop-before-start-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_stop_before_start_test.py")
 add_test(NAME sakamoto-s174-product-packet-kernel-contract
   COMMAND bash
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/s174-product-packet-kernel-contract.sh")

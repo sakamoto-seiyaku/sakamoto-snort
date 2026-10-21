@@ -55,5 +55,22 @@ uint32_t product_root_nfqueue_adapter_last_packet_id (void);
  * this lane's fixed receive partition; the graph must not free it again. */
 int product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
   const product_packet_completion_frame_t *completion);
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+/* Current origin dispatch only, count <= PRODUCT_PACKET_BATCH_SIZE. Returned
+ * flags independently report original receive-pool loans; never borrow buffers
+ * or completions after this call. */
+void product_root_nfqueue_complete_batch_from_graph (vlib_main_t *,
+  const u32 *indices, const product_packet_completion_frame_t *completions,
+  u32 count, u8 *returned);
+#endif
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+void product_root_nfqueue_prefetch_completion (vlib_main_t *,
+  const product_packet_completion_frame_t *);
+#endif
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+uint64_t product_root_nfqueue_adapter_policy_qualified_succeeded (void);
+void product_root_nfqueue_adapter_policy_qualified_matched_succeeded (
+  uint64_t *allow, uint64_t *drop);
+#endif
 
 #endif

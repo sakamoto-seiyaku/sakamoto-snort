@@ -14,6 +14,7 @@
 #include "product_diagnostic_hex.h"
 
 #include "product_packet_graph.h"
+#include "product_packet_batch.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -40,8 +41,16 @@
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES PRODUCT_ROOT_COMPLETION_MAX_LANES
 #define PRODUCT_ROOT_NFQUEUE_MAX_NETLINK 8192
 #define PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY PRODUCT_ROOT_COMPLETION_CAPACITY
-#define PRODUCT_ROOT_NFQUEUE_DEFAULT_MAXLEN 1024
+#define PRODUCT_ROOT_NFQUEUE_DEFAULT_MAXLEN PRODUCT_ROOT_DEFAULT_QUEUE_MAXLEN
+#define PRODUCT_ROOT_NFQUEUE_READ_BUDGET PRODUCT_ROOT_READ_BUDGET_LIMIT
+#define PRODUCT_ROOT_NFQUEUE_RCVBUF_REQUEST_LIMIT (1024U * 1024U)
 #define PRODUCT_ROOT_NFQUEUE_FLAGS (NFQA_CFG_F_UID_GID | NFQA_CFG_F_FAIL_OPEN)
+#ifndef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE
+#define SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE 2
+#endif
+#if SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE < 1 || SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE > 3
+#error "Root verdict sender must be scalar(1), sendmmsg(2) or packed(3)"
+#endif
 
 typedef enum
 {
@@ -95,25 +104,55 @@ typedef struct
   u64 generation;
   u64 next_obligation_token;
   u32 pending_count;
+  /* Two bounded 64-slot banks. The second bank is usable only when the
+   * quiescent diagnostic also reserves 128 normal receive buffers. */
+  u64 pending_active_slots, pending_displaced_slots;
+  u64 pending_active_slots_high, pending_displaced_slots_high;
+  u32 pending_high_water, loan_high_water;
   u8 draining;
   u8 receive_paused; /* Explicit CLI pressure probe; does not close verdict fd. */
   u8 identity_fault;
   u8 verdict_fault_next; /* CLI-only one-shot, real sendto(MSG_OOB) rejection. */
+  u8 verdict_id_fault_next; /* CLI-only wrong middle ID in an eligible window. */
+  u8 verdict_id_probe_expired; /* Sticky until this queue generation retires. */
   u8 listener_fault_after_submit; /* CLI-only: one real admitted packet. */
   u16 withheld_count;
-  u16 withheld[PRODUCT_ROOT_RECEIVE_TOTAL];
+  u16 withheld[PRODUCT_ROOT_RECEIVE_MAX_TOTAL];
   product_root_receive_pool_t receive_pool;
   u32 receive_allocated;
   u64 reserve_accepts, reserve_losses, identity_losses;
   u64 receive_datagrams, receive_returns, ingress_accepts;
+  u64 pending_collisions, pending_full_rejections, pending_duplicate_rejections;
+  u64 ingress_normal_exhausted, ingress_envelope_rejected;
+  u64 ingress_completion_rejected, ingress_graph_rejected;
   u32 queue_flags, queue_maxlen;
+  /* Diagnostic, generation-local tuning; no additional packet credit. */
+  u32 read_budget, rcvbuf_requested, rcvbuf_effective;
+  u64 read_callbacks, read_empty_callbacks, read_budget_exits;
+  u64 read_callback_datagrams, read_callback_max;
+  u64 recv_calls, recv_eagain, recv_eintr, recv_enobufs;
   u32 last_cpu, callback_thread, callback_tls;
   u32 last_packet_id, last_queue_id, last_uid, last_ip_family;
   u32 last_protocol, last_hook, last_uid_known;
   u64 packets_seen;
   u64 packets_submitted;
   u64 verdict_attempts;
+  /* Origin graph syscall counters; ingress bypass/configuration are separate. */
+  u64 graph_sendto_calls, graph_sendmmsg_calls, graph_sendmmsg_requested;
+  u64 graph_sendmmsg_sent, graph_sendmmsg_partial_calls;
+  u64 graph_verdict_windows, graph_verdict_window_messages;
+  u64 graph_packed_calls, graph_packed_requested, graph_packed_sent;
+  u64 graph_packed_bytes, graph_packed_mixed_calls;
+  u32 graph_packed_max_messages;
+  u64 control_replies, control_errors, control_malformed;
+  u32 control_first_error, control_first_sequence;
+  u32 control_last_error, control_last_sequence;
   u64 verdict_succeeded;
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  u64 policy_qualified_succeeded;
+  u64 policy_qualified_matched_allow_succeeded;
+  u64 policy_qualified_matched_drop_succeeded;
+#endif
   u64 verdict_failed;
   u64 duplicate_completion_drops;
   u64 internal_settlements;
@@ -125,7 +164,7 @@ typedef struct
   u8 verdict_packet_id_known;
   u8 socket_ready;
   u8 listener_ready;
-  product_root_nfqueue_pending_t pending[PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
+  product_root_nfqueue_pending_t pending[2 * PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
 } product_root_nfqueue_lane_t;
 
 typedef struct
@@ -398,15 +437,102 @@ product_root_nfqueue_fault_mode_from_env (void)
 }
 
 static product_root_nfqueue_pending_t *
+product_root_nfqueue_pending_find (product_root_nfqueue_lane_t *lane,
+  u32 packet_id, u64 token, u64 generation)
+{
+  product_root_nfqueue_pending_t *found = 0;
+  u32 capacity = lane->receive_pool.normal_capacity ?
+    lane->receive_pool.normal_capacity : PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY;
+  product_root_nfqueue_pending_t *home =
+    &lane->pending[packet_id % capacity];
+  if (home->completion.obligation.token &&
+      home->completion.obligation.packet_id == packet_id &&
+      home->completion.obligation.queue_generation == generation &&
+      (!token || home->completion.obligation.token == token))
+    {
+      found = home;
+      if (token) return found;
+    }
+  for (u32 bank = 0; bank < capacity / 64; ++bank)
+    {
+      u64 displaced = bank ? lane->pending_displaced_slots_high :
+                             lane->pending_displaced_slots;
+      while (displaced)
+        {
+          u32 slot = 64 * bank + (u32) __builtin_ctzll (displaced);
+          displaced &= displaced - 1;
+          product_root_nfqueue_pending_t *candidate = &lane->pending[slot];
+          const product_adapter_obligation_t *identity =
+            &candidate->completion.obligation;
+          if (identity->packet_id == packet_id &&
+              identity->queue_generation == generation && identity->token &&
+              (!token || identity->token == token) &&
+              (!found || identity->token > found->completion.obligation.token))
+            {
+              found = candidate;
+              if (token) return found;
+            }
+        }
+    }
+  return found;
+}
+
+static void
+product_root_nfqueue_pending_deactivate (product_root_nfqueue_main_t *nm,
+  product_root_nfqueue_lane_t *lane, product_root_nfqueue_pending_t *pending)
+{
+  u32 slot = (u32) (pending - lane->pending);
+  ASSERT (slot < 2 * PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY && pending->active);
+  pending->active = 0;
+  if (slot < 64) lane->pending_active_slots &= ~(UINT64_C (1) << slot);
+  else lane->pending_active_slots_high &= ~(UINT64_C (1) << (slot - 64));
+  lane->pending_count--;
+  clib_atomic_fetch_sub_relax (&nm->pending_count, 1);
+  /* Retain displaced identity history until this physical record is reused. */
+}
+
+static product_root_nfqueue_pending_t *
 product_root_nfqueue_reserve (product_root_nfqueue_main_t *nm,
                               product_root_nfqueue_lane_t *lane,
                               u32 packet_id, u32 buffer_index, u16 receive_slot)
 {
-  product_root_nfqueue_pending_t *pending =
-    &lane->pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
-  if (pending->active || lane->next_obligation_token >=
+  _Static_assert (PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY == 64,
+    "each ledger bank covers 64 completion identities");
+  u32 capacity = lane->receive_pool.normal_capacity ?
+    lane->receive_pool.normal_capacity : PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY;
+  u32 home = packet_id % capacity;
+  u32 slot = home;
+  product_root_nfqueue_pending_t *pending = &lane->pending[home];
+  if (lane->next_obligation_token >=
       (UINT64_MAX - PRODUCT_ROOT_NFQUEUE_MAX_LANES) / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
     return 0;
+  if (pending->active &&
+      pending->completion.obligation.packet_id == packet_id)
+    { lane->pending_duplicate_rejections++; return 0; }
+  for (u32 bank = 0; bank < capacity / 64; ++bank)
+    {
+      u64 displaced = bank ?
+        lane->pending_displaced_slots_high & lane->pending_active_slots_high :
+        lane->pending_displaced_slots & lane->pending_active_slots;
+      while (displaced)
+        {
+          u32 at = 64 * bank + (u32) __builtin_ctzll (displaced);
+          displaced &= displaced - 1;
+          if (lane->pending[at].completion.obligation.packet_id == packet_id)
+            { lane->pending_duplicate_rejections++; return 0; }
+        }
+    }
+  if (pending->active)
+    {
+      lane->pending_collisions++;
+      u64 vacant = ~lane->pending_active_slots;
+      if (vacant) slot = (u32) __builtin_ctzll (vacant);
+      else if (capacity > 64 && (vacant = ~lane->pending_active_slots_high))
+        slot = 64 + (u32) __builtin_ctzll (vacant);
+      else { lane->pending_full_rejections++; return 0; }
+      pending = &lane->pending[slot];
+      ASSERT (!pending->active);
+    }
   clib_memset (pending, 0, sizeof (*pending));
   pending->completion.obligation = (product_adapter_obligation_t) {
     .token = (++lane->next_obligation_token * PRODUCT_ROOT_NFQUEUE_MAX_LANES)
@@ -420,7 +546,17 @@ product_root_nfqueue_reserve (product_root_nfqueue_main_t *nm,
   pending->buffer_index = buffer_index;
   pending->receive_slot = (u8) receive_slot;
   pending->active = 1;
+  u64 bit = UINT64_C (1) << (slot % 64);
+  u64 *active = slot < 64 ? &lane->pending_active_slots : &lane->pending_active_slots_high;
+  u64 *displaced = slot < 64 ? &lane->pending_displaced_slots : &lane->pending_displaced_slots_high;
+  *active |= bit;
+  if (slot != home) *displaced |= bit;
+  else *displaced &= ~bit;
   lane->pending_count++;
+  if (lane->pending_count > lane->pending_high_water)
+    lane->pending_high_water = lane->pending_count;
+  if (lane->receive_pool.outstanding > lane->loan_high_water)
+    lane->loan_high_water = lane->receive_pool.outstanding;
   clib_atomic_fetch_add_relax (&nm->pending_count, 1);
   return pending;
 }
@@ -625,30 +761,37 @@ product_nfqueue_configure (int fd, u32 queue_id, u32 family, u32 queue_maxlen)
   return 1;
 }
 
+typedef union
+{
+  u8 bytes[NLMSG_SPACE (sizeof (struct nfgenmsg)) +
+           NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr))];
+  struct nlmsghdr nlh;
+} product_nfqueue_verdict_request_t;
+
+static int
+product_nfqueue_fill_verdict (product_nfqueue_verdict_request_t *request,
+  u32 queue_id, u32 packet_id, u32 verdict)
+{
+  struct nfqnl_msg_verdict_hdr verdict_header;
+  product_nfnl_fill_header (&request->nlh, sizeof (*request),
+                            NFQNL_MSG_VERDICT, queue_id);
+  /* Verdict ACKs share the ingress fd; preserve the original no-ACK request. */
+  request->nlh.nlmsg_flags = NLM_F_REQUEST;
+  /* Correlation for bounded control-error diagnostics, never ID authority. */
+  request->nlh.nlmsg_seq = packet_id;
+  clib_memset (&verdict_header, 0, sizeof (verdict_header));
+  verdict_header.verdict = htonl (verdict);
+  verdict_header.id = htonl (packet_id);
+  return product_nfnl_addattr (&request->nlh, sizeof (*request),
+    NFQA_VERDICT_HDR, &verdict_header, sizeof (verdict_header));
+}
+
 static int
 product_nfqueue_send_verdict (int fd, u32 queue_id, u32 packet_id,
                               u32 verdict, int flags)
 {
-  union
-  {
-    u8 bytes[NLMSG_SPACE (sizeof (struct nfgenmsg)) +
-             NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr))];
-    struct nlmsghdr nlh;
-  } request;
-  struct nfqnl_msg_verdict_hdr verdict_header;
-
-  product_nfnl_fill_header (&request.nlh, sizeof (request),
-                            NFQNL_MSG_VERDICT, queue_id);
-  /* libnetfilter_queue sends verdicts with NLM_F_REQUEST only.  ACK is kept
-   * for configuration commands, but verdict ACKs are delivered on the same
-   * queue fd as packets and pollute the read-ready ingress stream. */
-  request.nlh.nlmsg_flags = NLM_F_REQUEST;
-  clib_memset (&verdict_header, 0, sizeof (verdict_header));
-  verdict_header.verdict = htonl (verdict);
-  verdict_header.id = htonl (packet_id);
-  if (!product_nfnl_addattr (&request.nlh, sizeof (request),
-                             NFQA_VERDICT_HDR, &verdict_header,
-                             sizeof (verdict_header)))
+  product_nfqueue_verdict_request_t request;
+  if (!product_nfqueue_fill_verdict (&request, queue_id, packet_id, verdict))
     return 0;
   return product_nfnl_send (fd, &request.nlh, flags);
 }
@@ -662,6 +805,16 @@ product_root_nfqueue_record_verdict_attempt (
   clib_atomic_fetch_add_relax (&nm->verdict_attempts, 1);
   lane->last_verdict_packet_id = packet_id;
   lane->verdict_packet_id_known = 1;
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+  /* This diagnostic is confined to the initial low-ID portion of a fresh
+   * generation. Once it expires, ID wrap cannot make it available again. */
+  if (packet_id >= 4096 || lane->verdict_attempts >= 4096 ||
+      lane->identity_losses || lane->reserve_losses || lane->receive_overruns)
+    {
+      lane->verdict_id_probe_expired = 1;
+      lane->verdict_id_fault_next = 0;
+    }
+#endif
 }
 
 static int
@@ -869,6 +1022,10 @@ product_root_nfqueue_accept_unadmitted (product_root_nfqueue_main_t *nm,
       accepted_ids[accepted_count++] = packet_id;
       clib_atomic_fetch_add_relax (&nm->graph_submit_fail_opens, 1);
       lane->ingress_accepts++;
+      if (strcmp (reason, "normal_exhausted") == 0) lane->ingress_normal_exhausted++;
+      else if (strcmp (reason, "unadmitted_envelope") == 0) lane->ingress_envelope_rejected++;
+      else if (strcmp (reason, "completion_capacity") == 0) lane->ingress_completion_rejected++;
+      else if (strcmp (reason, "graph_submit_rejected") == 0) lane->ingress_graph_rejected++;
       int success = product_root_nfqueue_send_counted_verdict (
         nm, lane, packet_id, NF_ACCEPT);
       if (lane->ingress_accepts <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
@@ -891,10 +1048,46 @@ product_root_nfqueue_accept_unadmitted (product_root_nfqueue_main_t *nm,
     }
 }
 
-int
-product_root_nfqueue_complete_from_graph (
-  vlib_main_t *vm, u32 buffer_index,
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+void
+product_root_nfqueue_prefetch_completion (vlib_main_t *vm,
   const product_packet_completion_frame_t *completion)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  const product_adapter_obligation_t *obligation = &completion->obligation;
+  if (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE ||
+      obligation->queue_generation != nm->generation ||
+      obligation->origin_lane >= nm->lane_count)
+    return;
+  product_root_nfqueue_lane_t *lane = &nm->lanes[obligation->origin_lane];
+  if (vm->thread_index != vlib_get_worker_thread_index (lane->worker_index)) return;
+  product_root_nfqueue_pending_t *pending = product_root_nfqueue_pending_find (
+    lane, obligation->packet_id, obligation->token, obligation->queue_generation);
+  if (pending) __builtin_prefetch (pending, 0, 1);
+}
+#endif
+
+typedef struct
+{
+  vlib_main_t *vm;
+  product_root_nfqueue_lane_t *lane;
+  product_root_nfqueue_pending_t *pending;
+  u32 buffer_index, verdict;
+  int send_flags, capacity_bypass;
+} product_root_verdict_work_t;
+
+enum
+{
+  PRODUCT_VERDICT_SUCCEEDED,
+  PRODUCT_VERDICT_FAILED_DEFINITE,
+  PRODUCT_VERDICT_OUTCOME_UNKNOWN,
+};
+
+static int
+product_root_nfqueue_prepare_completion (
+  vlib_main_t *vm, u32 buffer_index,
+  const product_packet_completion_frame_t *completion,
+  product_root_verdict_work_t *work)
 {
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   const product_adapter_obligation_t *obligation = &completion->obligation;
@@ -927,10 +1120,9 @@ product_root_nfqueue_complete_from_graph (
    * every already-admitted obligation has settled. */
   if (!lane->socket_ready || lane->fd < 0)
     { rejection = "closed_lane"; goto stale; }
-  pending = &lane->pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
-  if (pending->completion.obligation.token != obligation->token
-      || pending->completion.obligation.queue_generation != obligation->queue_generation
-      || pending->completion.obligation.packet_id != packet_id)
+  pending = product_root_nfqueue_pending_find (
+    lane, packet_id, obligation->token, obligation->queue_generation);
+  if (!pending)
     { rejection = "stale_identity"; goto stale; }
   if (!pending->active)
     {
@@ -947,10 +1139,8 @@ product_root_nfqueue_complete_from_graph (
     { rejection = "stale_carrier_or_intent"; goto stale; }
 
   /* Commit identity consumption before the one native operation attempt. */
-  pending->active = 0;
-  lane->pending_count--;
+  product_root_nfqueue_pending_deactivate (nm, lane, pending);
   pending->completion = *completion;
-  clib_atomic_fetch_sub_relax (&nm->pending_count, 1);
   if (completion->producer_thread == vm->thread_index)
     { lane->origin_local_completions++; clib_atomic_fetch_add_relax (&nm->origin_local_completions, 1); }
   else
@@ -978,18 +1168,10 @@ product_root_nfqueue_complete_from_graph (
       verdict, completion->producer_thread
         ? vlib_get_worker_index (completion->producer_thread)
         : PRODUCT_EXECUTION_OWNER_UNKNOWN);
-  if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id, verdict, send_flags))
-    { lane->verdict_succeeded++; clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1); }
-  else
-    { lane->verdict_failed++; clib_atomic_fetch_add_relax (&nm->verdict_failed, 1); clib_atomic_fetch_add_relax (&nm->verdict_failed_definite, 1); }
-  if (send_flags || (completion->flags & PRODUCT_COMPLETION_TRACE)
-      || lane->internal_settlements <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
-    fprintf (stderr, "s242 event=verdict_syscall source=NFQ_CAPTURED generation=%llu thread=%u lane=%u fd=%d queue=%u packet=%u token=%llu verdict=%u flags=%d result=%lld errno=%d\n",
-      (unsigned long long) obligation->queue_generation, vm->thread_index,
-      lane_index, lane->fd, lane->queue_id, packet_id,
-      (unsigned long long) obligation->token, verdict, send_flags,
-      (long long) product_root_nfqueue_last_send_result, product_root_nfqueue_last_errno);
-  product_root_nfqueue_return_receive (lane, pending->receive_slot, buffer_index);
+  *work = (product_root_verdict_work_t) {
+    .vm = vm, .lane = lane, .pending = pending, .buffer_index = buffer_index,
+    .verdict = verdict, .send_flags = send_flags, .capacity_bypass = capacity_bypass,
+  };
   return 1;
 
 stale:
@@ -1005,13 +1187,338 @@ rejected:
   return 0;
 }
 
+static void
+product_root_nfqueue_finish_completion (product_root_verdict_work_t *work,
+  u32 outcome, ssize_t result, int error)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  vlib_main_t *vm = work->vm;
+  product_root_nfqueue_lane_t *lane = work->lane;
+  product_root_nfqueue_pending_t *pending = work->pending;
+  const product_packet_completion_frame_t *completion = &pending->completion;
+  const product_adapter_obligation_t *obligation = &completion->obligation;
+  u32 lane_index = obligation->origin_lane, packet_id = obligation->packet_id;
+  u32 buffer_index = work->buffer_index, verdict = work->verdict;
+  int send_flags = work->send_flags, capacity_bypass = work->capacity_bypass;
+  if (outcome == PRODUCT_VERDICT_SUCCEEDED)
+    {
+      lane->verdict_succeeded++; clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1);
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+      if ((completion->flags & PRODUCT_COMPLETION_POLICY_QUALIFIED) && !capacity_bypass &&
+          !(completion->flags & PRODUCT_COMPLETION_FRAGMENT_MEMBER))
+        {
+          __atomic_fetch_add (&lane->policy_qualified_succeeded, 1, __ATOMIC_RELAXED);
+          if (completion->flags & PRODUCT_COMPLETION_POLICY_QUALIFIED_MATCHED)
+            {
+              u64 *matched = verdict == NF_ACCEPT
+                ? &lane->policy_qualified_matched_allow_succeeded
+                : &lane->policy_qualified_matched_drop_succeeded;
+              __atomic_fetch_add (matched, 1, __ATOMIC_RELAXED);
+            }
+        }
+#endif
+    }
+  else
+    {
+      lane->verdict_failed++;
+      clib_atomic_fetch_add_relax (&nm->verdict_failed, 1);
+      if (outcome == PRODUCT_VERDICT_FAILED_DEFINITE)
+        clib_atomic_fetch_add_relax (&nm->verdict_failed_definite, 1);
+      else
+        clib_atomic_fetch_add_relax (&nm->verdict_outcome_unknown, 1);
+    }
+  if (send_flags || (completion->flags & PRODUCT_COMPLETION_TRACE)
+      || lane->internal_settlements <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+    fprintf (stderr, "s242 event=verdict_syscall source=NFQ_CAPTURED generation=%llu thread=%u lane=%u fd=%d queue=%u packet=%u token=%llu verdict=%u flags=%d result=%lld errno=%d outcome=%u\n",
+      (unsigned long long) obligation->queue_generation, vm->thread_index,
+      lane_index, lane->fd, lane->queue_id, packet_id,
+      (unsigned long long) obligation->token, verdict, send_flags,
+      (long long) result, error, outcome);
+  product_root_nfqueue_return_receive (lane, pending->receive_slot, buffer_index);
+}
+
+int
+product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
+  const product_packet_completion_frame_t *completion)
+{
+  product_root_verdict_work_t work;
+  if (!product_root_nfqueue_prepare_completion (vm, buffer_index, completion, &work))
+    return 0;
+  work.lane->graph_sendto_calls++;
+  int success = product_nfqueue_send_verdict (work.lane->fd, work.lane->queue_id,
+    completion->obligation.packet_id, work.verdict, work.send_flags);
+  product_root_nfqueue_finish_completion (&work,
+    success ? PRODUCT_VERDICT_SUCCEEDED : PRODUCT_VERDICT_FAILED_DEFINITE,
+    product_root_nfqueue_last_send_result, product_root_nfqueue_last_errno);
+  return 1;
+}
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+/* One current origin window, one fd and one flags value. Every message remains
+ * NFQNL_MSG_VERDICT for one exact ID, including mixed ACCEPT/DROP. No range
+ * verdict, retained queue, future-packet wait or physical verdict retry. */
+static void
+product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32 count)
+{
+  product_nfqueue_verdict_request_t requests[PRODUCT_PACKET_BATCH_SIZE];
+#if SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 2
+  struct mmsghdr messages[PRODUCT_PACKET_BATCH_SIZE] = {0};
+  struct iovec vectors[PRODUCT_PACKET_BATCH_SIZE];
+#endif
+  struct sockaddr_nl kernel = { .nl_family = AF_NETLINK };
+  product_root_nfqueue_lane_t *lane = work[0].lane;
+  ASSERT (count && count <= PRODUCT_PACKET_BATCH_SIZE);
+  _Static_assert (sizeof (product_nfqueue_verdict_request_t) ==
+    NLMSG_ALIGN (NLMSG_LENGTH (sizeof (struct nfgenmsg)) +
+      NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr))),
+    "verdict array stride must equal its aligned wire message size");
+  lane->graph_verdict_windows++;
+  lane->graph_verdict_window_messages += count;
+  for (u32 i = 0; i < count; ++i)
+    {
+      ASSERT (work[i].lane == lane && work[i].send_flags == work[0].send_flags);
+      int filled = product_nfqueue_fill_verdict (&requests[i], lane->queue_id,
+        work[i].pending->completion.obligation.packet_id, work[i].verdict);
+      ASSERT (filled);
+      /* The fixed request has room for the single fixed-size attribute. */
+      if (!filled || requests[i].nlh.nlmsg_len != sizeof (requests[i]) ||
+          NLMSG_ALIGN (requests[i].nlh.nlmsg_len) != sizeof (requests[i]))
+        {
+          for (u32 j = 0; j < count; ++j)
+            product_root_nfqueue_finish_completion (&work[j],
+              PRODUCT_VERDICT_FAILED_DEFINITE, -1, EINVAL);
+          return;
+        }
+#if SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 2
+      vectors[i] = (struct iovec) { &requests[i], requests[i].nlh.nlmsg_len };
+      messages[i].msg_hdr.msg_name = &kernel;
+      messages[i].msg_hdr.msg_namelen = sizeof (kernel);
+      messages[i].msg_hdr.msg_iov = &vectors[i];
+      messages[i].msg_hdr.msg_iovlen = 1;
+#endif
+    }
+  if (lane->verdict_id_fault_next && !lane->verdict_id_probe_expired &&
+      !lane->identity_losses && !lane->reserve_losses && !lane->receive_overruns && count >= 3)
+    {
+      u32 at = count / 2;
+      u32 original_id = work[at].pending->completion.obligation.packet_id;
+      /* Only a newly created diagnostic generation with IDs far below wrap
+       * can arm this CLI probe. The original obligation remains unchanged. */
+      int filled = product_nfqueue_fill_verdict (&requests[at], lane->queue_id,
+        UINT32_MAX, work[at].verdict);
+      ASSERT (filled);
+      lane->verdict_id_fault_next = 0;
+      fprintf (stderr, "s297 event=verdict_id_fault generation=%llu lane=%u original=%u wire=%u position=%u count=%u\n",
+        (unsigned long long) lane->generation, lane->lane_index, original_id,
+        UINT32_MAX, at, count);
+    }
+#if SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 1
+  /* Same prepared window and flush time as the other senders. */
+  for (u32 i = 0; i < count; ++i)
+    {
+      lane->graph_sendto_calls++;
+      errno = 0;
+      ssize_t sent = sendto (lane->fd, &requests[i], sizeof (requests[i]),
+        work[i].send_flags, (struct sockaddr *) &kernel, sizeof (kernel));
+      int error = sent < 0 ? errno : 0;
+      u32 outcome = sent == sizeof (requests[i]) ? PRODUCT_VERDICT_SUCCEEDED
+        : sent < 0 ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
+      product_root_nfqueue_finish_completion (&work[i], outcome, sent, error);
+    }
+#elif SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 3
+  /* A single contiguous command datagram, with each child length unchanged.
+   * Native submit success does not confirm every NFQ handler or delivery.
+   * In this kernel-port-0 path negative sendto returns precede dispatch;
+   * an unexpected short return has no reliable per-ID successful prefix. */
+  size_t bytes = count * sizeof (requests[0]);
+  lane->graph_packed_calls++;
+  lane->graph_packed_requested += count;
+  lane->graph_packed_max_messages = clib_max (lane->graph_packed_max_messages, count);
+  for (u32 i = 1; i < count; ++i)
+    if (work[i].verdict != work[0].verdict)
+      { lane->graph_packed_mixed_calls++; break; }
+  errno = 0;
+  ssize_t sent = sendto (lane->fd, requests, bytes, work[0].send_flags,
+    (struct sockaddr *) &kernel, sizeof (kernel));
+  int error = sent < 0 ? errno : 0;
+  u32 outcome = sent == (ssize_t) bytes ? PRODUCT_VERDICT_SUCCEEDED
+    : sent < 0 ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
+  if (sent > 0) lane->graph_packed_bytes += sent;
+  if (outcome == PRODUCT_VERDICT_SUCCEEDED) lane->graph_packed_sent += count;
+  for (u32 i = 0; i < count; ++i)
+    product_root_nfqueue_finish_completion (&work[i], outcome, sent, error);
+#else
+  for (u32 first = 0; first < count;)
+    {
+      lane->graph_sendmmsg_calls++;
+      lane->graph_sendmmsg_requested += count - first;
+      errno = 0;
+      int sent = sendmmsg (lane->fd, messages + first, count - first, work[first].send_flags);
+      int error = sent < 0 ? errno : 0;
+      u32 succeeded = sent > 0 ? (u32) sent : 0;
+      ASSERT (succeeded <= count - first);
+      lane->graph_sendmmsg_sent += succeeded;
+      for (u32 i = 0; i < succeeded; ++i)
+        {
+          u32 at = first + i;
+          int full = messages[at].msg_len == requests[at].nlh.nlmsg_len;
+          product_root_nfqueue_finish_completion (&work[at],
+            full ? PRODUCT_VERDICT_SUCCEEDED : PRODUCT_VERDICT_OUTCOME_UNKNOWN,
+            messages[at].msg_len, 0);
+        }
+      first += succeeded;
+      if (first == count) break;
+      /* sendmmsg stops at the first unsuccessful operation. After a nonempty
+       * prefix its errno is lost; a msg_len copy-out failure can also conceal
+       * a send. Consume this boundary identity conservatively and NEVER send
+       * it again. The untouched tail is still entitled to its first attempt. */
+      lane->graph_sendmmsg_partial_calls += succeeded != 0;
+      u32 outcome = succeeded || error == EFAULT || error == EINTR
+        ? PRODUCT_VERDICT_OUTCOME_UNKNOWN : PRODUCT_VERDICT_FAILED_DEFINITE;
+      product_root_nfqueue_finish_completion (&work[first], outcome, -1, error);
+      ++first;
+    }
+#endif
+}
+
+void
+product_root_nfqueue_complete_batch_from_graph (vlib_main_t *vm,
+  const u32 *indices, const product_packet_completion_frame_t *completions,
+  u32 count, u8 *returned)
+{
+  product_root_verdict_work_t work[PRODUCT_PACKET_BATCH_SIZE];
+  u32 n_work = 0;
+  clib_memset (returned, 0, count * sizeof (*returned));
+  ASSERT (count <= PRODUCT_PACKET_BATCH_SIZE);
+  if (count > PRODUCT_PACKET_BATCH_SIZE) return;
+  for (u32 i = 0; i < count; ++i)
+    {
+      if (completions[i].obligation.kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE)
+        continue;
+      product_root_verdict_work_t next;
+      if (!product_root_nfqueue_prepare_completion (vm, indices[i], &completions[i], &next))
+        continue;
+      if (n_work && (work[0].lane != next.lane || work[0].send_flags != next.send_flags))
+        {
+          product_root_nfqueue_send_verdict_window (work, n_work);
+          n_work = 0;
+        }
+      work[n_work++] = next;
+      returned[i] = 1;
+    }
+  if (n_work) product_root_nfqueue_send_verdict_window (work, n_work);
+}
+#endif
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+typedef struct
+{
+  product_packet_graph_external_item_t items[PRODUCT_ROOT_INPUT_BATCH_SIZE];
+  u32 visible[PRODUCT_ROOT_INPUT_BATCH_SIZE];
+  i16 envelope_offset[PRODUCT_ROOT_INPUT_BATCH_SIZE];
+  u32 count;
+} product_root_input_batch_t;
+
+static u32
+product_root_input_batch_flush (vlib_main_t *vm,
+  product_root_nfqueue_main_t *nm, product_root_nfqueue_lane_t *lane,
+  product_root_input_batch_t *batch)
+{
+  u8 accepted[PRODUCT_ROOT_INPUT_BATCH_SIZE] = {0};
+  if (!batch->count) return 0;
+  u32 submitted = product_packet_graph_submit_external_batch (
+    vm, batch->items, batch->count, accepted);
+  for (u32 i = 0; i < batch->count; ++i)
+    {
+      const product_packet_graph_external_item_t *item = &batch->items[i];
+      const product_adapter_obligation_t *obligation = &item->obligation;
+      if (accepted[i])
+        {
+          lane->packets_submitted++;
+          clib_atomic_fetch_add_relax (&nm->packets_submitted, 1);
+          if (lane->packets_submitted <=
+                product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+            fprintf (stderr, "s203 event=frame_accept source=NFQ_CAPTURED thread=%u lane=%u queue=%u packet=%u buffer=%u obligation=%llu generation=%llu\n",
+              vm->thread_index, lane->lane_index, lane->queue_id,
+              obligation->packet_id, item->buffer_index,
+              (unsigned long long) obligation->token,
+              (unsigned long long) obligation->queue_generation);
+          continue; /* Only copied identities are read after scheduling. */
+        }
+      product_root_nfqueue_pending_t *pending = product_root_nfqueue_pending_find (
+        lane, obligation->packet_id, obligation->token, obligation->queue_generation);
+      ASSERT (pending && pending->active && pending->buffer_index == item->buffer_index &&
+              pending->completion.obligation.token == obligation->token);
+      product_root_nfqueue_pending_deactivate (nm, lane, pending);
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, item->buffer_index);
+      product_root_nfqueue_accept_unadmitted (nm, lane,
+        buffer->data + batch->envelope_offset[i], batch->visible[i],
+        "graph_submit_rejected");
+      product_root_nfqueue_return_receive (lane, pending->receive_slot,
+                                           item->buffer_index);
+    }
+  batch->count = 0;
+  return submitted;
+}
+#endif
+
+/* Control replies consume no packet obligation. Validate the whole envelope
+ * before updating counters, so a mixed packet/control envelope stays on the
+ * existing unadmitted path rather than silently discarding a packet identity. */
+static int
+product_root_nfqueue_consume_control (product_root_nfqueue_lane_t *lane,
+  const u8 *data, u32 length)
+{
+  if (length < NLMSG_HDRLEN || ((const struct nlmsghdr *) data)->nlmsg_type != NLMSG_ERROR)
+    return 0;
+  u32 offset = 0;
+  while (offset < length)
+    {
+      if (length - offset < NLMSG_HDRLEN) goto malformed;
+      const struct nlmsghdr *nlh = (const struct nlmsghdr *) (data + offset);
+      if (nlh->nlmsg_type != NLMSG_ERROR ||
+          nlh->nlmsg_len < NLMSG_LENGTH (sizeof (struct nlmsgerr)) ||
+          nlh->nlmsg_len > length - offset) goto malformed;
+      const struct nlmsgerr *reply = NLMSG_DATA (nlh);
+      if (reply->error > 0 || reply->error == INT32_MIN ||
+          reply->msg.nlmsg_len < NLMSG_HDRLEN) goto malformed;
+      u32 step = NLMSG_ALIGN (nlh->nlmsg_len);
+      if (step > length - offset)
+        { if (nlh->nlmsg_len != length - offset) goto malformed; step = length - offset; }
+      offset += step;
+    }
+  for (offset = 0; offset < length;)
+    {
+      const struct nlmsghdr *nlh = (const struct nlmsghdr *) (data + offset);
+      const struct nlmsgerr *reply = NLMSG_DATA (nlh);
+      lane->control_replies++;
+      if (reply->error < 0)
+        {
+          u32 error = (u32) -reply->error;
+          if (!lane->control_errors)
+            { lane->control_first_error = error; lane->control_first_sequence = nlh->nlmsg_seq; }
+          lane->control_errors++;
+          lane->control_last_error = error;
+          lane->control_last_sequence = nlh->nlmsg_seq;
+        }
+      offset += clib_min (NLMSG_ALIGN (nlh->nlmsg_len), length - offset);
+    }
+  return 1;
+malformed:
+  lane->control_malformed++;
+  return 0;
+}
+
 static clib_error_t *
-product_root_nfqueue_read_ready (clib_file_t *file)
+product_root_nfqueue_read_dispatch (clib_file_t *file)
 {
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   product_root_nfqueue_lane_t *lane =
     uword_to_pointer (file->private_data, product_root_nfqueue_lane_t *);
   vlib_main_t *vm = vlib_get_main ();
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_root_input_batch_t batch = {0};
+#endif
 
   if (lane && lane->draining) return 0;
   if (lane == 0 || lane->lane_index >= nm->lane_count
@@ -1024,7 +1531,8 @@ product_root_nfqueue_read_ready (clib_file_t *file)
   if (lane->draining || lane->receive_paused)
     return 0;
 
-  for (u32 budget = 0; budget < 64; budget++)
+  lane->read_callbacks++;
+  for (u32 budget = 0; budget < lane->read_budget; budget++)
     {
       u32 buffer_index;
       u16 receive_slot;
@@ -1054,15 +1562,25 @@ product_root_nfqueue_read_ready (clib_file_t *file)
            * Consuming without storage loses the mandatory identity. The
            * kernel obligation cannot be verdicted and survives until queue
            * teardown; later queue-full bypass is a separate kernel origin. */
+          lane->recv_calls++;
           received = recv (lane->fd, 0, 0, MSG_DONTWAIT | MSG_TRUNC);
           if (received < 0)
             {
               int saved_errno = errno;
+              if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) lane->recv_eagain++;
+              else if (saved_errno == EINTR) lane->recv_eintr++;
+              else if (saved_errno == ENOBUFS) lane->recv_enobufs++;
               if (product_root_nfqueue_transient_errno (saved_errno))
                 {
                   if (saved_errno == ENOBUFS) lane->receive_overruns++;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+                  product_root_input_batch_flush (vm, nm, lane, &batch);
+#endif
                   return 0;
                 }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+              product_root_input_batch_flush (vm, nm, lane, &batch);
+#endif
               product_root_nfqueue_mark_lane_fault (nm, lane, "discard", saved_errno);
               return clib_error_return_unix (0, "Root NFQUEUE discard");
             }
@@ -1084,21 +1602,38 @@ product_root_nfqueue_read_ready (clib_file_t *file)
       clib_memset (buffer->opaque2, 0, sizeof (buffer->opaque2));
       base = vlib_buffer_get_current (buffer);
       data_size = vlib_buffer_get_default_data_size (vm);
+      lane->recv_calls++;
       received = recv ((int) file->file_descriptor, base, data_size,
                        MSG_DONTWAIT | MSG_TRUNC);
       if (received < 0)
         {
           int saved_errno = errno;
+          if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) lane->recv_eagain++;
+          else if (saved_errno == EINTR) lane->recv_eintr++;
+          else if (saved_errno == ENOBUFS) lane->recv_enobufs++;
           product_root_nfqueue_return_receive (lane, receive_slot, buffer_index);
           if (product_root_nfqueue_transient_errno (saved_errno))
             {
               if (saved_errno == ENOBUFS) lane->receive_overruns++;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+              product_root_input_batch_flush (vm, nm, lane, &batch);
+#endif
               return 0;
             }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+          product_root_input_batch_flush (vm, nm, lane, &batch);
+#endif
           product_root_nfqueue_mark_lane_fault (nm, lane, "recv", saved_errno);
           return clib_error_return_unix (0, "Root NFQUEUE recv");
         }
       lane->receive_datagrams++;
+      u32 visible = (u32) clib_min (received, (ssize_t) data_size);
+      if (received <= (ssize_t) data_size &&
+          product_root_nfqueue_consume_control (lane, base, visible))
+        {
+          product_root_nfqueue_return_receive (lane, receive_slot, buffer_index);
+          continue;
+        }
       if (lane->identity_fault
           || nm->fault_mode == PRODUCT_ROOT_NFQUEUE_FAULT_MISSING_IDENTITY)
         {
@@ -1111,7 +1646,6 @@ product_root_nfqueue_read_ready (clib_file_t *file)
           product_root_nfqueue_return_receive (lane, receive_slot, buffer_index);
           continue;
         }
-      u32 visible = (u32) clib_min (received, (ssize_t) data_size);
       struct nlmsghdr *nlh = (struct nlmsghdr *) base;
       int single_packet = visible >= NLMSG_LENGTH (sizeof (struct nfgenmsg))
         && nlh->nlmsg_len <= visible && NLMSG_ALIGN (nlh->nlmsg_len) == NLMSG_ALIGN (visible)
@@ -1272,14 +1806,34 @@ product_root_nfqueue_read_ready (clib_file_t *file)
         fprintf (stderr, "\n");
         funlockfile (stderr);
         }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      u32 position = batch.count++;
+      batch.items[position] = (product_packet_graph_external_item_t) {
+        .buffer_index = buffer_index, .platform = platform,
+        .obligation = pending->completion.obligation,
+      };
+      batch.visible[position] = visible;
+      batch.envelope_offset[position] = (i16) (base - buffer->data);
+      /* The listener fixture admits exactly one packet before the fault. */
+      submitted = 0;
+      if (batch.count == PRODUCT_ROOT_INPUT_BATCH_SIZE || lane->listener_fault_after_submit)
+        submitted = product_root_input_batch_flush (vm, nm, lane, &batch) != 0;
+      if (submitted && lane->listener_fault_after_submit)
+        {
+          lane->listener_fault_after_submit = 0;
+          fprintf (stderr, "s296 event=inflight_fault_fixture generation=%llu lane=%u pending=%u packet=%u\n",
+            (unsigned long long) nm->generation, lane->lane_index,
+            lane->pending_count, packet.packet_id);
+          product_root_nfqueue_mark_lane_fault (nm, lane, "epoll", EBADF);
+          return clib_error_return (0, "Root listener fault fixture after submit");
+        }
+#else
       submitted = product_packet_graph_submit_external (
         vm, buffer_index, &platform,
         &pending->completion.obligation);
       if (!submitted)
         {
-          pending->active = 0;
-          lane->pending_count--;
-          clib_atomic_fetch_sub_relax (&nm->pending_count, 1);
+          product_root_nfqueue_pending_deactivate (nm, lane, pending);
           product_root_nfqueue_accept_unadmitted (
             nm, lane, base, visible, "graph_submit_rejected");
           product_root_nfqueue_return_receive (lane, receive_slot, buffer_index);
@@ -1303,8 +1857,31 @@ product_root_nfqueue_read_ready (clib_file_t *file)
               return clib_error_return (0, "Root listener fault fixture after submit");
             }
         }
+#endif
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_root_input_batch_flush (vm, nm, lane, &batch);
+#endif
   return 0;
+}
+
+static clib_error_t *
+product_root_nfqueue_read_ready (clib_file_t *file)
+{
+  product_root_nfqueue_lane_t *lane =
+    uword_to_pointer (file->private_data, product_root_nfqueue_lane_t *);
+  u64 calls = lane ? lane->read_callbacks : 0;
+  u64 before = lane ? lane->receive_datagrams : 0;
+  clib_error_t *error = product_root_nfqueue_read_dispatch (file);
+  if (lane && lane->read_callbacks != calls)
+    {
+      u64 count = lane->receive_datagrams - before;
+      lane->read_callback_datagrams += count;
+      lane->read_callback_max = clib_max (lane->read_callback_max, count);
+      lane->read_empty_callbacks += count == 0;
+      lane->read_budget_exits += !error && count == lane->read_budget;
+    }
+  return error;
 }
 
 static clib_error_t *
@@ -1360,6 +1937,49 @@ product_root_nfqueue_reset_lane (product_root_nfqueue_lane_t *lane,
   lane->ip_family = lane_index < 2 ? 4 : 6;
   lane->last_uid = UINT32_MAX;
   lane->last_cpu = UINT32_MAX;
+  lane->read_budget = PRODUCT_ROOT_DEFAULT_READ_BUDGET;
+}
+
+/* SO_RCVBUF is an ordinary, capped socket option. The returned value is the
+ * kernel's accounting capacity (usually twice the request), never an inferred
+ * packet count. No SO_RCVBUFFORCE or global sysctl is used. */
+static int
+product_root_nfqueue_read_rcvbuf (int fd, u32 *effective)
+{
+  int value = 0;
+  socklen_t length = sizeof (value);
+  if (getsockopt (fd, SOL_SOCKET, SO_RCVBUF, &value, &length) < 0)
+    return 0;
+  if (length != sizeof (value) || value <= 0)
+    { errno = EIO; return 0; }
+  *effective = (u32) value;
+  return 1;
+}
+
+static int
+product_root_nfqueue_apply_io_tuning (product_root_nfqueue_lane_t *lane,
+                                      u32 budget, u32 rcvbuf_request)
+{
+  if (!lane || !lane->socket_ready || lane->draining || lane->fd < 0
+      || !budget || budget > PRODUCT_ROOT_NFQUEUE_READ_BUDGET
+      || rcvbuf_request > PRODUCT_ROOT_NFQUEUE_RCVBUF_REQUEST_LIMIT)
+    { errno = EINVAL; return 0; }
+  u32 effective;
+  if (!product_root_nfqueue_read_rcvbuf (lane->fd, &effective)) return 0;
+  if (rcvbuf_request)
+    {
+      int request = (int) rcvbuf_request;
+      if (setsockopt (lane->fd, SOL_SOCKET, SO_RCVBUF, &request, sizeof (request)) < 0)
+        return 0;
+      /* The socket has changed even if the subsequent read fails. Expose
+       * unknown effective capacity instead of retaining a stale value. */
+      lane->rcvbuf_requested = rcvbuf_request;
+      lane->rcvbuf_effective = 0;
+      if (!product_root_nfqueue_read_rcvbuf (lane->fd, &effective)) return 0;
+    }
+  lane->rcvbuf_effective = effective;
+  lane->read_budget = budget;
+  return 1;
 }
 
 static int
@@ -1390,6 +2010,14 @@ product_root_nfqueue_open_lane (product_root_nfqueue_main_t *nm,
     }
   lane->fd = fd;
   lane->socket_ready = 1;
+
+  if (!product_root_nfqueue_apply_io_tuning (lane,
+        PRODUCT_ROOT_DEFAULT_READ_BUDGET, PRODUCT_ROOT_DEFAULT_RCVBUF_REQUEST))
+    {
+      product_root_nfqueue_last_errno = errno == 0 ? EIO : errno;
+      close (fd); lane->fd = -1; lane->socket_ready = 0;
+      return 0;
+    }
 
   if (!product_nfqueue_configure (fd, lane->queue_id, lane->ip_family,
                                   lane->queue_maxlen))
@@ -1443,6 +2071,95 @@ product_root_nfqueue_release_pool (vlib_main_t *vm,
     vlib_buffer_free (vm, lane->receive_pool.buffers, lane->receive_allocated);
   lane->receive_allocated = 0;
   clib_memset (&lane->receive_pool, 0, sizeof (lane->receive_pool));
+}
+
+/* CLI worker barrier plus an empty generation is required. Allocate the new
+ * bounded reservation before releasing the old one, preserving it on failure.
+ * Ordinary startup still allocates only 64+8 buffers. No packet-path growth. */
+static int
+product_root_nfqueue_resize_empty_pool (vlib_main_t *vm,
+  product_root_nfqueue_lane_t *lane, u32 normal)
+{
+  _Static_assert (PRODUCT_ROOT_RECEIVE_MAX_NORMAL == PRODUCT_ROOT_COMPLETION_MAX_CAPACITY,
+                  "receive reservation and ledger banks have the same limit");
+  _Static_assert (PRODUCT_ROOT_RECEIVE_MAX_TOTAL <= UINT8_MAX,
+                  "completion receive slots fit their existing byte field");
+  if (!vm || !lane || !lane->generation || !lane->socket_ready || lane->draining
+      || lane->receive_paused || lane->pending_count || lane->withheld_count
+      || lane->receive_pool.outstanding
+      || (normal != PRODUCT_ROOT_RECEIVE_MIN_NORMAL && normal != PRODUCT_ROOT_RECEIVE_MAX_NORMAL))
+    { errno = EINVAL; return 0; }
+  if (normal == lane->receive_pool.normal_capacity) return 1;
+  u32 buffers[PRODUCT_ROOT_RECEIVE_MAX_TOTAL];
+  u32 total = normal + PRODUCT_ROOT_RECEIVE_RESERVE;
+  u32 allocated = vlib_buffer_alloc (vm, buffers, total);
+  if (allocated != total)
+    {
+      vlib_buffer_free (vm, buffers, allocated);
+      errno = ENOMEM;
+      return 0;
+    }
+  vlib_buffer_free (vm, lane->receive_pool.buffers, lane->receive_allocated);
+  if (!product_root_receive_pool_init_capacity (
+        &lane->receive_pool, lane->generation, buffers, (u16) normal))
+    clib_panic ("Root empty receive reservation identity mismatch");
+  lane->receive_allocated = total;
+  clib_memset (lane->pending, 0, sizeof (lane->pending));
+  lane->pending_active_slots = lane->pending_displaced_slots = 0;
+  lane->pending_active_slots_high = lane->pending_displaced_slots_high = 0;
+  return 1;
+}
+
+/* Diagnostic only, before the fixture produces traffic. ACK processing peeks
+ * first and never consumes an unexpected packet envelope. If an ACK cannot be
+ * established after submission, expose unknown maxlen rather than an old value. */
+static int
+product_root_nfqueue_apply_maxlen (product_root_nfqueue_lane_t *lane, u32 maxlen)
+{
+  if (!lane || !lane->socket_ready || lane->draining || lane->fd < 0
+      || lane->pending_count || lane->receive_pool.outstanding || lane->withheld_count
+      || !maxlen || maxlen > 65536)
+    { errno = EINVAL; return 0; }
+  u8 reply[512];
+  ssize_t received = recv (lane->fd, reply, sizeof (reply), MSG_PEEK | MSG_DONTWAIT);
+  if (received >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+    { if (received >= 0) errno = EBUSY; return 0; }
+  union {
+    u8 bytes[NLMSG_SPACE (sizeof (struct nfgenmsg)) + NFA_SPACE (sizeof (u32))];
+    struct nlmsghdr nlh;
+  } request;
+  product_nfnl_fill_header (&request.nlh, sizeof (request), NFQNL_MSG_CONFIG, lane->queue_id);
+  request.nlh.nlmsg_seq = UINT32_C (0xffff0000) | lane->queue_id;
+  u32 value = htonl (maxlen);
+  if (!product_nfnl_addattr (&request.nlh, sizeof (request), NFQA_CFG_QUEUE_MAXLEN,
+                            &value, sizeof (value)))
+    { errno = EINVAL; return 0; }
+  if (!product_nfnl_send (lane->fd, &request.nlh, 0))
+    { errno = product_root_nfqueue_last_errno; return 0; }
+  lane->queue_maxlen = 0;
+  for (u32 attempt = 0; attempt < 100; ++attempt)
+    {
+      received = recv (lane->fd, reply, sizeof (reply), MSG_PEEK | MSG_DONTWAIT);
+      if (received < 0)
+        {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) { usleep (1000); continue; }
+          return 0;
+        }
+      struct nlmsghdr *nlh = (struct nlmsghdr *) reply;
+      if (received < (ssize_t) NLMSG_LENGTH (sizeof (struct nlmsgerr))
+          || nlh->nlmsg_type != NLMSG_ERROR || nlh->nlmsg_seq != request.nlh.nlmsg_seq
+          || nlh->nlmsg_len < NLMSG_LENGTH (sizeof (struct nlmsgerr))
+          || NLMSG_ALIGN (nlh->nlmsg_len) != (u32) received)
+        { errno = EBUSY; return 0; }
+      int error = ((struct nlmsgerr *) NLMSG_DATA (nlh))->error;
+      if (recv (lane->fd, reply, sizeof (reply), MSG_DONTWAIT) != received)
+        { errno = EIO; return 0; }
+      if (error) { errno = -error; return 0; }
+      lane->queue_maxlen = maxlen;
+      return 1;
+    }
+  errno = ETIMEDOUT;
+  return 0;
 }
 
 int
@@ -1574,7 +2291,8 @@ product_root_nfqueue_adapter_start (vlib_main_t *vm, u64 generation)
       nm->lanes[index].queue_maxlen = queue_maxlen;
     }
 
-  if (!product_packet_graph_start_external (vm, generation))
+  if (!product_packet_graph_start_external (vm, generation,
+        PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE))
     {
       product_root_nfqueue_adapter_stop (vm);
       return 0;
@@ -1775,6 +2493,33 @@ product_root_nfqueue_adapter_verdict_succeeded (void)
 {
   return product_root_nfqueue_main.verdict_succeeded;
 }
+
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+uint64_t
+product_root_nfqueue_adapter_policy_qualified_succeeded (void)
+{
+  u64 result = 0;
+  for (u32 i = 0; i < product_root_nfqueue_main.lane_count; ++i)
+    result += __atomic_load_n (&product_root_nfqueue_main.lanes[i].policy_qualified_succeeded,
+                               __ATOMIC_RELAXED);
+  return result;
+}
+
+void
+product_root_nfqueue_adapter_policy_qualified_matched_succeeded (
+  uint64_t *allow, uint64_t *drop)
+{
+  *allow = *drop = 0;
+  for (u32 i = 0; i < product_root_nfqueue_main.lane_count; ++i)
+    {
+      product_root_nfqueue_lane_t *lane = &product_root_nfqueue_main.lanes[i];
+      *allow += __atomic_load_n (&lane->policy_qualified_matched_allow_succeeded,
+                                 __ATOMIC_RELAXED);
+      *drop += __atomic_load_n (&lane->policy_qualified_matched_drop_succeeded,
+                                __ATOMIC_RELAXED);
+    }
+}
+#endif
 
 uint64_t
 product_root_nfqueue_adapter_verdict_failed_definite (void)
@@ -2036,6 +2781,78 @@ VLIB_CLI_COMMAND (product_root_listener_fault_after_submit_command, static) = {
 };
 
 static clib_error_t *
+product_root_io_tuning_cli (vlib_main_t *vm, unformat_input_t *input,
+                            vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index, budget, request;
+  (void) command;
+  if (!unformat (input, "%u %u %u", &index, &budget, &request)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT
+      || !nm->available || index >= nm->lane_count || nm->pending_count
+      || product_packet_graph_buffer_debt ())
+    return clib_error_return (0, "expected lane, read budget 1..64, RCVBUF request 0..1048576 on an active empty graph");
+  product_root_nfqueue_lane_t *lane = &nm->lanes[index];
+  if (!product_root_nfqueue_apply_io_tuning (lane, budget, request))
+    return clib_error_return_unix (0, "Root IO tuning lane %u (effective RCVBUF %u)",
+                                   index, lane->rcvbuf_effective);
+  vlib_cli_output (vm, "root.io_tuning generation=%llu lane=%u read_budget=%u rcvbuf_requested=%u rcvbuf_effective=%u maxlen=%u",
+    (unsigned long long) lane->generation, index, lane->read_budget,
+    lane->rcvbuf_requested, lane->rcvbuf_effective, lane->queue_maxlen);
+  return 0;
+}
+/* The ordinary CLI barrier confines mutation to a quiesced lane. Settings
+ * reset on clean restart and are not saved into authoring configuration. */
+VLIB_CLI_COMMAND (product_root_io_tuning_command, static) = {
+  .path = "product root io-tuning", .function = product_root_io_tuning_cli,
+  .short_help = "product root io-tuning <lane> <read-budget 1..64> <RCVBUF request bytes; 0 keeps current>",
+};
+
+static clib_error_t *
+product_root_capacity_tuning_cli (vlib_main_t *vm, unformat_input_t *input,
+                                  vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index, normal;
+  (void) command;
+  if (!unformat (input, "%u %u", &index, &normal)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT || !nm->available
+      || index >= nm->lane_count || nm->pending_count || product_packet_graph_buffer_debt ())
+    return clib_error_return (0, "expected lane and normal slots 64|128 on an active empty graph");
+  if (!product_root_nfqueue_resize_empty_pool (vm, &nm->lanes[index], normal))
+    return clib_error_return_unix (0, "Root empty capacity tuning");
+  vlib_cli_output (vm, "root.capacity_tuning generation=%llu lane=%u normal=%u allocated=%u",
+    (unsigned long long) nm->generation, index, normal, nm->lanes[index].receive_allocated);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_capacity_tuning_command, static) = {
+  .path = "product root capacity-tuning", .function = product_root_capacity_tuning_cli,
+  .short_help = "product root capacity-tuning <lane> <normal slots 64|128>; empty graph only",
+};
+
+static clib_error_t *
+product_root_maxlen_tuning_cli (vlib_main_t *vm, unformat_input_t *input,
+                                vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index, maxlen;
+  (void) command;
+  if (!unformat (input, "%u %u", &index, &maxlen)
+      || unformat_check_input (input) != UNFORMAT_END_OF_INPUT || !nm->available
+      || index >= nm->lane_count || nm->pending_count || product_packet_graph_buffer_debt ())
+    return clib_error_return (0, "expected lane and maxlen 1..65536 on an active empty graph");
+  if (!product_root_nfqueue_apply_maxlen (&nm->lanes[index], maxlen))
+    return clib_error_return_unix (0, "Root maxlen tuning (known maxlen %u)", nm->lanes[index].queue_maxlen);
+  vlib_cli_output (vm, "root.maxlen_tuning generation=%llu lane=%u maxlen=%u ack=1",
+    (unsigned long long) nm->generation, index, maxlen);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_maxlen_tuning_command, static) = {
+  .path = "product root maxlen-tuning", .function = product_root_maxlen_tuning_cli,
+  .short_help = "product root maxlen-tuning <lane> <1..65536>; empty graph/socket only",
+};
+
+static clib_error_t *
 product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
                                  vlib_cli_command_t *command)
 {
@@ -2044,7 +2861,10 @@ product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
   for (u32 i = 0; i < nm->lane_count; ++i)
     {
       product_root_nfqueue_lane_t *lane = &nm->lanes[i];
-      vlib_cli_output (vm, "root.receive generation=%llu lane=%u family=%u queue=%u flags=%u maxlen=%u allocated=%u normal_free=%u reserve_free=%u loans=%u withheld=%u paused=%u identity_fault=%u datagrams=%llu returns=%llu ingress_accepts=%llu reserve_accepts=%llu reserve_losses=%llu identity_losses=%llu",
+      vlib_cli_output (vm, "root.capacity generation=%llu lane=%u normal_capacity=%u pending_capacity=%u pending_high_water=%u loan_high_water=%u",
+        (unsigned long long) lane->generation, i, lane->receive_pool.normal_capacity,
+        lane->receive_pool.normal_capacity, lane->pending_high_water, lane->loan_high_water);
+      vlib_cli_output (vm, "root.receive generation=%llu lane=%u family=%u queue=%u flags=%u maxlen=%u allocated=%u normal_free=%u reserve_free=%u loans=%u withheld=%u paused=%u identity_fault=%u datagrams=%llu returns=%llu ingress_accepts=%llu reserve_accepts=%llu reserve_losses=%llu identity_losses=%llu pending_collisions=%llu pending_full=%llu pending_duplicate_ids=%llu ingress_normal=%llu ingress_envelope=%llu ingress_completion=%llu ingress_graph=%llu",
         (unsigned long long) lane->generation, i, lane->ip_family, lane->queue_id,
         lane->queue_flags, lane->queue_maxlen, lane->receive_allocated,
         lane->receive_pool.normal_free, lane->receive_pool.reserve_free,
@@ -2054,7 +2874,26 @@ product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
         (unsigned long long) lane->ingress_accepts,
         (unsigned long long) lane->reserve_accepts,
         (unsigned long long) lane->reserve_losses,
-        (unsigned long long) lane->identity_losses);
+        (unsigned long long) lane->identity_losses,
+        (unsigned long long) lane->pending_collisions,
+        (unsigned long long) lane->pending_full_rejections,
+        (unsigned long long) lane->pending_duplicate_rejections,
+        (unsigned long long) lane->ingress_normal_exhausted,
+        (unsigned long long) lane->ingress_envelope_rejected,
+        (unsigned long long) lane->ingress_completion_rejected,
+        (unsigned long long) lane->ingress_graph_rejected);
+      vlib_cli_output (vm, "root.io generation=%llu lane=%u read_budget=%u rcvbuf_requested=%u rcvbuf_effective=%u callbacks=%llu empty_callbacks=%llu budget_exits=%llu callback_datagrams=%llu callback_max=%llu recv_calls=%llu recv_eagain=%llu recv_eintr=%llu recv_enobufs=%llu",
+        (unsigned long long) lane->generation, i, lane->read_budget,
+        lane->rcvbuf_requested, lane->rcvbuf_effective,
+        (unsigned long long) lane->read_callbacks,
+        (unsigned long long) lane->read_empty_callbacks,
+        (unsigned long long) lane->read_budget_exits,
+        (unsigned long long) lane->read_callback_datagrams,
+        (unsigned long long) lane->read_callback_max,
+        (unsigned long long) lane->recv_calls,
+        (unsigned long long) lane->recv_eagain,
+        (unsigned long long) lane->recv_eintr,
+        (unsigned long long) lane->recv_enobufs);
     }
   return 0;
 }
@@ -2171,12 +3010,69 @@ product_root_lanes_cli (vlib_main_t *vm, unformat_input_t *input,
         (unsigned long long) lane->origin_remote_completions,
         (unsigned long long) lane->buffer_returns,
         (unsigned long long) lane->duplicate_completion_drops);
+      vlib_cli_output (vm, "root.verdict_io lane=%u sendto_calls=%llu sendmmsg_calls=%llu sendmmsg_requested=%llu sendmmsg_sent=%llu partial_calls=%llu windows=%llu window_messages=%llu packed_calls=%llu packed_requested=%llu packed_sent=%llu packed_bytes=%llu packed_mixed_calls=%llu packed_max_messages=%u",
+        index, (unsigned long long) lane->graph_sendto_calls,
+        (unsigned long long) lane->graph_sendmmsg_calls,
+        (unsigned long long) lane->graph_sendmmsg_requested,
+        (unsigned long long) lane->graph_sendmmsg_sent,
+        (unsigned long long) lane->graph_sendmmsg_partial_calls,
+        (unsigned long long) lane->graph_verdict_windows,
+        (unsigned long long) lane->graph_verdict_window_messages,
+        (unsigned long long) lane->graph_packed_calls,
+        (unsigned long long) lane->graph_packed_requested,
+        (unsigned long long) lane->graph_packed_sent,
+        (unsigned long long) lane->graph_packed_bytes,
+        (unsigned long long) lane->graph_packed_mixed_calls,
+        lane->graph_packed_max_messages);
+      vlib_cli_output (vm, "root.control lane=%u replies=%llu errors=%llu malformed=%llu first_error=%u first_sequence=%u last_error=%u last_sequence=%u",
+        index, (unsigned long long) lane->control_replies,
+        (unsigned long long) lane->control_errors,
+        (unsigned long long) lane->control_malformed,
+        lane->control_first_error, lane->control_first_sequence,
+        lane->control_last_error, lane->control_last_sequence);
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+  vlib_cli_output (vm, "root.verdict_batch enabled=1 mode=%s window=%u",
+    SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 1 ? "scalar" :
+      SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 2 ? "sendmmsg" : "packed",
+    PRODUCT_PACKET_BATCH_SIZE);
+#else
+  vlib_cli_output (vm, "root.verdict_batch enabled=0 mode=scalar window=1");
+#endif
   return 0;
 }
 VLIB_CLI_COMMAND (product_root_lanes_command, static) = {
   .path = "show product root lanes", .function = product_root_lanes_cli,
 };
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+static clib_error_t *
+product_root_verdict_id_fault_cli (vlib_main_t *vm, unformat_input_t *input,
+                                  vlib_cli_command_t *command)
+{
+  product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
+  u32 index;
+  (void) command;
+  if (!unformat (input, "%u", &index) || index >= nm->lane_count ||
+      unformat_check_input (input) != UNFORMAT_END_OF_INPUT || !nm->available ||
+      nm->lanes[index].draining || !nm->lanes[index].socket_ready ||
+      nm->lanes[index].verdict_id_fault_next ||
+      nm->lanes[index].verdict_id_probe_expired ||
+      nm->lanes[index].verdict_attempts >= 4096 ||
+      nm->lanes[index].last_verdict_packet_id >= 4096 ||
+      nm->lanes[index].identity_losses || nm->lanes[index].reserve_losses ||
+      nm->lanes[index].receive_overruns)
+    return clib_error_return (0, "expected a live diagnostic lane before packet-ID wrap");
+  nm->lanes[index].verdict_id_fault_next = 1;
+  vlib_cli_output (vm, "root.verdict_id_fault=armed generation=%llu lane=%u minimum_window=3 budget=1",
+    (unsigned long long) nm->generation, index);
+  return 0;
+}
+VLIB_CLI_COMMAND (product_root_verdict_id_fault_command, static) = {
+  .path = "product root verdict-id-fault", .function = product_root_verdict_id_fault_cli,
+  .short_help = "product root verdict-id-fault <lane>; one bad middle ID, diagnostic generation only",
+};
+#endif
 
 static clib_error_t *
 product_root_verdict_fault_cli (vlib_main_t *vm, unformat_input_t *input,
@@ -2221,9 +3117,9 @@ product_completion_replay_cli (vlib_main_t *vm, unformat_input_t *input,
     { vec_free (mode); return clib_error_return (0, "expected duplicate or stale"); }
   if (old_generation && (!stale || old_generation == nm->generation))
     { vec_free (mode); return clib_error_return (0, "expected different stale generation"); }
-  product_root_nfqueue_pending_t *pending =
-    &nm->lanes[lane_index].pending[packet_id % PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY];
-  if (pending->active || pending->completion.obligation.packet_id != packet_id
+  product_root_nfqueue_pending_t *pending = product_root_nfqueue_pending_find (
+    &nm->lanes[lane_index], packet_id, 0, nm->generation);
+  if (!pending || pending->active || pending->completion.obligation.packet_id != packet_id
       || !pending->completion.obligation.token
       || pending->completion.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     { vec_free (mode); return clib_error_return (0, "completed identity unavailable"); }
@@ -2254,6 +3150,10 @@ product_completion_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_root_nfqueue_main_t *nm = &product_root_nfqueue_main;
   (void) input; (void) command;
+  u32 capacity = PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY;
+  for (u32 i = 0; i < nm->lane_count; ++i)
+    if (nm->lanes[i].receive_pool.normal_capacity > capacity)
+      capacity = nm->lanes[i].receive_pool.normal_capacity;
   vlib_cli_output (vm, "completion.status generation=%llu pending=%u frames=%llu buffers=%llu obligations=%llu verdicts=%llu duplicate=%llu stale=%llu local=%llu remote=%llu frame_bytes=%u capacity=%u",
     (unsigned long long) nm->generation, clib_atomic_load_acq_n (&nm->pending_count),
     (unsigned long long) product_packet_graph_completion_frame_debt (),
@@ -2264,7 +3164,7 @@ product_completion_status_cli (vlib_main_t *vm, unformat_input_t *input,
     (unsigned long long) nm->stale_completion_drops,
     (unsigned long long) nm->origin_local_completions,
     (unsigned long long) nm->origin_remote_completions,
-    (u32) sizeof (product_packet_completion_frame_t), PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY);
+    (u32) sizeof (product_packet_completion_frame_t), capacity);
   return 0;
 }
 VLIB_CLI_COMMAND (product_completion_status_command, static) = {

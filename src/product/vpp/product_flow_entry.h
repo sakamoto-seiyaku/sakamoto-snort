@@ -189,6 +189,25 @@ typedef struct
 
 typedef struct product_flow_runtime product_flow_runtime_t;
 
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+typedef enum
+{
+  PRODUCT_FLOW_PREFETCH_BUCKET = 0,
+  PRODUCT_FLOW_PREFETCH_INDEX,
+  PRODUCT_FLOW_PREFETCH_STATE,
+} product_flow_prefetch_stage_t;
+
+/* Synchronous, read-only preparation on the current owner's runtime. Supply
+ * the existing typed assignment/hash; no selector, allocation or observation
+ * occurs. Stages can be interleaved across a bounded packet window. No miss,
+ * entry pointer or lifetime handle is returned: observe/current_incarnation
+ * must still query the current chain and check the consuming packet's time.
+ * An earlier packet may create/close/expire/replace/recycle the same tuple. */
+void product_flow_runtime_prefetch (
+  const product_flow_runtime_t *runtime,
+  const product_owner_assignment_t *assignment, product_flow_prefetch_stage_t stage);
+#endif
+
 /* One composition callback, not a subscriber list. Called synchronously on
  * the owner after unlink; it must deliver one FlowEnd and leave entry alive.
  * In the product it allocates/enqueues a native empty buffer or exits fatally.

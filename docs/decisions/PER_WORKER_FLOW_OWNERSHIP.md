@@ -115,13 +115,19 @@ VPP storage 交给 NFQUEUE；`nfq_set_verdict(..., NF_ACCEPT/NF_DROP, ...)` 是 
 terminal operation，非负函数返回表示该 Adapter operation 成功完成，因此产生
 `SUCCEEDED`；负/native error 或 deterministic pre-backend rejection 产生 `FAILED_DEFINITE`。
 `OUTCOME_UNKNOWN` 只用于未取得可信 terminal result 的 genuinely ambiguous operation path，
-不用于已观察到的普通非负返回。NFQUEUE
-不提供独立 ACK，`SUCCEEDED` 只表示 terminal operation 完成，不证明后续 network delivery
+不用于已观察到的普通非负返回。当前产品的普通 NFQUEUE 判决不请求或等待逐消息成功 ACK；
+Netlink 本身支持显式成功 ACK 和按消息返回的错误通知。`SUCCEEDED` 只表示已接受的 native
+terminal-operation 返回成功，不把成功发送字节数解释成每条 kernel verdict callback 或
+reinjection 的独立确认，也不证明后续 network delivery
 或 downstream traffic success。物理尝试产生上述 outcome 后，同一 native lane 才走 VPP 原生
 buffer return 生命周期。每个 decided buffer 在此之前保持 live；Completion Frame 只移动 buffer
 indexes、completion identity 与 terminal metadata，不复制 packet bytes，不建立第二个 packet
 buffer、LeaseSlot table、return object 或热路径动态内存。真实 verdict syscall failure 后的 FAILED
 debt 结算和 clean teardown 仍是 release gate。
+
+2026-10-12 [Netlink 数据报研究](../reviews/2026-10-12_ROOT_NETLINK_VERDICT_DATAGRAM_RESEARCH.md)
+补充上述 ACK/返回值的接口范围说明；不改变已有 `SUCCEEDED`、一次尝试和 buffer-return
+合同，也不加入 ACK 等待、packet 重试或新的在途义务表。
 
 VPN 首版从一个 native TUN Platform I/O Lane 接收并完成 Android TUN I/O。Android 仍负责创建
 VpnService TUN、执行 `protect()` 所需的受控 broker 操作，并把平台资源交给受监督的 VPP Runtime；

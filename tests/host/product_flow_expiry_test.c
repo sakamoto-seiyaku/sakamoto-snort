@@ -58,6 +58,67 @@ observe (product_flow_runtime_t *runtime, unsigned index, uint64_t now)
   return observation;
 }
 
+static product_owner_assignment_t
+entry_assignment (const product_flow_entry_t *entry)
+{
+  return (product_owner_assignment_t) {
+    .key = entry->key, .canonical_hash = entry->canonical_hash,
+    .execution_owner = 0, .source_is_a = entry->origin_is_endpoint_a, .valid = 1,
+  };
+}
+
+static void
+prefetch (product_flow_runtime_t *runtime, const product_owner_assignment_t *assignment)
+{
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_flow_runtime_prefetch (runtime, assignment, PRODUCT_FLOW_PREFETCH_BUCKET);
+  product_flow_runtime_prefetch (runtime, assignment, PRODUCT_FLOW_PREFETCH_INDEX);
+  product_flow_runtime_prefetch (runtime, assignment, PRODUCT_FLOW_PREFETCH_STATE);
+#else
+  (void) runtime; (void) assignment;
+#endif
+}
+
+static void
+prepared_expiry_reuse (void)
+{
+  product_flow_runtime_t *runtime = NULL;
+  ends_t ends = {0};
+  assert (!product_flow_runtime_create (&runtime, 0, 1, 226, 2));
+  assert (!product_flow_runtime_set_end_callback (runtime, ended, &ends));
+  product_flow_entry_observation_t first = observe (runtime, 0, 1);
+  uint32_t slot = first.slot;
+  uint64_t incarnation = first.entry->incarnation;
+  product_owner_assignment_t old = entry_assignment (first.entry);
+  assert (!product_flow_runtime_set_deadline (runtime, slot, 226, incarnation,
+    20, PRODUCT_CT_TIMEOUT_OTHER_FIRST));
+  prefetch (runtime, &old); /* Candidate precedes timer-driven unlink. */
+  uint32_t closed;
+  assert (!product_flow_runtime_run_due (runtime, 20, 1, &closed) && closed == 1);
+  assert (!product_flow_entry_current_incarnation (runtime, &old, 226, 20));
+  product_flow_entry_observation_t other = observe (runtime, 1, 21);
+  assert (other.created && other.slot != slot && first.entry->incarnation == incarnation);
+  assert (!product_flow_runtime_release_end (runtime, slot, 226, incarnation,
+    PRODUCT_FLOW_END_EXPIRED));
+  prefetch (runtime, &old); /* Former identity is a miss before slot reuse. */
+  product_flow_entry_observation_t fresh = observe (runtime, 2, 22);
+  assert (fresh.created && fresh.slot == slot && fresh.entry->incarnation != incarnation);
+  assert (!product_flow_entry_current_incarnation (runtime, &old, 226, 22));
+  product_owner_assignment_t current = entry_assignment (fresh.entry);
+  prefetch (runtime, &current);
+  assert (product_flow_entry_current_incarnation (runtime, &current, 226, 22)
+          == fresh.entry->incarnation);
+  assert (product_flow_runtime_release_end (runtime, slot, 226, incarnation,
+    PRODUCT_FLOW_END_EXPIRED) == PRODUCT_FLOW_ENTRY_STATUS_NOT_FOUND);
+  product_flow_runtime_snapshot_t state = product_flow_runtime_snapshot (runtime);
+  assert (state.active_entries == 2 && state.linked_entries == 2
+          && !state.ending_entries && !state.timer_entries && ends.count == 1);
+  assert (!product_flow_runtime_flush (runtime));
+  prefetch (runtime, &old); prefetch (runtime, &current);
+  assert (!product_flow_entry_current_incarnation (runtime, &current, 226, 22));
+  product_flow_runtime_destroy (runtime);
+}
+
 static void
 indexed_order (unsigned capacity)
 {
@@ -132,11 +193,17 @@ logical_expiry (void)
   uint64_t incarnation = first.entry->incarnation;
   assert (!product_flow_runtime_set_deadline (runtime, slot, 226, incarnation,
     60000001, PRODUCT_CT_TIMEOUT_OTHER_FIRST));
+  product_owner_assignment_t assignment = entry_assignment (first.entry);
+  prefetch (runtime, &assignment);
   assert (observe (runtime, 0, 60000000).reused);
+  prefetch (runtime, &assignment); /* Live candidate expires at consumption time. */
   product_flow_entry_observation_t next = observe (runtime, 0, 60000001);
   assert (next.created && next.slot != slot && ends.count == 1);
   assert (next.expired_before_observe && next.previous_slot == slot);
   assert (next.previous_incarnation == incarnation && next.previous_deadline_us == 60000001);
+  prefetch (runtime, &assignment);
+  assert (product_flow_entry_current_incarnation (runtime, &assignment, 226, 60000001)
+          == next.entry->incarnation);
   assert (first.entry->incarnation == incarnation && !first.entry->linked);
   assert (!product_flow_runtime_snapshot (runtime).timer_entries);
   assert (product_flow_runtime_set_deadline (runtime, slot, 226, incarnation,
@@ -315,6 +382,7 @@ mixed_owner_deadlines (void)
 
 int main (void)
 {
+  prepared_expiry_reuse ();
   icmp_tracker_deadlines ();
   mixed_owner_deadlines ();
   const unsigned sizes[] = {1, 2, 3, 4, 99, 100, 1000, CAPACITY};

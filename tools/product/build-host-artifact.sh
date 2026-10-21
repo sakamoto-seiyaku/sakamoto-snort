@@ -13,6 +13,37 @@ source_manifest="$repo_root/src/product/vpp/product-vpp-artifact.properties"
 expected_revision="$(tr -d '[:space:]' < "$pin_file")"
 stage_raw="${VPP_HOST_STAGE_DIR:-}"
 host_evidence="${SAKAMOTO_PRODUCT_HOST_EVIDENCE:-OFF}"
+root_batch_experiment="${SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:-ON}"
+root_verdict_batch_experiment="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT:-$root_batch_experiment}"
+root_verdict_sender_default=sendmmsg
+if [[ "$root_verdict_batch_experiment" == ON ]]; then root_verdict_sender_default=packed; fi
+root_verdict_batch_mode="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE:-$root_verdict_sender_default}"
+policy_qualification_counters="${SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS:-$root_batch_experiment}"
+if [[ "$root_batch_experiment" != ON && "$root_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$policy_qualification_counters" != ON && "$policy_qualification_counters" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$root_verdict_batch_experiment" != ON && "$root_verdict_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$root_verdict_batch_experiment" == ON && "$root_batch_experiment" != ON ]]; then
+  echo "Root verdict batching requires SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=ON" >&2
+  exit 2
+fi
+case "$root_verdict_batch_mode" in
+  scalar|sendmmsg|packed) ;;
+  *) echo "SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE must be scalar, sendmmsg or packed" >&2; exit 2 ;;
+esac
+if [[ "$root_verdict_batch_experiment" != ON && "$root_verdict_batch_mode" != sendmmsg ]]; then
+  echo "Selecting a Root verdict sender requires SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=ON" >&2
+  exit 2
+fi
+if [[ "$root_batch_experiment" == ON ]]; then policy_qualification_counters=ON; fi
 if [[ "$host_evidence" != ON && "$host_evidence" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_HOST_EVIDENCE must be ON or OFF" >&2
   exit 2
@@ -198,6 +229,10 @@ cmake -S "$repo_root/src/product/vpp" -B "$plugin_build" -G Ninja \
   -DVPP_VAPI_CPP_GEN="$vpp_vapi_cpp_gen" \
   -DSAKAMOTO_PRODUCT_VPP_SOURCE_TREE_SHA256="$source_tree_sha256" \
   -DSAKAMOTO_PRODUCT_HOST_EVIDENCE="$host_evidence" \
+  -DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT="$root_batch_experiment" \
+  -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT="$root_verdict_batch_experiment" \
+  -DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE="$root_verdict_batch_mode" \
+  -DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS="$policy_qualification_counters" \
   -DCMAKE_INSTALL_PREFIX="$artifact_root" \
   -DCMAKE_INSTALL_LIBDIR=lib
 cmake --build "$plugin_build" --target install
@@ -255,6 +290,10 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "source.revision=$actual_revision"
   echo "vpp.stage.profile=host"
   echo "product.host.evidence=$host_evidence"
+  echo "experiment.root.batch=$root_batch_experiment"
+  echo "experiment.root.verdict.batch=$root_verdict_batch_experiment"
+  echo "experiment.root.verdict.mode=$root_verdict_batch_mode"
+  echo "experiment.policy.qualification=$policy_qualification_counters"
   echo "quic.crypto=mbedtls-3.6.7-aes-gcm-sha256-static-c"
   echo "domain.matcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible"
   echo "quic.version=1"

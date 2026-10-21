@@ -396,7 +396,10 @@ build_index (product_l4_policy_view_t *view, const product_l4_policy_compile_bud
   unsigned remaining = view->rule_count, factors = 0;
   for (unsigned subject = 0; subject < view->uid_bucket_count; ++subject)
     {
-      const product_l4_policy_uid_bucket_t *bucket = &view->uid_buckets[subject];
+      product_l4_policy_uid_bucket_t *bucket = &view->uid_buckets[subject];
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+      bucket->first_subtable = (uint16_t) view->subtable_count;
+#endif
       for (unsigned n = bucket->rule_count; n; --n)
         {
           unsigned rule = bucket->first_rule + n - 1;
@@ -440,6 +443,9 @@ build_index (product_l4_policy_view_t *view, const product_l4_policy_compile_bud
               index_insert (view, subject, rule, &e);
             }
         }
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+      bucket->subtable_count = (uint16_t) (view->subtable_count - bucket->first_subtable);
+#endif
     }
 }
 
@@ -476,7 +482,11 @@ static uint32_t
 query_state_bytes (void)
 {
   return PRODUCT_L4_POLICY_MAX_RULES + PRODUCT_STATIC_EXPRESSION_BYTES
-    + 3 * PRODUCT_L4_INDEX_KEY_BYTES + sizeof (static_envelope_t) + 512;
+    + 3 * PRODUCT_L4_INDEX_KEY_BYTES + sizeof (static_envelope_t) + 512
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+    + sizeof (product_l4_policy_prepared_query_t)
+#endif
+    ;
 }
 
 static uint32_t
@@ -897,62 +907,31 @@ set_no_match (product_l4_policy_match_result_t *result,
   result->probe_limit = probe_limit;
 }
 
-product_l4_policy_status_t
-product_l4_policy_match_position (const product_l4_policy_view_t *view,
-                         const product_l4_policy_packet_t *packet,
-                         product_l4_policy_position_t position,
-                         product_l4_policy_match_result_t *result)
+static product_l4_policy_status_t
+match_subject (const product_l4_policy_view_t *view,
+               const product_l4_policy_uid_bucket_t *bucket,
+               const uint8_t packet_key[PRODUCT_L4_INDEX_KEY_BYTES],
+               const product_l4_policy_packet_t *packet,
+               product_l4_policy_position_t position,
+               product_l4_policy_match_result_t *result)
 {
-  const product_l4_policy_uid_bucket_t *bucket;
-  uint32_t index;
-
-  if (view == NULL || packet == NULL || result == NULL
-      || position < PRODUCT_L4_POLICY_POSITION_ALL
-      || position > PRODUCT_L4_POLICY_POSITION_POST)
-    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
-
-  set_no_match (result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
-                view->max_probes);
-  if (!packet->uid_known || packet->uid == UINT32_MAX)
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNKNOWN_UID;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
-  if (!supported_family (packet->family))
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_FAMILY;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
-  if (packet->direction_known && !supported_direction (packet->direction))
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_DIRECTION;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
-
-  bucket = find_uid_bucket (view, packet->uid, &result->subject_probes);
-  if (bucket == NULL)
-    {
-      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_NO_SUBJECT;
-      return PRODUCT_L4_POLICY_STATUS_OK;
-    }
-
   result->candidate_count = bucket->rule_count;
   result->probe_limit = bucket->rule_count;
-  uint8_t packet_key[PRODUCT_L4_INDEX_KEY_BYTES], unused[PRODUCT_L4_INDEX_KEY_BYTES];
-  static_envelope_t values = envelope_any ();
-  values.low[ENVELOPE_FAMILY] = packet->family;
-  values.low[ENVELOPE_PROTOCOL] = packet->protocol;
-  values.low[ENVELOPE_DIRECTION] = packet->direction;
-  values.low[ENVELOPE_SOURCE_PORT] = packet->source_port;
-  values.low[ENVELOPE_DESTINATION_PORT] = packet->destination_port;
-  memcpy (values.address_low[0], packet->source_address, 16);
-  memcpy (values.address_low[1], packet->destination_address, 16);
-  index_bounds (&values, packet_key, unused);
   unsigned best = UINT32_MAX;
   uint8_t checked[PRODUCT_L4_POLICY_MAX_RULES] = {0};
-  for (index = 0; index < view->subtable_count; ++index)
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  unsigned first = bucket->first_subtable;
+  unsigned limit = first + bucket->subtable_count;
+#else
+  unsigned first = 0;
+  unsigned limit = view->subtable_count;
+#endif
+  for (unsigned index = first; index < limit; ++index)
     {
       const product_l4_policy_subtable_t *table = &view->subtables[index];
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+      if (index + 1 < limit) __builtin_prefetch (&view->subtables[index + 1], 0, 1);
+#endif
       ++result->subtable_probes;
       if (table->subject != (unsigned) (bucket - view->uid_buckets)
           || table->first_rank >= best) continue;
@@ -963,6 +942,11 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
         {
           unsigned rule = view->entries[entry].rule;
           const product_l4_policy_compiled_rule_t *compiled = &view->rules[rule];
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+          __builtin_prefetch (compiled, 0, 1);
+          if (view->entries[entry].next != PRODUCT_L4_INDEX_NONE)
+            __builtin_prefetch (&view->entries[view->entries[entry].next], 0, 1);
+#endif
           if (compiled->winner_rank >= best) break;
           ++result->key_probes;
           if ((position && compiled->position != position)
@@ -1005,6 +989,64 @@ product_l4_policy_match_position (const product_l4_policy_view_t *view,
 }
 
 product_l4_policy_status_t
+product_l4_policy_match_position (const product_l4_policy_view_t *view,
+                         const product_l4_policy_packet_t *packet,
+                         product_l4_policy_position_t position,
+                         product_l4_policy_match_result_t *result)
+{
+  if (view == NULL || packet == NULL || result == NULL
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  product_l4_policy_prepared_query_t query;
+  product_l4_policy_status_t status = product_l4_policy_prepare (view, packet, &query);
+  if (status != PRODUCT_L4_POLICY_STATUS_OK) return status;
+  return product_l4_policy_match_prepared (&query, packet, position, result);
+#else
+  const product_l4_policy_uid_bucket_t *bucket;
+  set_no_match (result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
+                view->max_probes);
+  if (!packet->uid_known || packet->uid == UINT32_MAX)
+    {
+      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNKNOWN_UID;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+  if (!supported_family (packet->family))
+    {
+      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_FAMILY;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+  if (packet->direction_known && !supported_direction (packet->direction))
+    {
+      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_DIRECTION;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+
+  bucket = find_uid_bucket (view, packet->uid, &result->subject_probes);
+  if (bucket == NULL)
+    {
+      result->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_NO_SUBJECT;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+
+  result->candidate_count = bucket->rule_count;
+  result->probe_limit = bucket->rule_count;
+  uint8_t packet_key[PRODUCT_L4_INDEX_KEY_BYTES], unused[PRODUCT_L4_INDEX_KEY_BYTES];
+  static_envelope_t values = envelope_any ();
+  values.low[ENVELOPE_FAMILY] = packet->family;
+  values.low[ENVELOPE_PROTOCOL] = packet->protocol;
+  values.low[ENVELOPE_DIRECTION] = packet->direction;
+  values.low[ENVELOPE_SOURCE_PORT] = packet->source_port;
+  values.low[ENVELOPE_DESTINATION_PORT] = packet->destination_port;
+  memcpy (values.address_low[0], packet->source_address, 16);
+  memcpy (values.address_low[1], packet->destination_address, 16);
+  index_bounds (&values, packet_key, unused);
+  return match_subject (view, bucket, packet_key, packet, position, result);
+#endif
+}
+
+product_l4_policy_status_t
 product_l4_policy_match (const product_l4_policy_view_t *view,
                          const product_l4_policy_packet_t *packet,
                          product_l4_policy_match_result_t *result)
@@ -1037,6 +1079,89 @@ product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
   return PRODUCT_L4_POLICY_STATUS_NOT_FOUND;
 }
 
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+static void
+static_packet_projection (product_l4_policy_packet_t *projection,
+                          const product_l4_policy_packet_t *packet)
+{
+  memset (projection, 0, sizeof (*projection));
+#define COPY(field) projection->field = packet->field
+  COPY(uid); COPY(uid_known); COPY(family); COPY(protocol);
+  COPY(direction); COPY(direction_known); COPY(network_context_id);
+  COPY(network_context_known); COPY(ifindex); COPY(ifindex_known);
+  COPY(source_port); COPY(destination_port); COPY(ports_available);
+  memcpy (projection->source_address, packet->source_address, 16);
+  memcpy (projection->destination_address, packet->destination_address, 16);
+#undef COPY
+}
+
+product_l4_policy_status_t
+product_l4_policy_prepare (const product_l4_policy_view_t *view,
+                          const product_l4_policy_packet_t *packet,
+                          product_l4_policy_prepared_query_t *query)
+{
+  if (!query) return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  memset (query, 0, sizeof (*query));
+  if (!view || !packet) return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  query->view = view;
+  query->prepared = 1;
+  if (!packet->uid_known || packet->uid == UINT32_MAX)
+    query->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNKNOWN_UID;
+  else if (!supported_family (packet->family))
+    query->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_FAMILY;
+  else if (packet->direction_known && !supported_direction (packet->direction))
+    query->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_UNSUPPORTED_DIRECTION;
+  else
+    {
+      query->subject = find_uid_bucket (view, packet->uid, &query->subject_probes);
+      if (!query->subject)
+        query->no_match_reason = PRODUCT_L4_POLICY_NO_MATCH_NO_SUBJECT;
+    }
+  if (!query->subject) return PRODUCT_L4_POLICY_STATUS_OK;
+
+  static_packet_projection (&query->static_packet, packet);
+  /* This is the same canonical 42-byte packet key as the scalar path. No
+   * envelope or unused high bound is needed for an individual packet. */
+  const uint16_t values[ENVELOPE_AXES] = {
+    packet->family, packet->protocol, packet->direction,
+    packet->source_port, packet->destination_port
+  };
+  for (unsigned i = 0; i < ENVELOPE_AXES; ++i)
+    {
+      query->packet_key[2*i] = (uint8_t) (values[i] >> 8);
+      query->packet_key[2*i+1] = (uint8_t) values[i];
+    }
+  memcpy (query->packet_key + 10, packet->source_address, 16);
+  memcpy (query->packet_key + 26, packet->destination_address, 16);
+  /* Preparation can run ahead within a protected, bounded node window. The
+   * immutable subject's first mask/heads and first source are safe hints. */
+  if (query->subject->subtable_count)
+    __builtin_prefetch (&view->subtables[query->subject->first_subtable], 0, 1);
+  __builtin_prefetch (&view->rules[query->subject->first_rule], 0, 1);
+  return PRODUCT_L4_POLICY_STATUS_OK;
+}
+
+product_l4_policy_status_t
+product_l4_policy_match_prepared (product_l4_policy_prepared_query_t *query,
+                                 const product_l4_policy_packet_t *packet,
+                                 product_l4_policy_position_t position,
+                                 product_l4_policy_match_result_t *result)
+{
+  if (!query || !query->prepared || !query->view || !packet || !result
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  set_no_match (result, query->subject ? PRODUCT_L4_POLICY_NO_MATCH_NO_RULE
+                                      : query->no_match_reason,
+                query->view->max_probes);
+  result->subject_probes = query->subject_probes;
+  query->subject_probes = 0;
+  if (!query->subject) return PRODUCT_L4_POLICY_STATUS_OK;
+  return match_subject (query->view, query->subject, query->packet_key,
+                        packet, position, result);
+}
+#endif
+
 /* Canonical bytes avoid caller padding/uninitialized irrelevant dynamic data.
  * Static over-guarding is intentional: application/platform changes and opposite
  * packet endpoints/directions cannot silently share a result. */
@@ -1044,19 +1169,27 @@ static void
 cache_guard (product_policy_cache_guard_t *guard,
              const product_l4_policy_packet_t *packet,
              const product_policy_cache_identity_t *identity,
-             product_l4_policy_position_t position, unsigned dependencies)
+             product_l4_policy_position_t position, unsigned dependencies
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+             , const product_l4_policy_prepared_query_t *query
+#endif
+             )
 {
   memset (guard, 0, sizeof (*guard));
   guard->identity = *identity;
   guard->position = position;
   guard->dependencies = dependencies;
 #define COPY(field) guard->packet.field = packet->field
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  memcpy (&guard->packet, &query->static_packet, sizeof (guard->packet));
+#else
   COPY(uid); COPY(uid_known); COPY(family); COPY(protocol);
   COPY(direction); COPY(direction_known); COPY(network_context_id);
   COPY(network_context_known); COPY(ifindex); COPY(ifindex_known);
   COPY(source_port); COPY(destination_port); COPY(ports_available);
   memcpy (guard->packet.source_address, packet->source_address, 16);
   memcpy (guard->packet.destination_address, packet->destination_address, 16);
+#endif
   if (dependencies & PRODUCT_POLICY_DEP_CT)
     {
       COPY(ct_state); COPY(ct_state_known);
@@ -1070,6 +1203,69 @@ cache_guard (product_policy_cache_guard_t *guard,
 #undef COPY
 }
 
+static product_policy_cache_entry_t *
+cache_entry (product_policy_cache_t *cache, const product_policy_cache_guard_t *guard)
+{
+  uint64_t hash = UINT64_C (14695981039346656037);
+  const unsigned char *bytes = (const unsigned char *) guard;
+  for (size_t i = 0; i < sizeof (*guard); ++i)
+    hash = (hash ^ bytes[i]) * UINT64_C (1099511628211);
+  /* Mix high bits before reducing to a power-of-two capacity. Sequential Flow
+   * incarnations correlated with endpoint ports otherwise cluster in low bits. */
+  hash ^= hash >> 33;
+  hash *= UINT64_C (0xff51afd7ed558ccd);
+  hash ^= hash >> 33;
+  hash *= UINT64_C (0xc4ceb9fe1a85ec53);
+  hash ^= hash >> 33;
+  unsigned capacity = cache->capacity ? cache->capacity : PRODUCT_POLICY_CACHE_CAPACITY;
+  return &cache->entries[hash % capacity];
+}
+
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+product_l4_policy_status_t
+product_l4_policy_match_prepared_cached (
+  product_policy_cache_t *cache, product_l4_policy_prepared_query_t *query,
+  const product_l4_policy_packet_t *packet,
+  const product_policy_cache_identity_t *identity,
+  product_l4_policy_position_t position, product_l4_policy_match_result_t *result)
+{
+  if (!cache) return product_l4_policy_match_prepared (query, packet, position, result);
+  if (!query || !query->prepared || !query->view || !packet || !identity || !result
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST
+      || cache->capacity > PRODUCT_POLICY_CACHE_MAX_CAPACITY)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  /* These are complete, stable NoMatch outcomes for the protected static
+   * query. Skipping cache work does not skip the caller's Flow maintenance. */
+  if (!query->subject) return product_l4_policy_match_prepared (query, packet, position, result);
+  product_policy_cache_guard_t guard;
+  cache_guard (&guard, packet, identity, position, query->subject->dependencies, query);
+  product_policy_cache_entry_t *entry = cache_entry (cache, &guard);
+  if (entry->valid && !memcmp (&entry->guard, &guard, sizeof (guard)))
+    {
+      ++cache->hits;
+      *result = entry->result;
+      result->probes = 0;
+      result->subject_probes = query->subject_probes;
+      query->subject_probes = 0;
+      result->subtable_probes = result->key_probes = 0;
+      return PRODUCT_L4_POLICY_STATUS_OK;
+    }
+  ++cache->misses;
+  product_l4_policy_status_t status = product_l4_policy_match_prepared (
+    query, packet, position, result);
+  if (status == PRODUCT_L4_POLICY_STATUS_OK)
+    {
+      if (entry->valid) ++cache->replacements;
+      else ++cache->occupied;
+      entry->guard = guard;
+      entry->result = *result;
+      entry->valid = 1;
+    }
+  return status;
+}
+#endif
+
 product_l4_policy_status_t
 product_l4_policy_match_cached (
   product_policy_cache_t *cache, const product_l4_policy_view_t *view,
@@ -1077,6 +1273,18 @@ product_l4_policy_match_cached (
   const product_policy_cache_identity_t *identity,
   product_l4_policy_position_t position, product_l4_policy_match_result_t *result)
 {
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  if (!cache) return product_l4_policy_match_position (view, packet, position, result);
+  if (!view || !packet || !identity || !result
+      || position < PRODUCT_L4_POLICY_POSITION_ALL
+      || position > PRODUCT_L4_POLICY_POSITION_POST
+      || cache->capacity > PRODUCT_POLICY_CACHE_MAX_CAPACITY)
+    return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+  product_l4_policy_prepared_query_t query;
+  product_l4_policy_status_t status = product_l4_policy_prepare (view, packet, &query);
+  if (status != PRODUCT_L4_POLICY_STATUS_OK) return status;
+  return product_l4_policy_match_prepared_cached (cache, &query, packet, identity, position, result);
+#else
   if (!cache)
     return product_l4_policy_match_position (view, packet, position, result);
   if (!view || !packet || !identity || !result
@@ -1090,19 +1298,7 @@ product_l4_policy_match_cached (
   product_policy_cache_guard_t guard;
   cache_guard (&guard, packet, identity, position,
                bucket ? bucket->dependencies : PRODUCT_POLICY_DEP_STATIC);
-  uint64_t hash = UINT64_C (14695981039346656037);
-  const unsigned char *bytes = (const unsigned char *) &guard;
-  for (size_t i = 0; i < sizeof (guard); ++i)
-    hash = (hash ^ bytes[i]) * UINT64_C (1099511628211);
-  /* Mix high bits before reducing to a power-of-two capacity. Sequential Flow
-   * incarnations correlated with endpoint ports otherwise cluster in low bits. */
-  hash ^= hash >> 33;
-  hash *= UINT64_C (0xff51afd7ed558ccd);
-  hash ^= hash >> 33;
-  hash *= UINT64_C (0xc4ceb9fe1a85ec53);
-  hash ^= hash >> 33;
-  unsigned capacity = cache->capacity ? cache->capacity : PRODUCT_POLICY_CACHE_CAPACITY;
-  product_policy_cache_entry_t *entry = &cache->entries[hash % capacity];
+  product_policy_cache_entry_t *entry = cache_entry (cache, &guard);
   if (entry->valid && !memcmp (&entry->guard, &guard, sizeof (guard)))
     {
       ++cache->hits;
@@ -1125,4 +1321,5 @@ product_l4_policy_match_cached (
       entry->valid = 1;
     }
   return status;
+#endif
 }

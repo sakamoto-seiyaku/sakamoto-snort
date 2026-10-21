@@ -4,6 +4,11 @@ Status: active; evidence is being collected.
 
 This memo contains only durable problems, decisions, conclusions, and recurring pitfalls from the Android/VPP POC series. Command-by-command history stays in the corresponding execution ledgers under `experiments/vpp-nfq-poc/results/`.
 
+2026-10-12: current VPP-native C Product verdict experiments and the independent
+Netlink-datagram candidate are recorded in the [Root NFQUEUE verdict memo](ROOT_NFQUEUE_VERDICT_OPTIMIZATION_MEMO.md).
+The POC findings below retain their original run scope and do not describe the
+current Product backend or its performance acceptance.
+
 ## Scope and operating rules
 
 - Start with real-device evidence; do not promote a POC result to production architecture without a reproducible device run.

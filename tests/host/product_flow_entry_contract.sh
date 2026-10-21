@@ -52,10 +52,11 @@ done
 
 python3 - "$source" <<'PY'
 import pathlib
+import re
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-observe_start = source.index("product_flow_entry_observe (")
+observe_start = source.index("product_flow_entry_observe_impl (")
 observe = source[observe_start:source.index("product_flow_entry_set_decision (", observe_start)]
 drop = observe.index("stage_verdict == PRODUCT_FLOW_ENTRY_VERDICT_DROP")
 find = observe.index("slot = find_entry")
@@ -66,6 +67,18 @@ for allocation in ('malloc (', 'calloc (', 'free (', 'realloc ('):
 assert 'pool->free_head' in observe
 assert 'pool->buckets' in source
 assert 'PRODUCT_FLOW_ENTRY_MAX_ENTRIES' not in source
+assert 'offsetof (flow_slot_t, entry) == 0' in source
+assert 'sizeof (flow_index_t) == 56' in source
+assert 'pool->index[slot].key = entry->key' in source
+assert 'pool->index[slot].canonical_hash = entry->canonical_hash' in source
+assert source.count('pool->index[slot].key =') == 1
+assert source.count('pool->index[slot].canonical_hash =') == 1
+prefetch_start = source.index('product_flow_runtime_prefetch (')
+prefetch = source[prefetch_start:source.index('\n#endif', prefetch_start)]
+for mutation in ('malloc (', 'calloc (', 'free (', 'release_slot (',
+                 'product_flow_runtime_close ('):
+    assert mutation not in prefetch, 'prefetch must only prepare reads: ' + mutation
+assert not re.search(r'pool->stats\.\w+\s*(?:=(?!=)|\+\+|--)', prefetch)
 if "product_flow_entry_publish_revision" in source or "active_policy_revision" in source:
     raise AssertionError("FlowEntry must have no publisher-side epoch mutation API")
 for identity in ("policy_generation == policy->generation", "policy_revision == policy->revision", "policy_snapshot_hash == policy->snapshot_hash"):
@@ -75,7 +88,12 @@ PY
 
 cmake -S "$repo_root" -B "$fixture_root/build" -G Ninja >/dev/null
 cmake --build "$fixture_root/build" --target sakamoto_quic_crypto >/dev/null
-cc -std=c11 -Wall -Wextra -Werror -pedantic \
+for mode in off on; do
+  experiment_flags=()
+  if [[ "$mode" == on ]]; then
+    experiment_flags=(-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1)
+  fi
+  cc -std=c11 -Wall -Wextra -Werror -pedantic "${experiment_flags[@]}" \
   -I"$repo_root/src/product/vpp" \
   -I"$repo_root/third_party/mbedtls/include" \
   -I"$repo_root/third_party/mbedtls" -DMBEDTLS_CONFIG_FILE='"product_config.h"' \
@@ -86,9 +104,10 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic \
   "$source" "$repo_root/src/product/vpp/product_flow_sni.c" \
   "$repo_root/src/product/vpp/product_flow_quic.c" "$test_source" \
   "$fixture_root/build/third_party/mbedtls/libsakamoto_quic_crypto.a" \
-  -o "$fixture_root/product-flow-entry-test"
+  -o "$fixture_root/product-flow-entry-test-$mode"
 
-"$fixture_root/product-flow-entry-test"
+  "$fixture_root/product-flow-entry-test-$mode"
+done
 
 grep -Fq 'sakamoto_product_flow_entry STATIC' "$root_cmake"
 grep -Fq 'tests/host/product_flow_entry_test.c' "$root_cmake"

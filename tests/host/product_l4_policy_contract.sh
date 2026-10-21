@@ -27,9 +27,14 @@ for forbidden in '<vlib/' 'jni.h' 'jni/' 'product_core.api' 'extern "C"' \
   fi
 done
 
-cc -std=c11 -Wall -Wextra -Werror -pedantic \
-  -I"$repo_root/src/product/vpp" \
-  "$source" "$test_source" -o "$fixture_root/product-l4-policy-test"
-
-"$fixture_root/product-l4-policy-test"
+for variant in baseline root-batch; do
+  experiment_flags=()
+  if [[ "$variant" == root-batch ]]; then
+    experiment_flags=(-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1)
+  fi
+  cc -std=c11 -Wall -Wextra -Werror -pedantic "${experiment_flags[@]}" \
+    -I"$repo_root/src/product/vpp" \
+    "$source" "$test_source" -o "$fixture_root/product-l4-policy-$variant-test"
+  "$fixture_root/product-l4-policy-$variant-test"
+done
 echo "sakamoto S192 standalone stateless L4 policy contract: PASS"

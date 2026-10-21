@@ -205,6 +205,9 @@ typedef struct
   uint8_t matched;
   uint8_t terminal_preserved;
   uint8_t declared_action, actual_action, mode;
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  uint8_t policy_qualified;
+#endif
   uint32_t rule_index;
   uint32_t winner;
   uint64_t generation;
@@ -256,7 +259,9 @@ typedef struct
   uint32_t l4_rule_count;
 } product_packet_graph_policy_bundle_t;
 
-int product_packet_graph_start_external (vlib_main_t *vm, u64 generation);
+/* Adapter kind selects startup resource defaults, never packet/flow ownership. */
+int product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
+                                        product_adapter_obligation_kind_t adapter_kind);
 void product_packet_graph_stop_external (vlib_main_t *vm);
 
 uint32_t product_packet_graph_trace_limit (void);
@@ -314,6 +319,21 @@ int product_packet_graph_get_platform_facts (const vlib_buffer_t *buffer,
 int product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                           const product_platform_packet_facts_t *platform,
                                           const product_adapter_obligation_t *obligation);
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+/* The current synchronous caller owns all items until scheduling accepts
+ * them. Each accepted[i] is independent; rejected items remain caller-owned.
+ * Count is bounded by VLIB_FRAME_SIZE. No payload pointer is retained. */
+typedef struct
+{
+  u32 buffer_index;
+  product_platform_packet_facts_t platform;
+  product_adapter_obligation_t obligation;
+} product_packet_graph_external_item_t;
+u32 product_packet_graph_submit_external_batch (
+  vlib_main_t *vm, const product_packet_graph_external_item_t *items,
+  u32 count, u8 *accepted);
+#endif
 
 int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
   uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *);

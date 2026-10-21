@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -160,12 +161,63 @@ static int server(const char *ip, int port) {
 }
 
 typedef struct { int fd, connected, sent, received; uint64_t since; header h, reply; } client_conn;
+typedef struct { pthread_barrier_t ready, start; uint64_t begin, end; } paced_clock;
 typedef struct {
-  int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride; const char *ip; uint64_t begin, end;
+  int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride, offered_rate, burst_size; const char *ip; uint64_t begin, end;
   uint64_t bytes, packets, attempts, completed, errors, timeouts, cancelled, tuples, exhausted;
+  uint64_t offered_packets, probe_requests, pacing_cursor, pacing_scheduled, pacing_missed, pacing_capacity_missed;
+  uint64_t pacing_behind_events, pacing_max_behind_ns;
   uint64_t samples, hist[HIST];
+  paced_clock *clock;
 } worker;
 static void latency(worker *w, uint64_t ns) { uint64_t bucket = ns / 100000; if (bucket >= HIST) bucket = HIST - 1; w->hist[bucket]++; w->samples++; }
+static void pacing_start(worker *w) {
+  if (!w->offered_rate) return;
+  pthread_barrier_wait(&w->clock->ready);
+  pthread_barrier_wait(&w->clock->start);
+  w->begin = w->clock->begin; w->end = w->clock->end;
+}
+/* Global tickets are round-robin across workers. Deadlines are anchored to the
+ * shared CLOCK_MONOTONIC begin, not the previous send or worker wakeup.
+ * A burst groups global tickets at one deadline; it changes temporal density,
+ * not the total target or bounded per-worker send budget. */
+static uint64_t pacing_target(const worker *w) {
+  uint64_t global = ((w->end - w->begin) * (uint64_t)w->offered_rate + 999999999) / 1000000000;
+  return global > (uint64_t)w->index ? (global - 1 - (uint64_t)w->index) / (uint64_t)w->threads + 1 : 0;
+}
+static uint64_t pacing_next(const worker *w) {
+  if (w->pacing_cursor >= pacing_target(w)) return w->end;
+  uint64_t ticket = w->pacing_cursor * (uint64_t)w->threads + (uint64_t)w->index;
+  ticket = ticket / (uint64_t)w->burst_size * (uint64_t)w->burst_size;
+  return w->begin + (ticket * 1000000000 + (uint64_t)w->offered_rate - 1) / (uint64_t)w->offered_rate;
+}
+static int pacing_take(worker *w, uint64_t now, int limit) {
+  if (now < w->begin || now >= w->end) return 0;
+  uint64_t elapsed_tickets = (now - w->begin) * (uint64_t)w->offered_rate / 1000000000;
+  uint64_t global = elapsed_tickets / (uint64_t)w->burst_size * (uint64_t)w->burst_size + (uint64_t)w->burst_size;
+  uint64_t due = global > (uint64_t)w->index ? (global - 1 - (uint64_t)w->index) / (uint64_t)w->threads + 1 : 0;
+  uint64_t target = pacing_target(w); if (due > target) due = target;
+  if (due <= w->pacing_cursor) return 0;
+  uint64_t behind = now - pacing_next(w);
+  if (behind > w->pacing_max_behind_ns) w->pacing_max_behind_ns = behind;
+  uint64_t count = due - w->pacing_cursor;
+  if (count > ((uint64_t)w->burst_size + (uint64_t)w->threads - 1) / (uint64_t)w->threads) w->pacing_behind_events++;
+  if (count > (uint64_t)limit) { w->pacing_missed += count - (uint64_t)limit; count = (uint64_t)limit; }
+  w->pacing_cursor = due;
+  return (int)count;
+}
+static void pacing_finish(worker *w) {
+  if (!w->offered_rate) return;
+  w->pacing_scheduled = pacing_target(w);
+  w->pacing_missed += w->pacing_scheduled - w->pacing_cursor;
+}
+static void udp_wait(int probe, uint64_t deadline) {
+  uint64_t now = now_ns(); if (now >= deadline) return;
+  uint64_t remaining = deadline - now;
+  struct timespec timeout = {.tv_sec = (time_t)(remaining / 1000000000), .tv_nsec = (long)(remaining % 1000000000)};
+  struct pollfd fd = {.fd = probe, .events = POLLIN};
+  if (ppoll(&fd, 1, &timeout, NULL) < 0 && errno != EINTR) die("probe poll");
+}
 static void open_conn(worker *w, int ep, client_conn *c, int i, int probe) {
   memset(c, 0, sizeof(*c)); c->fd = sock(SOCK_STREAM); w->attempts++; c->since = now_ns();
   if (c->fd < 0) { w->errors++; return; }
@@ -178,10 +230,24 @@ static void open_conn(worker *w, int ep, client_conn *c, int i, int probe) {
 static void *tcp_worker(void *arg) {
   worker *w = arg; int ep = epoll_create1(EPOLL_CLOEXEC), total = w->flows + (w->mode == 0);
   client_conn *c = calloc((size_t)total, sizeof(*c)); if (!c || ep < 0) die("client allocation");
-  for (int i = 0; i < total; i++) open_conn(w, ep, &c[i], i, i == w->flows);
+  for (int i = 0; i < total; i++) { c[i].fd = -1; if (!w->offered_rate) open_conn(w, ep, &c[i], i, i == w->flows); }
+  pacing_start(w);
   uint64_t next_probe = 0; char data[65536]; struct epoll_event events[128];
   while (!stopped && now_ns() < w->end) {
-    int n = epoll_wait(ep, events, 128, 10);
+    int wait_ms = 10;
+    if (w->offered_rate) {
+      int due = pacing_take(w, now_ns(), 16);
+      for (int j = 0; j < due; j++) {
+        int slot = 0; while (slot < total && c[slot].fd >= 0) slot++;
+        if (now_ns() >= w->end) w->pacing_missed++;
+        else if (slot == total) { w->pacing_missed++; w->pacing_capacity_missed++; }
+        else open_conn(w, ep, &c[slot], slot, 0);
+      }
+      uint64_t now = now_ns(), next = pacing_next(w);
+      wait_ms = next <= now ? 0 : (int)((next - now + 999999) / 1000000);
+      if (wait_ms > 10) wait_ms = 10;
+    }
+    int n = epoll_wait(ep, events, 128, wait_ms);
     if (n < 0 && errno != EINTR) die("client epoll");
     for (int j = 0; j < n; j++) {
       int i = (int)events[j].data.u32, probe = w->mode == 0 && i == w->flows, finish = 0, failed = 0;
@@ -210,22 +276,23 @@ static void *tcp_worker(void *arg) {
       if (finish || failed) {
         epoll_ctl(ep, EPOLL_CTL_DEL, s->fd, NULL); close(s->fd); s->fd = -1;
         if (failed) w->errors++;
-        if (w->mode == 1) open_conn(w, ep, s, i, 0);
+        if (w->mode == 1 && !w->offered_rate) open_conn(w, ep, s, i, 0);
       }
     }
     uint64_t now = now_ns();
     for (int i = 0; i < total; i++) {
       client_conn *s = &c[i]; int probe = w->mode == 0 && i == w->flows;
-      if (s->fd < 0) { if (w->mode == 1) open_conn(w, ep, s, i, 0); continue; }
+      if (s->fd < 0) { if (w->mode == 1 && !w->offered_rate) open_conn(w, ep, s, i, 0); continue; }
       if ((w->mode == 1 || probe || !s->connected) && now - s->since > 1000000000 && (!probe || !next_probe)) {
         epoll_ctl(ep, EPOLL_CTL_DEL, s->fd, NULL); close(s->fd); s->fd = -1; w->timeouts++;
-        if (w->mode == 1) open_conn(w, ep, s, i, 0);
+        if (w->mode == 1 && !w->offered_rate) open_conn(w, ep, s, i, 0);
       } else if (probe && next_probe && now >= next_probe) {
         s->since = now; s->sent = 0; next_probe = 0; s->h = message(w->id, 'E', now, sizeof(header)); modify(ep, s->fd, EPOLLOUT | EPOLLRDHUP, i);
       }
     }
   }
   for (int i = 0; i < total; i++) if (c[i].fd >= 0) { if (w->mode == 1) w->cancelled++; close(c[i].fd); }
+  pacing_finish(w);
   free(c); close(ep); return NULL;
 }
 static void *udp_worker(void *arg) {
@@ -254,62 +321,94 @@ static void *udp_worker(void *arg) {
   for (int i = 0; i < 16; i++) { memset(data[i], 0x5a, sizeof(data[i])); io[i] = (struct iovec){data[i], sizeof(data[i])}; memset(&msgs[i], 0, sizeof(msgs[i])); msgs[i].msg_hdr.msg_iov = &io[i]; msgs[i].msg_hdr.msg_iovlen = 1; }
   uint64_t tuple_index = 0, seq = 0, next_probe = 0, probe_since = 0; int fixed = 0;
   int per_thread = 20000 / w->threads;
+  pacing_start(w);
   while (!stopped && now_ns() < w->end) {
-    int fd, batch = w->mode == 2 ? 16 : 4, fixed_index = 0;
-    if (w->mode == 2) { fixed_index = (fixed++) % w->flows; fd = fds[fixed_index]; }
-    else {
-      if (tuple_index >= (uint64_t)per_thread * PORTS) { w->exhausted++; break; }
-      fd = sock(SOCK_DGRAM); local.sin_port = htons(40000 + w->index * per_thread + tuple_index % per_thread);
-      dest.sin_port = htons(w->port + tuple_index / per_thread); tuple_index++; w->attempts++;
-      if (fd < 0) { w->errors++; continue; }
-      if (bind(fd, (void *)&local, sizeof(local)) || connect(fd, (void *)&dest, sizeof(dest))) { w->errors++; close(fd); continue; }
+    int batch = w->offered_rate ? pacing_take(w, now_ns(), 16) : w->mode == 2 ? 16 : 4;
+    if (batch && w->offered_rate && now_ns() >= w->end) { w->pacing_missed += (uint64_t)batch; batch = 0; }
+    if (batch) {
+      int fd, fixed_index = 0;
+      if (w->mode == 2) { fixed_index = (fixed++) % w->flows; fd = fds[fixed_index]; }
+      else {
+        if (tuple_index >= (uint64_t)per_thread * PORTS) { w->exhausted++; break; }
+        fd = sock(SOCK_DGRAM); local.sin_port = htons(40000 + w->index * per_thread + tuple_index % per_thread);
+        dest.sin_port = htons(w->port + tuple_index / per_thread); tuple_index++; w->attempts++;
+        if (fd < 0) { w->errors++; continue; }
+        if (bind(fd, (void *)&local, sizeof(local)) || connect(fd, (void *)&dest, sizeof(dest))) { w->errors++; close(fd); continue; }
+      }
+      for (int i = 0; i < batch; i++) { header h = message(w->id, 'U', (seq + (uint64_t)i) * w->threads + w->index, sizeof(data[i])); memcpy(data[i], &h, sizeof(h)); }
+      w->offered_packets += (uint64_t)batch;
+      int n = sendmmsg(fd, msgs, (unsigned)batch, MSG_DONTWAIT | MSG_NOSIGNAL);
+      if (n > 0) { w->packets += (uint64_t)n; w->bytes += (uint64_t)n * sizeof(data[0]);
+        if (w->mode == 3 || !used[fixed_index]) { w->tuples++; used[fixed_index] = 1; }
+      }
+      if (n < batch) w->errors += (uint64_t)(batch - (n < 0 ? 0 : n));
+      seq += (uint64_t)batch;
+      if (w->mode == 3) close(fd);
     }
-    for (int i = 0; i < batch; i++) { header h = message(w->id, 'U', (seq + (uint64_t)i) * w->threads + w->index, sizeof(data[i])); memcpy(data[i], &h, sizeof(h)); }
-    int n = sendmmsg(fd, msgs, (unsigned)batch, MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (n > 0) { w->packets += (uint64_t)n; w->bytes += (uint64_t)n * sizeof(data[0]);
-      if (w->mode == 3 || !used[fixed_index]) { w->tuples++; used[fixed_index] = 1; }
-    }
-    if (n < batch) w->errors += (uint64_t)(batch - (n < 0 ? 0 : n));
-    seq += (uint64_t)batch;
-    if (w->mode == 3) close(fd);
     uint64_t now = now_ns();
     if (probe_since) { header reply; ssize_t b = recv(probe, &reply, sizeof(reply), MSG_DONTWAIT);
       if (b == sizeof(reply) && ntohl(reply.magic) == MAGIC && ntohl(reply.op) == 'P' && be64toh(reply.seq) == probe_since) { latency(w, now_ns() - probe_since); probe_since = 0; }
       else if (now - probe_since > 1000000000) { w->timeouts++; probe_since = 0; }
     }
     if (!probe_since && now >= next_probe) { header h = message(w->id, 'P', now, sizeof(header));
+      w->probe_requests++;
       if (send(probe, &h, sizeof(h), MSG_DONTWAIT) == sizeof(h)) probe_since = now; else w->errors++;
       next_probe = now + 20000000; }
+    if (w->offered_rate) {
+      uint64_t next = pacing_next(w), probe_next = probe_since ? probe_since + 1000000000 : next_probe;
+      if (next > probe_next) next = probe_next;
+      if (next > w->end) next = w->end;
+      udp_wait(probe, next);
+    }
   }
   if (probe_since) w->cancelled++;
   for (int i = 0; i < w->flows; i++) if (fds[i] >= 0) close(fds[i]);
+  pacing_finish(w);
   free(used); free(fds); close(probe); return NULL;
 }
 static int client(int argc, char **argv) {
-  if (argc < 9 || argc > 11) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [UDP_FIXED_SOURCE_PORT_BASE [UDP_FIXED_SOURCE_PORT_STRIDE]]\n"); return 2; }
+  if (argc < 9 || argc > 13) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [UDP_FIXED_SOURCE_PORT_BASE [UDP_FIXED_SOURCE_PORT_STRIDE [OFFERED_RATE [UDP_BURST_SIZE]]]]\n"); return 2; }
   const char *names[] = {"tcp-fixed", "tcp-new", "udp-fixed", "udp-new"}; int mode = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(argv[5], names[i])) mode = i;
   if (mode < 0) return 2;
   int port = number(argv[3], 1024, 65472), id = number(argv[4], 0, CASES - 1), ms = number(argv[6], 100, 60000);
   int threads = number(argv[7], 1, 8), flows = number(argv[8], 1, 256);
-  int fixed_port_stride = argc == 11 ? number(argv[10], 1, 16) : 1;
-  int fixed_port_base = argc >= 10 ? number(argv[9], 1024, 65535 - (threads * flows + threads - 1) * fixed_port_stride) : 0;
+  int fixed_port_stride = argc >= 11 ? number(argv[10], 1, 16) : 1;
+  int fixed_port_base = argc >= 10 ? number(argv[9], 0, 65535 - (threads * flows + threads - 1) * fixed_port_stride) : 0;
+  int offered_rate = argc >= 12 ? number(argv[11], 0, 1000000) : 0;
+  int burst_size = argc >= 13 ? number(argv[12], 1, threads * 16) : 1;
+  if (fixed_port_base && fixed_port_base < 1024) return 2;
   if (fixed_port_base && mode != 2) return 2;
+  if (offered_rate && mode != 1 && mode != 2) { fprintf(stderr, "OFFERED_RATE is supported only for tcp-new (attempts/s) and udp-fixed (payload packets/s)\n"); return 2; }
+  if (burst_size > 1 && (!offered_rate || mode != 2)) { fprintf(stderr, "UDP_BURST_SIZE requires paced udp-fixed\n"); return 2; }
   address(argv[2], port); signal(SIGPIPE, SIG_IGN);
   worker *w = calloc((size_t)threads, sizeof(*w)); pthread_t ids[8]; if (!w) die("calloc");
-  struct rusage before, after; getrusage(RUSAGE_SELF, &before); uint64_t begin = now_ns(), end = begin + (uint64_t)ms * 1000000;
-  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.fixed_port_base=fixed_port_base,.fixed_port_stride=fixed_port_stride,.ip=argv[2],.begin=begin,.end=end}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
+  struct rusage before, after; getrusage(RUSAGE_SELF, &before); uint64_t begin = now_ns(), end = begin + (uint64_t)ms * 1000000, setup_begin = begin, pacing_setup_ns = 0;
+  paced_clock clock;
+  if (offered_rate && (pthread_barrier_init(&clock.ready, NULL, (unsigned)threads + 1)
+                       || pthread_barrier_init(&clock.start, NULL, (unsigned)threads + 1))) die("pacing barrier");
+  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.fixed_port_base=fixed_port_base,.fixed_port_stride=fixed_port_stride,.offered_rate=offered_rate,.burst_size=burst_size,.ip=argv[2],.begin=begin,.end=end,.clock=offered_rate ? &clock : NULL}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
+  if (offered_rate) {
+    pthread_barrier_wait(&clock.ready);
+    begin = clock.begin = now_ns(); end = clock.end = begin + (uint64_t)ms * 1000000;
+    pacing_setup_ns = begin - setup_begin;
+    pthread_barrier_wait(&clock.start);
+  }
   worker sum = {0};
   for (int i = 0; i < threads; i++) { pthread_join(ids[i], NULL);
     sum.bytes+=w[i].bytes; sum.packets+=w[i].packets; sum.attempts+=w[i].attempts; sum.completed+=w[i].completed; sum.errors+=w[i].errors; sum.timeouts+=w[i].timeouts; sum.cancelled+=w[i].cancelled; sum.tuples+=w[i].tuples; sum.samples+=w[i].samples; sum.exhausted+=w[i].exhausted;
+    sum.offered_packets+=w[i].offered_packets; sum.probe_requests+=w[i].probe_requests; sum.pacing_scheduled+=w[i].pacing_scheduled; sum.pacing_missed+=w[i].pacing_missed; sum.pacing_capacity_missed+=w[i].pacing_capacity_missed; sum.pacing_behind_events+=w[i].pacing_behind_events;
+    if (w[i].pacing_max_behind_ns > sum.pacing_max_behind_ns) sum.pacing_max_behind_ns = w[i].pacing_max_behind_ns;
     for (int j=0;j<HIST;j++) sum.hist[j]+=w[i].hist[j]; }
   uint64_t finished = now_ns(); getrusage(RUSAGE_SELF, &after);
+  if (offered_rate) { pthread_barrier_destroy(&clock.ready); pthread_barrier_destroy(&clock.start); }
   double cpu = (after.ru_utime.tv_sec-before.ru_utime.tv_sec)+(after.ru_utime.tv_usec-before.ru_utime.tv_usec)/1e6+(after.ru_stime.tv_sec-before.ru_stime.tv_sec)+(after.ru_stime.tv_usec-before.ru_stime.tv_usec)/1e6;
   int p99 = 0; uint64_t cumulative = 0, target = (sum.samples*99+99)/100;
   if (sum.samples) for (int j=0;j<HIST;j++) { cumulative+=sum.hist[j]; if (cumulative>=target) { p99=j+1; break; } }
   printf("{\"case\":\"%s\",\"case_id\":%d,\"pid\":%d,\"uid\":%d,\"start_monotonic_ns\":%"PRIu64",\"end_monotonic_ns\":%"PRIu64",\"requested_ms\":%d,\"threads\":%d,\"flows_per_thread\":%d,\"bytes\":%"PRIu64",\"packets\":%"PRIu64",\"attempts\":%"PRIu64",\"completed\":%"PRIu64",\"errors\":%"PRIu64",\"timeouts\":%"PRIu64",\"cancelled_at_deadline\":%"PRIu64",\"input_unique_udp_tuples\":%"PRIu64",\"tuple_space_exhausted\":%"PRIu64",\"latency_samples\":%"PRIu64",\"latency_overflow_samples\":%"PRIu64",\"p99_upper_us\":",names[mode],id,getpid(),getuid(),begin,finished,ms,threads,flows,sum.bytes,sum.packets,sum.attempts,sum.completed,sum.errors,sum.timeouts,sum.cancelled,sum.tuples,sum.exhausted,sum.samples,sum.hist[HIST-1]);
   if (!p99 || p99 >= HIST) printf("null"); else printf("%d",p99*100);
-  printf(",\"generator_cpu_seconds\":%.6f,\"generator_maxrss_kib\":%ld,\"fixed_source_port_base\":%d,\"fixed_source_port_stride\":%d}\n",cpu,after.ru_maxrss,fixed_port_base,fixed_port_stride); free(w); return 0;
+  printf(",\"burst_size\":%d",burst_size);
+  printf(",\"generator_cpu_seconds\":%.6f,\"generator_maxrss_kib\":%ld,\"fixed_source_port_base\":%d,\"fixed_source_port_stride\":%d,\"offered_rate\":%d,\"offered_rate_unit\":\"%s\",\"offered_packets\":%"PRIu64",\"udp_send_errors\":%"PRIu64",\"offered_connections\":%"PRIu64",\"probe_requests\":%"PRIu64",\"pacing_scheduled\":%"PRIu64",\"pacing_missed\":%"PRIu64",\"pacing_capacity_missed\":%"PRIu64",\"pacing_behind_events\":%"PRIu64",\"pacing_max_behind_ns\":%"PRIu64",\"pacing_setup_ns\":%"PRIu64"}\n",cpu,after.ru_maxrss,fixed_port_base,fixed_port_stride,offered_rate,mode == 2 ? "payload_packets_per_second" : mode == 1 ? "connection_attempts_per_second" : "unsupported",sum.offered_packets,sum.offered_packets-sum.packets,mode < 2 ? sum.attempts : 0,sum.probe_requests,sum.pacing_scheduled,sum.pacing_missed,sum.pacing_capacity_missed,sum.pacing_behind_events,sum.pacing_max_behind_ns,pacing_setup_ns); free(w); return 0;
 }
 static int monitor(int pid, int ms) {
   uint64_t end=now_ns()+(uint64_t)ms*1000000; char path[128], line[2048];

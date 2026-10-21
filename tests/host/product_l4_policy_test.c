@@ -872,9 +872,94 @@ static void domain_opcode_contract(void)
                      "QUIC plus supplemental STUN keeps the domain winner");
 }
 
+static void
+test_multiple_subject_masks (void)
+{
+  product_l4_policy_rule_t rules[5]={
+    rule_template(1901,17,4,6,1,5,2), rule_template(1902,17,0,0,2,4,1),
+    rule_template(1903,40,6,17,1,3,2), rule_template(1904,40,0,0,2,2,1),
+    rule_template(1905,90,0,0,1,1,2)
+  };
+  rules[0].source_port_first=1; rules[0].source_port_last=6;
+  rules[0].destination_port_first=443; rules[0].destination_port_last=445;
+  rules[0].source_prefix_length=24; set_ipv4(rules[0].source_address,UINT32_C(0xc0000200));
+  rules[2].source_port_first=1; rules[2].source_port_last=65534;
+  rules[2].destination_port_first=53; rules[2].destination_port_last=53;
+  rules[2].source_prefix_length=64; set_ipv6(rules[2].source_address,32);
+  /* The disjunction retains a full residual evaluator, with unavailable
+   * platform facts and port edges participating in three-valued truth. */
+  const uint8_t expression[]={PRODUCT_STATIC_NETWORK,9,0,0,0,
+    PRODUCT_STATIC_DESTINATION_PORT,255,255,255,255,PRODUCT_STATIC_OR};
+  memcpy(rules[4].expression,expression,sizeof expression);
+  rules[4].expression_length=sizeof expression;
+  product_l4_policy_view_t view;
+  for(unsigned plan=0;plan<3;++plan) {
+    product_l4_policy_compile_budget_t budget=product_l4_policy_default_budget();
+    if(plan) budget.direct_entries=0;
+    if(plan==2) budget.factor_rules=0;
+    CHECK(product_l4_policy_compile_with_budget(&view,rules,5,&budget)==0,
+          "multiple differently masked subjects compile under all plans");
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+    unsigned covered=0;
+    for(unsigned subject=0;subject<view.uid_bucket_count;++subject) {
+      const product_l4_policy_uid_bucket_t *bucket=&view.uid_buckets[subject];
+      CHECK(bucket->first_subtable==covered && bucket->subtable_count>0,
+            "subject ranges are contiguous and nonempty");
+      covered+=bucket->subtable_count;
+    }
+    CHECK(covered==view.subtable_count,"ranges cover the fixed compiled index");
+#endif
+    for(unsigned subject=0;subject<3;++subject)
+      for(unsigned edge=0;edge<4;++edge) {
+        const uint32_t uids[]={17,40,90};
+        product_l4_policy_packet_t packet=packet_template(uids[subject],subject==1?6:4,
+                                                         subject==1?17:6,3,subject==1?53:443);
+        set_ipv4(packet.source_address,UINT32_C(0xc0000201));
+        if(subject==1) set_ipv6(packet.source_address,32);
+        uint64_t winner=subject==0?1901:subject==1?1903:1905;
+        unsigned rank=1;
+        if(edge==1) {
+          packet.source_port=0; packet.network_context_known=0;
+          winner=subject==0?1902:subject==1?1904:0; rank=winner?2:0;
+        }
+        if(edge==2) {
+          packet.source_address[0]^=128; packet.network_context_known=0;
+          packet.destination_port=65535;
+          winner=subject==0?1902:subject==1?1904:1905; rank=subject==2?1:2;
+        }
+        if(edge==3) {
+          packet.ports_available=0; packet.network_context_known=0;
+          winner=subject==0?1902:subject==1?1904:0; rank=winner?2:0;
+        }
+        product_l4_policy_match_result_t result=match(&view,&packet);
+        if(winner) check_result_match(&result,winner,rank,rank==2?1:2,
+                                     rank==2?0:1,"subject winner remains complete");
+        else check_no_match(&result,packet.ports_available?PRODUCT_L4_POLICY_NO_MATCH_NO_RULE
+                                                               :PRODUCT_L4_POLICY_NO_MATCH_L4_UNAVAILABLE,
+                            "unavailable subject predicates cannot match");
+        CHECK(result.candidate_count==(subject==2?1U:2U),"subject candidate bound is local");
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+        CHECK(result.subtable_probes==view.uid_buckets[subject].subtable_count,
+              "query visits only this subject's masks");
+        product_l4_policy_prepared_query_t prepared={0};
+        CHECK(product_l4_policy_prepare(&view,&packet,&prepared)==0,"static query prepares");
+        CHECK(product_l4_policy_match_prepared(&prepared,&packet,PRODUCT_L4_POLICY_POSITION_PRE,&result)==0,
+              "prepared PRE query completes");
+        CHECK(result.rule_id==winner && result.subject_probes>0,"prepared PRE keeps winner and actual prepare probes");
+        CHECK(product_l4_policy_match_prepared(&prepared,&packet,PRODUCT_L4_POLICY_POSITION_POST,&result)==0,
+              "prepared POST query completes");
+        CHECK(!result.rule_id && !result.subject_probes,"POST cannot reuse PRE placement or double count prepare");
+#else
+        CHECK(result.subtable_probes==view.subtable_count,"baseline still visits all masks");
+#endif
+      }
+  }
+}
+
 int
 main (void)
 {
+  test_multiple_subject_masks();
   domain_opcode_contract();
   test_exact_range_plan ();
   test_factor_budget ();

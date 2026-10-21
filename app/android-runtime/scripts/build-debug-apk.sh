@@ -15,6 +15,37 @@ bridge_source="$repo_root/src/product/native/sakamoto_product_vapi.c"
 jni_source="$repo_root/app/android-runtime/src/main/native/sakamoto_product_core_jni.c"
 plugin_build_name="product_core_plugin.so"
 plugin_name="libproduct_core_plugin.so"
+root_batch_experiment="${SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:-ON}"
+root_verdict_batch_experiment="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT:-$root_batch_experiment}"
+root_verdict_sender_default=sendmmsg
+if [[ "$root_verdict_batch_experiment" == ON ]]; then root_verdict_sender_default=packed; fi
+root_verdict_batch_mode="${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE:-$root_verdict_sender_default}"
+policy_qualification_counters="${SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS:-$root_batch_experiment}"
+if [[ "$root_batch_experiment" != ON && "$root_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$policy_qualification_counters" != ON && "$policy_qualification_counters" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$root_verdict_batch_experiment" != ON && "$root_verdict_batch_experiment" != OFF ]]; then
+  echo "SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT must be ON or OFF" >&2
+  exit 2
+fi
+if [[ "$root_verdict_batch_experiment" == ON && "$root_batch_experiment" != ON ]]; then
+  echo "Root verdict batching requires SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=ON" >&2
+  exit 2
+fi
+case "$root_verdict_batch_mode" in
+  scalar|sendmmsg|packed) ;;
+  *) echo "SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE must be scalar, sendmmsg or packed" >&2; exit 2 ;;
+esac
+if [[ "$root_verdict_batch_experiment" != ON && "$root_verdict_batch_mode" != sendmmsg ]]; then
+  echo "Selecting a Root verdict sender requires SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=ON" >&2
+  exit 2
+fi
+if [[ "$root_batch_experiment" == ON ]]; then policy_qualification_counters=ON; fi
 expected_vpp_patch_series_count=19
 expected_vpp_patch_series_sha256=884aa3aac9457d8b34482f0d0c0faeb933831653f37e0f856fd8a6756a4ea400
 expected_vpp_core_patch_series_count="$(
@@ -529,6 +560,10 @@ build_native_stage() {
     "-DVPP_VAPI_C_GEN=$vapi_c_gen"
     "-DVPP_VAPI_CPP_GEN=$vapi_cpp_gen"
     "-DVPP_LIBRARY_DIR=$stage_dir/lib"
+    "-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=$root_batch_experiment"
+    "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=$root_verdict_batch_experiment"
+    "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE=$root_verdict_batch_mode"
+    "-DSAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS=$policy_qualification_counters"
     -DCMAKE_INSTALL_LIBDIR=lib
     "-DCMAKE_INSTALL_PREFIX=$plugin_install"
   )
@@ -625,6 +660,14 @@ build_native_stage() {
   # Android PackageManager recognizes only lib/<abi>/lib*.so as native
   # payload. Use the linker-prefixed installed name required by that boundary.
   install -m 0755 "$plugin_source" "$native_dir/$plugin_name"
+  # Optional exact unstripped companion for offline profiling, before the
+  # temporary native build is deleted. This never changes the APK payload.
+  if [[ -n "${SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR:-}" ]]; then
+    [[ "$SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR" == /* ]] || \
+      die "SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR must be absolute"
+    mkdir -p -- "$SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR"
+    install -m 0755 "$plugin_source" "$SAKAMOTO_ANDROID_PRODUCT_SYMBOLS_DIR/$plugin_name"
+  fi
   install -m 0644 "$generated_vapi_header" "$generated_dir/product_core.api.vapi.h"
 
   for artifact in \
@@ -731,6 +774,10 @@ productPlugin=lib/arm64-v8a/$plugin_name
 quicCrypto=mbedtls-3.6.7-aes-gcm-sha256-static-c
 domainMatcher=valkey-rax-05a9c29c62538519d870d6512978f80ac58a758f-vpp-fallible
 quicVersion=1
+rootBatchExperiment=$root_batch_experiment
+rootVerdictBatchExperiment=$root_verdict_batch_experiment
+rootVerdictBatchMode=$root_verdict_batch_mode
+policyQualificationCounters=$policy_qualification_counters
 generatedVapi=generated-vapi/vapi/product_core.api.vapi.h
 bridgeSource=src/product/native/sakamoto_product_vapi.c
 EOF
@@ -807,6 +854,10 @@ PY
   echo "productStage=$product_stage"
   echo "versionCode=$version_code"
   echo "vppRevision=$expected_revision"
+  echo "rootBatchExperiment=$root_batch_experiment"
+  echo "rootVerdictBatchExperiment=$root_verdict_batch_experiment"
+  echo "rootVerdictBatchMode=$root_verdict_batch_mode"
+  echo "policyQualificationCounters=$policy_qualification_counters"
   echo "productCore=$product_stage/lib/arm64-v8a/libsakamoto_product_core.so"
   echo "runtimeControl=$product_stage/lib/arm64-v8a/libsakamoto_runtime_control.so"
   echo "productPlugin=$product_stage/lib/arm64-v8a/$plugin_name"
@@ -914,6 +965,21 @@ build_apk_only() {
   require_product_manifest_line "abi=arm64-v8a"
   require_product_manifest_line "androidApi=$android_api"
   require_product_manifest_line "vppRevision=$expected_revision"
+  # Older qualified stages predate these optional experiment fields and are OFF.
+  local staged_batch staged_verdict_batch staged_verdict_mode staged_qualification
+  staged_batch="$(sed -n 's/^rootBatchExperiment=//p' "$product_manifest")"
+  staged_verdict_batch="$(sed -n 's/^rootVerdictBatchExperiment=//p' "$product_manifest")"
+  staged_verdict_batch="${staged_verdict_batch:-OFF}"
+  staged_verdict_mode="$(sed -n 's/^rootVerdictBatchMode=//p' "$product_manifest")"
+  staged_verdict_mode="${staged_verdict_mode:-sendmmsg}"
+  staged_qualification="$(sed -n 's/^policyQualificationCounters=//p' "$product_manifest")"
+  staged_batch="${staged_batch:-OFF}"
+  staged_qualification="${staged_qualification:-OFF}"
+  [[ "$staged_batch" == "$root_batch_experiment" &&
+     "$staged_verdict_batch" == "$root_verdict_batch_experiment" &&
+     "$staged_verdict_mode" == "$root_verdict_batch_mode" &&
+     "$staged_qualification" == "$policy_qualification_counters" ]] || \
+    die "product stage batch/qualification flags do not match this APK request"
   product_artifact_id="$(strict_manifest_value "$product_source_manifest" artifact.id)"
   product_api_identity="$(strict_manifest_value "$product_source_manifest" product.api.identity)"
   product_abi_version="$(strict_manifest_value "$product_source_manifest" product.abi.version)"

@@ -4,8 +4,10 @@
 
 #include "product_packet.h"
 
-/* Current bounded configuration; capacity qualification remains separate. */
+/* A bank has 64 slots; two banks support the default 128-slot Root pool.
+ * The 64-slot diagnostic configuration and capacity qualification are separate. */
 #define PRODUCT_ROOT_COMPLETION_CAPACITY 64
+#define PRODUCT_ROOT_COMPLETION_MAX_CAPACITY 128
 #define PRODUCT_ROOT_COMPLETION_MAX_LANES 4
 #define PRODUCT_GRAPH_INJECTION_CAPACITY 32
 
@@ -34,6 +36,10 @@ enum
   /* Derived from shared PacketFacts before their terminal lifetime ends. */
   PRODUCT_COMPLETION_TRANSPORT_UNSUPPORTED = 1 << 4,
   PRODUCT_COMPLETION_FLOW_STACK_RETURN = 1 << 5,
+  /* Ordinary Root packet: complete policy decision, not capacity bypass. */
+  PRODUCT_COMPLETION_POLICY_QUALIFIED = 1 << 6,
+  /* Qualified packet with a complete rule winner at its decision cutoff. */
+  PRODUCT_COMPLETION_POLICY_QUALIFIED_MATCHED = 1 << 7,
 };
 
 _Static_assert (sizeof (product_packet_completion_frame_t) == 32,

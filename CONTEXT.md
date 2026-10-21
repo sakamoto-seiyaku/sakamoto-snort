@@ -396,6 +396,10 @@ _Avoid_: early ALLOW loses its winner, lower-ranked post-flow rule overrides a p
 The actual packet-policy ALLOW or DROP produced from the logical winner and effective mode, or default ALLOW after a complete NoMatch. It is separate from runtime failure and transport outcome; policy not evaluated remains distinguishable.
 _Avoid_: NFQUEUE completion result, delivery guarantee, infrastructure bypass as policy ALLOW
 
+**Policy-Qualified Packet（有效策略处理包）**:
+A captured network packet whose applicable policy evaluation has completed and whose Adapter Completion is `SUCCEEDED`. Normal policy ALLOW and DROP qualify; infrastructure bypass, runtime-drop without a Policy Verdict, unadmitted traffic and internal END/completion carriers do not.
+_Avoid_: admitted packet, endpoint-delivered packet, fail-open accept, FlowEnd signal counted as a network packet
+
 **Runtime Disposition**:
 The shared dataplane's terminal handling of a packet after accounting for both Policy Verdict and runtime faults. A runtime fault may discard a packet without creating a policy `DROP`.
 _Avoid_: policy reason, Adapter completion, transport delivery result
@@ -459,6 +463,10 @@ _Avoid_: end-to-end delivery claim, retrying an ambiguous netlink result, transp
 **Lane-Owned NFQUEUE Completion**:
 The Root threading rule that one native NFQUEUE Platform I/O Lane is the sole caller for receive and verdict operations on its netlink queue/socket. Flow owners never call a shared `nfq_q_handle`; they return terminal intents and original live VPP buffer indexes to the origin lane, which submits the original queue generation and packet IDs and then performs native buffer return. This completion routing is not owner distribution and never copies packet bytes.
 _Avoid_: cross-worker `nfq_set_verdict`, `nfq_set_verdict_batch` for mixed or out-of-order decisions, shared socket mutex on the hot path, second completion buffer, wake per packet, freeing a buffer before its lane consumes completion
+
+**NFQUEUE Verdict Datagram（判决数据报）**:
+A Netlink datagram carrying one or more independently framed `NFQNL_MSG_VERDICT` messages, each retaining its original packet ID and verdict. The 2026-10-12 experimental C sender groups only already-ready work from one origin lane/generation with the same syscall flags in the existing bounded window. Scalar, sendmmsg and packed modes share that window; the experiment remains default OFF until qualified comparison establishes adoption. This differs from `sendmmsg`'s multiple datagrams and from `NFQNL_MSG_VERDICT_BATCH`'s same-verdict ID range. See the [Root verdict memo](docs/memos/ROOT_NFQUEUE_VERDICT_OPTIMIZATION_MEMO.md).
+_Avoid_: rewriting the first child message length to the aggregate datagram length, waiting for future packets, mixed-verdict range completion, treating a full byte-count return as independent kernel confirmation of every message
 
 **Infrastructure Fault**:
 A bounded runtime, Adapter, completion, or transport failure fact that explains why packet execution could not follow its normal path. It may coexist with a Policy Verdict and must never be attributed to a policy rule.

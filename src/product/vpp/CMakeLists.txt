@@ -4,6 +4,38 @@ cmake_minimum_required(VERSION 3.18)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.tcp" DESTINATION share/licenses/sakamoto)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/rax/LICENSE" DESTINATION share/licenses/sakamoto RENAME rax-LICENSE)
 project(sakamoto_product_core_plugin LANGUAGES C CXX)
+option(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  "Build the Root whole-path batch implementation" ON)
+option(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+  "Use the bounded origin window for independent NFQUEUE verdicts"
+  ${SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT})
+set(_product_root_sender_default "sendmmsg")
+if(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT)
+  set(_product_root_sender_default "packed")
+endif()
+set(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE "${_product_root_sender_default}" CACHE STRING
+  "Origin-window verdict sender: scalar, sendmmsg or packed")
+set_property(CACHE SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE PROPERTY STRINGS
+  scalar sendmmsg packed)
+if(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE STREQUAL "scalar")
+  set(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE_VALUE 1)
+elseif(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE STREQUAL "sendmmsg")
+  set(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE_VALUE 2)
+elseif(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE STREQUAL "packed")
+  set(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE_VALUE 3)
+else()
+  message(FATAL_ERROR "Root verdict sender must be scalar, sendmmsg or packed")
+endif()
+if(NOT SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT AND
+   NOT SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE STREQUAL "sendmmsg")
+  message(FATAL_ERROR "Selecting a Root verdict sender requires its experiment window")
+endif()
+if(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT AND
+   NOT SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  message(FATAL_ERROR "Root verdict batching requires the origin batch window")
+endif()
+option(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  "Record policy completion coupled to successful Root verdicts" OFF)
 
 include(GNUInstallDirs)
 
@@ -271,6 +303,20 @@ target_compile_definitions(product_core_plugin PRIVATE
   SAKAMOTO_PRODUCT_VPP_REVISION="${SAKAMOTO_PRODUCT_VPP_REVISION}"
   PRODUCT_DOMAINS_VPP_HEAP=1
 )
+if(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  target_compile_definitions(product_core_plugin PRIVATE
+    SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1)
+endif()
+if(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT)
+  target_compile_definitions(product_core_plugin PRIVATE
+    SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=1
+    SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE=${SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE_VALUE})
+endif()
+if(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS OR
+   SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT)
+  target_compile_definitions(product_core_plugin PRIVATE
+    SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS=1)
+endif()
 target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto m)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE

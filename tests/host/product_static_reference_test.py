@@ -163,7 +163,7 @@ def logical(expr, identity=10, priority=1, order=0, action=2, mode=0, uid=17):
 BASE = dict(uid=17, family=4, protocol=17, direction=3, network=1, interface=9,
             src='192.0.2.1', dst='198.51.100.255', sport=0, dport=65535, ct=None, flowdir=None, lpi=None)
 
-def run(lib):
+def run(lib, prepared=False):
     global DOMAIN_BACKEND
     lib.product_domains_build.argtypes = [C.POINTER(DomainSource),C.POINTER(C.c_void_p)]
     lib.product_domains_match.argtypes = [C.c_void_p,C.c_char_p,C.c_size_t]
@@ -235,6 +235,24 @@ def run(lib):
                     assert lib.product_l4_policy_match_cached(cache,view,C.byref(packet(facts)),
                         C.byref(identity),2,C.byref(final)) == 0
                 assert {key:getattr(final,key) for key in expected} == expected
+            if prepared:
+                # The opaque query is borrowed from this protected immutable
+                # view. Static facts stay fixed; POST receives current dynamic
+                # producers, rather than the PRE packet's unknown facts.
+                for repeat in range(2):
+                    query = C.create_string_buffer(256)
+                    before, after = packet(early_facts), packet(facts)
+                    assert lib.product_l4_policy_prepare(view,C.byref(before),query) == 0
+                    pre = Result()
+                    assert lib.product_l4_policy_match_prepared_cached(cache,query,C.byref(before),
+                        C.byref(identity),1,C.byref(pre)) == 0
+                    final = pre
+                    if not pre.evaluation:
+                        final = Result()
+                        assert lib.product_l4_policy_match_prepared_cached(cache,query,C.byref(after),
+                            C.byref(identity),2,C.byref(final)) == 0
+                        assert final.subject_probes == 0
+                    assert {key:getattr(final,key) for key in expected} == expected
             count += 1
 
     def placed(rules, facts, pre_id, post_id):
@@ -477,16 +495,23 @@ def run(lib):
         compare(rules, facts)
     lib.product_domains_destroy(index)
     DOMAIN_BACKEND = None
-    print(f'T06–T18 independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
+    variant = 'root-batch prepared' if prepared else 'baseline'
+    print(f'T06–T18 {variant} independent ordered, split, cold/hot and fact-change reference (three plans): {count} complete winner comparisons PASS')
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='sakamoto-t06-') as temporary:
-        library = Path(temporary)/'policy.so'
-        subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-shared','-fPIC',
-                        str(ROOT/'src/product/vpp/product_l4_policy.c'),
-                        str(ROOT/'src/product/vpp/product_domains.c'),str(ROOT/'src/product/vpp/product_domains_memory.c'),
-                        str(ROOT/'src/product/vpp/product_domains_rax.c'),'-I'+str(ROOT/'src/product/include'),'-I'+str(ROOT/'src/product/vpp'),'-lm','-o',str(library)],check=True)
-        lib = C.CDLL(str(library))
-        lib.product_l4_policy_compile.argtypes = [C.c_void_p, C.POINTER(Rule), C.c_size_t]
-        lib.product_l4_policy_match.argtypes = [C.c_void_p, C.POINTER(Packet), C.POINTER(Result)]
-        run(lib)
+        for prepared in (False, True):
+            library = Path(temporary)/('policy-batch.so' if prepared else 'policy.so')
+            experiment = ['-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1'] if prepared else []
+            subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-shared','-fPIC',*experiment,
+                            str(ROOT/'src/product/vpp/product_l4_policy.c'),
+                            str(ROOT/'src/product/vpp/product_domains.c'),str(ROOT/'src/product/vpp/product_domains_memory.c'),
+                            str(ROOT/'src/product/vpp/product_domains_rax.c'),'-I'+str(ROOT/'src/product/include'),'-I'+str(ROOT/'src/product/vpp'),'-lm','-o',str(library)],check=True)
+            lib = C.CDLL(str(library))
+            lib.product_l4_policy_compile.argtypes = [C.c_void_p, C.POINTER(Rule), C.c_size_t]
+            lib.product_l4_policy_match.argtypes = [C.c_void_p, C.POINTER(Packet), C.POINTER(Result)]
+            if prepared:
+                lib.product_l4_policy_prepare.argtypes = [C.c_void_p,C.POINTER(Packet),C.c_void_p]
+                lib.product_l4_policy_match_prepared_cached.argtypes = [C.c_void_p,C.c_void_p,
+                    C.POINTER(Packet),C.POINTER(CacheIdentity),C.c_int,C.POINTER(Result)]
+            run(lib, prepared)

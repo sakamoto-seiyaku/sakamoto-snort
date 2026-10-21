@@ -25,6 +25,15 @@ separately scoped evidence. Rust owns control-plane sessions; Java RuntimeServic
 owns Android supervision. POC source and the removed C++ implementation are not
 product code or compatibility fallbacks.
 
+Root defaults selected on 2026-10-13 now use 128 ordinary receive/pending slots,
+48 primary credits, a 16-datagram callback budget, a 1 MiB socket buffer request
+(Pixel 2 MiB effective) and NFQUEUE maxlen 4096. Build entrypoints default to the
+existing batch+packed implementation; production connection-stable queue placement
+is retained. The installed Pixel artifact passed mixed ALLOW/DROP and the 8kpps
+startup check; 16kpps still had four primary rejections. This is a user-selected
+capacity change, with no whole-path CPU benefit claim. See the scoped
+[implementation and regression record](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md).
+
 The [foundation joint report](../testing/2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md)
 records `PASS_WITH_EXPLICIT_LIMITS` across Linux Root and 64 distinct Pixel
 generations, with independent verifiers and retained failed attempts. Its Product

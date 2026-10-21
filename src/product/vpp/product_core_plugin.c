@@ -1006,11 +1006,11 @@ VLIB_REGISTER_NODE (product_core_start_adapters_node) = {
   .function = product_core_start_adapters,
   .type = VLIB_NODE_TYPE_PROCESS,
   .name = "product-adapter-start",
-  /* Match VPP's CLI control-process stack. Root startup now partitions real
-   * VPP buffers before opening listeners; forced-inline allocator/free code
-   * exceeds the default 32 KiB process stack in an unoptimized host build.
+  /* Root startup partitions real VPP buffers before opening listeners. The
+   * unoptimized startup + failed-start rollback allocator/free chain needs
+   * more than 282 KiB, including its caller, so reserve 512 KiB here.
    * This is one bounded control-plane stack, not packet receive storage. */
-  .process_log2_n_stack_bytes = 18,
+  .process_log2_n_stack_bytes = 19,
 };
 
 VLIB_PLUGIN_REGISTER () = {

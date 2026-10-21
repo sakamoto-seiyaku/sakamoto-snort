@@ -9,6 +9,10 @@
 
 #include "product_packet.h"
 #include "product_packet_graph.h"
+#include "product_packet_batch.h"
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+#include "product_fragment.h"
+#endif
 #include "product_core_policy.h"
 #include "product_flow_entry.h"
 #include "product_protocol_catalog.h"
@@ -16,6 +20,7 @@
 #include "product_flow_expiry.h"
 #include "product_observation.h"
 #include "product_root_nfqueue_adapter.h"
+#include "product_root_defaults.h"
 #include "product_vpn_tun_adapter.h"
 #include "product_vpn_flow_stack_driver.h"
 #include "product_vpn_uid_resolver.h"
@@ -45,9 +50,12 @@
 _Static_assert (PRODUCT_GRAPH_WORKERS == 2, "update rule-config query storage budget with worker layout");
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
+#define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48
 
 _Static_assert (PRODUCT_GRAPH_HANDOFF_CREDITS < FRAME_QUEUE_MAX_NELTS,
                 "handoff credits must remain below the private FQM depth");
+_Static_assert (PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS < 64,
+                "diagnostic credits fit the existing primary ring");
 
 enum
 {
@@ -242,6 +250,9 @@ typedef struct
   u8 protocols_available;
   u8 sni_result;
   u64 domain_lists;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_l4_policy_prepared_query_t *prepared_query;
+#endif
 } product_policy_snapshot_t;
 
 typedef struct
@@ -256,6 +267,7 @@ typedef struct
 typedef struct
 {
   vlib_main_t *vlib_main;
+  product_adapter_obligation_kind_t adapter_kind;
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   u32 owner_guard_frame_queue;
 #else
@@ -431,6 +443,26 @@ typedef struct
 
 static product_packet_graph_main_t product_packet_graph_main;
 
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+typedef struct
+{
+  CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);
+  u64 admit_frames, admit_vectors, prepare_windows, prepared_packets;
+  u64 primary_calls, primary_publications, primary_vectors, primary_failed;
+  u64 policy_claims, policy_packets, policy_hold_ns, policy_hold_max_ns;
+  u64 completion_calls, completion_publications, completion_vectors;
+  u64 retry_windows, origin_frames, origin_vectors;
+} product_packet_batch_stats_t;
+static product_packet_batch_stats_t product_packet_batch_stats[PRODUCT_GRAPH_WORKERS + 1];
+
+static_always_inline product_packet_batch_stats_t *
+product_packet_batch_counters (vlib_main_t *vm)
+{
+  ASSERT (vm->thread_index <= PRODUCT_GRAPH_WORKERS);
+  return &product_packet_batch_stats[vm->thread_index];
+}
+#endif
+
 static void
 product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
                                   product_policy_snapshot_t *snapshot)
@@ -464,6 +496,9 @@ product_policy_snapshot_acquire (product_packet_graph_main_t *graph,
       snapshot->protocols_available = 0;
       snapshot->sni_result = 0;
       snapshot->domain_lists = 0;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      snapshot->prepared_query = 0;
+#endif
       snapshot->position = PRODUCT_L4_POLICY_POSITION_ALL;
       snapshot->bank = &graph->l4_policy_banks[index];
       snapshot->bank_index = index;
@@ -502,7 +537,11 @@ product_policy_domains_clear (product_packet_graph_main_t *graph)
 
 static product_packet_result_t product_packet_graph_policy_on_owner (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
-  product_packet_graph_policy_evaluation_t *evaluation, int trace);
+  product_packet_graph_policy_evaluation_t *evaluation, int trace
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  , const product_policy_snapshot_t *batch_snapshot
+#endif
+  );
 
 
 static void product_packet_graph_deactivate_policy_view (
@@ -1181,6 +1220,9 @@ product_capacity_configure_empty (product_packet_graph_main_t *graph,
     clib_atomic_store_rel_n (&graph->handoff_credits[i], credits);
 }
 
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+#include "product_packet_batch_admit.inc"
+#else
 static int
 product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
                           u32 bi, product_buffer_metadata_t *metadata,
@@ -1241,6 +1283,7 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
   return 1;
 }
 #endif
+#endif
 
 VLIB_NODE_FN (product_packet_admit_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -1250,11 +1293,32 @@ VLIB_NODE_FN (product_packet_admit_node)
   u32 index;
 
   PRODUCT_EVIDENCE_ADD (admit_vectors, frame->n_vectors);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
+  product_primary_batch_t primary = {0};
+  product_admit_prepared_t prepared[PRODUCT_PACKET_PREPARE_SIZE];
+  product_packet_batch_counters (vm)->admit_frames++;
+  product_packet_batch_counters (vm)->admit_vectors += frame->n_vectors;
+#endif
 
   for (index = 0; index < frame->n_vectors; index++)
     {
       u32 buffer_index = from[index];
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      vlib_buffer_t *buffer = buffers[index];
+      if (index % PRODUCT_PACKET_PREPARE_SIZE == 0)
+        {
+          for (u32 k = 0; k < PRODUCT_PACKET_PREPARE_SIZE; ++k)
+            product_batch_prefetch_buffer (buffers,
+              index + PRODUCT_PACKET_PREPARE_SIZE + k, frame->n_vectors, 1);
+          product_admit_prepare_window (vm, buffers, index,
+            clib_min (PRODUCT_PACKET_PREPARE_SIZE, frame->n_vectors - index), prepared);
+        }
+      product_admit_prepared_t *item = &prepared[index % PRODUCT_PACKET_PREPARE_SIZE];
+#else
       vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+#endif
       product_buffer_metadata_t initial_metadata;
       product_buffer_metadata_t metadata;
       product_packet_lease_t lease;
@@ -1267,8 +1331,17 @@ VLIB_NODE_FN (product_packet_admit_node)
 
       product_metadata_load (buffer, &initial_metadata);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      if (item->fragment)
+        {
+          product_primary_batch_flush (vm, node, &primary);
+          if (product_fragment_dispatch (vm, node, buffer_index, &initial_metadata))
+            continue;
+        }
+#else
       if (product_fragment_dispatch (vm, node, buffer_index, &initial_metadata))
         continue;
+#endif
 #endif
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!clib_atomic_load_acq_n (&graph->accepting))
@@ -1296,6 +1369,10 @@ VLIB_NODE_FN (product_packet_admit_node)
       clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
       clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
 #endif
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      (void) ingress; (void) logical_worker; (void) layout;
+      lease = item->lease;
+#else
       clib_memset (&ingress, 0, sizeof (ingress));
       ingress.data = vlib_buffer_get_current (buffer);
       ingress.length = buffer->current_length;
@@ -1305,6 +1382,7 @@ VLIB_NODE_FN (product_packet_admit_node)
             buffer, initial_metadata.generation, &ingress.platform))
         product_packet_graph_platform_facts_unknown (&ingress.platform);
       clib_memset (&lease, 0, sizeof (lease));
+#endif
       product_packet_result_t admit_result;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (initial_metadata.fragment_bundle_count)
@@ -1315,7 +1393,14 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
       else
 #endif
-        admit_result = product_packet_admit (&layout, &ingress, &lease);
+        {
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+          ASSERT (item->ordinary);
+          admit_result = item->result;
+#else
+          admit_result = product_packet_admit (&layout, &ingress, &lease);
+#endif
+        }
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (admit_result != PRODUCT_PACKET_OK)
         {
@@ -1369,7 +1454,12 @@ VLIB_NODE_FN (product_packet_admit_node)
           && lease.distribution == PRODUCT_PACKET_DISTRIBUTION_PRIMARY_REMOTE)
         {
           product_packet_processing_bypass_reason_t reason = PRODUCT_PACKET_BYPASS_NONE;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+          if (product_primary_batch_append (vm, node, &primary,
+                buffer_index, &metadata, &reason))
+#else
           if (product_primary_handoff (vm, node, buffer_index, &metadata, &reason))
+#endif
             continue;
           /* Retained rejection still owns this buffer on arrival worker. */
           if (product_packet_bypass_primary_capacity (&lease, reason) != PRODUCT_PACKET_OK)
@@ -1428,6 +1518,9 @@ VLIB_NODE_FN (product_packet_admit_node)
         }
 #endif
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_primary_batch_flush (vm, node, &primary);
+#endif
   return frame->n_vectors;
 }
 
@@ -1592,6 +1685,12 @@ VLIB_NODE_FN (product_packet_policy_node)
   u32 index;
 
   PRODUCT_EVIDENCE_ADD (policy_vectors, frame->n_vectors);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
+  product_policy_snapshot_t batch_snapshot;
+  u64 batch_started = 0;
+#endif
 
   for (index = 0; index < frame->n_vectors; index++)
     {
@@ -1601,6 +1700,31 @@ VLIB_NODE_FN (product_packet_policy_node)
       product_packet_lease_t lease;
       product_packet_graph_policy_evaluation_t evaluation;
       product_packet_result_t policy_result;
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      buffer = buffers[index];
+      if (index % PRODUCT_POLICY_BATCH_SIZE == 0)
+        {
+          if (index)
+            {
+              u64 held = product_packet_event_clock_ns () - batch_started;
+              product_packet_batch_stats_t *stats = product_packet_batch_counters (vm);
+              stats->policy_hold_ns += held;
+              stats->policy_hold_max_ns = clib_max (stats->policy_hold_max_ns, held);
+              product_policy_snapshot_release (graph, &batch_snapshot);
+            }
+          product_policy_snapshot_acquire (graph, &batch_snapshot);
+          batch_started = product_packet_event_clock_ns ();
+          product_packet_batch_counters (vm)->policy_claims++;
+        }
+      product_batch_prefetch_buffer (buffers, index + 4, frame->n_vectors, 1);
+      product_batch_flow_prefetch (vm, buffers, index + 6,
+        frame->n_vectors, PRODUCT_FLOW_PREFETCH_BUCKET);
+      product_batch_flow_prefetch (vm, buffers, index + 3,
+        frame->n_vectors, PRODUCT_FLOW_PREFETCH_INDEX);
+      product_batch_flow_prefetch (vm, buffers, index + 1,
+        frame->n_vectors, PRODUCT_FLOW_PREFETCH_STATE);
+#endif
 
       product_metadata_load (buffer, &metadata);
       if (metadata.generation != graph->generation)
@@ -1686,12 +1810,20 @@ VLIB_NODE_FN (product_packet_policy_node)
             }
           policy_result = product_packet_graph_policy_on_owner (
             vm, buffer_index, &lease, &evaluation,
-            metadata.state_bits & PRODUCT_META_TRACE);
+            metadata.state_bits & PRODUCT_META_TRACE
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+            , &batch_snapshot
+#endif
+            );
         }
 #else
       policy_result = product_packet_graph_policy_on_owner (
             vm, buffer_index, &lease, &evaluation,
-            metadata.state_bits & PRODUCT_META_TRACE);
+            metadata.state_bits & PRODUCT_META_TRACE
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+            , &batch_snapshot
+#endif
+            );
 #endif
       if (policy_result != PRODUCT_PACKET_OK
           && lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
@@ -1714,12 +1846,27 @@ VLIB_NODE_FN (product_packet_policy_node)
       product_metadata_set_terminal_intent (&metadata, lease.terminal_intent);
       metadata.runtime_drop_reason = lease.runtime_drop_reason;
       metadata.processing_bypass_reason = lease.processing_bypass_reason;
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+      metadata.reserved_bits = (metadata.reserved_bits & ~3U) |
+        (policy_result == PRODUCT_PACKET_OK && evaluation.policy_qualified
+          ? (1U | (evaluation.matched ? 2U : 0U)) : 0U);
+#endif
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_POLICY,
                          metadata.origin_obligation_id);
       vlib_buffer_enqueue_to_single_next (
         vm, node, &buffer_index, PRODUCT_POLICY_NEXT_CONSUMER, 1);
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  if (frame->n_vectors)
+    {
+      u64 held = product_packet_event_clock_ns () - batch_started;
+      product_packet_batch_stats_t *stats = product_packet_batch_counters (vm);
+      stats->policy_hold_ns += held;
+      stats->policy_hold_max_ns = clib_max (stats->policy_hold_max_ns, held);
+      product_policy_snapshot_release (graph, &batch_snapshot);
+    }
+#endif
   return frame->n_vectors;
 }
 
@@ -1748,10 +1895,19 @@ VLIB_NODE_FN (product_flow_consumer_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   u32 *from = vlib_frame_vector_args (frame);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
+#endif
   for (u32 i = 0; i < frame->n_vectors; i++)
     {
       u32 bi = from[i], next = PRODUCT_CONSUMER_NEXT_TERMINAL;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      vlib_buffer_t *b = buffers[i];
+      product_batch_prefetch_buffer (buffers, i + 4, frame->n_vectors, 0);
+#else
       vlib_buffer_t *b = vlib_get_buffer (vm, bi);
+#endif
       if (product_buffer_is_flow_end (b))
         {
           if (product_flow_end_consume (vm, node, bi))
@@ -1760,14 +1916,24 @@ VLIB_NODE_FN (product_flow_consumer_node)
       else
         {
           product_buffer_metadata_t metadata;
-          product_packet_lease_t lease;
           product_metadata_load (b, &metadata);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+          product_platform_packet_facts_t platform;
+          u8 intent = product_batch_metadata_span_valid (&metadata, b)
+            ? product_metadata_terminal_intent (&metadata) : PRODUCT_PACKET_INTENT_DROP_RUNTIME;
+          if (product_packet_graph_get_platform_facts (b, metadata.generation, &platform) &&
+              platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+              intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME)
+            next = PRODUCT_CONSUMER_NEXT_VPN_EGRESS;
+#else
+          product_packet_lease_t lease;
           product_lease_from_metadata (&metadata, b, &lease);
           if (product_packet_graph_get_platform_facts (b, metadata.generation,
                                                        &lease.platform) &&
               lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
               lease.terminal_intent != PRODUCT_PACKET_INTENT_DROP_RUNTIME)
             next = PRODUCT_CONSUMER_NEXT_VPN_EGRESS;
+#endif
           if (metadata.state_bits & PRODUCT_META_TRACE)
             fprintf (stderr, "s225 event=consumer_packet node=%u thread=%u owner=%u generation=%llu buffer=%u token=%llu next=%u is_flow_end=0\n",
               node->node_index, vm->thread_index, metadata.expected_owner,
@@ -1829,9 +1995,9 @@ VLIB_REGISTER_NODE(product_vpn_egress_node) = {
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-#define PRODUCT_COMPLETION_RETURN_CAPACITY 512
+#define PRODUCT_COMPLETION_RETURN_CAPACITY 1024
 _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
-                  PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_CAPACITY
+                  PRODUCT_ROOT_COMPLETION_MAX_LANES * PRODUCT_ROOT_COMPLETION_MAX_CAPACITY
                   + 3 * PRODUCT_GRAPH_INJECTION_CAPACITY,
                 "return backlog covers every current admitted carrier");
 _Static_assert (PRODUCT_COMPLETION_RETURN_CAPACITY >
@@ -1847,6 +2013,9 @@ typedef struct
 } __attribute__((aligned(CLIB_CACHE_LINE_BYTES))) product_completion_return_queue_t;
 static product_completion_return_queue_t product_completion_returns[PRODUCT_GRAPH_WORKERS + 1];
 
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+#include "product_packet_batch_completion.inc"
+#else
 static int
 product_completion_return_try (vlib_main_t *vm, vlib_node_runtime_t *node,
                                 u32 bi, const product_packet_completion_frame_t *completion,
@@ -1900,6 +2069,7 @@ product_completion_return (vlib_main_t *vm, vlib_node_runtime_t *node,
   clib_atomic_fetch_add_relax (&graph->completion_deferred, 1);
   vlib_node_set_interrupt_pending (vm, product_packet_completion_retry_node.index);
 }
+#endif
 
 VLIB_NODE_FN (product_packet_completion_retry_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
@@ -1910,6 +2080,10 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
   (void) frame;
   ASSERT (thread <= PRODUCT_GRAPH_WORKERS);
   product_completion_return_queue_t *queue = &product_completion_returns[thread];
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  (void) graph;
+  completed = product_completion_retry_batch (vm, node);
+#else
   u32 budget = clib_min(queue->count, 64);
   while (queue->count && budget--)
     {
@@ -1933,6 +2107,7 @@ VLIB_NODE_FN (product_packet_completion_retry_node)
       clib_atomic_fetch_sub_relax (&graph->completion_pending_returns, 1);
       completed++;
     }
+#endif
   /* A full destination is dependency-blocked, not immediately runnable work.
    * Retry on a bounded native deadline without occupying an idle CPU. */
   if (queue->count && !vlib_node_is_scheduled(vm, node->node_index))
@@ -1960,11 +2135,23 @@ VLIB_NODE_FN (product_packet_terminal_node)
   u32 index;
 
   PRODUCT_EVIDENCE_ADD (terminal_vectors, frame->n_vectors);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
+  product_completion_batch_t returns = {0};
+  ASSERT (!product_completion_dispatch[vm->thread_index].active);
+  product_completion_dispatch[vm->thread_index].active = &returns;
+#endif
 
   for (index = 0; index < frame->n_vectors; index++)
     {
       u32 buffer_index = from[index];
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      vlib_buffer_t *buffer = buffers[index];
+      product_batch_prefetch_buffer (buffers, index + 4, frame->n_vectors, 0);
+#else
       vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+#endif
       if (product_buffer_is_flow_end (buffer))
         {
           product_flow_end_terminal (vm, node, buffer_index);
@@ -1989,7 +2176,12 @@ VLIB_NODE_FN (product_packet_terminal_node)
           vlib_buffer_free (vm, &buffer_index, 1);
           continue;
         }
-      product_lease_from_metadata (&metadata, buffer, &lease);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      if (!metadata.fragment_bundle_count && !(metadata.state_bits & PRODUCT_META_TRACE))
+        product_batch_terminal_lease (&metadata, buffer, &lease);
+      else
+#endif
+        product_lease_from_metadata (&metadata, buffer, &lease);
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       if (!product_fixture_index_from_obligation (
             metadata.origin_obligation_id, &fixture_index))
@@ -2119,6 +2311,18 @@ VLIB_NODE_FN (product_packet_terminal_node)
         .processing_bypass_reason = lease.processing_bypass_reason,
         .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
       };
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+      if ((metadata.reserved_bits & 1U) &&
+          completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
+          completion.processing_bypass_reason == PRODUCT_PACKET_BYPASS_NONE &&
+          (completion.terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER ||
+           (completion.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME &&
+            completion.runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4)))
+        completion.flags |= PRODUCT_COMPLETION_POLICY_QUALIFIED;
+      if ((completion.flags & PRODUCT_COMPLETION_POLICY_QUALIFIED) &&
+          (metadata.reserved_bits & 2U))
+        completion.flags |= PRODUCT_COMPLETION_POLICY_QUALIFIED_MATCHED;
+#endif
       if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
         completion.flags |= PRODUCT_COMPLETION_FLOW_STACK_RETURN;
       if (lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
@@ -2175,6 +2379,10 @@ VLIB_NODE_FN (product_packet_terminal_node)
         }
 #endif
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_completion_batch_flush (vm, node, &returns);
+  product_completion_dispatch[vm->thread_index].active = 0;
+#endif
   return frame->n_vectors;
 }
 
@@ -2191,16 +2399,91 @@ VLIB_REGISTER_NODE (product_packet_terminal_node) = {
 };
 
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+typedef struct
+{
+  u32 indices[PRODUCT_PACKET_BATCH_SIZE];
+  product_packet_completion_frame_t completion[PRODUCT_PACKET_BATCH_SIZE];
+  u8 free_native[PRODUCT_PACKET_BATCH_SIZE], valid_tun[PRODUCT_PACKET_BATCH_SIZE];
+  u32 count;
+} product_origin_reclaim_t;
+
+static void
+product_origin_reclaim_flush (vlib_main_t *vm, product_origin_reclaim_t *batch)
+{
+  if (!batch->count) return;
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  u32 native[PRODUCT_PACKET_BATCH_SIZE], n_native = 0, settlements = 0;
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+  u8 root_returned[PRODUCT_PACKET_BATCH_SIZE];
+  product_root_nfqueue_complete_batch_from_graph (vm, batch->indices,
+    batch->completion, batch->count, root_returned);
+  for (u32 i = 0; i < batch->count; ++i)
+    if (batch->completion[i].obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE)
+      batch->free_native[i] = !root_returned[i];
+#endif
+  for (u32 i = 0; i < batch->count; ++i)
+    if (batch->free_native[i]) native[n_native++] = batch->indices[i];
+  if (n_native) vlib_buffer_free (vm, native, n_native);
+  for (u32 i = 0; i < batch->count; ++i)
+    {
+      const product_packet_completion_frame_t *completion = &batch->completion[i];
+      if (batch->valid_tun[i])
+        product_vpn_tun_return_freed (vm, batch->indices[i], completion);
+      settlements += !(completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE);
+    }
+  /* Root loans were returned by their identity operation; only other carriers
+   * entered native[]. Debt follows actual pool/native return in either case. */
+  clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, batch->count);
+  clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, batch->count);
+  clib_atomic_fetch_sub_relax (&graph->lifecycle_obligations, settlements);
+  clib_atomic_fetch_add_relax (&graph->lifecycle_settlements, settlements);
+  clib_atomic_fetch_add_relax (&graph->lifecycle_returns, settlements);
+  for (u32 i = 0; i < batch->count; ++i)
+    {
+      const product_packet_completion_frame_t *completion = &batch->completion[i];
+      if (completion->flags & PRODUCT_COMPLETION_TRACE)
+        fprintf (stderr, "s203 event=buffer_free source=%s thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u completion_frames=%u\n",
+          (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ? "COMPLETION_REPLAY" :
+          completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED ? "GRAPH_INJECTED" :
+          completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? "TUN_CAPTURED" : "NFQ_CAPTURED",
+          vm->thread_index, batch->indices[i], (unsigned long long) completion->obligation.token,
+          clib_atomic_load_acq_n (&graph->lifecycle_buffers),
+          clib_atomic_load_acq_n (&graph->lifecycle_obligations),
+          clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
+    }
+  batch->count = 0;
+}
+#endif
 VLIB_NODE_FN (product_packet_origin_completion_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   u32 *from = vlib_frame_vector_args (frame);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  (void) graph;
+  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  product_origin_reclaim_t reclaim = {0};
+  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
+  product_packet_batch_counters (vm)->origin_frames++;
+  product_packet_batch_counters (vm)->origin_vectors += frame->n_vectors;
+#endif
   for (u32 i = 0; i < frame->n_vectors; i++)
     {
       u32 bi = from[i];
       product_packet_completion_frame_t completion;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      product_batch_prefetch_buffer (buffers, i + 4, frame->n_vectors, 0);
+      if (i + 2 < frame->n_vectors)
+        {
+          product_packet_completion_frame_t future;
+          clib_memcpy_fast (&future, buffers[i + 2]->opaque2, sizeof (future));
+          product_root_nfqueue_prefetch_completion (vm, &future);
+        }
+      clib_memcpy_fast (&completion, buffers[i]->opaque2, sizeof (completion));
+#else
       clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
+#endif
       const char *source = (completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE)
         ? "COMPLETION_REPLAY" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
         ? "GRAPH_INJECTED" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
@@ -2221,7 +2504,12 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
       switch (completion.obligation.kind)
         {
         case PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE:
+#ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
+          /* Kept in this origin window until its independent verdict completes. */
+          root_buffer_returned = 1;
+#else
           root_buffer_returned = product_root_nfqueue_complete_from_graph (vm, bi, &completion);
+#endif
           break;
         case PRODUCT_ADAPTER_OBLIGATION_VPN_TUN:
           valid_tun_completion = product_vpn_tun_complete_from_graph (vm, bi, &completion);
@@ -2229,6 +2517,15 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
         default:
           break; /* GRAPH_INJECTED owns no native adapter operation. */
         }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      u32 at = reclaim.count++;
+      reclaim.indices[at] = bi;
+      reclaim.completion[at] = completion;
+      reclaim.free_native[at] = !root_buffer_returned;
+      reclaim.valid_tun[at] = valid_tun_completion;
+      if (reclaim.count == PRODUCT_PACKET_BATCH_SIZE)
+        product_origin_reclaim_flush (vm, &reclaim);
+#else
       if (!root_buffer_returned)
         vlib_buffer_free (vm, &bi, 1);
       if (valid_tun_completion)
@@ -2247,7 +2544,11 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
           clib_atomic_load_acq_n (&graph->lifecycle_buffers),
           clib_atomic_load_acq_n (&graph->lifecycle_obligations),
           clib_atomic_load_acq_n (&graph->lifecycle_completion_frames));
+#endif
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_origin_reclaim_flush (vm, &reclaim);
+#endif
   return frame->n_vectors;
 }
 VLIB_REGISTER_NODE (product_packet_origin_completion_node) = {
@@ -2298,12 +2599,22 @@ product_packet_graph_replay_completion (vlib_main_t *vm,
 #endif
 }
 
+static u32
+product_packet_graph_default_handoff_credits (product_adapter_obligation_kind_t adapter_kind)
+{
+  return adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+    ? PRODUCT_ROOT_DEFAULT_HANDOFF_CREDITS : PRODUCT_GRAPH_HANDOFF_CREDITS;
+}
+
 int
-product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
+product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
+                                     product_adapter_obligation_kind_t adapter_kind)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
 
-  if (vm == 0 || generation == 0)
+  if (vm == 0 || generation == 0
+      || (adapter_kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
+          && adapter_kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN))
     return 0;
   if (clib_atomic_load_acq_n (&graph->enabled)
       || clib_atomic_load_acq_n (&graph->lifecycle_obligations) != 0
@@ -2314,8 +2625,12 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
     return 0;
 
   graph->vlib_main = vm;
+  graph->adapter_kind = adapter_kind;
 
   graph->generation = generation;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  clib_memset (product_packet_batch_stats, 0, sizeof (product_packet_batch_stats));
+#endif
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   product_fragment_start (vm);
 #endif
@@ -2327,7 +2642,8 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
   graph->lifecycle_completion_frames = 0;
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   graph->misroute_next = 0;
-  product_capacity_configure_empty (graph, PRODUCT_GRAPH_HANDOFF_CREDITS, 64, 128);
+  product_capacity_configure_empty (graph,
+    product_packet_graph_default_handoff_credits (adapter_kind), 64, 128);
   graph->primary_published = graph->primary_received = graph->primary_rejected = 0;
   graph->owner_delivery_checks = graph->owner_delivery_failures = 0;
   graph->completion_returns = graph->completion_deferred = graph->completion_retry_attempts = 0;
@@ -2355,6 +2671,8 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation)
 void
 product_packet_graph_stop_external (vlib_main_t *vm)
 {
+  /* An early process exit can precede adapter startup and worker VM creation. */
+  if (!vm) return;
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_flow_end_quiesce (vm);
   product_observation_quiesce ();
@@ -2389,6 +2707,10 @@ product_packet_graph_hash_seed (void)
 uint32_t
 product_packet_graph_handoff_credits (void)
 {
+#ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
+  if (product_packet_graph_main.primary_credit_limit)
+    return product_packet_graph_main.primary_credit_limit;
+#endif
   return PRODUCT_GRAPH_HANDOFF_CREDITS;
 }
 
@@ -2577,7 +2899,7 @@ product_packet_graph_l4_direction_from_platform (
     }
 }
 
-static void
+static_always_inline void
 product_packet_graph_l4_packet_projection (
   const product_packet_lease_t *lease, product_l4_policy_packet_t *packet)
 {
@@ -2938,57 +3260,83 @@ product_packet_graph_l4_match_policy_key (u64 generation, u64 revision,
   return hash == 0 ? 1 : hash;
 }
 
+static_always_inline u64
+product_packet_graph_l4_match_evidence_prefix (
+  const product_l4_policy_packet_t *packet, u64 policy_key)
+{
+  u64 hash = PRODUCT_PACKET_GRAPH_L4_EVIDENCE_FNV_OFFSET;
+
+  hash = product_packet_graph_l4_evidence_hash_u64 (hash, policy_key);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet->family);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet->protocol);
+  hash = product_packet_graph_l4_evidence_hash_bytes (
+    hash, packet->source_address, sizeof (packet->source_address));
+  hash = product_packet_graph_l4_evidence_hash_bytes (
+    hash, packet->destination_address, sizeof (packet->destination_address));
+  return hash;
+}
+
+static_always_inline u64
+product_packet_graph_l4_match_evidence_suffix (
+  const product_l4_policy_packet_t *packet, u64 hash)
+{
+  hash = product_packet_graph_l4_evidence_hash_u32 (hash, packet->uid);
+  hash = product_packet_graph_l4_evidence_hash_u32 (
+    hash, packet->network_context_id);
+  hash = product_packet_graph_l4_evidence_hash_u32 (hash, packet->ifindex);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet->direction);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash,
+                                                     packet->uid_known);
+  hash = product_packet_graph_l4_evidence_hash_byte (
+    hash, packet->network_context_known);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet->ifindex_known);
+  hash = product_packet_graph_l4_evidence_hash_byte (hash,
+                                                     packet->direction_known);
+  return hash == 0 ? 1 : hash;
+}
+
 static u64
 product_packet_graph_l4_match_evidence_key (
   const product_packet_lease_t *lease, u64 generation, u64 revision,
   u64 snapshot_hash, int include_destination_port)
 {
   product_l4_policy_packet_t packet;
-  u64 hash = PRODUCT_PACKET_GRAPH_L4_EVIDENCE_FNV_OFFSET;
+  u64 hash;
 
   product_packet_graph_l4_packet_projection (lease, &packet);
-  hash = product_packet_graph_l4_evidence_hash_u64 (
-    hash, product_packet_graph_l4_match_policy_key (generation, revision,
-                                                     snapshot_hash));
-  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet.family);
-  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet.protocol);
-  hash = product_packet_graph_l4_evidence_hash_bytes (
-    hash, packet.source_address, sizeof (packet.source_address));
-  hash = product_packet_graph_l4_evidence_hash_bytes (
-    hash, packet.destination_address, sizeof (packet.destination_address));
+  hash = product_packet_graph_l4_match_evidence_prefix (
+    &packet, product_packet_graph_l4_match_policy_key (generation, revision,
+                                                        snapshot_hash));
   if (include_destination_port)
     hash = product_packet_graph_l4_evidence_hash_u16 (
       hash, packet.destination_port);
-  hash = product_packet_graph_l4_evidence_hash_u32 (hash, packet.uid);
-  hash = product_packet_graph_l4_evidence_hash_u32 (
-    hash, packet.network_context_id);
-  hash = product_packet_graph_l4_evidence_hash_u32 (hash, packet.ifindex);
-  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet.direction);
-  hash = product_packet_graph_l4_evidence_hash_byte (hash,
-                                                     packet.uid_known);
-  hash = product_packet_graph_l4_evidence_hash_byte (
-    hash, packet.network_context_known);
-  hash = product_packet_graph_l4_evidence_hash_byte (hash, packet.ifindex_known);
-  hash = product_packet_graph_l4_evidence_hash_byte (hash,
-                                                     packet.direction_known);
-  return hash == 0 ? 1 : hash;
+  return product_packet_graph_l4_match_evidence_suffix (&packet, hash);
+}
+
+static void
+product_packet_graph_l4_match_evidence_keys (
+  const product_packet_lease_t *lease, u64 policy_key,
+  u64 *probe_key, u64 *subject_key)
+{
+  product_l4_policy_packet_t packet;
+  u64 prefix;
+
+  /* The two identities differ only by destination-port bytes before the
+   * subject suffix. Reuse this record's projection and uncommitted prefix;
+   * retain the exact byte order and final zero-marker normalization. */
+  product_packet_graph_l4_packet_projection (lease, &packet);
+  prefix = product_packet_graph_l4_match_evidence_prefix (&packet, policy_key);
+  *probe_key = product_packet_graph_l4_match_evidence_suffix (
+    &packet, product_packet_graph_l4_evidence_hash_u16 (
+      prefix, packet.destination_port));
+  *subject_key = product_packet_graph_l4_match_evidence_suffix (&packet, prefix);
 }
 
 static void
 product_packet_graph_l4_match_association_remember (
-  product_packet_graph_main_t *graph, const product_packet_lease_t *lease,
-  u64 generation, u64 revision, u64 snapshot_hash)
+  product_packet_graph_main_t *graph, u64 policy_key,
+  u64 probe_key, u64 subject_key)
 {
-  u64 policy_key;
-  u64 probe_key;
-  u64 subject_key;
-
-  policy_key = product_packet_graph_l4_match_policy_key (generation, revision,
-                                                          snapshot_hash);
-  probe_key = product_packet_graph_l4_match_evidence_key (
-    lease, generation, revision, snapshot_hash, 1);
-  subject_key = product_packet_graph_l4_match_evidence_key (
-    lease, generation, revision, snapshot_hash, 0);
   clib_atomic_store_rel_n (&graph->l4_typed_match_probe_key, probe_key);
   clib_atomic_store_rel_n (&graph->l4_typed_match_subject_key, subject_key);
   /* Publish the complete keys last so readers never trust an old policy key
@@ -3034,7 +3382,13 @@ product_packet_graph_l4_view_evaluate (
   u64 query_started = snapshot->trace ? product_packet_event_clock_ns () : 0;
   u64 previous_hits = snapshot->cache ? snapshot->cache->hits : 0;
 #endif
-  product_packet_graph_l4_packet_projection (lease, &packet);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  if (snapshot->prepared_query && snapshot->prepared_query->prepared &&
+      snapshot->prepared_query->subject)
+    packet = snapshot->prepared_query->static_packet;
+  else
+#endif
+    product_packet_graph_l4_packet_projection (lease, &packet);
   packet.protocol_set = snapshot->protocols;
   packet.protocol_set_known = snapshot->protocols_available;
   packet.sni_result = snapshot->sni_result;
@@ -3052,7 +3406,23 @@ product_packet_graph_l4_view_evaluate (
     snapshot->identity.generation, snapshot->identity.revision,
     snapshot->identity.snapshot_hash, snapshot->flow_incarnation
   };
-  product_l4_policy_status_t status = product_l4_policy_match_cached (
+  product_l4_policy_status_t status;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  if (snapshot->prepared_query)
+    {
+      if (!snapshot->prepared_query->prepared)
+        {
+          status = product_l4_policy_prepare (&snapshot->bank->view, &packet,
+                                              snapshot->prepared_query);
+          if (status != PRODUCT_L4_POLICY_STATUS_OK) return status;
+        }
+      status = product_l4_policy_match_prepared_cached (
+        snapshot->cache, snapshot->prepared_query, &packet, &identity,
+        snapshot->position, match);
+    }
+  else
+#endif
+    status = product_l4_policy_match_cached (
     snapshot->cache, &snapshot->bank->view, &packet, &identity, snapshot->position, match);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (snapshot->trace)
@@ -3085,6 +3455,7 @@ product_packet_graph_record_l4_view_match (
   u64 generation, u64 revision, u64 snapshot_hash,
   const product_l4_policy_match_result_t *match)
 {
+  u64 policy_key, probe_key, subject_key;
   u32 verdict;
 
   if (graph == 0 || lease == 0 || match == 0)
@@ -3108,10 +3479,11 @@ product_packet_graph_record_l4_view_match (
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_revision, revision);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_result,
                            PRODUCT_PACKET_GRAPH_L4_EVALUATION_MATCH);
-  clib_atomic_store_rel_n (
-    &graph->l4_last_evaluation_probe_key,
-    product_packet_graph_l4_match_evidence_key (lease, generation, revision,
-                                                 snapshot_hash, 1));
+  policy_key = product_packet_graph_l4_match_policy_key (generation, revision,
+                                                          snapshot_hash);
+  product_packet_graph_l4_match_evidence_keys (
+    lease, policy_key, &probe_key, &subject_key);
+  clib_atomic_store_rel_n (&graph->l4_last_evaluation_probe_key, probe_key);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_verdict, verdict);
   clib_atomic_store_rel_n (&graph->l4_last_evaluation_device_direction,
                            lease->platform.direction);
@@ -3154,7 +3526,7 @@ product_packet_graph_record_l4_view_match (
                                lease->platform.direction);
     }
   product_packet_graph_l4_match_association_remember (
-    graph, lease, generation, revision, snapshot_hash);
+    graph, policy_key, probe_key, subject_key);
 }
 
 static void
@@ -3827,6 +4199,11 @@ product_packet_graph_policy_stage_snapshot (
 #endif
   clib_atomic_fetch_add_relax (&graph->policy_l4_evaluations, 1);
   evaluation->stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4;
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  /* A nonempty global table is insufficient: this packet must have a subject. */
+  evaluation->policy_qualified = matcher_status == PRODUCT_L4_POLICY_STATUS_OK &&
+    matched_view.candidate_count != 0;
+#endif
   if (matcher_status != PRODUCT_L4_POLICY_STATUS_OK)
     {
       result = product_packet_set_terminal (lease, PRODUCT_PACKET_INTENT_DROP_RUNTIME);
@@ -3898,11 +4275,22 @@ product_packet_graph_policy_stage (
 static product_packet_result_t
 product_packet_graph_policy_on_owner (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
-  product_packet_graph_policy_evaluation_t *evaluation, int trace)
+  product_packet_graph_policy_evaluation_t *evaluation, int trace
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  , const product_policy_snapshot_t *batch_snapshot
+#endif
+  )
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_policy_snapshot_t snapshot;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  snapshot = *batch_snapshot;
+  product_l4_policy_prepared_query_t prepared_query = {0};
+  snapshot.prepared_query = &prepared_query;
+  product_packet_batch_counters (vm)->policy_packets++;
+#else
   product_policy_snapshot_acquire (graph, &snapshot);
+#endif
   product_policy_worker_t *worker = vm->thread_index > 0 && vm->thread_index <= PRODUCT_GRAPH_WORKERS
     ? &graph->policy_workers[vlib_get_worker_index (vm->thread_index)] : 0;
   snapshot.trace = trace;
@@ -3963,8 +4351,8 @@ product_packet_graph_policy_on_owner (
   if (result == PRODUCT_PACKET_OK && !post_flow
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
-  else if (result == PRODUCT_PACKET_OK && observation.entry
-           && !evaluation->terminal_preserved && snapshot.identity.revision)
+  if (result == PRODUCT_PACKET_OK && observation.entry
+      && !evaluation->terminal_preserved && snapshot.identity.revision)
     {
       u16 owner_worker = (u16) vlib_get_worker_index (vm->thread_index);
       product_flow_runtime_t *pool = graph->flow_pools[owner_worker];
@@ -4017,6 +4405,19 @@ product_packet_graph_policy_on_owner (
   }
 #endif
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  evaluation->policy_qualified = evaluation->policy_qualified &&
+    lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+    result == PRODUCT_PACKET_OK && eligible &&
+    early_status == PRODUCT_L4_POLICY_STATUS_OK && !evaluation->terminal_preserved &&
+    evaluation->stage == PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4 &&
+    snapshot.bank->generation == graph->generation && snapshot.identity.revision != 0 &&
+    snapshot.bank->view.rule_count != 0 &&
+    lease->processing_bypass_reason == PRODUCT_PACKET_BYPASS_NONE &&
+    (lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE ||
+     (lease->terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME &&
+      lease->runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4));
+#endif
   if (worker)
     {
       worker->released++;
@@ -4035,15 +4436,87 @@ product_packet_graph_policy_on_owner (
       (unsigned long long) snapshot.bank->generation, (unsigned long long) snapshot.bank->revision,
       (unsigned long long) snapshot.bank->snapshot_hash, (unsigned long long) product_packet_event_clock_ns ());
 #endif
+#ifndef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
   product_policy_snapshot_release (graph, &snapshot);
+#endif
   return result;
 }
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+u32
+product_packet_graph_submit_external_batch (
+  vlib_main_t *vm, const product_packet_graph_external_item_t *items,
+  u32 count, u8 *accepted)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  vlib_frame_t *frame = 0;
+  u32 *to = 0, submitted = 0;
+  if (!items || !accepted || count > VLIB_FRAME_SIZE)
+    return 0;
+  clib_memset (accepted, 0, count);
+  for (u32 i = 0; i < count; ++i)
+    {
+      const product_adapter_obligation_t *obligation = &items[i].obligation;
+      const product_platform_packet_facts_t *platform = &items[i].platform;
+      int vpn_return = vm && vm->thread_index &&
+        obligation->kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
+        platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
+        platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
+        obligation->origin_worker == 0 && obligation->origin_lane == 0 &&
+        obligation->packet_id == vlib_get_worker_index (vm->thread_index) + 1 &&
+        obligation->packet_id <= PRODUCT_VPN_RETURN_WORKERS;
+      if (!vm || obligation->origin_worker >= PRODUCT_GRAPH_WORKERS ||
+          (platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return) ||
+          (!vpn_return && vm->thread_index !=
+            vlib_get_worker_thread_index (obligation->origin_worker)) ||
+          !obligation->token || obligation->queue_generation != graph->generation ||
+          (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
+           obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN) ||
+          !clib_atomic_load_acq_n (&graph->enabled) ||
+          !clib_atomic_load_acq_n (&graph->accepting))
+        continue;
+      product_buffer_metadata_t metadata = {
+        .origin_obligation_id = obligation->token,
+        .generation = obligation->queue_generation,
+      };
+      if (clib_atomic_fetch_add_relax (&graph->trace_packets, 1) < graph->trace_limit)
+        metadata.state_bits |= PRODUCT_META_TRACE;
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, items[i].buffer_index);
+      product_buffer_platform_metadata_t saved = { .obligation = *obligation };
+      clib_memcpy_fast (buffer->opaque, &saved, sizeof (saved));
+      product_metadata_store (buffer, &metadata);
+      product_packet_graph_set_platform_facts (buffer, platform, metadata.generation);
+      if (!frame)
+        {
+          frame = vlib_get_frame_to_node (vm, product_packet_admit_node.index);
+          to = vlib_frame_vector_args (frame);
+        }
+      to[submitted++] = items[i].buffer_index;
+      accepted[i] = 1;
+      clib_atomic_fetch_add_relax (&graph->lifecycle_obligations, 1);
+      clib_atomic_fetch_add_relax (&graph->lifecycle_buffers, 1);
+    }
+  if (submitted)
+    {
+      frame->n_vectors = submitted;
+      vlib_put_frame_to_node (vm, product_packet_admit_node.index, frame);
+    }
+  return submitted;
+}
+#endif
 
 int
 product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
                                       const product_platform_packet_facts_t *platform,
                                       const product_adapter_obligation_t *obligation)
 {
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_packet_graph_external_item_t item = { .buffer_index = buffer_index };
+  u8 accepted = 0;
+  if (platform) item.platform = *platform;
+  if (obligation) item.obligation = *obligation;
+  return product_packet_graph_submit_external_batch (vm, &item, 1, &accepted) == 1;
+#else
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_buffer_metadata_t metadata = { 0 };
   u64 origin_obligation_id = obligation ? obligation->token : 0;
@@ -4092,6 +4565,7 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
   frame->n_vectors = 1;
   vlib_put_frame_to_node (vm, product_packet_admit_node.index, frame);
   return 1;
+#endif
 }
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -4107,12 +4581,15 @@ product_capacity_cli (vlib_main_t *vm, unformat_input_t *input,
   u32 credits, primary, completion;
   (void) command;
   if (unformat (input, "off"))
-    { credits = PRODUCT_GRAPH_HANDOFF_CREDITS; primary = 64; completion = 128; }
+    {
+      credits = product_packet_graph_default_handoff_credits (g->adapter_kind);
+      primary = 64; completion = 128;
+    }
   else if (!unformat (input, "credits %u primary-slots %u completion-slots %u",
                       &credits, &primary, &completion))
     return clib_error_return (0, "expected off or credits N primary-slots N completion-slots N");
   if (unformat_check_input (input) != UNFORMAT_END_OF_INPUT
-      || credits > PRODUCT_GRAPH_HANDOFF_CREDITS
+      || credits > PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS
       || (primary != 2 && primary != 64)
       || (completion != 2 && completion != 128))
     return clib_error_return (0, "unsupported diagnostic capacity");
@@ -4177,6 +4654,74 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
 }
 VLIB_CLI_COMMAND (product_primary_status_command, static) = {
   .path = "show product primary", .function = product_primary_status_cli,
+};
+
+static clib_error_t *
+product_batch_status_cli (vlib_main_t *vm, unformat_input_t *input,
+                          vlib_cli_command_t *command)
+{
+  (void) input; (void) command;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  product_packet_batch_stats_t stats[PRODUCT_GRAPH_WORKERS + 1];
+#endif
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  u64 qualified, matched_allow, matched_drop, cpu_ns = 0;
+  struct timespec cpu;
+#endif
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS)
+  vlib_worker_thread_barrier_sync (vm);
+#endif
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  clib_memcpy_fast (stats, product_packet_batch_stats, sizeof (stats));
+#endif
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  qualified = product_root_nfqueue_adapter_policy_qualified_succeeded ();
+  product_root_nfqueue_adapter_policy_qualified_matched_succeeded (
+    &matched_allow, &matched_drop);
+  if (clock_gettime (CLOCK_PROCESS_CPUTIME_ID, &cpu) == 0)
+    cpu_ns = (u64) cpu.tv_sec * 1000000000ULL + (u64) cpu.tv_nsec;
+#endif
+#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS)
+  vlib_worker_thread_barrier_release (vm);
+#endif
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  for (u32 i = 0; i <= PRODUCT_GRAPH_WORKERS; ++i)
+    vlib_cli_output (vm, "batch.thread=%u admit_frames=%llu admit_vectors=%llu prepare_windows=%llu prepared_packets=%llu primary_calls=%llu primary_publications=%llu primary_vectors=%llu primary_failed=%llu policy_claims=%llu policy_packets=%llu policy_hold_ns=%llu policy_hold_max_ns=%llu completion_calls=%llu completion_publications=%llu completion_vectors=%llu retry_windows=%llu origin_frames=%llu origin_vectors=%llu",
+      i, (unsigned long long) stats[i].admit_frames,
+      (unsigned long long) stats[i].admit_vectors,
+      (unsigned long long) stats[i].prepare_windows,
+      (unsigned long long) stats[i].prepared_packets,
+      (unsigned long long) stats[i].primary_calls,
+      (unsigned long long) stats[i].primary_publications,
+      (unsigned long long) stats[i].primary_vectors,
+      (unsigned long long) stats[i].primary_failed,
+      (unsigned long long) stats[i].policy_claims,
+      (unsigned long long) stats[i].policy_packets,
+      (unsigned long long) stats[i].policy_hold_ns,
+      (unsigned long long) stats[i].policy_hold_max_ns,
+      (unsigned long long) stats[i].completion_calls,
+      (unsigned long long) stats[i].completion_publications,
+      (unsigned long long) stats[i].completion_vectors,
+      (unsigned long long) stats[i].retry_windows,
+      (unsigned long long) stats[i].origin_frames,
+      (unsigned long long) stats[i].origin_vectors);
+  vlib_cli_output (vm, "batch.enabled=1 input_window=%u prepare_window=%u publication_window=%u policy_window=%u retry_window=%u",
+    PRODUCT_ROOT_INPUT_BATCH_SIZE, PRODUCT_PACKET_PREPARE_SIZE,
+    PRODUCT_PACKET_BATCH_SIZE, PRODUCT_POLICY_BATCH_SIZE, PRODUCT_COMPLETION_BATCH_SIZE);
+#else
+  vlib_cli_output (vm, "batch.enabled=0");
+#endif
+#ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
+  vlib_cli_output (vm, "batch.qualification=1 scope=root_ordinary_subject_l4_succeeded policy_qualified_succeeded=%llu policy_qualified_matched_allow_succeeded=%llu policy_qualified_matched_drop_succeeded=%llu cpu_ns=%llu",
+    (unsigned long long) qualified, (unsigned long long) matched_allow,
+    (unsigned long long) matched_drop, (unsigned long long) cpu_ns);
+#else
+  vlib_cli_output (vm, "batch.qualification=0");
+#endif
+  return 0;
+}
+VLIB_CLI_COMMAND (product_batch_status_command, static) = {
+  .path = "show product batch", .function = product_batch_status_cli,
 };
 
 /* Default CLI barrier makes these bounded pool snapshots safe. Packet-side
@@ -4409,10 +4954,12 @@ product_packet_trace_limit_cli (vlib_main_t *vm, unformat_input_t *input,
   (void) command;
   if (product_vpn_tun_product_mode())
     return clib_error_return (0, "packet tracing is unavailable in Product VPN mode");
-  if (!unformat (input, "%u", &limit) || limit < 256 || limit > 4096
-      || (g->trace_packets && limit < g->trace_limit)
+  if (!unformat (input, "%u", &limit) || (limit && limit < 256) || limit > 4096
+      || (limit && g->trace_packets && limit < g->trace_limit)
       || unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
-    return clib_error_return (0, "trace limit 256..4096 may only increase after first packet");
+    return clib_error_return (0, "trace limit 0 disables future traces; positive 256..4096 may only increase after first packet");
+  /* Disabling future capture traces preserves the ordinal and each existing
+   * packet's saved trace flag. The CLI barrier protects this update. */
   /* VPN attachment can generate kernel control packets before CLI is ready.
    * Increasing the cap under this CLI barrier does not reset the ordinal or
    * retroactively trace packets omitted before the increase. */

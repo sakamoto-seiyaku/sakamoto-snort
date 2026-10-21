@@ -11,6 +11,9 @@
 
 ## 当前入口
 
+- [2026-10-11 Root 整链 VPP 批量执行与预取规格](VPP_ROOT_BATCH_EXECUTION_SPEC.md)：
+  用户确认 Root 先行，入口到 origin completion 作为同一完整候选；保持现有资源上限，采用有效策略处理包的整链 CPU 效率验收，规则快照可评估有界批级粒度。未实施、未开始新性能采集；工作与验收状态见 [SAKAMOTO-291](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/e03a4efc-32c0-4b7a-b529-12e06ee730bc)。
+  上句是原规格阶段记录。10-13用户另行选择扩大Root容量并采用默认batch＋packed，已安装真机验证；产品队列分配保持，16k仍有策略拒绝，未宣布整链CPU验收通过。[当前默认值与回归边界](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md)
 - [2026-10-07 Root／VPN按应用DNS过滤正式决定](../adr/0011-application-dns-filtering-root-and-vpn.md)：
   首版范围为Root/NFQ与VPN，共用一套DNS处理实现；KSU/libnetd留作未来扩展，首版不实施。两种当前入口统一应用政策：原请求应用可靠时在查询阶段过滤，归属未知时允许解析、采集关联，后续连接按自身应用和可用证据判断。查询拒绝与连接拒绝分别记录；系统缓存和归属限制不因此消失。详细合同待定义，未实施。
 - [2026-10-07 首版DNS模块方案](../reviews/2026-10-05_VPP_DNS_CAPABILITY_REFERENCE.md#2026-10-07首版范围与模块草图)：

@@ -11,6 +11,25 @@ typedef struct {
   uint32_t next;
 } flow_slot_t;
 
+_Static_assert (offsetof (flow_slot_t, entry) == 0,
+                "FlowEntry address validation requires slot offset zero");
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+/* Immutable identity projection, initialized only from its owning entry.
+ * The array position is the slot; next is only the linked hash chain. Free
+ * slots keep using flow_slot_t.next, so an END cannot become a free slot. */
+typedef struct {
+  product_canonical_owner_key_t key;
+  uint64_t canonical_hash;
+  uint32_t next;
+} flow_index_t;
+
+_Static_assert (sizeof (product_canonical_owner_key_t) == 40,
+                "Compact Flow index requires the current typed key");
+_Static_assert (sizeof (flow_index_t) == 56,
+                "Account for every compact Flow index byte");
+#endif
+
 struct product_flow_runtime {
   product_flow_runtime_snapshot_t stats;
   flow_slot_t *slots;
@@ -21,6 +40,9 @@ struct product_flow_runtime {
   uint64_t next_incarnation;
   product_flow_end_callback_t end_callback;
   void *end_context;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  flow_index_t *index;
+#endif
 };
 
 static int
@@ -69,9 +91,26 @@ bucket_for (const product_flow_runtime_t *pool, uint64_t hash)
 }
 
 static uint32_t
-find_entry (product_flow_runtime_t *pool,
+find_entry (const product_flow_runtime_t *pool,
             const product_owner_assignment_t *assignment)
 {
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  for (uint32_t index = pool->buckets[bucket_for (pool, assignment->canonical_hash)];
+       index != NO_SLOT; index = pool->index[index].next)
+    {
+      const flow_index_t *projection = &pool->index[index];
+      if (projection->canonical_hash != assignment->canonical_hash
+          || !key_equal (&projection->key, &assignment->key))
+        continue;
+      /* Bucket misses never touch the large entry. The matched entry remains
+       * authoritative; the index is not an independently mutable identity. */
+      const product_flow_entry_t *entry = &pool->slots[index].entry;
+      if (entry->linked && entry->in_use
+          && entry->canonical_hash == assignment->canonical_hash
+          && key_equal (&entry->key, &assignment->key))
+        return index;
+    }
+#else
   for (uint32_t index = pool->buckets[bucket_for (pool, assignment->canonical_hash)];
        index != NO_SLOT; index = pool->slots[index].next)
     {
@@ -80,8 +119,59 @@ find_entry (product_flow_runtime_t *pool,
           && key_equal (&entry->key, &assignment->key))
         return index;
     }
+#endif
   return NO_SLOT;
 }
+
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+static void
+prefetch_read (const void *address)
+{
+#if defined (__GNUC__) || defined (__clang__)
+  __builtin_prefetch (address, 0, 3);
+#else
+  (void) address;
+#endif
+}
+
+void
+product_flow_runtime_prefetch (
+  const product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, product_flow_prefetch_stage_t stage)
+{
+  if (!pool || !assignment_is_eligible (assignment)
+      || assignment->execution_owner != pool->stats.worker_index)
+    return;
+  uint32_t bucket = bucket_for (pool, assignment->canonical_hash);
+  if (stage == PRODUCT_FLOW_PREFETCH_BUCKET)
+    prefetch_read (&pool->buckets[bucket]);
+  else if (stage == PRODUCT_FLOW_PREFETCH_INDEX)
+    {
+      uint32_t slot = pool->buckets[bucket];
+      if (slot != NO_SLOT)
+        {
+          const flow_index_t *projection = &pool->index[slot];
+          prefetch_read (projection);
+          /* A packed 56-byte item can straddle the cache line. */
+          prefetch_read (&projection->next);
+        }
+    }
+  else if (stage == PRODUCT_FLOW_PREFETCH_STATE)
+    {
+      uint32_t slot = find_entry (pool, assignment);
+      if (slot != NO_SLOT)
+        {
+          const product_flow_entry_t *entry = &pool->slots[slot].entry;
+          prefetch_read (entry);
+          prefetch_read (&entry->incarnation);
+          prefetch_read (&entry->deadline_us);
+          prefetch_read (&entry->protocol_state);
+        }
+    }
+  /* No lookup conclusion escapes this synchronous owner-local call. The
+   * consuming packet rechecks the current chain and its own deadline/time. */
+}
+#endif
 
 uint64_t product_flow_entry_current_incarnation (product_flow_runtime_t *pool,
   const product_owner_assignment_t *assignment, uint64_t generation,
@@ -213,6 +303,10 @@ release_slot (product_flow_runtime_t *pool, uint32_t slot)
     --pool->stats.linked_entries;
   else
     --pool->stats.ending_entries;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  memset (&pool->index[slot], 0, sizeof (pool->index[slot]));
+  pool->index[slot].next = NO_SLOT;
+#endif
   memset (&old->entry, 0, sizeof (old->entry));
   old->next = pool->free_head;
   pool->free_head = slot;
@@ -267,9 +361,18 @@ product_flow_runtime_close (product_flow_runtime_t *pool, uint32_t slot,
     {
       if (*link == NO_SLOT)
         return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      link = &pool->index[*link].next;
+#else
       link = &pool->slots[*link].next;
+#endif
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  *link = pool->index[slot].next;
+  pool->index[slot].next = NO_SLOT;
+#else
   *link = old->next;
+#endif
   old->next = NO_SLOT;
   old->entry.linked = 0;
   old->entry.end_reason = reason;
@@ -374,8 +477,16 @@ static void
 reset_storage (product_flow_runtime_t *pool)
 {
   memset (pool->slots, 0, sizeof (*pool->slots) * pool->stats.capacity);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  memset (pool->index, 0, sizeof (*pool->index) * pool->stats.capacity);
+#endif
   for (uint32_t i = 0; i < pool->stats.capacity; i++)
-    pool->slots[i].next = i + 1 < pool->stats.capacity ? i + 1 : NO_SLOT;
+    {
+      pool->slots[i].next = i + 1 < pool->stats.capacity ? i + 1 : NO_SLOT;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      pool->index[i].next = NO_SLOT;
+#endif
+    }
   for (uint32_t i = 0; i < pool->bucket_count; i++)
     pool->buckets[i] = NO_SLOT;
   pool->free_head = 0;
@@ -395,6 +506,9 @@ product_flow_runtime_create (product_flow_runtime_t **runtime,
   while (buckets < capacity * 2)
     buckets <<= 1;
   if ((uint64_t) capacity * sizeof (flow_slot_t) > SIZE_MAX
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      || (uint64_t) capacity * sizeof (flow_index_t) > SIZE_MAX
+#endif
       || (uint64_t) buckets * sizeof (uint32_t) > SIZE_MAX)
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   product_flow_runtime_t *pool = calloc (1, sizeof (*pool));
@@ -403,11 +517,21 @@ product_flow_runtime_create (product_flow_runtime_t **runtime,
   pool->slots = calloc (capacity, sizeof (*pool->slots));
   pool->buckets = calloc (buckets, sizeof (*pool->buckets));
   pool->heap = calloc (capacity, sizeof (*pool->heap));
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  pool->index = calloc (capacity, sizeof (*pool->index));
+#endif
   if (!pool->slots || !pool->buckets || !pool->heap)
     {
       product_flow_runtime_destroy (pool);
       return PRODUCT_FLOW_ENTRY_STATUS_ALLOCATION_FAILED;
     }
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  if (!pool->index)
+    {
+      product_flow_runtime_destroy (pool);
+      return PRODUCT_FLOW_ENTRY_STATUS_ALLOCATION_FAILED;
+    }
+#endif
   pool->stats.worker_index = worker_index;
   pool->stats.worker_count = worker_count;
   pool->stats.generation = generation;
@@ -415,7 +539,11 @@ product_flow_runtime_create (product_flow_runtime_t **runtime,
   pool->stats.allocated_bytes = sizeof (*pool)
     + (uint64_t) capacity * sizeof (*pool->slots)
     + (uint64_t) capacity * sizeof (*pool->heap)
-    + (uint64_t) buckets * sizeof (*pool->buckets);
+    + (uint64_t) buckets * sizeof (*pool->buckets)
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+    + (uint64_t) capacity * sizeof (*pool->index)
+#endif
+    ;
   pool->bucket_count = buckets;
   reset_storage (pool);
   *runtime = pool;
@@ -596,8 +724,10 @@ product_flow_entry_observe_impl (
         }
       pool->free_head = pool->slots[slot].next;
       uint32_t bucket = bucket_for (pool, assignment->canonical_hash);
+#ifndef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
       pool->slots[slot].next = pool->buckets[bucket];
       pool->buckets[bucket] = slot;
+#endif
       entry = &pool->slots[slot].entry;
       memset (entry, 0, sizeof (*entry));
       entry->in_use = 1U;
@@ -616,6 +746,15 @@ product_flow_entry_observe_impl (
       entry->policy_generation = packet->policy.generation;
       entry->policy_revision = packet->policy.revision;
       entry->policy_snapshot_hash = packet->policy.snapshot_hash;
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      /* Publish only a fully initialized projection of the immutable identity.
+       * Neither policy enrichment nor tracker updates may edit key/hash. */
+      pool->index[slot].key = entry->key;
+      pool->index[slot].canonical_hash = entry->canonical_hash;
+      pool->index[slot].next = pool->buckets[bucket];
+      pool->buckets[bucket] = slot;
+      pool->slots[slot].next = NO_SLOT;
+#endif
       pool->stats.active_entries++;
       pool->stats.linked_entries++;
       if (pool->stats.active_entries > pool->stats.high_watermark)
@@ -751,11 +890,18 @@ product_flow_runtime_destroy (product_flow_runtime_t *pool)
   /* Destruction is only legal after the native graph has drained. */
   if (pool->stats.ending_entries)
     abort ();
-  if (pool->slots && pool->buckets)
+  if (pool->slots && pool->buckets
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+      && pool->index
+#endif
+      )
     (void) product_flow_runtime_flush (pool);
   free (pool->slots);
   free (pool->buckets);
   free (pool->heap);
+#ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
+  free (pool->index);
+#endif
   free (pool);
 }
 
