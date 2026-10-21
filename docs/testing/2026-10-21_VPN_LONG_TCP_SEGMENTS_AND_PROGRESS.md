@@ -198,3 +198,9 @@ owner0的pending-to-node均值2.33/2.48ms，owner1为40.4/44.1μs。源码 `sche
 两窗on-CPU火焰图中TUN completion含子调用约34–35%，HEV receive约31%（其中readv约24%），policy node约7.7%，HEV scheduling约5.5%；调用链重叠不能相加。约69%采样在内核；spin-unlock的self热点不能单独证明锁竞争。工作线程平均各51–58%单核，CPU-clock不记录off-CPU，尚不能认定500Mbps为CPU或链路上限。
 
 本次冻结的排查假设按优先顺序为：①TUN工作回合推迟同worker的flow-stack推进，缩小该回合应降低pending-to-node时延；②过密重试导致owner1碎片读取，限制无数据重试应降低EAGAIN/交付GiB且保留ACK后恢复；③primary credit或入队拒绝延迟ACK，消除该拒绝应减少sndbuf-full观察；④链路/off-CPU限制吞吐，若CPU成本下降但交付不变，则需要独立等待/链路测量。新比较保持MTU10000、2048/data10240池、32KiB ring/sndbuf、返回额度128和Openwrt_5G，性能变量逐项改变，不以扩大全部容量替代诊断。
+
+### 诊断计数与Host反馈
+
+`show product primary`新增 `primary.rejection credit/enqueue`，分别在真实reserve失败和retained enqueue失败处计数，覆盖scalar与batch实现；既有 `rejected` 总数和处理语义保留。`show product tun`新增 `tun.capture_io`，报告实际capture budget、callback次数、预算退出及callback单调墙钟时间。`show product flow-stack`新增 `flow_stack.step_timing`，报告HEV step墙钟总时长、峰值及超过1ms次数；它包含OS抢占，不能替代CPU时间或独立off-CPU归因。对照和候选使用相同观测代码。
+
+实际Product batch函数的Host回归通过unordered enqueue拒绝与32-credit耗尽，且分别断言两类计数准确；external batch和policy batch回归通过。external batch harness在本轮前遗漏此前拆出的 `submit_external_batch_internal`，其旧提取编译失败已保留，更新为执行真实internal及wrapper；没有修改该Product提交函数来迎合测试。[Host原始日志](../../build-output/vpn-progress-20261021/host-product_packet_batch_test.py.log)。这些回归证明计数与有界拒绝行为，不证明更小TUN回合能改善实机性能。

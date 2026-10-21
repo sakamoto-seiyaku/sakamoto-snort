@@ -70,6 +70,7 @@ typedef uint64_t u64;
 #define clib_atomic_fetch_add_relax(p,n) __atomic_fetch_add((p),(n),__ATOMIC_RELAXED)
 #define clib_panic(message) do { fputs((message), stderr); abort(); } while (0)
 typedef struct { u32 thread_index; } vlib_main_t;
+typedef struct { u32 node_index; } vlib_node_runtime_t;
 typedef struct { u32 n_vectors, vectors[VLIB_FRAME_SIZE]; } vlib_frame_t;
 typedef struct { u8 opaque[40], opaque2[56]; } vlib_buffer_t;
 typedef struct {
@@ -116,12 +117,18 @@ static void forbidden_call(const char *operation) {
 #define product_packet_graph_policy_evaluate(...) forbidden_call("policy")
 #define product_root_nfqueue_complete_from_graph(...) forbidden_call("Root completion")
 #define product_vpn_tun_complete_from_graph(...) forbidden_call("VPN completion")
+static void vlib_buffer_enqueue_to_single_next(vlib_main_t *vm,
+  vlib_node_runtime_t *node, u32 *indices, u32 next, u32 count) {
+  (void)vm; (void)node; (void)indices; (void)next; (void)count;
+  forbidden_call("native next publication");
+}
 '''
 
 dependencies = "\n".join(function(source, name) for name in (
     "product_metadata_load", "product_metadata_store",
     "product_packet_graph_set_platform_facts"))
 production = "\n".join(function(source, name) for name in (
+    "product_packet_graph_submit_external_batch_internal",
     "product_packet_graph_submit_external_batch", "product_packet_graph_submit_external"))
 
 suffix = r'''

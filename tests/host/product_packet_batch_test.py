@@ -128,6 +128,7 @@ typedef struct {
 } vlib_buffer_t;
 typedef struct {
   u64 generation, primary_published, primary_rejected;
+  u64 primary_rejected_credit, primary_rejected_enqueue;
   u64 completion_returns, completion_deferred, completion_retry_attempts;
   u32 primary_frame_queue, completion_return_frame_queue, primary_credit_limit;
   u32 handoff_credits[PRODUCT_GRAPH_WORKERS], lifecycle_handoffs;
@@ -508,6 +509,7 @@ static void primary_partial(void) {
   product_primary_batch_flush(&vm, &node, &batch);
   assert(batch.count == 0 && native_calls == 1 && native_sizes[0] == 8);
   assert(product_packet_graph_main.primary_published == 5 && product_packet_graph_main.primary_rejected == 3);
+  assert(product_packet_graph_main.primary_rejected_enqueue == 3 && product_packet_graph_main.primary_rejected_credit == 0);
   assert(product_packet_graph_main.handoff_credits[0] == 29 && product_packet_graph_main.handoff_credits[1] == 30);
   assert(product_packet_graph_main.lifecycle_handoffs == 5);
   const product_packet_batch_stats_t *stats = &packet_stats[vm.thread_index];
@@ -549,6 +551,7 @@ static void primary_boundaries(void) {
   assert(native_sizes[0] == 16 && native_sizes[1] == 16);
   assert(product_packet_graph_main.handoff_credits[1] == 0 && product_packet_graph_main.lifecycle_handoffs == 32);
   assert(product_packet_graph_main.primary_rejected == 1 && live[32] && !transfers[32]);
+  assert(product_packet_graph_main.primary_rejected_credit == 1 && product_packet_graph_main.primary_rejected_enqueue == 0);
   reset();
   batch = (product_primary_batch_t){0};
   product_packet_graph_main.handoff_credits[0] = 0;

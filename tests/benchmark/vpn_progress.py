@@ -37,6 +37,7 @@ def analyze(directory):
     tcp = counters(before, after, 'flow_stack.tcp_receive ')
     driver = counters(before, after, 'flow_stack.driver ')
     progress = counters(before, after, 'flow_stack.tcp_progress ')
+    timing = counters(before, after, 'flow_stack.step_timing ')
     owners = []
     for owner, receive in tcp.items():
         d, p = driver[owner], progress[owner]
@@ -52,10 +53,15 @@ def analyze(directory):
             sndbuf_full_observations=p['sndbuf_full'],
             pending_to_node_mean_ns=ratio(d['ready_delay_ns'], d['ready_samples']),
             pending_to_node_over_1ms_fraction=ratio(d['ready_over_1ms'], d['ready_samples']),
+            step_wall_ns=timing.get(owner, {}).get('ns'),
+            step_over_1ms=timing.get(owner, {}).get('over_1ms'),
         ))
     return dict(
         directory=str(directory), generation=case['generation'], owners=owners,
         primary=counters(before, after, 'primary.status ')[''],
+        primary_rejection=counters(before, after, 'primary.rejection ').get(''),
+        capture_io=counters(before, after, 'tun.capture_io ').get(''),
+        capture_profile=pixel_quick.rows(after, 'tun.capture_io '),
         input_sha256={name: hashlib.sha256((folder / name).read_bytes()).hexdigest()
                       for name in ('before-cli.txt', 'after-cli.txt', 'native-stop.txt')},
     )

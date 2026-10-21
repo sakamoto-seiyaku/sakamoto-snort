@@ -148,6 +148,7 @@ product_primary_batch_flush (vlib_main_t *vm, vlib_node_runtime_t *node,
       metadata->state_bits &= ~PRODUCT_META_HANDOFF_CREDIT;
       product_handoff_credit_release (graph, metadata->expected_owner);
       clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      clib_atomic_fetch_add_relax (&graph->primary_rejected_enqueue, 1);
       product_packet_lease_t lease;
       product_lease_from_metadata (metadata, buffer, &lease);
       if (product_packet_bypass_primary_capacity (
@@ -192,6 +193,7 @@ product_primary_batch_append (vlib_main_t *vm, vlib_node_runtime_t *node,
     {
       *reason = PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED;
       clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      clib_atomic_fetch_add_relax (&graph->primary_rejected_credit, 1);
       return 0;
     }
   u16 target = vlib_get_worker_thread_index (owner);

@@ -277,6 +277,7 @@ typedef struct
   u32 primary_credit_limit, primary_ring_slots, completion_ring_slots;
   u32 completion_pending_returns;
   u64 primary_published, primary_received, primary_rejected;
+  u64 primary_rejected_credit, primary_rejected_enqueue;
   u64 owner_delivery_checks, owner_delivery_failures;
   u64 completion_returns, completion_deferred, completion_retry_attempts;
 #endif
@@ -1237,6 +1238,7 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
     {
       *reason = PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED;
       clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      clib_atomic_fetch_add_relax (&graph->primary_rejected_credit, 1);
       return 0;
     }
   if (graph->misroute_next)
@@ -1272,6 +1274,7 @@ product_primary_handoff (vlib_main_t *vm, vlib_node_runtime_t *node,
       product_metadata_store (vlib_get_buffer (vm, bi), metadata);
       product_handoff_credit_release (graph, owner);
       clib_atomic_fetch_add_relax (&graph->primary_rejected, 1);
+      clib_atomic_fetch_add_relax (&graph->primary_rejected_enqueue, 1);
       return 0;
     }
   clib_atomic_fetch_add_relax (&graph->primary_published, 1);
@@ -2645,6 +2648,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   product_capacity_configure_empty (graph,
     product_packet_graph_default_handoff_credits (adapter_kind), 64, 128);
   graph->primary_published = graph->primary_received = graph->primary_rejected = 0;
+  graph->primary_rejected_credit = graph->primary_rejected_enqueue = 0;
   graph->owner_delivery_checks = graph->owner_delivery_failures = 0;
   graph->completion_returns = graph->completion_deferred = graph->completion_retry_attempts = 0;
   graph->completion_pending_returns = 0;
@@ -4685,6 +4689,10 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
     clib_atomic_load_acq_n (&g->handoff_credits[1]),
     product_flow_entry_pool_active_count (g->flow_pools[0])
       + product_flow_entry_pool_active_count (g->flow_pools[1]));
+  vlib_cli_output (vm, "primary.rejection generation=%llu credit=%llu enqueue=%llu",
+    (unsigned long long) g->generation,
+    (unsigned long long) clib_atomic_load_acq_n (&g->primary_rejected_credit),
+    (unsigned long long) clib_atomic_load_acq_n (&g->primary_rejected_enqueue));
   return 0;
 }
 VLIB_CLI_COMMAND (product_primary_status_command, static) = {

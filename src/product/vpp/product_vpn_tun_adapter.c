@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #define TUN_PENDING PRODUCT_VPN_TUN_CAPTURE_CAPACITY
+#define TUN_CAPTURE_BUDGET 64
 
 static u64 trace_monotonic_ns(void)
 {
@@ -68,6 +69,7 @@ static struct {
   u64 tun_write_attempts, tun_writes, tun_write_failed;
   u64 tun_write_bytes, tun_write_large, tun_write_max;
   u64 capture_batch_calls, capture_batch_packets, capture_batch_max;
+  u64 capture_callbacks, capture_budget_exits, capture_callback_ns, capture_callback_max_ns;
   u64 stack_accepted_originals, stack_rejected_originals;
   u64 fault_write_at;
   u64 pregraph_returns, local, remote;
@@ -363,11 +365,14 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
   if (vm->thread_index != vlib_get_worker_thread_index (0)
       || file->file_descriptor != (u32) tun.tun_fd) return clib_error_return (0, "TUN lane mismatch");
   if (__atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE)) return 0;
+  u64 started_ns = trace_monotonic_ns();
+  u32 captured = 0;
+  ++tun.capture_callbacks;
 #ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
   product_packet_graph_external_item_t batch[64];
   u32 count = 0;
 #endif
-  for (u32 budget = 0; budget < 64 && tun.pending < TUN_PENDING; ++budget) {
+  for (u32 budget = 0; budget < TUN_CAPTURE_BUDGET && tun.pending < TUN_PENDING; ++budget) {
     u64 token = tun.next_token + 1;
     if (!token || token >= (1ULL << 63)) {
       __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); tun.errors++; break;
@@ -390,6 +395,7 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       tun.errors++; __atomic_store_n(&tun.draining, 1, __ATOMIC_RELEASE); break;
     }
     tun.captured++;
+    ++captured;
     if ((u32) length >= capacity) {
       /* A full read buffer cannot establish absence of TUN truncation. */
       tun.pregraph_returns++; tun.transport_unavailable++;
@@ -445,6 +451,10 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
   /* Publish all ready captures even when the final read/allocation failed. */
   tun_submit_captured(vm, batch, count);
 #endif
+  if (captured == TUN_CAPTURE_BUDGET) ++tun.capture_budget_exits;
+  u64 elapsed_ns = trace_monotonic_ns() - started_ns;
+  tun.capture_callback_ns += elapsed_ns;
+  if (elapsed_ns > tun.capture_callback_max_ns) tun.capture_callback_max_ns = elapsed_ns;
   return 0;
 }
 
@@ -655,6 +665,11 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.capture_batch_calls,
     (unsigned long long)tun.capture_batch_packets,
     (unsigned long long)tun.capture_batch_max);
+  vlib_cli_output(vm, "tun.capture_io budget=%u callbacks=%llu budget_exits=%llu callback_ns=%llu callback_max_ns=%llu",
+    TUN_CAPTURE_BUDGET, (unsigned long long)tun.capture_callbacks,
+    (unsigned long long)tun.capture_budget_exits,
+    (unsigned long long)tun.capture_callback_ns,
+    (unsigned long long)tun.capture_callback_max_ns);
   vlib_cli_output (vm, "tun.status generation=%llu enabled=%u attached=%u fd=%d origin_thread=%u draining=%u captured=%llu submitted=%llu completed=%llu pending=%u policy_drops=%llu runtime_drops=%llu transport_unavailable=%llu pregraph_returns=%llu errors=%llu rejected=%llu local=%llu remote=%llu frames=%llu buffers=%llu obligations=%llu tun_writes=%llu nfq_verdicts=0 direct_egress_ready=0",
     (unsigned long long) tun.generation, tun.enabled, tun.tun_fd >= 0, tun.tun_fd,
     vlib_get_worker_thread_index (0), __atomic_load_n(&tun.draining, __ATOMIC_ACQUIRE),

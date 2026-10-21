@@ -26,6 +26,7 @@ typedef struct {
   uint64_t pending_since_ns, schedule_calls, ready_wakes, timer_wakes;
   uint64_t node_calls, empty_steps, timer_arms, ready_samples;
   uint64_t ready_delay_ns, ready_delay_max_ns, ready_delay_over_1ms;
+  uint64_t step_ns, step_max_ns, step_over_1ms;
   uint32_t index;
   unsigned enabled, stop_requested, stopped, ready, trace;
   int timer_fd;
@@ -391,7 +392,12 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
   }
   owner->output_node = node;
   owner->output_next = 0; /* product-vpn-flow-stack-input -> product-packet-admit */
+  u64 step_started = clock_ns();
   product_vpn_flow_stack_step_result_t result = product_vpn_flow_stack_step(owner->stack, 8, 200);
+  u64 step_elapsed = clock_ns() - step_started;
+  owner->step_ns += step_elapsed;
+  if (step_elapsed > owner->step_max_ns) owner->step_max_ns = step_elapsed;
+  if (step_elapsed > 1000000) ++owner->step_over_1ms;
   if (!received && !result.quanta && !result.runnable) ++owner->empty_steps;
   owner->output_node = NULL;
   owner->snapshot = product_vpn_flow_stack_snapshot(owner->stack);
@@ -441,6 +447,10 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
     (unsigned long long)owner->timer_arms, (unsigned long long)owner->ready_samples,
     (unsigned long long)owner->ready_delay_ns, (unsigned long long)owner->ready_delay_max_ns,
     (unsigned long long)owner->ready_delay_over_1ms);
+  vlib_cli_output(vm, "flow_stack.step_timing owner=%u ns=%llu max_ns=%llu over_1ms=%llu wall_clock=1",
+    index, (unsigned long long)owner->step_ns,
+    (unsigned long long)owner->step_max_ns,
+    (unsigned long long)owner->step_over_1ms);
   vlib_cli_output(vm, "flow_stack.tcp_progress owner=%u idle_rounds=%llu ring_full=%llu sndbuf_full=%llu window_full=%llu cwnd_full=%llu pending_rounds=%llu ring_peak=%llu pending_peak=%llu flight_peak=%llu mss_min=%u mss_max=%u buffer_bytes=%u interest_changes=%llu read_pauses=%llu read_resumes=%llu entry_observations=1",
     index, (unsigned long long)s->tcp_idle_rounds,
     (unsigned long long)s->tcp_ring_full, (unsigned long long)s->tcp_sndbuf_full,
