@@ -41,8 +41,12 @@ def main():
     lib = ReportLib()
     lib.SetRecordFile(str(args.record))
     lib.SetSymfs(str(args.symfs))
-    if lib.MetaInfo().get('trace_offcpu') != 'true':
+    metadata = lib.MetaInfo()
+    if metadata.get('trace_offcpu') != 'true':
         raise ValueError('record has no off-CPU scheduler tracing')
+    record_stats = {key: int(value) for key, value in
+                    (part.split('=', 1) for part in metadata['record_stat'].split(','))}
+    lossy = any(value for key, value in record_stats.items() if 'lost' in key)
     lib.SetTraceOffCpuMode('off-cpu')
     threads = defaultdict(lambda: dict(states=Counter(), categories=Counter(), stacks=Counter(), next_threads=Counter(), intervals=0))
     while (sample := lib.GetNextSample()) is not None:
@@ -82,10 +86,13 @@ def main():
         ))
     report = dict(
         schema='vpn-waits/v1', generation=case['generation'], window_seconds=(end - begin) / 1e9,
+        profile_integrity='LOSSY' if lossy else 'NO_REPORTED_LOSS',
+        complete_wait_accounting=False, record_stats=record_stats,
         record_sha256=hashlib.sha256(args.record.read_bytes()).hexdigest(), threads=output,
         limits=[
             'Separate tracing window; do not pair throughput with CPU-only windows.',
             'Intervals are clipped to the load window; terminal intervals absent from the record cannot be recovered.',
+            'Lost scheduler records can bias interval attribution; retained intervals are not a complete or unbiased wait-time budget.',
             'Stack categories describe where a thread switched out, not what caused its wakeup or all end-to-end latency.',
             'next_thread_on_switch names only the immediate successor; interval duration is not that successor thread CPU time.',
             'Raw prev_state is retained; a preempted stack is not proof of lock contention or a blocking syscall.',

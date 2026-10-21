@@ -365,6 +365,13 @@ def run(args):
     if suite not in ("root-vpn-v1", *VPN_SUITES):
         raise RuntimeError("unknown benchmark suite")
     vpn_only = suite in VPN_SUITES
+    client_cpu_mask = manifest.get("client_cpu_mask")
+    if client_cpu_mask is not None:
+        if not vpn_only or not isinstance(client_cpu_mask, str) or not re.fullmatch(r"[0-9a-fA-F]+", client_cpu_mask) or not int(client_cpu_mask, 16):
+            raise ValueError("client_cpu_mask requires a nonzero hex mask and VPN suite")
+    primary_credits = manifest.get("primary_handoff_credits")
+    if primary_credits is not None and (not vpn_only or type(primary_credits) is not int or primary_credits not in (32, 48)):
+        raise ValueError("primary_handoff_credits requires VPN suite and 32 or 48")
     fresh_each_case = suite in (VPN_FRESH_SUITE, VPN_TCP_SUITE)
     if fresh_each_case and manifest.get('fresh_lifetime_each_case') is not True:
         raise RuntimeError("fresh VPN suite must freeze independent lifetimes")
@@ -427,6 +434,12 @@ def run(args):
                 if suite == VPN_TCP_SUITE:
                     retained_log = run_remote + "/" + case + "-native.log"
                     device.retain_vpn_log(retained_log)
+                if primary_credits is not None:
+                    configured = device.cli(profile, [f"product capacity credits {primary_credits} primary-slots 64 completion-slots 128"])
+                    (cell / "capacity-configured.txt").write_text(configured)
+                    if not any(row.get("generation") == running["generation"] and row.get("credits") == str(primary_credits)
+                               for row in rows(configured, "capacity.configured ")):
+                        raise RuntimeError("diagnostic capacity requires an active empty graph; no retry")
                 client_prefix = ["shell", "su", str(manifest["uid"]), "-c"] if profile == "root" else ["shell"]
                 # Warm only existing tracing and the actual LAN path. Its flows and time are explicit.
                 warm = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), "14", "tcp-fixed", "250", "2", "8"]
@@ -502,8 +515,19 @@ def run(args):
                 if not sampler_pids.get("monitor", "").isdigit() or (manifest["profiling"] and not sampler_pids.get("profiler", "").isdigit()):
                     raise RuntimeError("invalid sampler process identity")
                 argv = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), str(case_id), case, str(manifest["cell_ms"]), str(manifest["threads"]), str(manifest["flows_per_thread"])]
+                if client_cpu_mask is not None:
+                    script = "cat /proc/self/status; echo BENCH_CLIENT_JSON; exec " + shlex.join(argv)
+                    argv = ["/system/bin/taskset", client_cpu_mask, "/system/bin/sh", "-c", script]
                 command = [*client_prefix, shlex.quote(shlex.join(argv))] if profile == "root" else [*client_prefix, *argv]
+                if client_cpu_mask is not None:
+                    command = ["shell", shlex.join(argv)]
                 value = device.command(*command, timeout=manifest["cell_ms"] / 1000 + 2)
+                if client_cpu_mask is not None:
+                    affinity, value = value.split("\nBENCH_CLIENT_JSON\n", 1)
+                    (cell / "client-affinity.txt").write_text(affinity + "\n")
+                    actual_mask = re.search(r"^Cpus_allowed:\s*([0-9a-fA-F,]+)$", affinity, re.M)
+                    if not actual_mask or int(actual_mask[1].replace(",", ""), 16) != int(client_cpu_mask, 16):
+                        raise RuntimeError("actual client CPU affinity differs from frozen mask")
                 (cell / "client.json").write_text(value)
                 client = json.loads(value)
                 if client["uid"] != (manifest["uid"] if profile == "root" else 2000):

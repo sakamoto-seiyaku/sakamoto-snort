@@ -182,7 +182,7 @@ Android实际配置为 `buffers { virtual-only buffers-per-numa 2048 default dat
 
 工作跟踪：[SAKAMOTO-292](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/work-items/0a35cbe1-ce1e-4531-b413-d6d8edc8a94c)。本节记录可重算事实与证伪过程，不把热点直接认定为吞吐上限。
 
-使用 [`vpn_progress.py`](../../tests/benchmark/vpn_progress.py) 重读第四阶段B1/B2原始CLI和同generation停止证据，无设备访问、无新流量。两窗都出现：owner0每次非EAGAIN读取约30–31KiB，owner1约4.5–4.7KiB且读取EAGAIN比例约40%；owner1无数据推进146412/147001轮，ring/sndbuf满的入口观察23958/26828次。它们是次数，不代表等待时间占比；非EAGAIN分母可能包含EOF。
+使用 [`vpn_progress.py`](../../tests/benchmark/vpn_progress.py) 重读第四阶段B1/B2原始CLI和同generation停止证据，无设备访问、无新流量。两窗都出现：owner0每次未遇暂时错误的读取约30–31KiB，owner1约4.5–4.7KiB且暂时错误读取比例约40%；owner1无数据推进146412/147001轮，ring/sndbuf满的入口观察23958/26828次。它们是次数，不代表等待时间占比；`read_blocked`实际合计EAGAIN/EWOULDBLOCK/EINTR，不能单独解释为EAGAIN；非blocked分母可能包含EOF。
 
 [重算结果及输入SHA](../../build-output/vpn-mtu10000-20261021/progress-recomputed.json)，复现命令：
 
@@ -197,7 +197,7 @@ owner0的pending-to-node均值2.33/2.48ms，owner1为40.4/44.1μs。源码 `sche
 
 两窗on-CPU火焰图中TUN completion含子调用约34–35%，HEV receive约31%（其中readv约24%），policy node约7.7%，HEV scheduling约5.5%；调用链重叠不能相加。约69%采样在内核；spin-unlock的self热点不能单独证明锁竞争。工作线程平均各51–58%单核，CPU-clock不记录off-CPU，尚不能认定500Mbps为CPU或链路上限。
 
-本次冻结的排查假设按优先顺序为：①TUN工作回合推迟同worker的flow-stack推进，缩小该回合应降低pending-to-node时延；②过密重试导致owner1碎片读取，限制无数据重试应降低EAGAIN/交付GiB且保留ACK后恢复；③primary credit或入队拒绝延迟ACK，消除该拒绝应减少sndbuf-full观察；④链路/off-CPU限制吞吐，若CPU成本下降但交付不变，则需要独立等待/链路测量。新比较保持MTU10000、2048/data10240池、32KiB ring/sndbuf、返回额度128和Openwrt_5G，性能变量逐项改变，不以扩大全部容量替代诊断。
+本次冻结的排查假设按优先顺序为：①TUN工作回合推迟同worker的flow-stack推进，缩小该回合应降低pending-to-node时延；②过密重试导致owner1碎片读取，限制无数据重试应降低blocked reads/交付GiB且保留ACK后恢复；③primary credit或入队拒绝延迟ACK，消除该拒绝应减少sndbuf-full观察；④链路/off-CPU限制吞吐，若CPU成本下降但交付不变，则需要独立等待/链路测量。新比较保持MTU10000、2048/data10240池、32KiB ring/sndbuf、返回额度128和Openwrt_5G，性能变量逐项改变，不以扩大全部容量替代诊断。
 
 ### 诊断计数与Host反馈
 
@@ -224,6 +224,42 @@ inclusive HEV receive成本5.31→4.09 CPU秒/GiB、调度0.90→0.40；TUN comp
 
 另用同一control64 APK跑generation2115、20秒64流，增加simpleperf `--trace-offcpu`，其465.50Mbps不混入上述ABBA。on-CPU分析明确选择on-cpu模式；[`vpn_waits.py`](../../tests/benchmark/vpn_waits.py)选择off-cpu模式，把sched_switch区间裁剪到端点实际开始/结束时间，保留raw prev_state和完整热点调用链。[等待归因](../../build-output/vpn-progress-20261021/waits.json) · [精确符号/独立CPU图](../../build-output/vpn-progress-20261021/analysis-wait64/analysis.json)。
 
-worker0总off-CPU约9.09秒，其中raw prev_state256的约8.44秒位于 `preempt_schedule → tun_rx_batched → tun_get_user → write → product_vpn_tun_complete_from_graph`；另约0.58秒在UID通知sendto路径被抢占。该worker在VPP epoll等待仅0.032秒，Android fwmark等待约0.029秒。worker1的off-CPU约12.99秒，其中VPP epoll等待11.65秒。worker0切出时紧接着调度 `socket-load` 的区间合计约8.44秒，负载客户端自身CPU为8.59秒；next_comm仅标识切出时的下一线程，不能把整个离CPU区间全算成它的CPU时间。
+最终日志显示该独立窗口记录165370条、丢失1738条kernel记录，userspace lost0；分析器标记 `profile_integrity=LOSSY / complete_wait_accounting=false`。以下均为保留记录中的区间归因，丢失可能造成偏差，不能当作完整等待账本；不重跑替换该窗口。
 
-这补充并修正了对平均CPU的解释：worker0平均只用约53%单核，不代表它在剩余时间等待网络或没有CPU调度压力。该窗口实际显示单TUN lane在回注路径被抢占，而另一owner有大量epoll等待；CPU热点和推进节奏须结合调度解释。跟踪本身会增加开销，一窗不能证明所有抢占成因、一般应用的CPU分布或整机吞吐上限。
+worker0保留区间中的off-CPU约9.09秒，其中raw prev_state256的约8.44秒位于 `preempt_schedule → tun_rx_batched → tun_get_user → write → product_vpn_tun_complete_from_graph`；另约0.58秒在UID通知sendto路径被抢占。保留的VPP epoll等待为0.032秒，Android fwmark等待约0.029秒。worker1保留区间的off-CPU约12.99秒，其中VPP epoll等待11.65秒。worker0切出时紧接着调度 `socket-load` 的区间合计约8.44秒，负载客户端自身CPU为8.59秒；next_comm仅标识切出时的下一线程，不能把整个离CPU区间全算成它的CPU时间。
+
+这补充并修正了对平均CPU的解释：worker0平均只用约53%单核，不代表它在剩余时间等待网络或没有CPU调度压力。该窗口提供单TUN lane在回注路径被抢占、另一owner在epoll等待的线索，不能完整量化二者占比；CPU热点和推进节奏须结合调度解释。跟踪会增加开销，且此窗存在lost，不能证明所有抢占成因、一般应用的CPU分布或整机吞吐上限。
+
+### 客户端CPU亲和性：排除同核消费没有提高吞吐
+
+按[独立协议](../../build-output/vpn-progress-20261021/affinity-protocol.json)，使用完全相同的control64 APK，只将测量客户端的允许CPU mask由ff（CPU0–7）改成8（CPU3），不修改VPP的mainCPU0/workerCPU1、2。两侧warmup保持原状，实际测量的UID2000及exec前继承的 `Cpus_allowed` 均保留在每窗 `client-affinity.txt`。只读sysfs确认CPU1与CPU3容量均160、同属policy0（CPU0–3，最大1803000kHz），没有强制使用大核。
+
+| 窗口 | 客户端CPU | Mbps | VPP CPU秒/GiB | primary credit拒绝 |
+| --- | --- | ---: | ---: | ---: |
+| C1 /2116 | 0–7 | 507.65 | 18.43 | 2734 |
+| D1 /2117 | 3 | 502.01 | 24.18 | 66 |
+| D2 /2118 | 3 | 521.34 | 23.61 | 49 |
+| C2 /2119 | 0–7 | 519.54 | 17.98 | 2615 |
+
+均值513.59→511.68Mbps（−0.37%），CPU/GiB18.20→23.89（+31.26%），成功TUN writes/GiB137426→193416（+40.74%），readv/GiB+44.39%，receive rounds/GiB+35.66%。worker0在CPU3客户端窗平均CPU约76–77%单核，高于共享窗约58%，但没有获得交付收益。D1有2次返回credit不足/OUTPUT_CAPACITY，D2为0；两窗stamp和VPP buffer不足均0。primary拒绝5349→115且credit额度仍32，说明压力也受处理节奏影响；所有enqueue拒绝为0。这否定了“只把消费者搬走即可提速”的简单预测，不能把多用CPU当成效率改善。[独立汇总与火焰图](../../build-output/vpn-progress-20261021/index-affinity.html)。
+
+### primary credit32/48：小幅吞吐取舍，未证明队列槽位不足
+
+此前实际拒绝均为credit耗尽，因此再按[单容量协议](../../build-output/vpn-progress-20261021/credit-protocol.json)只比较32与现有诊断接口支持的48个primary credit，不增加其他候选值。两边同一个control64 APK，capture budget64、primary64槽、completion128槽、返回额度128及普通客户端CPU继承均不变。在warmup前仅一次调用现有 `product capacity`，要求active-empty graph并核对同generation配置；不重试该设置。
+
+| 窗口 | primary credit | Mbps | VPP CPU秒/GiB | credit拒绝 | enqueue拒绝 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| E1 /2120 | 32 | 515.35 | 17.08 | 1962 | 0 |
+| F1 /2121 | 48 | 539.72 | 18.73 | 2383 | 0 |
+| F2 /2122 | 48 | 533.33 | 17.88 | 1888 | 0 |
+| E2 /2123 | 32 | 516.31 | 18.28 | 3939 | 0 |
+
+均值515.83→536.53Mbps（+4.01%），CPU/GiB17.68→18.31（+3.55%），readv/GiB+6.60%，receive rounds/GiB+7.69%；TUN writes/GiB基本不变（+0.09%）。credit拒绝5901→4271（−27.62%），没有消失，enqueue始终0；返回credit/stamp/buffer不足均0。存在局部headroom收益，但不是MTU修复那样的数量级变化，也未证明64个handoff槽位不足。[独立汇总与火焰图](../../build-output/vpn-progress-20261021/index-credit.html)。
+
+三个对照分别回答捕获回合、客户端放置与credit大小，不跨组混算；每组固定四窗，无重试或参数扫描。端点五元组与owner负载分布可变化，原始分布保留，2窗/配置不足以给出一般统计显著性或发布资格。现有证据支持把TUN回注的按包内核成本和HEV接收/推进粒度作为主要成本，而不是把500Mbps上限归因于单一队列常量；既未采用capture16，也未修改primary默认credit32、队列64槽或产品CPU放置。
+
+### 第五阶段身份、检查与结束状态
+
+最终Product源码闭包为control64的 `6ede6ce5f0f647122065f57a6e8b7f209062a0f0ec600c88fef31fc127299a07`，核心patch及9个VPP runtime与第四阶段相同；这里只增加可观测计数，不改变传输/容量默认行为。control64 APK `c765faee149621939f76258bf6139c481274ab6e447260a781ca01492f7c8ca8`；被否决的candidate16 APK `cdc85e9d80a8e211c88c40a17ae0a062870e703e44f4b0e21c9eb78caad81b0a`及源码快照均保留。四个collector版本按各自manifest SHA保存，12个on-CPU窗口lost0/unknown leaf0；独立off-CPU窗口1738 lost明确保留。[13窗审计](../../build-output/vpn-progress-20261021/sampler-final.json) · [全部推进计数](../../build-output/vpn-progress-20261021/progress-all.json)。最初final日志尚在post-processing阶段，最终原始日志另存为 `perf-final.log`；审计器最初只匹配另一种lost日志格式的解析失败同样保留，格式修正后才发现并记录off-CPU lost，没有重采样。
+
+Host真实primary/completion批量回归、external batch及policy batch通过；普通VPN collector的generation/推进/native debts/保留删除日志检查通过。13窗停止均满足generation对应的native债务零，阻塞reader完成、FIFO gate移除、remote日志SHA与本地停止日志相同。最终恢复原October13 APK及12个native、规则hash、Root grant和Stopped2123，Openwrt_5G全程保持，VPP/socket-load/simpleperf无残留；本轮LAN peer经PID/starttime/exe/argv/hash核对后由pidfd关闭。[设备最终审计](../../build-output/vpn-progress-20261021/final-readonly/result.json) · [专用peer清理](../../build-output/vpn-progress-20261021/peer-cleanup.json)。

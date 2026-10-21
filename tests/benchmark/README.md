@@ -95,6 +95,29 @@ Its native log reader holds an inode before load and blocks on a FIFO until
 stop or failure cleanup; it does not poll during performance measurement.
 `report.py compare` requires exactly that one cell for this suite.
 
+Freeze diagnostic controls in the manifest before collection:
+
+- `trace_offcpu: true` adds scheduler tracing to the existing CPU-clock record.
+  Report on-CPU and off-CPU modes separately. `vpn_waits.py` clips retained
+  scheduler intervals to the actual client window and records loss explicitly;
+  a lossy profile does not provide a complete wait-time budget.
+- `client_cpu_mask: "8"` limits only the measured VPN load client to CPU3.
+  Its exec wrapper retains the actual inherited `Cpus_allowed` status and the
+  collector verifies that mask; warmup and Product CPU placement stay fixed.
+  A placement diagnosis is a separate cohort, not a Product optimization.
+- `primary_handoff_credits: 32` or `48` uses the existing diagnostic CLI once
+  before warmup, with primary64/completion128 queue slots unchanged. The graph
+  must be active and empty; failed configuration makes the run incomplete.
+  Both arms must freeze this operation, and no capacity retry is performed.
+
+`vpn_progress.py` reads retained per-owner CLI deltas and generation-matched
+stop evidence. `flow_stack.driver.ready_delay_ns` spans any pending schedule
+request to node entry, including input-triggered work; it is not socket-ready
+latency. `primary.rejection` separates credit exhaustion from enqueue failure.
+`tun.capture_io` and `flow_stack.step_timing` report wall-clock spans, which
+can include preemption. Keep round counts distinct from time occupancy.
+See the [bounded progression and placement diagnosis](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
+
 The default-OFF `SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT` combines at most eight
 existing one-MSS TCP commits per receive round, native return next-frame
 aggregation and at most64 ready TUN capture graph submissions per batch. It

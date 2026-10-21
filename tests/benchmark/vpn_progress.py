@@ -45,7 +45,7 @@ def analyze(directory):
             owner=owner,
             receive_rounds=receive['rounds'],
             read_calls=receive['read_calls'],
-            eagain_fraction=ratio(receive['read_blocked'], receive['read_calls']),
+            blocked_read_fraction=ratio(receive['read_blocked'], receive['read_calls']),
             bytes_per_nonblocked_read=ratio(receive['bytes'], receive['read_calls'] - receive['read_blocked']),
             bytes_per_receive_round=ratio(receive['bytes'], receive['rounds']),
             idle_rounds=p['idle_rounds'],
@@ -73,11 +73,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     report = dict(
-        schema='vpn-progress/v1', windows=[analyze(path) for path in args.windows],
+        schema='vpn-progress/v2', windows=[analyze(path) for path in args.windows],
         limits=[
             'CLI intervals include setup/background and are not tuple-filtered.',
             'ready_delay spans any pending schedule request to node entry, including input-triggered requests; it is not socket-ready latency.',
             'Round and capacity counters are entry observations, not fractions of wall time.',
+            'read_blocked includes EAGAIN, EWOULDBLOCK and EINTR; it is not an EAGAIN-only count.',
             'Nonblocked reads may include EOF; bytes/read is a descriptive ratio, not a packet-size distribution.',
             'On-CPU profiles do not attribute off-CPU waiting or establish a throughput ceiling.',
         ],
