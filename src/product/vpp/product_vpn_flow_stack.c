@@ -474,12 +474,13 @@ static clib_error_t *status(vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output(vm, "flow_stack.scheduler_io owner=%u polls=%llu events=%llu",
     index, (unsigned long long)s->scheduler_io_polls,
     (unsigned long long)s->scheduler_io_events);
-  vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu",
+  vlib_cli_output(vm, "flow_stack.tcp_receive owner=%u rounds=%llu read_calls=%llu read_blocked=%llu commits=%llu bytes=%llu write_blocked=%llu output_calls=%llu max_commits=%llu eagain=%llu eintr=%llu eof=%llu",
     index, (unsigned long long)s->tcp_rx_rounds,
     (unsigned long long)s->tcp_read_calls, (unsigned long long)s->tcp_read_blocked,
     (unsigned long long)s->tcp_commits, (unsigned long long)s->tcp_commit_bytes,
     (unsigned long long)s->tcp_write_blocked, (unsigned long long)s->tcp_output_calls,
-    (unsigned long long)s->tcp_commit_max);
+    (unsigned long long)s->tcp_commit_max, (unsigned long long)s->tcp_read_eagain,
+    (unsigned long long)s->tcp_read_eintr, (unsigned long long)s->tcp_read_eof);
   vlib_cli_output(vm, "flow_stack.udp_send owner=%u calls=%llu requested=%llu datagrams=%llu partial=%llu blocked=%llu max=%llu",
     index, (unsigned long long)s->udp_send_calls,
     (unsigned long long)s->udp_send_requested, (unsigned long long)s->udp_send_datagrams,

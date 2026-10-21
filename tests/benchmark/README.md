@@ -101,6 +101,11 @@ Freeze diagnostic controls in the manifest before collection:
   Report on-CPU and off-CPU modes separately. `vpn_waits.py` clips retained
   scheduler intervals to the actual client window and records loss explicitly;
   a lossy profile does not provide a complete wait-time budget.
+- `profiler_callgraph: "fp"`, `profiler_mmap_pages: 4096` and
+  `profiler_await_exit: true` select lighter stack recording, a larger kernel
+  buffer and completed-log collection. Verify frame pointers in the actual
+  ELF, final record loss and exact symbols; these options do not prove loss
+  absence by themselves. Keep the settings identical within a CPU comparison.
 - `client_cpu_mask: "8"` limits only the measured VPN load client to CPU3.
   Its exec wrapper retains the actual inherited `Cpus_allowed` status and the
   collector verifies that mask; warmup and Product CPU placement stay fixed.
@@ -116,6 +121,11 @@ request to node entry, including input-triggered work; it is not socket-ready
 latency. `primary.rejection` separates credit exhaustion from enqueue failure.
 `tun.capture_io` and `flow_stack.step_timing` report wall-clock spans, which
 can include preemption. Keep round counts distinct from time occupancy.
+`vpn_task_waits.py --run <result.json> --output <summary.json>` reconciles TCP
+round/idle totals against first wake origins, with repeated `--run` for a cohort.
+It reads `flow_stack.tcp_wait` and `flow_stack.tcp_wake` from the opt-in TCP
+progress diagnostics: waiting before a wake and ready time after it are sums
+of session wall intervals, distinct from the worker's off-CPU intervals.
 See the [bounded progression and placement diagnosis](../../docs/testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
 The default-OFF `SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT` combines at most eight

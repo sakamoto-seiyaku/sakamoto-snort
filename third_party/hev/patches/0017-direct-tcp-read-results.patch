@@ -1,0 +1,31 @@
+--- a/src/hev-socks5-session-tcp.c
++++ b/src/hev-socks5-session-tcp.c
+@@ -105,6 +105,7 @@
+     struct iovec iov[2];
+     int res = 0, iovc;
+     self->direct_read_calls = self->direct_read_blocked = 0;
++    self->direct_read_eagain = self->direct_read_eintr = self->direct_read_eof = 0;
+     self->direct_commits = self->direct_commit_bytes = 0;
+     self->direct_write_blocked = self->direct_output_calls = 0;
+     if (!self->pcb)
+@@ -118,7 +119,10 @@
+                 if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+                     return -2;
+                 ++self->direct_read_blocked;
++                if (errno == EINTR) ++self->direct_read_eintr;
++                else ++self->direct_read_eagain;
+             } else if (s == 0) {
++                ++self->direct_read_eof;
+                 self->direct_rx_eof = 1;
+             } else {
+                 self->direct_received_bytes += (uint64_t)s;
+--- a/src/hev-socks5-session-tcp.h
++++ b/src/hev-socks5-session-tcp.h
+@@ -42,6 +42,7 @@
+     uint64_t direct_sent_bytes, direct_received_bytes;
+     /* Last Direct receive round, consumed by the owner before the next call. */
+     unsigned int direct_read_calls, direct_read_blocked, direct_commits;
++    unsigned int direct_read_eagain, direct_read_eintr, direct_read_eof;
+     unsigned int direct_commit_bytes, direct_write_blocked, direct_output_calls;
+ };
+ 

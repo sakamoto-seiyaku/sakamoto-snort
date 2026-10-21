@@ -268,7 +268,7 @@ Host真实primary/completion批量回归、external batch及policy batch通过�
 
 以上为阶段测量和清理结果，不代表SAKAMOTO-292完成。后续诊断须分别解释用户态无进展调度、逻辑等待条件、已被唤醒但尚未运行的时长及内核off-CPU区间，保留已有失败和候选被证伪的记录。
 
-## 第六阶段：按等待与唤醒原因继续定位（进行中）
+## 第六阶段：按等待与唤醒原因定位
 
 真实HEV调度器最小复现确认了一个额外系统调用：external schedule已做一次非阻塞I/O扫描，随后pick_current_task在同时存在RUNNING/WAITING任务时再次扫描。一个任务quantum包含入口及yield后的扫描即可，修复前实测3次，修复后2次。[RED](../../build-output/vpn-wait-cause-20261021/scheduler-red.log) · [GREEN及I/O回归](../../build-output/vpn-wait-cause-20261021/scheduler-coverage.log)。补丁0015只跳过external路径中紧接着的重复扫描，standalone调度器保留阻塞I/O与timer扫描；回归实际运行混合任务、真实pipe事件、standalone timer唤醒及清理。
 
@@ -290,4 +290,24 @@ owner0的runnable任务从yield到再执行的合计时长/该类yield数约39.8
 
 I1 worker0记录off-CPU8.668秒，其中8.143秒在TUN write的tun_rx_batched抢占栈、0.471秒在UID sendto抢占栈；VPP epoll等待仅0.042秒。worker1 off-CPU11.366秒，其中VPP epoll约9.824秒。worker0的长runnable间隔因此须与单TUN lane上的graph工作、OS抢占结合解释，不能宣称“HEV在无数据时烧满CPU”。FP链省略inline helper，分类器依据实际外层VPP/HEV scheduler区分epoll，原始完整栈仍保留。无报告丢失也不能恢复记录末尾尚未闭合的off-CPU区间，故不宣称完整等待占比。
 
-38项真实HEV Host回归通过，含held-ACK/loss/backpressure/FIN；普通VPN证据校验通过。真实Android unchanged repeat为0 Rust编译、0 Ninja actions、823个编译文件mtime保持及12个native字节一致（两次约0.76秒）。五窗native零债务和reader/gate检查通过，设备自动恢复原APK、规则和Root grant，Openwrt_5G保持。ACK无用唤醒仍待因果验证，SAKAMOTO-292继续进行。
+38项真实HEV Host回归通过，含held-ACK/loss/backpressure/FIN；普通VPN证据校验通过。真实Android unchanged repeat为0 Rust编译、0 Ninja actions、823个编译文件mtime保持及12个native字节一致（两次约0.76秒）。五窗native零债务和reader/gate检查通过，设备自动恢复原APK、规则和Root grant，Openwrt_5G保持。这是ACK对照前的阶段结果；其后验证和最终取舍见下节。
+
+### ACK过滤：局部RED/GREEN成立，整条路径无收益，撤回
+
+新真实TCP fixture让上游只回传4096字节、保留充分ring空间，待任务读空并WAITIO后再注入纯ACK。控制版多执行一次空receive round（[RED](../../build-output/vpn-wait-cause-20261021/idle-ack-red-executed.log)）；候选保持满ring、pending与EOF唤醒，只跳过不解锁工作的一类ACK，IPv4/IPv6均降为0且字节与最终释放正确（[GREEN](../../build-output/vpn-wait-cause-20261021/idle-ack-green.log)）。候选40项Host回归通过，也验证了实验开关关闭时的40项默认回归。局部成立没有被当作整条路径收益。
+
+按[独立ACK协议](../../build-output/vpn-ack-wake-20261021/protocol.json)再做J1/K1/K2/J2，同样的single-poll与插桩，唯一差别是ACK predicate。候选两窗分别跳过31388、36101次等待态ACK通知，ACK首次唤醒后的idle均为0。但均值518.29→504.90Mbps（−2.58%），CPU秒/GiB18.38→18.61（+1.25%）。I/O首次唤醒/GiB增加26.56%，整体idle/GiB只减少1.75%，poll/GiB反增1.77%；事件节奏发生替换，不能由单个idle来源消失推出效率提高。两窗/配置及owner负载差异限制更强的统计结论，因此不采用该候选，不修改原ACK语义。[完整汇总](../../build-output/vpn-ack-wake-20261021/summary.json)。
+
+候选补丁、精确source/APK/symbols、测试源码、RED/GREEN及全部四窗保存在证据目录；Product中的ACK过滤、跳过计数及其专属测试均已撤回。最终Product没有这段行为；当前patch0017是下面的read结果计数补丁，不能与候选的归档同编号补丁混淆。
+
+### 最终代码的read结果核对与恢复
+
+旧read_blocked包括EAGAIN/EWOULDBLOCK/EINTR，故此前“upstream”账本不是单独的errno统计。最终补丁0017-direct-tcp-read-results拆分EAGAIN/EWOULDBLOCK、EINTR和EOF，仅把实际EAGAIN归为upstream，EINTR进入other。读取、提交、yield条件及ACK唤醒语义保持原样。
+
+在最终代码的独立20秒L1窗口中，owner0/1分别记录2072/163130次EAGAIN，共165202次；EINTR均0，EOF合计2，read_blocked逐owner等于EAGAIN+EINTR，首次唤醒/idle总数也完全对账。这直接验证了该窗口的read失败确实是非阻塞读空。466.86Mbps、20.93 CPU秒/GiB是单窗最终源码见证，不与上述ABBA混算，不能当作性能增益的估计或回填以前记录的errno。[账本](../../build-output/vpn-read-reasons-20261021/task-waits.json) · [精确ELF/CPU记录](../../build-output/vpn-read-reasons-20261021/analysis-L1/analysis.json)。
+
+最终源码闭包为8318c4c9eb778517157eff41d52f0743cc1dec97e631eb720d9fa9387986e50c，APK为ae2882215b1e22376fb31f1d0b888882b18e1d498b2c4aa93e69bb94227257c5；[完整构建身份](../../build-output/vpn-read-reasons-20261021/read-reasons/build.json)。最终默认配置与batch/progress诊断配置各38/38 Host回归通过；Host unchanged build为no work。Android unchanged repeat为0 Rust编译、0 Ninja actions、1087个编译文件mtime保持和12个native字节一致，约0.88秒。普通VPN evidence校验和10个新设备窗口的round/idle对账、native零债务、reader/gate完成、最终perf lost0全部通过；旧lossy窗口保持原样。
+
+最终恢复原October13 APK及12个native、规则hash和Root grant，设备Stopped2133，Openwrt_5G保持，VPP/socket-load/simpleperf无残留。两次专用LAN peer均按PID/starttime/exe/argv/hash核对并由pidfd结束。[最终设备审计](../../build-output/vpn-read-reasons-20261021/final-readonly/result.json) · [peer清理](../../build-output/vpn-read-reasons-20261021/peer-cleanup.json)。
+
+本轮因果结论是：大部分idle是实际推进后的最后一次读空探测，随后进入WAITIO；不是无进展持续自我调度。等待条件与首次I/O/ACK/poll唤醒已分开，owner0主要保持runnable并在单TUN lane工作及抢占之间等待再次执行，owner1有大量真实I/O/ACK等待。已证实并修复的是external调度器的重复epoll扫描，其配对CPU成本下降5.28%；ACK过滤未获整条路径收益而被撤回。以上完成了这些现象的可重复定位与修复验证，没有把500Mbps当作已经被唯一归因或解除的吞吐上限。

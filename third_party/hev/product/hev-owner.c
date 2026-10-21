@@ -107,7 +107,7 @@ static unsigned tcp_wait_reason(const HevSocks5SessionTCP *tcp)
   if (tcp->queue) return TCP_UPLOAD;
   if (tcp->buffer->use_size == tcp->buffer->max_size ||
       (tcp->buffer->rda_size && !tcp_sndbuf(tcp->pcb))) return TCP_INNER_ACK;
-  if (tcp->direct_read_blocked) return TCP_UPSTREAM;
+  if (tcp->direct_read_eagain) return TCP_UPSTREAM;
   if (tcp->direct_rx_eof) return TCP_EOF;
   return TCP_OTHER;
 }
@@ -638,6 +638,9 @@ static void tcp_session_task(void *opaque)
       ++owner->stats.tcp_rx_rounds;
       owner->stats.tcp_read_calls += transport->direct_read_calls;
       owner->stats.tcp_read_blocked += transport->direct_read_blocked;
+      owner->stats.tcp_read_eagain += transport->direct_read_eagain;
+      owner->stats.tcp_read_eintr += transport->direct_read_eintr;
+      owner->stats.tcp_read_eof += transport->direct_read_eof;
       owner->stats.tcp_commits += transport->direct_commits;
       owner->stats.tcp_commit_bytes += transport->direct_commit_bytes;
       owner->stats.tcp_write_blocked += transport->direct_write_blocked;

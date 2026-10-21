@@ -77,5 +77,10 @@
     "file": "0016-task-wait-attribution.patch",
     "purpose": "Opt-in first wake origin and ready timestamp for TCP logical-wait versus scheduling-delay attribution",
     "regression": "tests/host/hev_owner_scheduler_test.c; tests/host/hev_owner_tcp_test.c"
+  },
+  {
+    "file": "0017-direct-tcp-read-results.patch",
+    "purpose": "Separate actual nonblocking read EAGAIN/EWOULDBLOCK, EINTR and EOF; do not classify interrupted calls as upstream-empty waits",
+    "regression": "tests/host/hev_owner_tcp_test.c; ordinary long-download read result reconciliation"
   }
 ]

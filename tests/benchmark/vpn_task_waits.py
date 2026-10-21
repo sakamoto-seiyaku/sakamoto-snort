@@ -35,10 +35,14 @@ def analyze(path):
     wakes = delta(before, after, 'flow_stack.tcp_wake ', ('owner', 'origin'), ('rounds', 'idle'))
     waits = delta(before, after, 'flow_stack.tcp_wait ', ('owner', 'reason'),
                   ('yields', 'wait_ns', 'ready_ns'))
+    read_split = all('eagain' in row for row in quick.rows(before, 'flow_stack.tcp_receive '))
+    read_fields = ('eagain', 'eintr', 'eof') if read_split else ()
     receive = delta(before, after, 'flow_stack.tcp_receive ', ('owner',),
-                    ('rounds', 'read_calls', 'read_blocked', 'commits', 'bytes'))
+                    ('rounds', 'read_calls', 'read_blocked', 'commits', 'bytes', *read_fields))
     progress = delta(before, after, 'flow_stack.tcp_progress ', ('owner',), ('idle_rounds',))
     polls = delta(before, after, 'flow_stack.scheduler_io ', ('owner',), ('polls', 'events'))
+    skipped = (delta(before, after, 'flow_stack.tcp_ack_wake ', ('owner',), ('skipped_waiting',))
+               if quick.rows(before, 'flow_stack.tcp_ack_wake ') else [])
     owners = []
     for owner in ('0', '1'):
         wake = [r for r in wakes if r['owner'] == owner]
@@ -54,14 +58,19 @@ def analyze(path):
             raise ValueError('first-wake idle accounting does not reconcile')
         if any(r['idle'] > r['rounds'] for r in wake):
             raise ValueError('idle rounds exceed all rounds')
+        if read_split and (rx['read_blocked'] != rx['eagain'] + rx['eintr'] or
+                           rx['read_blocked'] + rx['eof'] > rx['read_calls']):
+            raise ValueError('read errno accounting does not reconcile')
         owners.append(dict(owner=owner, receive=rx, idle_rounds=p['idle_rounds'],
-                           first_wake=wake, wait=wait, scheduler_io=io))
+                           first_wake=wake, wait=wait, scheduler_io=io,
+                           ack_wake_skipped=sum(r['skipped_waiting'] for r in skipped
+                                                if r['owner'] == owner)))
     gib = case['client']['bytes'] / 2**30
     return dict(run=str(path), generation=case['generation'], owners=owners,
                 mbps=case['score']['delivered_mbps'], endpoint_gib=gib,
                 cpu_seconds_per_gib=case['score']['cpu_seconds_per_delivered_gib'],
                 polls_per_gib=sum(r['polls'] for r in polls) / gib,
-                round_accounting_reconciles=True)
+                round_accounting_reconciles=True, read_results_split=read_split)
 
 
 def main():

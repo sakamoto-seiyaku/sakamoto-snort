@@ -476,6 +476,8 @@ int main(int argc, char **argv)
     assert(s.stopped && !s.sessions && !s.pbufs && !s.input_packets);
     if (!refusal) {
       assert(s.tcp_rx_rounds && s.tcp_read_calls && s.tcp_commits);
+      assert(s.tcp_read_blocked == s.tcp_read_eagain + s.tcp_read_eintr);
+      assert(s.tcp_read_blocked + s.tcp_read_eof <= s.tcp_read_calls);
       assert(s.tcp_commit_bytes == PAYLOAD);
       assert(s.tcp_mss_min == CLIENT_MSS && s.tcp_mss_max == CLIENT_MSS);
       assert(s.tcp_idle_rounds <= s.tcp_rx_rounds);

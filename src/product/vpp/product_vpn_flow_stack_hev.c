@@ -169,6 +169,7 @@ product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_snapshot(
   COPY(udp_send_calls); COPY(udp_send_requested); COPY(udp_send_datagrams);
   COPY(udp_send_partial); COPY(udp_send_blocked); COPY(udp_send_max);
   COPY(tcp_rx_rounds); COPY(tcp_read_calls); COPY(tcp_read_blocked);
+  COPY(tcp_read_eagain); COPY(tcp_read_eintr); COPY(tcp_read_eof);
   COPY(tcp_commits); COPY(tcp_commit_bytes); COPY(tcp_write_blocked);
   COPY(tcp_output_calls); COPY(tcp_commit_max);
   COPY(tcp_idle_rounds); COPY(tcp_ring_full); COPY(tcp_sndbuf_full);

@@ -76,6 +76,7 @@ typedef struct {
   uint64_t udp_send_calls, udp_send_requested, udp_send_datagrams;
   uint64_t udp_send_partial, udp_send_blocked, udp_send_max;
   uint64_t tcp_rx_rounds, tcp_read_calls, tcp_read_blocked;
+  uint64_t tcp_read_eagain, tcp_read_eintr, tcp_read_eof;
   uint64_t tcp_commits, tcp_commit_bytes, tcp_write_blocked, tcp_output_calls;
   uint64_t tcp_commit_max;
   uint64_t tcp_idle_rounds, tcp_ring_full, tcp_sndbuf_full;
