@@ -3,10 +3,12 @@
 #define SAKAMOTO_PRODUCT_OBSERVATION_H
 #include <stdint.h>
 #include <stddef.h>
+#include "sakamoto_product_limits.h"
 
 #define PRODUCT_OBSERVATION_VERSION 5
-#define PRODUCT_OBSERVATION_OWNERS 2
-#define PRODUCT_OBSERVATION_CHANNELS 4
+/* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
+#define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
+#define PRODUCT_OBSERVATION_CHANNELS (2 * PRODUCT_OBSERVATION_OWNERS)
 #define PRODUCT_OBSERVATION_END 1
 #define PRODUCT_OBSERVATION_CREATE 2
 #define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
@@ -72,6 +74,8 @@ typedef struct product_observation_transport product_observation_transport_t;
  * quiesced. Consumers use a separate process-local handle on one thread. */
 product_observation_transport_t *product_observation_transport_create (
   uint64_t generation, uint32_t flow_capacity);
+product_observation_transport_t *product_observation_transport_create_for_owners (
+  uint64_t generation, uint32_t flow_capacity, uint32_t owner_count);
 void product_observation_transport_destroy (product_observation_transport_t *);
 int product_observation_publish (product_observation_transport_t *, unsigned channel,
                                  const void *, uint32_t length);
@@ -90,6 +94,8 @@ void product_observation_connected (product_observation_transport_t *, int);
  * and mapping; close only after all consumer access has stopped. */
 product_observation_transport_t *product_observation_connect (
   const char *socket_path, uint64_t generation);
+product_observation_transport_t *product_observation_connect_for_owners (
+  const char *socket_path, uint64_t generation, uint32_t owner_count);
 int product_observation_receive (product_observation_transport_t *, unsigned channel,
                                  product_observation_record_t *);
 int product_observation_wait (product_observation_transport_t *, int timeout_ms);

@@ -351,7 +351,7 @@ enum
   STATUS_VIEW_VALUE_COUNT = 7,
   STATUS_ASSOCIATION_VALUE_COUNT = 3,
   STATUS_WIRE_VALUE_COUNT = STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
-                            + STATUS_ASSOCIATION_VALUE_COUNT + 1,
+                            + STATUS_ASSOCIATION_VALUE_COUNT + 2,
   CONNECT_VALUE_COUNT = STATUS_WIRE_VALUE_COUNT + 1,
 };
 
@@ -459,6 +459,7 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   char product_graph_vpp_worker0_core[32];
   char product_graph_vpp_worker1_thread_index[32];
   char product_graph_vpp_worker1_core[32];
+  char product_graph_vpp_owner_cores[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS * 12];
   char product_graph_enabled[32];
   char product_graph_accepting[32];
   char product_graph_worker_layout_ready[32];
@@ -691,6 +692,20 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   snprintf (product_graph_vpp_worker1_core,
             sizeof (product_graph_vpp_worker1_core), "%" PRIu32,
             status->product_graph_vpp_worker1_core);
+  product_graph_vpp_owner_cores[0] = 0;
+  size_t owner_cores_used = 0;
+  for (uint32_t owner = 0;
+       owner < status->product_graph_worker_count
+       && owner < SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS; owner++)
+    {
+      int written = snprintf (product_graph_vpp_owner_cores + owner_cores_used,
+        sizeof (product_graph_vpp_owner_cores) - owner_cores_used,
+        "%s%" PRIu32, owner ? "," : "",
+        status->product_graph_vpp_owner_core[owner]);
+      if (written < 0 || (size_t) written >=
+          sizeof (product_graph_vpp_owner_cores) - owner_cores_used) break;
+      owner_cores_used += (size_t) written;
+    }
   snprintf (product_graph_enabled, sizeof (product_graph_enabled), "%" PRIu32,
             status->product_graph_enabled);
   snprintf (product_graph_accepting, sizeof (product_graph_accepting),
@@ -1020,6 +1035,7 @@ status_values (JNIEnv *env, const sakamoto_product_status_t *status,
   fields[index++] = policy_l4_typed_match_probe_key;
   fields[index++] = policy_l4_last_evaluation_probe_key;
   fields[index++] = product_graph_tun_io_worker_index;
+  fields[index++] = product_graph_vpp_owner_cores;
 
   for (int value_index = 0; value_index < index; ++value_index)
     {

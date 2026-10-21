@@ -211,6 +211,8 @@ pub struct ProductStatus {
     pub product_graph_vpp_worker0_core: u32,
     pub product_graph_vpp_worker1_thread_index: u32,
     pub product_graph_vpp_worker1_core: u32,
+    pub product_graph_vpp_owner_thread_index: [u32; 62],
+    pub product_graph_vpp_owner_core: [u32; 62],
     pub product_graph_enabled: u32,
     pub product_graph_accepting: u32,
     pub product_graph_worker_layout_ready: u32,
@@ -287,7 +289,7 @@ pub struct ProductStatus {
     pub product_graph_tun_io_worker_index: u32,
 }
 
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 #[repr(C)]
 pub struct ProductNetworkSnapshot {
@@ -441,6 +443,8 @@ pub struct Status {
     pub product_graph_vpp_worker0_core: u32,
     pub product_graph_vpp_worker1_thread_index: u32,
     pub product_graph_vpp_worker1_core: u32,
+    pub product_graph_vpp_owner_thread_index: [u32; 62],
+    pub product_graph_vpp_owner_core: [u32; 62],
     pub product_graph_enabled: u32,
     pub product_graph_accepting: u32,
     pub product_graph_worker_layout_ready: u32,
@@ -594,6 +598,8 @@ impl Status {
             product_graph_vpp_worker0_core: value.product_graph_vpp_worker0_core,
             product_graph_vpp_worker1_thread_index: value.product_graph_vpp_worker1_thread_index,
             product_graph_vpp_worker1_core: value.product_graph_vpp_worker1_core,
+            product_graph_vpp_owner_thread_index: value.product_graph_vpp_owner_thread_index,
+            product_graph_vpp_owner_core: value.product_graph_vpp_owner_core,
             product_graph_enabled: value.product_graph_enabled,
             product_graph_accepting: value.product_graph_accepting,
             product_graph_worker_layout_ready: value.product_graph_worker_layout_ready,
@@ -826,6 +832,8 @@ impl Status {
             product_graph_vpp_worker0_core: 0,
             product_graph_vpp_worker1_thread_index: 0,
             product_graph_vpp_worker1_core: 0,
+            product_graph_vpp_owner_thread_index: [0; 62],
+            product_graph_vpp_owner_core: [0; 62],
             product_graph_enabled: 0,
             product_graph_accepting: 0,
             product_graph_worker_layout_ready: 0,
@@ -918,7 +926,7 @@ mod tests {
         assert_eq!(align_of::<ProductPolicyRuleEntry>(), 8);
         assert_eq!(size_of::<ProductPolicyBundle>(), 15_496);
         assert_eq!(align_of::<ProductPolicyBundle>(), 8);
-        assert_eq!(size_of::<ProductStatus>(), 1312);
+        assert_eq!(size_of::<ProductStatus>(), 1808);
         assert_eq!(align_of::<ProductStatus>(), 8);
     }
 

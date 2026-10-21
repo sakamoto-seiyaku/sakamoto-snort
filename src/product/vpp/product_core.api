@@ -102,6 +102,8 @@ define product_core_status_reply {
     u32 product_graph_vpp_worker0_core;
     u32 product_graph_vpp_worker1_thread_index;
     u32 product_graph_vpp_worker1_core;
+    u32 product_graph_vpp_owner_thread_index[62];
+    u32 product_graph_vpp_owner_core[62];
     u32 product_graph_enabled;
     u32 product_graph_accepting;
     u32 product_graph_worker_layout_ready;
@@ -437,9 +439,9 @@ define product_core_observation_query_reply {
   u32 context; i32 retval;
   u64 generation; u64 mapping_bytes;
   u32 version; u32 owners; u32 flow_capacity; u32 connected;
-  u32 blocked_capacity; u32 blocked_active[2];
-  u64 blocked_capacity_misses[2]; u64 blocked_retired[2];
-  vl_api_product_observation_channel_t channels[4];
+  u32 blocked_capacity; u32 blocked_active[62];
+  u64 blocked_capacity_misses[62]; u64 blocked_retired[62];
+  vl_api_product_observation_channel_t channels[124];
 };
 
 typedef product_flow_query_attribution {
@@ -469,8 +471,8 @@ define product_core_flow_query {
 };
 define product_core_flow_query_reply {
   u32 context; i32 retval; u64 generation;
-  u64 allocated_bytes[2]; u64 capacity_misses[2];
-  u32 capacity[2]; u32 active[2]; u32 high_watermark[2];
-  u32 cursor; u32 next_cursor; u32 scanned; u32 count; u32 done;
+  u64 allocated_bytes[62]; u64 capacity_misses[62];
+  u32 capacity[62]; u32 active[62]; u32 high_watermark[62];
+  u32 owner_count; u32 cursor; u32 next_cursor; u32 scanned; u32 count; u32 done;
   vl_api_product_flow_query_entry_t entries[16];
 };

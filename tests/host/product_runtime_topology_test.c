@@ -53,8 +53,17 @@ int main (void)
   assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 2));
   assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN).owner_count);
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "3", 1) == 0);
+  root = product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT);
+  assert (root.owner_count == 3 && root.vpp_worker_count == 3);
+  assert (product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 3));
+  assert (!product_runtime_topology_valid (PRODUCT_TOPOLOGY_ROOT, root, 2));
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "62", 1) == 0);
+  assert (product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count == 62);
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "63", 1) == 0);
   assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
   assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "01", 1) == 0);
+  assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
+  assert (setenv ("SAKAMOTO_PRODUCT_OWNER_COUNT", "+3", 1) == 0);
   assert (!product_runtime_topology_current (PRODUCT_TOPOLOGY_ROOT).owner_count);
   assert (unsetenv ("SAKAMOTO_PRODUCT_OWNER_COUNT") == 0);
   return 0;

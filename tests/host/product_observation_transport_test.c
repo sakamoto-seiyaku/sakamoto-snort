@@ -66,6 +66,20 @@ int main (void) {
     assert (s.channels[0].basic_packets[outcome] == 1 && s.channels[0].basic_bytes[outcome] == 60 + outcome);
   product_observation_transport_destroy (t);
   assert (fd_count () == before);
+  t = product_observation_transport_create_for_owners (78, 1024, 3);
+  assert (t);
+  r.owner = 2;
+  assert (product_observation_publish (t, 4, &r, 456) == 1);
+  assert (product_observation_publish (t, 5, &r, 456) == 1);
+  product_observation_account (t, 2, 0, 73);
+  product_observation_transport_status (t, &s);
+  assert (s.owners == 3 && s.channels[4].published == 1
+          && s.channels[5].published == 1
+          && s.channels[4].basic_packets[0] == 1
+          && s.channels[4].basic_bytes[0] == 73);
+  assert (product_observation_publish (t, 6, &r, 456) == -1);
+  product_observation_transport_destroy (t);
+  assert (fd_count () == before);
   puts ("transport_capacity_fd_rejection_accounting=PASS");
   return 0;
 }

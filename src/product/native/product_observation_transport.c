@@ -31,7 +31,7 @@
 #error "observation supports the product little-endian 64-bit targets"
 #endif
 #define OBS_MAGIC UINT64_C (0x3153424f50504b53)
-#define OBS_HEADER 4096
+#define OBS_HEADER 32768
 #define OBS_SLOTS 256
 #define LOAD(p) __atomic_load_n ((p), __ATOMIC_ACQUIRE)
 #define ADD(p, n) __atomic_fetch_add ((p), (n), __ATOMIC_RELAXED)
@@ -52,6 +52,7 @@ struct product_observation_transport {
   observation_shared_t *shared;
   size_t length;
   int memfd, socket, interrupt, consumer;
+  unsigned channels;
   int event[PRODUCT_OBSERVATION_CHANNELS];
   svm_msg_q_t queue[PRODUCT_OBSERVATION_CHANNELS];
   unsigned attached;
@@ -79,17 +80,17 @@ static product_observation_transport_t *allocate_handle (void) {
   return t;
 }
 static int allocate_descriptors (product_observation_transport_t *t) {
-  t->length = OBS_HEADER + PRODUCT_OBSERVATION_CHANNELS * queue_bytes ();
+  t->length = OBS_HEADER + t->channels * queue_bytes ();
   t->memfd = syscall (SYS_memfd_create, "sakamoto-observation", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (t->memfd < 0 || ftruncate (t->memfd, t->length)) return 0;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     t->event[i] = eventfd (0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (t->event[i] < 0) return 0;
   }
   return !fcntl (t->memfd, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL);
 }
 static void attach (product_observation_transport_t *t) {
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     svm_msg_q_attach (&t->queue[i], queue_base (t, i));
     /* The pinned primitive supports -2 as event mode with signals disabled.
      * We own the ordered notification latch, and never wait in svm_msg_q. */
@@ -112,11 +113,13 @@ void product_observation_transport_destroy (product_observation_transport_t *t) 
   if (t->socket >= 0) close (t->socket);
   free (t);
 }
-product_observation_transport_t *product_observation_transport_create (
-  uint64_t generation, uint32_t flow_capacity) {
-  if (!generation || !flow_capacity || flow_capacity > 65536) return NULL;
+product_observation_transport_t *product_observation_transport_create_for_owners (
+  uint64_t generation, uint32_t flow_capacity, uint32_t owner_count) {
+  if (!generation || !flow_capacity || flow_capacity > 65536
+      || !owner_count || owner_count > PRODUCT_OBSERVATION_OWNERS) return NULL;
   product_observation_transport_t *t = allocate_handle ();
   if (!t) return NULL;
+  t->channels = owner_count * 2;
   if (!allocate_descriptors (t)) goto fail;
   void *mapped = mmap (NULL, t->length, PROT_READ | PROT_WRITE, MAP_SHARED, t->memfd, 0);
   if (mapped == MAP_FAILED) goto fail;
@@ -124,7 +127,7 @@ product_observation_transport_t *product_observation_transport_create (
   *t->shared = (observation_shared_t) { .magic = OBS_MAGIC, .generation = generation,
     .mapping_bytes = t->length, .queue_bytes = queue_bytes (),
     .version = PRODUCT_OBSERVATION_VERSION, .flow_capacity = flow_capacity };
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     svm_msg_q_init (queue_base (t, i), &config);
   }
   attach (t);
@@ -134,9 +137,14 @@ fail:
   return NULL;
 }
 
+product_observation_transport_t *product_observation_transport_create (
+  uint64_t generation, uint32_t flow_capacity) {
+  return product_observation_transport_create_for_owners (generation, flow_capacity, 2);
+}
+
 int product_observation_publish (product_observation_transport_t *t, unsigned channel,
                                  const void *data, uint32_t length) {
-  if (!t || t->consumer || channel >= PRODUCT_OBSERVATION_CHANNELS) return -1;
+  if (!t || t->consumer || channel >= t->channels) return -1;
   product_observation_channel_status_t *s = &t->shared->channels[channel];
   ADD (&s->attempted, 1);
   if (!data || length < 4 || length > PRODUCT_OBSERVATION_MAX_RECORD) {
@@ -171,13 +179,13 @@ int product_observation_publish (product_observation_transport_t *t, unsigned ch
 }
 void product_observation_account (product_observation_transport_t *t, unsigned owner,
                                   unsigned outcome, uint32_t bytes) {
-  if (!t || owner >= PRODUCT_OBSERVATION_OWNERS || outcome >= 3) return;
+  if (!t || owner >= t->channels / 2 || outcome >= 3) return;
   product_observation_channel_status_t *s = &t->shared->channels[owner * 2];
   ADD (&s->basic_packets[outcome], 1);
   ADD (&s->basic_bytes[outcome], bytes);
 }
 void product_observation_allocation_lost (product_observation_transport_t *t, unsigned channel) {
-  if (t && channel < PRODUCT_OBSERVATION_CHANNELS)
+  if (t && channel < t->channels)
     __atomic_add_fetch (&t->shared->channels[channel].allocation_lost, 1, __ATOMIC_RELAXED);
 }
 void product_observation_connected (product_observation_transport_t *t, int connected) {
@@ -190,11 +198,11 @@ void product_observation_transport_status (product_observation_transport_t *t,
   out->generation = t->shared->generation;
   out->mapping_bytes = t->length;
   out->version = PRODUCT_OBSERVATION_VERSION;
-  out->owners = PRODUCT_OBSERVATION_OWNERS;
+  out->owners = t->channels / 2;
   out->flow_capacity = t->shared->flow_capacity;
   out->blocked_capacity = t->shared->flow_capacity < 1024 ? t->shared->flow_capacity : 1024;
   out->connected = LOAD (&t->shared->connected);
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     product_observation_channel_status_t *dst = &out->channels[i];
     product_observation_channel_status_t *src = &t->shared->channels[i];
     /* Status is a per-counter sample, not a transaction across running owners. */
@@ -216,6 +224,7 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
   observation_hello_t request = {0};
   product_observation_transport_t *proposal = allocate_handle ();
   if (!proposal) return -1;
+  proposal->channels = t->channels;
   union { struct cmsghdr alignment;
     char bytes[CMSG_SPACE (sizeof (int) * (1 + PRODUCT_OBSERVATION_CHANNELS))]; } control = {0};
   struct iovec iov = { &request, sizeof (request) };
@@ -237,20 +246,20 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
     int *fds = (int *) CMSG_DATA (c);
     for (unsigned i = 0; i < n; i++, count++) {
       if (count == 0) proposal->memfd = fds[i];
-      else if (count <= PRODUCT_OBSERVATION_CHANNELS) proposal->event[count - 1] = fds[i];
+      else if (count <= t->channels) proposal->event[count - 1] = fds[i];
       else close (fds[i]);
     }
   }
   if (received != sizeof (request) || msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)
-      || count != 1 + PRODUCT_OBSERVATION_CHANNELS || request.magic != OBS_MAGIC
+      || count != 1 + t->channels || request.magic != OBS_MAGIC
       || request.generation != t->shared->generation || request.version != PRODUCT_OBSERVATION_VERSION
-      || request.header_bytes != OBS_HEADER || request.channels != PRODUCT_OBSERVATION_CHANNELS
+      || request.header_bytes != OBS_HEADER || request.channels != t->channels
       || request.queue_bytes != queue_bytes () || request.mapping_bytes != t->length) goto fail;
   struct stat st;
   int seals = fcntl (proposal->memfd, F_GET_SEALS);
   if (fstat (proposal->memfd, &st) || st.st_size != (off_t) t->length
       || seals < 0 || (seals & (F_SEAL_GROW | F_SEAL_SHRINK)) != (F_SEAL_GROW | F_SEAL_SHRINK)) goto fail;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++)
+  for (unsigned i = 0; i < t->channels; i++)
     if (fcntl (proposal->event[i], F_SETFL, O_NONBLOCK)) goto fail;
   proposal->length = t->length;
   void *mapped = mmap (NULL, t->length, PROT_READ | PROT_WRITE, MAP_SHARED, proposal->memfd, 0);
@@ -269,7 +278,7 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
   munmap (t->shared, t->length); close (t->memfd);
   t->shared = proposal->shared; proposal->shared = NULL;
   t->memfd = proposal->memfd; proposal->memfd = -1;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     close (t->event[i]); t->event[i] = proposal->event[i]; proposal->event[i] = -1;
   }
   attach (t);
@@ -277,7 +286,7 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
   observation_hello_t reply = { .magic = OBS_MAGIC, .generation = t->shared->generation,
     .mapping_bytes = t->length, .queue_bytes = queue_bytes (),
     .version = PRODUCT_OBSERVATION_VERSION, .flow_capacity = t->shared->flow_capacity,
-    .header_bytes = OBS_HEADER, .channels = PRODUCT_OBSERVATION_CHANNELS };
+    .header_bytes = OBS_HEADER, .channels = t->channels };
   return send (fd, &reply, sizeof (reply), MSG_NOSIGNAL | MSG_DONTWAIT) == sizeof (reply) ? 0 : -1;
 fail:
   product_observation_transport_destroy (proposal);
@@ -288,14 +297,16 @@ fail:
 static pthread_once_t consumer_heap_once = PTHREAD_ONCE_INIT;
 static void *consumer_heap;
 static void init_consumer_heap (void) { consumer_heap = clib_mem_init (NULL, 1024 * 1024); }
-product_observation_transport_t *product_observation_connect (
-  const char *path, uint64_t generation) {
-  if (!path || strlen (path) >= sizeof (((struct sockaddr_un *) 0)->sun_path)) return NULL;
+product_observation_transport_t *product_observation_connect_for_owners (
+  const char *path, uint64_t generation, uint32_t owner_count) {
+  if (!path || !owner_count || owner_count > PRODUCT_OBSERVATION_OWNERS
+      || strlen (path) >= sizeof (((struct sockaddr_un *) 0)->sun_path)) return NULL;
   pthread_once (&consumer_heap_once, init_consumer_heap);
   if (!consumer_heap) return NULL;
   clib_mem_set_heap (consumer_heap);
   product_observation_transport_t *t = allocate_handle ();
   if (!t) return NULL;
+  t->channels = owner_count * 2;
   t->consumer = 1;
   if (!allocate_descriptors (t)) goto fail;
   t->socket = socket (AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
@@ -312,24 +323,26 @@ product_observation_transport_t *product_observation_connect (
       || server_length != sizeof (server) || (server.uid != geteuid () && server.uid != 0)) goto fail;
   observation_hello_t hello = { .magic = OBS_MAGIC, .generation = generation,
     .version = PRODUCT_OBSERVATION_VERSION, .mapping_bytes = t->length,
-    .queue_bytes = queue_bytes (), .header_bytes = OBS_HEADER, .channels = PRODUCT_OBSERVATION_CHANNELS };
+    .queue_bytes = queue_bytes (), .header_bytes = OBS_HEADER, .channels = t->channels };
   union { struct cmsghdr alignment;
     char bytes[CMSG_SPACE (sizeof (int) * (1 + PRODUCT_OBSERVATION_CHANNELS))]; } control = {0};
   struct iovec iov = { &hello, sizeof (hello) };
   struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1,
     .msg_control = control.bytes, .msg_controllen = sizeof (control.bytes) };
   int fds[1 + PRODUCT_OBSERVATION_CHANNELS]; fds[0] = t->memfd;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) fds[i+1] = t->event[i];
+  for (unsigned i = 0; i < t->channels; i++) fds[i+1] = t->event[i];
+  msg.msg_controllen = CMSG_SPACE (sizeof (int) * (1 + t->channels));
   struct cmsghdr *cmsg = CMSG_FIRSTHDR (&msg);
   cmsg->cmsg_level = SOL_SOCKET; cmsg->cmsg_type = SCM_RIGHTS;
-  cmsg->cmsg_len = CMSG_LEN (sizeof (fds)); memcpy (CMSG_DATA (cmsg), fds, sizeof (fds));
+  cmsg->cmsg_len = CMSG_LEN (sizeof (int) * (1 + t->channels));
+  memcpy (CMSG_DATA (cmsg), fds, sizeof (int) * (1 + t->channels));
   if (sendmsg (t->socket, &msg, MSG_NOSIGNAL) != sizeof (hello)) goto fail;
   ssize_t received = recv (t->socket, &hello, sizeof (hello), MSG_TRUNC);
   if (received != sizeof (hello) || hello.magic != OBS_MAGIC
       || hello.generation != generation || hello.version != PRODUCT_OBSERVATION_VERSION
-      || hello.header_bytes != OBS_HEADER || hello.channels != PRODUCT_OBSERVATION_CHANNELS
+      || hello.header_bytes != OBS_HEADER || hello.channels != t->channels
       || hello.queue_bytes != queue_bytes () || !hello.flow_capacity || hello.flow_capacity > 65536
-      || hello.mapping_bytes != OBS_HEADER + PRODUCT_OBSERVATION_CHANNELS * queue_bytes ()) goto fail;
+      || hello.mapping_bytes != OBS_HEADER + t->channels * queue_bytes ()) goto fail;
   void *mapped = mmap (NULL, t->length, PROT_READ | PROT_WRITE, MAP_SHARED, t->memfd, 0);
   if (mapped == MAP_FAILED) goto fail;
   t->shared = mapped;
@@ -338,7 +351,7 @@ product_observation_transport_t *product_observation_connect (
       || t->shared->version != PRODUCT_OBSERVATION_VERSION
       || t->shared->flow_capacity != hello.flow_capacity) goto fail;
   /* Validate layout before the pinned attach function follows any offsets. */
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     svm_msg_q_shared_t *q = queue_base (t, i);
     if (q->n_rings != 2 || q->q->maxsize != config.q_nitems
         || q->q->elsize != sizeof (svm_msg_q_msg_t)) goto fail;
@@ -359,9 +372,14 @@ fail:
   return NULL;
 }
 
+product_observation_transport_t *product_observation_connect (
+  const char *path, uint64_t generation) {
+  return product_observation_connect_for_owners (path, generation, 2);
+}
+
 int product_observation_receive (product_observation_transport_t *t, unsigned channel,
                                  product_observation_record_t *record) {
-  if (!t || !t->consumer || channel >= PRODUCT_OBSERVATION_CHANNELS || !record) return -1;
+  if (!t || !t->consumer || channel >= t->channels || !record) return -1;
   svm_msg_q_t *mq = &t->queue[channel];
   if (!LOAD (&mq->q.shr->cursize)) return 0;
   svm_msg_q_msg_t msg;
@@ -385,18 +403,18 @@ static void drain (int fd) {
 int product_observation_wait (product_observation_transport_t *t, int timeout_ms) {
   if (!t || !t->consumer) return -1;
   struct pollfd fds[PRODUCT_OBSERVATION_CHANNELS + 2];
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < t->channels; i++) {
     drain (t->event[i]);
     __atomic_exchange_n (&t->shared->channels[i].pending, 0, __ATOMIC_SEQ_CST);
     if (LOAD (&t->queue[i].q.shr->cursize)) return 1;
     fds[i] = (struct pollfd) { .fd = t->event[i], .events = POLLIN };
   }
-  fds[PRODUCT_OBSERVATION_CHANNELS] = (struct pollfd) { .fd = t->socket, .events = POLLIN };
-  fds[PRODUCT_OBSERVATION_CHANNELS + 1] = (struct pollfd) { .fd = t->interrupt, .events = POLLIN };
+  fds[t->channels] = (struct pollfd) { .fd = t->socket, .events = POLLIN };
+  fds[t->channels + 1] = (struct pollfd) { .fd = t->interrupt, .events = POLLIN };
   int rv;
-  do rv = poll (fds, PRODUCT_OBSERVATION_CHANNELS + 2, timeout_ms); while (rv < 0 && errno == EINTR);
-  if (fds[PRODUCT_OBSERVATION_CHANNELS].revents) return -1;
-  if (fds[PRODUCT_OBSERVATION_CHANNELS + 1].revents) drain (t->interrupt);
+  do rv = poll (fds, t->channels + 2, timeout_ms); while (rv < 0 && errno == EINTR);
+  if (fds[t->channels].revents) return -1;
+  if (fds[t->channels + 1].revents) drain (t->interrupt);
   return rv;
 }
 int product_observation_interrupt_fd (product_observation_transport_t *t) {

@@ -3,13 +3,14 @@
 #include "product_flow_expiry.h"
 #include "product_observation.h"
 #include "product_packet_graph.h"
+#include "product_runtime_topology.h"
 #include <vlib/threads.h>
 #include <vnet/buffer.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 
-#define PRODUCT_FLOW_END_WORKERS 2
+#define PRODUCT_FLOW_END_WORKERS PRODUCT_VPP_MAX_FLOW_OWNERS
 enum { END_CONTROL_NONE, END_CONTROL_NOW, END_CONTROL_NEXT_PACKET };
 typedef struct
 {

@@ -124,13 +124,14 @@ typedef struct {u32 thread_index;} vlib_main_t;
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 #define SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT 1
 #define clib_memset memset
+#define clib_warning(...) ((void)0)
 #define ASSERT assert
 #define clib_atomic_load_acq_n(p) (*(p))
 #define clib_atomic_store_rel_n(p,v) (*(p)=(v))
 typedef struct {
  vlib_main_t *vlib_main;product_adapter_obligation_kind_t adapter_kind;u32 owner_count;
  u64 generation,lifecycle_obligations,lifecycle_buffers,lifecycle_handoffs,lifecycle_completion_frames;
- u32 enabled,accepting,trace_packets,trace_limit,policy_hold_next_us[2],misroute_next;
+ u32 enabled,accepting,trace_packets,trace_limit,policy_hold_next_us[2],misroute_next,flow_capacity;
  u64 primary_published,primary_received,primary_rejected,primary_rejected_credit,primary_rejected_enqueue,owner_delivery_checks,owner_delivery_failures;
  u64 completion_returns,completion_deferred,completion_retry_attempts,completion_pending_returns;
  u32 l4_policy_bank_readers[2],l4_policy_active_bank,policy_publish_sequence;

@@ -24,8 +24,8 @@ grep -Fq 'schema=s187-worker-core-guardrails/v1' "$service"
 grep -Fq 'PRODUCT_CORE_MAIN_CORE = "0"' "$service"
 grep -Fq 'activeWorkerPlacement.ownerCount' "$service"
 grep -Fq 'WorkerCpuPlacement.DEFAULT' "$service"
-grep -Fq 'activeWorkerPlacement.worker0CpuId' "$service"
-grep -Fq 'activeWorkerPlacement.worker1CpuId' "$service"
+grep -Fq 'activeWorkerPlacement.cpuId(owner)' "$service"
+grep -Fq 'status.productGraphVppOwnerCores[owner]' "$service"
 grep -Fq 'writeS187WorkerCoreGuardrailsStatus(status)' "$service"
 grep -Fq 'threshold_scope=engineering_guardrail_not_release_slo' "$service"
 grep -Fq 'placement_fixed_before_start=true' "$service"
@@ -133,7 +133,7 @@ for token in (
         "public final long productGraphHandoffDebt"):
     if token not in native_status:
         raise AssertionError("S187 native status missing " + token)
-if "_Static_assert(sizeof(sakamoto_product_status_t) == 1312U" not in abi_header:
+if "_Static_assert(sizeof(sakamoto_product_status_t) == 1808U" not in abi_header:
     raise AssertionError("S187 Product Core ABI must include graph guardrail fields")
 PY
 
@@ -146,7 +146,7 @@ for token in \
   'product_graph_vpp_worker_count: value.product_graph_vpp_worker_count' \
   'value.product_graph_worker_count = status.product_graph_worker_count' \
   'value.product_graph_vpp_worker_count = status.product_graph_vpp_worker_count' \
-  'assert_eq!(size_of::<ProductStatus>(), 1312)'; do
+  'assert_eq!(size_of::<ProductStatus>(), 1808)'; do
   grep -Fq -- "$token" "${rust_sources[@]}"
 done
 

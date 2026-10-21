@@ -86,6 +86,7 @@ cat >"$work_dir/vlib/threads.h" <<'EOF'
 
 typedef struct {
   int cpu_id;
+  long lwp;
 } vlib_worker_thread_t;
 
 typedef struct {
@@ -193,11 +194,11 @@ cat >"$work_dir/product_core.api_types.h" <<'EOF'
 #include "sakamoto_product_observation.h"
 #include "sakamoto_product_flow_query.h"
 typedef struct { uint64_t generation; } vl_api_product_core_observation_query_t;
-typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[2]; uint64_t blocked_capacity_misses[2], blocked_retired[2]; product_observation_channel_status_t channels[4]; } vl_api_product_core_observation_query_reply_t;
+typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[62]; uint64_t blocked_capacity_misses[62], blocked_retired[62]; product_observation_channel_status_t channels[124]; } vl_api_product_core_observation_query_reply_t;
 typedef struct { uint64_t generation; uint32_t cursor; } vl_api_product_core_flow_query_t;
 typedef product_observation_attribution_t vl_api_product_flow_query_attribution_t;
 typedef sakamoto_product_flow_entry_t vl_api_product_flow_query_entry_t;
-typedef struct { int32_t retval; uint64_t generation; uint64_t allocated_bytes[2], capacity_misses[2]; uint32_t capacity[2], active[2], high_watermark[2]; uint32_t cursor,next_cursor,scanned,count,done; vl_api_product_flow_query_entry_t entries[16]; } vl_api_product_core_flow_query_reply_t;
+typedef struct { int32_t retval; uint64_t generation; uint64_t allocated_bytes[62], capacity_misses[62]; uint32_t capacity[62], active[62], high_watermark[62]; uint32_t owner_count,cursor,next_cursor,scanned,count,done; vl_api_product_flow_query_entry_t entries[16]; } vl_api_product_core_flow_query_reply_t;
 typedef struct { uint64_t generation, incarnation; uint32_t worker, slot; } vl_api_product_core_sni_query_t;
 typedef struct { int32_t retval; uint64_t generation, incarnation, protocols; uint32_t worker, slot, result, stop, attempts, bytes, work, cache_bytes, name_length, protocols_available; char name[254]; } vl_api_product_core_sni_query_reply_t;
 typedef sakamoto_product_config_rule_t vl_api_product_config_rule_t;
@@ -270,6 +271,8 @@ typedef struct {
   uint32_t product_graph_vpp_worker0_core;
   uint32_t product_graph_vpp_worker1_thread_index;
   uint32_t product_graph_vpp_worker1_core;
+  uint32_t product_graph_vpp_owner_thread_index[62];
+  uint32_t product_graph_vpp_owner_core[62];
   uint32_t product_graph_enabled;
   uint32_t product_graph_accepting;
   uint32_t product_graph_worker_layout_ready;
@@ -440,7 +443,7 @@ cat >"$work_dir/product_core_identity.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #ifndef SAKAMOTO_PRODUCT_ABI_VERSION
-#define SAKAMOTO_PRODUCT_ABI_VERSION 2
+#define SAKAMOTO_PRODUCT_ABI_VERSION 3
 #endif
 #ifndef SAKAMOTO_PRODUCT_API_VERSION
 #define SAKAMOTO_PRODUCT_API_VERSION 1
@@ -469,6 +472,7 @@ setup_message_id_table (void)
 EOF
 
 cat >"$work_dir/harness.c" <<EOF
+#define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -479,7 +483,9 @@ cat >"$work_dir/harness.c" <<EOF
 
 clib_error_t sakamoto_test_error;
 u16 sakamoto_test_message_id_base;
-vlib_worker_thread_t sakamoto_test_workers[3] = {{0}, {1}, {2}};
+vlib_worker_thread_t sakamoto_test_workers[3] = {
+  {.cpu_id=0, .lwp=0}, {.cpu_id=1, .lwp=0}, {.cpu_id=2, .lwp=0}
+};
 vlib_worker_thread_t *vlib_worker_threads = sakamoto_test_workers;
 vlib_thread_main_t vlib_thread_main = {
   .n_vlib_mains = 3U,

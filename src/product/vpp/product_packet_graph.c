@@ -47,9 +47,9 @@
 #endif
 
 #define PRODUCT_GRAPH_VECTOR_COUNT 8
-#define PRODUCT_GRAPH_WORKERS 2
-/* ABI storage still has two slots. SAKAMOTO-295 activates one or two Root
- * owners; the configured count controls every owner-local operation. */
+#define PRODUCT_GRAPH_WORKERS PRODUCT_VPP_MAX_FLOW_OWNERS
+_Static_assert (PRODUCT_GRAPH_WORKERS + 2 == FRAME_QUEUE_MAX_NELTS,
+                "Product owner storage follows the pinned VPP thread limit");
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
 #define PRODUCT_GRAPH_HANDOFF_CREDITS 32
 #define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48
@@ -2685,6 +2685,8 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
 #endif
   if (!product_packet_graph_flow_pools_reset (graph))
     {
+      clib_warning ("Product per-owner state resource rejected before capture: owners=%u entries_per_owner=%u",
+        graph->owner_count, graph->flow_capacity);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       product_fragment_abort ();
 #endif
@@ -2837,6 +2839,9 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   /* Provisional development setting, not a release sizing decision. */
   if (!graph->flow_capacity)
     graph->flow_capacity = 1024;
+  /* Flow-query cursors and bounded per-owner tables use u32 slot positions. */
+  if (graph->owner_count > UINT32_MAX / graph->flow_capacity)
+    goto failed;
   for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     if (product_flow_runtime_create (
           &graph->flow_pools[worker], (u16) worker, product_packet_graph_worker_count (),
@@ -4730,6 +4735,9 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
 {
   product_packet_graph_main_t *g = &product_packet_graph_main;
   (void) input; (void) command;
+  u32 active_flows = 0;
+  for (u32 owner = 0; owner < g->owner_count; owner++)
+    active_flows += product_flow_entry_pool_active_count (g->flow_pools[owner]);
   vlib_cli_output (vm, "capacity.status credits=%u primary_slots=%u completion_slots=%u",
     g->primary_credit_limit, g->primary_ring_slots, g->completion_ring_slots);
   vlib_cli_output (vm, "primary.status generation=%llu published=%llu received=%llu rejected=%llu owner_checks=%llu owner_failures=%llu returns=%llu deferred=%llu retries=%llu pending_returns=%u handoff_debt=%u credit0=%u credit1=%u flows=%u",
@@ -4746,8 +4754,11 @@ product_primary_status_cli (vlib_main_t *vm, unformat_input_t *input,
     clib_atomic_load_acq_n (&g->lifecycle_handoffs),
     clib_atomic_load_acq_n (&g->handoff_credits[0]),
     clib_atomic_load_acq_n (&g->handoff_credits[1]),
-    product_flow_entry_pool_active_count (g->flow_pools[0])
-      + product_flow_entry_pool_active_count (g->flow_pools[1]));
+    active_flows);
+  for (u32 owner = 0; owner < g->owner_count; owner++)
+    vlib_cli_output (vm, "primary.owner=%u credit=%u flows=%u",
+      owner, clib_atomic_load_acq_n (&g->handoff_credits[owner]),
+      product_flow_entry_pool_active_count (g->flow_pools[owner]));
   vlib_cli_output (vm, "primary.rejection generation=%llu credit=%llu enqueue=%llu",
     (unsigned long long) g->generation,
     (unsigned long long) clib_atomic_load_acq_n (&g->primary_rejected_credit),
@@ -5365,13 +5376,16 @@ int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
       return -1;
     }
   out->generation = generation;
+  out->owner_count = product_packet_graph_worker_count ();
   out->cursor = cursor;
   uint32_t position = cursor;
   while (position < total && out->scanned < SAKAMOTO_FLOW_QUERY_SCAN
          && out->count < SAKAMOTO_FLOW_QUERY_PAGE)
     {
-      uint32_t worker = position < pool[0].capacity ? 0 : 1;
-      uint32_t slot = position - (worker ? pool[0].capacity : 0);
+      uint32_t worker = 0;
+      uint32_t slot = position;
+      while (worker < out->owner_count && slot >= pool[worker].capacity)
+        slot -= pool[worker++].capacity;
       position++;
       out->scanned++;
       const product_flow_entry_t *e =

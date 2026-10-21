@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+
+#define PRODUCT_FLOW_CHECK_WORKERS 2
 /* Explicit diagnostic vectors, never NFQ_CAPTURED or application FlowEntries.
  * Control preallocates isolated runtimes; actual owner nodes exercise the same
  * Interface and free their independent, payload-free VPP carriers once. */
 typedef struct {
-  product_flow_runtime_t *runtime[PRODUCT_GRAPH_WORKERS];
-  product_flow_runtime_snapshot_t counters[PRODUCT_GRAPH_WORKERS];
+  product_flow_runtime_t *runtime[PRODUCT_FLOW_CHECK_WORKERS];
+  product_flow_runtime_snapshot_t counters[PRODUCT_FLOW_CHECK_WORKERS];
   u32 queue, initialized, armed, done;
-  u32 failed_step[PRODUCT_GRAPH_WORKERS];
-  u32 thread[PRODUCT_GRAPH_WORKERS];
+  u32 failed_step[PRODUCT_FLOW_CHECK_WORKERS];
+  u32 thread[PRODUCT_FLOW_CHECK_WORKERS];
   u64 generation;
 } product_flow_collision_check_t;
 static product_flow_collision_check_t product_flow_check;
@@ -122,7 +124,7 @@ VLIB_NODE_FN (product_flow_collision_check_node)
       u32 bi = buffers[i];
       u32 expected = vlib_get_buffer (vm, bi)->opaque[0];
       u32 worker = vlib_get_worker_index (vm->thread_index);
-      if (expected < PRODUCT_GRAPH_WORKERS)
+      if (expected < PRODUCT_FLOW_CHECK_WORKERS)
         {
           product_flow_check.thread[expected] = vm->thread_index;
           product_flow_check.failed_step[expected] = worker == expected
@@ -134,7 +136,7 @@ VLIB_NODE_FN (product_flow_collision_check_node)
             : (product_flow_runtime_snapshot_t) { 0 };
         }
       vlib_buffer_free (vm, &bi, 1);
-      if (expected < PRODUCT_GRAPH_WORKERS)
+      if (expected < PRODUCT_FLOW_CHECK_WORKERS)
         __atomic_fetch_or (&product_flow_check.done, 1U << expected, __ATOMIC_RELEASE);
     }
   return frame->n_vectors;
@@ -147,7 +149,7 @@ VLIB_REGISTER_NODE (product_flow_collision_check_node) = {
 static void
 product_flow_check_destroy (void)
 {
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 0; i < PRODUCT_FLOW_CHECK_WORKERS; i++)
     {
       product_flow_runtime_destroy (product_flow_check.runtime[i]);
       product_flow_check.runtime[i] = 0;
@@ -159,10 +161,10 @@ product_flow_check_cli (vlib_main_t *vm, unformat_input_t *input,
                         vlib_cli_command_t *command)
 {
   product_packet_graph_main_t *g = &product_packet_graph_main;
-  u32 buffers[PRODUCT_GRAPH_WORKERS], failed[PRODUCT_GRAPH_WORKERS];
-  u16 targets[PRODUCT_GRAPH_WORKERS];
+  u32 buffers[PRODUCT_FLOW_CHECK_WORKERS], failed[PRODUCT_FLOW_CHECK_WORKERS];
+  u16 targets[PRODUCT_FLOW_CHECK_WORKERS];
   (void) input; (void) command;
-  if (vlib_num_workers () != PRODUCT_GRAPH_WORKERS
+  if (vlib_num_workers () != PRODUCT_FLOW_CHECK_WORKERS
       || g->enabled || g->lifecycle_buffers || g->lifecycle_obligations
       || g->lifecycle_handoffs || g->lifecycle_completion_frames
       || (product_flow_check.armed && __atomic_load_n (&product_flow_check.done, __ATOMIC_ACQUIRE) != 3))
@@ -171,12 +173,12 @@ product_flow_check_cli (vlib_main_t *vm, unformat_input_t *input,
   product_flow_check.armed = 0;
   product_flow_check.done = 0;
   product_flow_check.generation = g->generation ? g->generation : 1;
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 0; i < PRODUCT_FLOW_CHECK_WORKERS; i++)
     {
       product_flow_check.failed_step[i] = 0;
       product_flow_check.thread[i] = 0;
       if (product_flow_runtime_create (&product_flow_check.runtime[i], i,
-            PRODUCT_GRAPH_WORKERS, product_flow_check.generation, 8)
+            PRODUCT_FLOW_CHECK_WORKERS, product_flow_check.generation, 8)
             != PRODUCT_FLOW_ENTRY_STATUS_OK)
         {
           product_flow_check_destroy ();
@@ -184,8 +186,8 @@ product_flow_check_cli (vlib_main_t *vm, unformat_input_t *input,
         }
       targets[i] = vlib_get_worker_thread_index (i);
     }
-  u32 allocated = vlib_buffer_alloc (vm, buffers, PRODUCT_GRAPH_WORKERS);
-  if (allocated != PRODUCT_GRAPH_WORKERS)
+  u32 allocated = vlib_buffer_alloc (vm, buffers, PRODUCT_FLOW_CHECK_WORKERS);
+  if (allocated != PRODUCT_FLOW_CHECK_WORKERS)
     {
       if (allocated) vlib_buffer_free (vm, buffers, allocated);
       product_flow_check_destroy ();
@@ -196,13 +198,13 @@ product_flow_check_cli (vlib_main_t *vm, unformat_input_t *input,
       product_flow_check.queue = vlib_frame_queue_main_init (product_flow_collision_check_node.index, 8);
       product_flow_check.initialized = 1;
     }
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 0; i < PRODUCT_FLOW_CHECK_WORKERS; i++)
     vlib_get_buffer (vm, buffers[i])->opaque[0] = i;
   product_flow_check.armed = 1;
   u32 queued = vlib_buffer_enqueue_to_thread_retained (
     vm, vlib_node_get_runtime (vm, product_flow_collision_check_node.index),
-    product_flow_check.queue, buffers, targets, PRODUCT_GRAPH_WORKERS, failed);
-  for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS - queued; i++)
+    product_flow_check.queue, buffers, targets, PRODUCT_FLOW_CHECK_WORKERS, failed);
+  for (u32 i = 0; i < PRODUCT_FLOW_CHECK_WORKERS - queued; i++)
     {
       u32 worker = vlib_get_buffer (vm, failed[i])->opaque[0];
       product_flow_check.failed_step[worker] = 2;
@@ -226,7 +228,7 @@ product_flow_check_show_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "flow.check armed=%u done=%u source=FLOW_RUNTIME_INJECTED", product_flow_check.armed, done);
   if (product_flow_check.armed && done == 3)
     {
-      for (u32 i = 0; i < PRODUCT_GRAPH_WORKERS; i++)
+      for (u32 i = 0; i < PRODUCT_FLOW_CHECK_WORKERS; i++)
         {
           const product_flow_runtime_snapshot_t *s = &product_flow_check.counters[i];
           vlib_cli_output (vm, "flow.check.owner worker=%u thread=%u generation=%llu failed_step=%u creates=%llu hits=%llu capacity_misses=%llu early_drops=%llu wrong_owner=%llu flushes=%llu final_entries=%u carrier_freed=1",

@@ -9,7 +9,8 @@ mod live {
     use std::thread::{self, JoinHandle};
 
     unsafe extern "C" {
-        fn product_observation_connect(path: *const c_char, generation: u64) -> *mut c_void;
+        fn product_observation_connect_for_owners(
+            path: *const c_char, generation: u64, owner_count: u32) -> *mut c_void;
         fn product_observation_transport_destroy(handle: *mut c_void);
         fn product_observation_transport_status(handle: *mut c_void, out: *mut ObservationHealth);
         fn product_observation_receive(
@@ -107,6 +108,18 @@ mod live {
             generation: u64,
             store_path: &Path,
         ) -> Result<Self, String> {
+            Self::start_for_owners(api, generation, store_path, 2)
+        }
+
+        pub(crate) fn start_for_owners(
+            api: &Path,
+            generation: u64,
+            store_path: &Path,
+            owner_count: u32,
+        ) -> Result<Self, String> {
+            if !(1..=62).contains(&owner_count) {
+                return Err("invalid_observation_owner_count".into());
+            }
             let store_path = store_path.to_owned();
             let path =
                 CString::new(format!("{}.obs", api.display())).map_err(|_| "invalid_socket")?;
@@ -126,7 +139,9 @@ mod live {
                 .spawn(move || {
                     // Native handle never crosses threads. Negotiation and all
                     // mapped queue accesses, including destruction, occur here.
-                    let handle = unsafe { product_observation_connect(path.as_ptr(), generation) };
+                    let handle = unsafe {
+                        product_observation_connect_for_owners(path.as_ptr(), generation, owner_count)
+                    };
                     if handle.is_null() {
                         let _ = tx.send(Err("observation_connect_failed".to_owned()));
                         return;
@@ -156,7 +171,7 @@ mod live {
                         );
                         s.live = true;
                         s.overview.incomplete = health
-                            .channels
+                            .channels[..(health.owners as usize * 2)]
                             .iter()
                             .any(|c| c.full != 0 || c.oversize != 0);
                     }
@@ -195,7 +210,7 @@ mod live {
                         answer_query(&worker_state, store.as_ref(), &worker_control);
                         let mut work = false;
                         let mut records = Vec::new();
-                        for channel in 0..4 {
+                        for channel in 0..health.owners * 2 {
                             for _ in 0..128 {
                                 let mut raw = RawRecord([0; 480]);
                                 let rv = unsafe {
@@ -237,7 +252,7 @@ mod live {
                         }
                         unsafe { product_observation_transport_status(handle, &mut health) };
                         if health
-                            .channels
+                            .channels[..(health.owners as usize * 2)]
                             .iter()
                             .any(|c| c.full != 0 || c.oversize != 0 || c.notify_errors != 0
                                 || c.allocation_lost != 0)
@@ -868,6 +883,10 @@ pub(crate) struct ObservationService;
 #[cfg(not(product_vapi))]
 impl ObservationService {
     pub(crate) fn start(_: &std::path::Path, _: u64, _: &std::path::Path) -> Result<Self, String> {
+        Err("observation_requires_product_vpp".into())
+    }
+    pub(crate) fn start_for_owners(_: &std::path::Path, _: u64, _: &std::path::Path,
+                                   _: u32) -> Result<Self, String> {
         Err("observation_requires_product_vpp".into())
     }
     pub(crate) fn snapshot(&self) -> serde_json::Value {

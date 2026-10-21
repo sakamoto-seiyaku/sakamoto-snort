@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "sakamoto_product_observation.h"
+#include "sakamoto_product_limits.h"
 
 /* One VPP main-thread query scans at most 256 slots under the worker barrier.
  * Pages are live samples: a cursor does not freeze or change Flow ownership. */
@@ -26,9 +27,12 @@ typedef struct {
 
 typedef struct {
   uint64_t generation;
-  uint64_t allocated_bytes[2], capacity_misses[2];
-  uint32_t capacity[2], active[2], high_watermark[2];
-  uint32_t cursor, next_cursor, scanned, count, done;
+  uint64_t allocated_bytes[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint64_t capacity_misses[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint32_t capacity[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint32_t active[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint32_t high_watermark[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint32_t owner_count, cursor, next_cursor, scanned, count, done;
   sakamoto_product_flow_entry_t entries[SAKAMOTO_FLOW_QUERY_PAGE];
 } sakamoto_product_flow_page_t;
 
@@ -39,9 +43,9 @@ typedef struct {
 #endif
 SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_entry_t) == 496,
                       "flow query entry ABI");
-SAKAMOTO_FLOW_ASSERT (offsetof (sakamoto_product_flow_page_t, entries) == 88,
+SAKAMOTO_FLOW_ASSERT (offsetof (sakamoto_product_flow_page_t, entries) == 1768,
                       "flow query page ABI");
-SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_page_t) == 8024,
+SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_page_t) == 9704,
                       "flow query page size");
 #undef SAKAMOTO_FLOW_ASSERT
 

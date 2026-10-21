@@ -42,7 +42,7 @@ actual_series="$(sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*#/d' "$series_file
 
 expected_count="$(property vpp.core.patch.count)"
 expected_sha256="$(property vpp.core.patch.sha256)"
-fixed_sha256=76aa5f7657ff0f2a4bea2fd6ec5e81c10074ea9a1b30ff3ddbf9cb4f3281deb7
+fixed_sha256=ebeb71ace719113198d100ae262ac87a8c8380b2d22a043e2a00bc1cb49c4415
 [[ "$expected_count" == "7" ]] || fail "core patch count allowlist must remain 7"
 [[ "$expected_sha256" =~ ^[[:xdigit:]]{64}$ ]] || \
   fail "core patch hash allowlist is not a SHA-256 digest"

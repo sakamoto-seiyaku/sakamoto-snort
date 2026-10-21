@@ -1,9 +1,11 @@
 diff --git a/src/vlib/threads.c b/src/vlib/threads.c
 --- a/src/vlib/threads.c
 +++ b/src/vlib/threads.c
-@@ -31,4 +31,41 @@
- vlib_thread_main_t vlib_thread_main;
+@@ -29,6 +29,40 @@
  
+ vlib_worker_thread_t *vlib_worker_threads;
+ vlib_thread_main_t vlib_thread_main;
++
 +/* Explicit startup placement is a sequence, not a CPU bitmap. It never
 + * participates in packet ownership and is immutable once workers launch. */
 +static u32 *ordered_worker_cpus;
@@ -28,10 +30,7 @@ diff --git a/src/vlib/threads.c b/src/vlib/threads.c
 +          cpu = cpu * 10 + digit;
 +        }
 +      while (*p >= '0' && *p <= '9');
-+      for (u32 i = 0; i < vec_len (ordered_worker_cpus); i++)
-+        if (ordered_worker_cpus[i] == cpu)
-+          return clib_error_return (0, "ordered-workers: duplicate CPU %u", cpu);
-+      if (vec_len (ordered_worker_cpus) >= FRAME_QUEUE_MAX_NELTS - 1)
++      if (vec_len (ordered_worker_cpus) >= FRAME_QUEUE_MAX_NELTS - 2)
 +        return clib_error_return (0, "ordered-workers: too many CPUs");
 +      vec_add1 (ordered_worker_cpus, cpu);
 +      if (!*p)
@@ -40,28 +39,47 @@ diff --git a/src/vlib/threads.c b/src/vlib/threads.c
 +        return clib_error_return (0, "ordered-workers: expected comma and CPU");
 +    }
 +}
-+
+ 
  /*
   * Barrier tracing can be enabled on a normal build to collect information
-@@ -820,12 +857,15 @@
+@@ -820,14 +854,27 @@
        else
  	{
  	  uword c;
-+          u32 placement_index = 0;
-           clib_bitmap_foreach (c, tr->coremask)  {
-+            uword cpu = tr == ordered_worker_registration ?
-+              ordered_worker_cpus[placement_index++] : c;
-             w = vlib_worker_threads + worker_thread_index++;
- 	    err = vlib_launch_thread_int (vlib_worker_thread_bootstrap_fn,
+-          clib_bitmap_foreach (c, tr->coremask)  {
+-            w = vlib_worker_threads + worker_thread_index++;
+-	    err = vlib_launch_thread_int (vlib_worker_thread_bootstrap_fn,
 -					  w, c);
-+					  w, cpu);
- 	    if (err)
- 	      clib_unix_error ("%U, thread %s init on cpu %d failed",
+-	    if (err)
+-	      clib_unix_error ("%U, thread %s init on cpu %d failed",
 -			       format_clib_error, err, tr->name, c);
-+			       format_clib_error, err, tr->name, cpu);
- 	    }
+-	    }
++          if (tr == ordered_worker_registration)
++            for (u32 placement_index = 0; placement_index < tr->count; placement_index++)
++              {
++                uword cpu = ordered_worker_cpus[placement_index];
++                w = vlib_worker_threads + worker_thread_index++;
++                err = vlib_launch_thread_int (vlib_worker_thread_bootstrap_fn,
++                                              w, cpu);
++                if (err)
++                  clib_unix_error ("%U, thread %s init on cpu %d failed",
++                                   format_clib_error, err, tr->name, cpu);
++              }
++          else
++            clib_bitmap_foreach (c, tr->coremask)
++              {
++                w = vlib_worker_threads + worker_thread_index++;
++                err = vlib_launch_thread_int (vlib_worker_thread_bootstrap_fn,
++                                              w, c);
++                if (err)
++                  clib_unix_error ("%U, thread %s init on cpu %d failed",
++                                   format_clib_error, err, tr->name, c);
++              }
  	}
-@@ -1118,4 +1158,13 @@
+     }
+   vlib_worker_thread_barrier_sync (vm);
+@@ -1117,6 +1164,15 @@
+       else if (unformat (input, "numa-heap-size %U",
  			 unformat_memory_size, &tm->numa_heap_size))
  	;
 +      else if (unformat (input, "ordered-workers"))
@@ -75,18 +93,20 @@ diff --git a/src/vlib/threads.c b/src/vlib/threads.c
 +        }
        else if (unformat (input, "coremask-%s %U", &name,
  			 unformat_bitmap_mask, &bitmap) ||
-@@ -1167,4 +1216,5 @@
+ 	       unformat (input, "corelist-%s %U", &name,
+@@ -1166,12 +1222,56 @@
+ 	  tr->count = count;
+ 	}
        else
 -	break;
 +	return clib_error_return (0, "unknown CPU input `%U'",
 +                                  format_unformat_error, input);
      }
  
-@@ -1172,5 +1222,48 @@
    if (use_corelist && tm->main_lcore == ~0)
      return clib_error_return (0, "main-core must be specified when using "
  				 "corelist-* or coremask-* attribute");
- 
++
 +  if (vec_len (ordered_worker_cpus))
 +    {
 +      p = hash_get_mem (tm->thread_registrations_by_name, "workers");
@@ -129,5 +149,6 @@ diff --git a/src/vlib/threads.c b/src/vlib/threads.c
 +        tr->coremask = clib_bitmap_set (tr->coremask, ordered_worker_cpus[i], 1);
 +      ordered_worker_registration = tr;
 +    }
-+
+ 
    if (tm->skip_cores != 0 && tm->main_lcore == ~0)
+     return clib_error_return (

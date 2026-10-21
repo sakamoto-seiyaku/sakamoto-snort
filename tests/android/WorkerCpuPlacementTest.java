@@ -24,7 +24,11 @@ public final class WorkerCpuPlacementTest {
         require(single.equals(WorkerCpuPlacement.parse(single.encode())), "single round trip");
         require(single.startupConfig().equals(
                 "cpu {\n  main-core 0\n  workers 1\n  ordered-workers 3\n}\n\n"), "one native worker");
-        String[] invalid = {null, "", "0", "1,2,3", "1,1", "01,1", "0,1", "1,0",
+        WorkerCpuPlacement shared = WorkerCpuPlacement.parse("1,2,1");
+        require(shared.ownerCount == 3 && shared.encode().equals("1,2,1"), "shared CPU keeps three owners");
+        require(shared.startupConfig().contains("workers 3\n  ordered-workers 1,2,1"),
+                "three native worker contexts");
+        String[] invalid = {null, "", "0", "0,1", "1,0",
                 "1,", ",1", "1,,2", "1-3", "3-1", "-1,2", "+1,2", "1.0,2", "1, 2",
                 " 1,2", "1,2 ", "1,2\n", "1,2\nworkers 9", "1,2}", "1024,1",
                 "4294967297,2", "99999999999,2", "١,2", "1;2"};
@@ -35,6 +39,13 @@ public final class WorkerCpuPlacementTest {
             } catch (IllegalArgumentException expected) {
                 // Every supplied invalid value rejects; none selects a fallback.
             }
+        }
+        try {
+            WorkerCpuPlacement.parse(String.join(",",
+                    java.util.Collections.nCopies(63, "1")));
+            throw new AssertionError("accepted a worker count beyond the pinned VPP limit");
+        } catch (IllegalArgumentException expected) {
+            // The 63rd owner exceeds the pinned VPP thread limit.
         }
         System.out.println("Worker CPU placement: ordered W2/default/roundtrip and "
                 + invalid.length + " invalid inputs PASS; native affinity remains a device gate");

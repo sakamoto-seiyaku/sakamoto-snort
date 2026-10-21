@@ -14,10 +14,10 @@ extern "C" {
 #endif
 
 /* This is a deliberately small, fixed-width, non-unwinding seam. */
-/* ABI 2 appends TUN lane identity to status. JNI, Rust and VAPI are always
+/* ABI 3 appends ordered actual owner affinity to status. JNI, Rust and VAPI are always
  * published together in one content-verified Product artifact/APK; callers
  * must never mix native libraries from different artifact generations. */
-#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(2)
+#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(3)
 #define SAKAMOTO_PRODUCT_API_VERSION UINT32_C(1)
 #define SAKAMOTO_PRODUCT_ARTIFACT_ID_MAX UINT32_C(96)
 #define SAKAMOTO_PRODUCT_API_IDENTITY_MAX UINT32_C(96)
@@ -248,6 +248,8 @@ typedef struct {
   uint32_t product_graph_vpp_worker0_core;
   uint32_t product_graph_vpp_worker1_thread_index;
   uint32_t product_graph_vpp_worker1_core;
+  uint32_t product_graph_vpp_owner_thread_index[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
+  uint32_t product_graph_vpp_owner_core[SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS];
   uint32_t product_graph_enabled;
   uint32_t product_graph_accepting;
   uint32_t product_graph_worker_layout_ready;
@@ -356,7 +358,7 @@ static_assert(offsetof(sakamoto_product_status_t, generation) == 16U,
               "product status generation ABI changed");
 static_assert(offsetof(sakamoto_product_status_t, artifact_id) == 52U,
               "product status identity ABI changed");
-static_assert(sizeof(sakamoto_product_status_t) == 1312U,
+static_assert(sizeof(sakamoto_product_status_t) == 1808U,
               "product status ABI changed");
 #else
 _Static_assert(sizeof(sakamoto_product_bytes_t) == 16U,
@@ -383,7 +385,7 @@ _Static_assert(offsetof(sakamoto_product_status_t, generation) == 16U,
                "product status generation ABI changed");
 _Static_assert(offsetof(sakamoto_product_status_t, artifact_id) == 52U,
                "product status identity ABI changed");
-_Static_assert(sizeof(sakamoto_product_status_t) == 1312U,
+_Static_assert(sizeof(sakamoto_product_status_t) == 1808U,
                "product status ABI changed");
 #endif
 

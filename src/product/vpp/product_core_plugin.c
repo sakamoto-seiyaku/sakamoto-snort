@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#define _GNU_SOURCE
 
 /*
  * Product identity and coarse readiness share this plugin with the VPP-native
@@ -11,6 +12,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sched.h>
 
 #include <vlib/vlib.h>
 #include <vlib/threads.h>
@@ -178,13 +180,26 @@ product_core_protection_running (void)
 }
 
 static u32
+product_core_actual_thread_core (u32 thread_index)
+{
+  if (thread_index >= vec_len (vlib_worker_threads)) return UINT32_MAX;
+  cpu_set_t allowed;
+  if (sched_getaffinity ((pid_t) vlib_worker_threads[thread_index].lwp,
+                         sizeof (allowed), &allowed)) return UINT32_MAX;
+  u32 found = UINT32_MAX;
+  for (u32 cpu = 0; cpu < CPU_SETSIZE; cpu++)
+    if (CPU_ISSET (cpu, &allowed))
+      {
+        if (found != UINT32_MAX) return UINT32_MAX;
+        found = cpu;
+      }
+  return found;
+}
+
+static u32
 product_core_vpp_main_core (void)
 {
-  if (vec_len (vlib_worker_threads) > 0 && vlib_worker_threads[0].cpu_id >= 0)
-    return (u32) vlib_worker_threads[0].cpu_id;
-  if (vlib_thread_main.main_lcore != UINT32_MAX)
-    return vlib_thread_main.main_lcore;
-  return UINT32_MAX;
+  return product_core_actual_thread_core (0);
 }
 
 static u32
@@ -199,10 +214,8 @@ static u32
 product_core_vpp_worker_core (u32 worker)
 {
   u32 thread_index = product_core_vpp_worker_thread_index (worker);
-  if (thread_index == UINT32_MAX || thread_index >= vec_len (vlib_worker_threads)
-      || vlib_worker_threads[thread_index].cpu_id < 0)
-    return UINT32_MAX;
-  return (u32) vlib_worker_threads[thread_index].cpu_id;
+  if (thread_index == UINT32_MAX) return UINT32_MAX;
+  return product_core_actual_thread_core (thread_index);
 }
 
 static u32
@@ -246,6 +259,13 @@ product_core_topology_status_cli (vlib_main_t *vm, unformat_input_t *input,
       product_runtime_topology_is_owner (topology, topology.tun_io_worker));
   else
     vlib_cli_output (vm, "topology.tun_io_lane=none");
+  vlib_cli_output (vm, "topology.main thread_index=0 actual_core=%u",
+                   product_core_vpp_main_core ());
+  for (u32 owner = 0; owner < topology.owner_count; owner++)
+    vlib_cli_output (vm,
+      "topology.owner=%u thread_index=%u actual_core=%u",
+      owner, product_core_vpp_worker_thread_index (owner),
+      product_core_vpp_worker_core (owner));
   return 0;
 }
 
@@ -543,6 +563,13 @@ vl_api_product_core_status_t_handler (vl_api_product_core_status_t *mp)
                     htonl (product_core_vpp_worker_thread_index (1));
                   rmp->product_graph_vpp_worker1_core =
                     htonl (product_core_vpp_worker_core (1));
+                  for (u32 owner = 0; owner < product_packet_graph_worker_count (); owner++)
+                    {
+                      rmp->product_graph_vpp_owner_thread_index[owner] =
+                        htonl (product_core_vpp_worker_thread_index (owner));
+                      rmp->product_graph_vpp_owner_core[owner] =
+                        htonl (product_core_vpp_worker_core (owner));
+                    }
                   rmp->product_graph_enabled =
                     htonl (product_packet_graph_enabled ());
                   rmp->product_graph_accepting =
@@ -643,7 +670,8 @@ vl_api_product_core_flow_query_t_handler (vl_api_product_core_flow_query_t *mp)
     if (!rv)
       {
         rmp->generation = clib_host_to_net_u64 (page.generation);
-        for (unsigned worker = 0; worker < 2; worker++)
+        rmp->owner_count = htonl (page.owner_count);
+        for (unsigned worker = 0; worker < page.owner_count; worker++)
           {
             rmp->allocated_bytes[worker] = clib_host_to_net_u64 (page.allocated_bytes[worker]);
             rmp->capacity_misses[worker] = clib_host_to_net_u64 (page.capacity_misses[worker]);
@@ -1039,9 +1067,15 @@ product_core_start_adapters (vlib_main_t *vm, vlib_node_runtime_t *node,
     return 0;
   if (!product_core_graph_worker_layout_ready ())
     {
-      clib_warning ("Product topology rejected before adapter capture: expected %u VPP workers, found %u",
-                    product_core_topology ().vpp_worker_count,
-                    vlib_num_workers ());
+      product_runtime_topology_t topology = product_core_topology ();
+      if (!topology.owner_count && product_core_profile_is_root ())
+        clib_warning ("Product Root owner count rejected before adapter capture: expected decimal 1..%u within pinned VPP thread limit, got '%s'",
+          PRODUCT_VPP_MAX_FLOW_OWNERS,
+          getenv ("SAKAMOTO_PRODUCT_OWNER_COUNT")
+            ? getenv ("SAKAMOTO_PRODUCT_OWNER_COUNT") : "(default)");
+      else
+        clib_warning ("Product topology rejected before adapter capture: expected %u VPP workers, found %u",
+          topology.vpp_worker_count, vlib_num_workers ());
       return 0;
     }
   u32 expected_workers = product_core_topology ().vpp_worker_count;

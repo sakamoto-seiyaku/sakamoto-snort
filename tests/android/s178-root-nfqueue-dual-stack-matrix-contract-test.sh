@@ -147,7 +147,7 @@ do
   grep -Fq "root_nfqueue_${symbol}" "$jni"
 done
 
-grep -Fq 'sizeof(sakamoto_product_status_t) == 1312U' "$abi"
+grep -Fq 'sizeof(sakamoto_product_status_t) == 1808U' "$abi"
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$native_status"
 grep -Fq 'STATUS_VALUE_COUNT = 135' "$jni"
 grep -Fq 'Long.parseLong(value)' "$native_status"

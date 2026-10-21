@@ -3,6 +3,7 @@
 #include "product_observation.h"
 #include "product_flow_timeout.h"
 #include "product_packet_graph.h"
+#include "product_runtime_topology.h"
 #include <vlib/file.h>
 #include <vlib/threads.h>
 #include <sys/timerfd.h>
@@ -14,7 +15,8 @@
 
 /* S226's qualified owner-local deadline driver. The old A/B path is gated
  * by an explicit startup option and does not define production behavior. */
-enum { EXPIRY_WORKERS = 2, EXPIRY_BATCH = 100, EXPIRY_BATCH_GAP_US = 100000 };
+enum { EXPIRY_WORKERS = PRODUCT_VPP_MAX_FLOW_OWNERS,
+       EXPIRY_BATCH = 100, EXPIRY_BATCH_GAP_US = 100000 };
 enum { EXPIRY_OFF, EXPIRY_POLL, EXPIRY_DEADLINE };
 typedef struct {
   CLIB_CACHE_LINE_ALIGN_MARK (cacheline0);

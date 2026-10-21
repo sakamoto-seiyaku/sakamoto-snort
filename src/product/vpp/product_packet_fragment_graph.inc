@@ -214,7 +214,7 @@ product_fragment_select_worker (const product_fragment_key_t *key)
   hash = product_fragment_hash_bytes (hash, key->source, 16);
   hash = product_fragment_hash_bytes (hash, key->destination, 16);
   hash = product_fragment_hash_bytes (hash, identification, 4);
-  return (u16) (hash % PRODUCT_GRAPH_WORKERS);
+  return (u16) (hash % product_packet_graph_worker_count ());
 }
 
 static int
@@ -225,7 +225,7 @@ product_fragment_initial_owner (vlib_main_t *vm, vlib_buffer_t *buffer,
   product_packet_facts_t facts;
   product_owner_assignment_t assignment;
   product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS,
+    .worker_count = product_packet_graph_worker_count (),
     .hash_seed = PRODUCT_GRAPH_HASH_SEED,
   };
   u8 *packet = vlib_buffer_get_current (buffer);
@@ -646,7 +646,7 @@ VLIB_NODE_FN (product_packet_fragment_reassembled_node)
       product_packet_ingress_t ingress;
       product_packet_lease_t lease;
       product_worker_layout_t layout = {
-        .worker_count = PRODUCT_GRAPH_WORKERS,
+        .worker_count = product_packet_graph_worker_count (),
         .hash_seed = PRODUCT_GRAPH_HASH_SEED,
       };
       u16 current_worker = (u16) vlib_get_worker_index (vm->thread_index);
@@ -1064,7 +1064,7 @@ product_fragment_fixture_port (u8 family, u32 identification)
   product_packet_facts_t facts;
   product_owner_assignment_t assignment;
   product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS,
+    .worker_count = product_packet_graph_worker_count (),
     .hash_seed = PRODUCT_GRAPH_HASH_SEED,
   };
   u16 fragment_worker;
@@ -1402,7 +1402,7 @@ product_packet_fragment_graph_init (vlib_main_t *vm)
 {
   product_fragment_graph_main_t *fragment = &product_fragment_graph_main;
   u32 worker;
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < product_packet_graph_worker_count (); worker++)
     {
       clib_atomic_store_rel_n (&fragment->steer_credits[worker],
                                PRODUCT_GRAPH_HANDOFF_CREDITS);

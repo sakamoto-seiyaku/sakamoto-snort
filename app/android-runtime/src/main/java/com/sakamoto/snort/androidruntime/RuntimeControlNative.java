@@ -12,7 +12,7 @@ public final class RuntimeControlNative {
     private static final int STATUS_ASSOCIATION_VALUE_COUNT = 3;
     private static final int STATUS_WIRE_VALUE_COUNT =
             STATUS_VALUE_COUNT + STATUS_VIEW_VALUE_COUNT
-                    + STATUS_ASSOCIATION_VALUE_COUNT + 1;
+                    + STATUS_ASSOCIATION_VALUE_COUNT + 2;
     private static final int CONNECT_VALUE_COUNT = STATUS_WIRE_VALUE_COUNT + 1;
     private static final boolean LOADED;
 
@@ -66,7 +66,7 @@ public final class RuntimeControlNative {
             return Status.unavailable();
         }
         try {
-            return new Status(
+            Status status = new Status(
                     parseInt(values[offset + 12], -1),
                     parseInt(values[offset + 13], -1),
                     parseInt(values[offset + 0], -1),
@@ -215,6 +215,19 @@ public final class RuntimeControlNative {
                     parseIntAt(values, offset + 139, 0),
                     parseIntAt(values, offset + 140, 0),
                     parseIntAt(values, offset + 141, 0));
+            if (values.length > offset + 146) {
+                String cores = values[offset + 146];
+                if (cores != null && !cores.isEmpty()) {
+                    String[] parts = cores.split(",", -1);
+                    if (parts.length != status.productGraphWorkerCount || parts.length > 62)
+                        return Status.unavailable();
+                    int[] actual = new int[parts.length];
+                    for (int i = 0; i < parts.length; i++)
+                        actual[i] = parseInt(parts[i], -1);
+                    status.productGraphVppOwnerCores = actual;
+                }
+            }
+            return status;
         } catch (RuntimeException error) {
             return Status.unavailable();
         }
@@ -787,6 +800,7 @@ public final class RuntimeControlNative {
         public final int productGraphVppWorker0Core;
         public final int productGraphVppWorker1ThreadIndex;
         public final int productGraphVppWorker1Core;
+        public int[] productGraphVppOwnerCores;
         public final int productGraphEnabled;
         public final int productGraphAccepting;
         public final int productGraphWorkerLayoutReady;
@@ -1105,6 +1119,11 @@ public final class RuntimeControlNative {
             this.productGraphVppWorker0Core = productGraphVppWorker0Core;
             this.productGraphVppWorker1ThreadIndex = productGraphVppWorker1ThreadIndex;
             this.productGraphVppWorker1Core = productGraphVppWorker1Core;
+            this.productGraphVppOwnerCores = productGraphWorkerCount == 1
+                    ? new int[] {productGraphVppWorker0Core}
+                    : productGraphWorkerCount == 2
+                    ? new int[] {productGraphVppWorker0Core, productGraphVppWorker1Core}
+                    : new int[0];
             this.productGraphEnabled = productGraphEnabled;
             this.productGraphAccepting = productGraphAccepting;
             this.productGraphWorkerLayoutReady = productGraphWorkerLayoutReady;

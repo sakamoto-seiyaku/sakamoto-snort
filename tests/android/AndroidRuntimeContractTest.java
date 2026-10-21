@@ -1358,6 +1358,18 @@ public final class AndroidRuntimeContractTest {
                         null, (Object) vpnTopologyValues, 0);
         check(rootTopology.productGraphTunIoWorkerIndex == -1,
                 "Root status has no VPN TUN lane");
+        String[] threeOwnerValues = Arrays.copyOf(vpnTopologyValues, 147);
+        threeOwnerValues[63] = "3";
+        threeOwnerValues[66] = "3";
+        threeOwnerValues[146] = "1,2,1";
+        RuntimeControlNative.Status threeOwners =
+                (RuntimeControlNative.Status) parser.invoke(
+                        null, (Object) threeOwnerValues, 0);
+        check(threeOwners.productGraphVppOwnerCores.length == 3
+                        && threeOwners.productGraphVppOwnerCores[0] == 1
+                        && threeOwners.productGraphVppOwnerCores[1] == 2
+                        && threeOwners.productGraphVppOwnerCores[2] == 1,
+                "Root status retains every actual ordered owner CPU");
         check(status.code == 7, "native status code stays in the code field");
         check(status.abiVersion == 2, "native ABI version stays in the ABI field");
         check(status.apiVersion == 3, "native API version stays in the API field");

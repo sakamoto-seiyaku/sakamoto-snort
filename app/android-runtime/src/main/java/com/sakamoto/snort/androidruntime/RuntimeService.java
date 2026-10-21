@@ -5070,16 +5070,20 @@ public final class RuntimeService extends VpnService {
         if (status == null || activeWorkerPlacement == null) {
             return false;
         }
+        if (status.productGraphVppOwnerCores == null
+                || status.productGraphVppOwnerCores.length != activeWorkerPlacement.ownerCount)
+            return false;
+        for (int owner = 0; owner < activeWorkerPlacement.ownerCount; owner++)
+            if (status.productGraphVppOwnerCores[owner] != activeWorkerPlacement.cpuId(owner))
+                return false;
         return status.productGraphWorkerCount == activeWorkerPlacement.ownerCount
                 && status.productGraphVppWorkerCount == activeWorkerPlacement.ownerCount
                 && status.productGraphTunIoWorkerIndex ==
                         (activeProfile == RuntimeProfile.VPN ? 0 : -1)
                 && status.productGraphVppMainCore == parseFixedInt(PRODUCT_CORE_MAIN_CORE, -1)
-                && status.productGraphVppWorker0Core == activeWorkerPlacement.worker0CpuId
-                && (activeWorkerPlacement.ownerCount == 1
-                    ? status.productGraphVppWorker1ThreadIndex == -1
-                        && status.productGraphVppWorker1Core == -1
-                    : status.productGraphVppWorker1Core == activeWorkerPlacement.worker1CpuId)
+                && (activeWorkerPlacement.ownerCount != 1
+                    || status.productGraphVppWorker1ThreadIndex == -1
+                        && status.productGraphVppWorker1Core == -1)
                 && status.productGraphWorkerLayoutReady != 0;
     }
 

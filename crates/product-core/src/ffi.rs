@@ -459,6 +459,8 @@ fn status_to_ffi(status: &Status) -> ProductStatus {
     value.product_graph_vpp_worker0_core = status.product_graph_vpp_worker0_core;
     value.product_graph_vpp_worker1_thread_index = status.product_graph_vpp_worker1_thread_index;
     value.product_graph_vpp_worker1_core = status.product_graph_vpp_worker1_core;
+    value.product_graph_vpp_owner_thread_index = status.product_graph_vpp_owner_thread_index;
+    value.product_graph_vpp_owner_core = status.product_graph_vpp_owner_core;
     value.product_graph_enabled = status.product_graph_enabled;
     value.product_graph_accepting = status.product_graph_accepting;
     value.product_graph_worker_layout_ready = status.product_graph_worker_layout_ready;

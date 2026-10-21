@@ -98,6 +98,8 @@ typedef struct {
   uint32_t product_graph_vpp_worker0_core;
   uint32_t product_graph_vpp_worker1_thread_index;
   uint32_t product_graph_vpp_worker1_core;
+  uint32_t product_graph_vpp_owner_thread_index[62];
+  uint32_t product_graph_vpp_owner_core[62];
   uint32_t product_graph_enabled;
   uint32_t product_graph_accepting;
   uint32_t product_graph_worker_layout_ready;
@@ -307,7 +309,7 @@ typedef vapi_error_e (*vapi_product_core_root_stop_callback_t)(
 #include "sakamoto_product_observation.h"
 #include "sakamoto_product_flow_query.h"
 typedef struct { struct { uint64_t generation; } payload; } vapi_msg_product_core_observation_query;
-typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[2]; uint64_t blocked_capacity_misses[2], blocked_retired[2]; product_observation_channel_status_t channels[4]; } vapi_payload_product_core_observation_query_reply;
+typedef struct { int32_t retval; uint64_t generation, mapping_bytes; uint32_t version, owners, flow_capacity, connected, blocked_capacity, blocked_active[62]; uint64_t blocked_capacity_misses[62], blocked_retired[62]; product_observation_channel_status_t channels[124]; } vapi_payload_product_core_observation_query_reply;
 typedef vapi_error_e (*vapi_product_core_observation_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_observation_query_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_observation_query, vapi_msg_id_product_core_observation_query_reply;
 vapi_msg_product_core_observation_query *vapi_alloc_product_core_observation_query(vapi_ctx_t);
@@ -315,7 +317,7 @@ vapi_error_e vapi_product_core_observation_query(vapi_ctx_t,vapi_msg_product_cor
 typedef product_observation_attribution_t vapi_type_product_flow_query_attribution;
 typedef sakamoto_product_flow_entry_t vapi_type_product_flow_query_entry;
 typedef struct { struct { uint64_t generation; uint32_t cursor; } payload; } vapi_msg_product_core_flow_query;
-typedef struct { int32_t retval; uint64_t generation; uint64_t allocated_bytes[2], capacity_misses[2]; uint32_t capacity[2], active[2], high_watermark[2]; uint32_t cursor, next_cursor, scanned, count, done; vapi_type_product_flow_query_entry entries[16]; } vapi_payload_product_core_flow_query_reply;
+typedef struct { int32_t retval; uint64_t generation; uint64_t allocated_bytes[62], capacity_misses[62]; uint32_t capacity[62], active[62], high_watermark[62]; uint32_t owner_count, cursor, next_cursor, scanned, count, done; vapi_type_product_flow_query_entry entries[16]; } vapi_payload_product_core_flow_query_reply;
 typedef vapi_error_e (*vapi_product_core_flow_query_callback_t)(vapi_ctx_t,void *,vapi_error_e,bool,vapi_payload_product_core_flow_query_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_flow_query, vapi_msg_id_product_core_flow_query_reply;
 vapi_msg_product_core_flow_query *vapi_alloc_product_core_flow_query(vapi_ctx_t);

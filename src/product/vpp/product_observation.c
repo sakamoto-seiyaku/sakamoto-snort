@@ -235,7 +235,7 @@ void product_observation_status (product_observation_status_t *status) {
   product_observation_transport_status (transport, status);
   if (transport) status->owners = product_packet_graph_worker_count ();
   status->blocked_capacity = blocked_capacity;
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+  for (unsigned i = 0; i < product_packet_graph_worker_count (); i++) {
     status->blocked_active[i] = product_blocked_observation_active (blocked[i]);
     status->blocked_capacity_misses[i] = product_blocked_observation_misses (blocked[i]);
     status->blocked_retired[i] = product_blocked_observation_retired (blocked[i]);
@@ -318,7 +318,8 @@ int product_observation_bind (uint64_t generation, product_flow_runtime_t **runt
   if (!runtimes) return 1;
   uint32_t capacity = product_flow_runtime_snapshot (runtimes[0]).capacity;
   blocked_capacity = capacity < 1024 ? capacity : 1024;
-  transport = product_observation_transport_create (generation, capacity);
+  transport = product_observation_transport_create_for_owners (
+    generation, capacity, product_packet_graph_worker_count ());
   if (!transport) goto fail;
   for (unsigned i = 0; i < product_packet_graph_worker_count (); i++) {
     owners[i].runtime = runtimes[i]; owners[i].capacity = capacity; owners[i].generation = generation;
@@ -369,7 +370,7 @@ static clib_error_t *show_observation (vlib_main_t *vm, unformat_input_t *input,
   vlib_cli_output (vm, "observation.generation=%llu connected=%u bytes=%llu capacity=%u version=%u",
     (unsigned long long) s.generation, s.connected, (unsigned long long) s.mapping_bytes,
     s.flow_capacity, s.version);
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < 2 * s.owners; i++) {
     product_observation_channel_status_t *c = &s.channels[i];
     vlib_cli_output (vm, "observation.channel=%u attempted=%llu published=%llu full=%llu consumed=%llu occupancy=%u capacity=%u allow_packets=%llu allow_bytes=%llu drop_packets=%llu drop_bytes=%llu runtime_packets=%llu runtime_bytes=%llu notifications=%llu notify_errors=%llu",
       i, (unsigned long long) c->attempted, (unsigned long long) c->published,

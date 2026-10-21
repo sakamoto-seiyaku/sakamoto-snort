@@ -60,7 +60,7 @@ static u32
 product_fragment_contexts (void)
 {
   u32 count = 0;
-  for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 1; i <= product_packet_graph_worker_count (); i++)
     count += product_fragment_main.tables[i].active;
   return count;
 }
@@ -512,7 +512,7 @@ static void
 product_fragment_abort (void)
 {
   product_fragment_main.accepting = 0;
-  for (u32 i = 1; i <= PRODUCT_GRAPH_WORKERS; i++)
+  for (u32 i = 1; i <= product_packet_graph_worker_count (); i++)
     product_fragment_table_destroy (&product_fragment_main.tables[i]);
 }
 

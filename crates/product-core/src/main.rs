@@ -19,6 +19,15 @@ fn print_status(label: &str, status: &Status) {
     println!("{label}.artifact_id={}", status.artifact_id);
     println!("{label}.api_identity={}", status.api_identity);
     println!("{label}.vpp_revision={}", status.vpp_revision);
+    println!("{label}.flow_owners={}", status.product_graph_worker_count);
+    println!("{label}.vpp_workers={}", status.product_graph_vpp_worker_count);
+    println!("{label}.main_core={}", status.product_graph_vpp_main_core);
+    for owner in 0..(status.product_graph_worker_count as usize).min(62) {
+        println!("{label}.owner.{owner}.thread_index={}",
+            status.product_graph_vpp_owner_thread_index[owner]);
+        println!("{label}.owner.{owner}.actual_core={}",
+            status.product_graph_vpp_owner_core[owner]);
+    }
     println!(
         "{label}.policy_requested_revision={}",
         status.policy_requested_revision

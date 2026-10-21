@@ -96,7 +96,8 @@ static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_er
   observation_call_t *call = opaque; call->called = true;
   if (rv != VAPI_OK || !reply) { call->invalid = true; return VAPI_OK; }
   if (reply->retval) { call->code = SAKAMOTO_PRODUCT_STALE_HANDLE; return VAPI_OK; }
-  if (reply->generation != call->generation || reply->owners > 2
+  if (reply->generation != call->generation
+      || reply->owners > PRODUCT_OBSERVATION_OWNERS
       || (reply->version != 0 && reply->version != PRODUCT_OBSERVATION_VERSION)
       || reply->flow_capacity > 65536 || reply->connected > 1) {
     call->invalid = true; return VAPI_OK;
@@ -105,13 +106,13 @@ static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_er
   COPY (generation); COPY (mapping_bytes); COPY (version); COPY (owners);
   COPY (flow_capacity); COPY (connected);
   COPY (blocked_capacity);
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_OWNERS; i++) {
+  for (unsigned i = 0; i < reply->owners; i++) {
     call->out->blocked_active[i] = reply->blocked_active[i];
     call->out->blocked_capacity_misses[i] = reply->blocked_capacity_misses[i];
     call->out->blocked_retired[i] = reply->blocked_retired[i];
   }
 #undef COPY
-  for (unsigned i = 0; i < PRODUCT_OBSERVATION_CHANNELS; i++) {
+  for (unsigned i = 0; i < 2 * reply->owners; i++) {
 #define COPY(field) call->out->channels[i].field = reply->channels[i].field
     COPY (attempted); COPY (published); COPY (full); COPY (oversize); COPY (consumed);
     COPY (allocation_lost);
@@ -167,11 +168,17 @@ static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e r
                                      : SAKAMOTO_PRODUCT_STALE_HANDLE;
     return VAPI_OK;
   }
-  uint64_t total = (uint64_t)reply->capacity[0] + reply->capacity[1];
+  uint32_t owners = reply->owner_count;
+  uint64_t total = 0;
+  if (!owners || owners > SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS) {
+    call->invalid = true; return VAPI_OK;
+  }
+  for (unsigned worker = 0; worker < owners; worker++)
+    total += reply->capacity[worker];
   if (reply->generation != call->generation || reply->cursor != call->cursor
       || reply->count > SAKAMOTO_FLOW_QUERY_PAGE
       || reply->scanned > SAKAMOTO_FLOW_QUERY_SCAN
-      || reply->done > 1 || total > 131072
+      || reply->done > 1 || total > UINT32_MAX
       || (uint64_t)call->cursor + reply->scanned > total
       || (reply->done ? reply->next_cursor != 0
                       : reply->next_cursor != call->cursor + reply->scanned
@@ -181,10 +188,11 @@ static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e r
   }
   sakamoto_product_flow_page_t *out = call->out;
   out->generation = reply->generation;
+  out->owner_count = owners;
   out->cursor = reply->cursor; out->next_cursor = reply->next_cursor;
   out->scanned = reply->scanned; out->count = reply->count;
   out->done = reply->done;
-  for (unsigned worker = 0; worker < 2; worker++) {
+  for (unsigned worker = 0; worker < owners; worker++) {
     out->allocated_bytes[worker] = reply->allocated_bytes[worker];
     out->capacity_misses[worker] = reply->capacity_misses[worker];
     out->capacity[worker] = reply->capacity[worker];
@@ -198,7 +206,7 @@ static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e r
   for (unsigned i = 0; i < reply->count; i++) {
     const vapi_type_product_flow_query_entry *in = &reply->entries[i];
     sakamoto_product_flow_entry_t *entry = &out->entries[i];
-    if (in->worker >= 2 || in->slot >= out->capacity[in->worker]
+    if (in->worker >= owners || in->slot >= out->capacity[in->worker]
         || !in->incarnation || (in->family != 4 && in->family != 6)
         || in->protocols_available > 1 || (!in->protocols_available && in->protocols)
         || in->last_seen < in->first_seen) {
@@ -825,6 +833,13 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
                                      detail);
       return VAPI_OK;
     }
+  if (reply->product_graph_worker_count > SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS)
+    {
+      call->transport_code = SAKAMOTO_PRODUCT_QUERY_FAILED;
+      sakamoto_product_status_error (call->status, call->transport_code,
+                                     "VPP owner count exceeds pinned thread limit");
+      return VAPI_OK;
+    }
   call->status->status_code = SAKAMOTO_PRODUCT_OK;
   call->status->abi_version = reply->abi_version;
   call->status->api_version = reply->api_version;
@@ -941,6 +956,13 @@ status_reply (vapi_ctx_t context, void *callback_context, vapi_error_e rv,
     reply->product_graph_vpp_worker1_thread_index;
   call->status->product_graph_vpp_worker1_core =
     reply->product_graph_vpp_worker1_core;
+  for (uint32_t owner = 0; owner < reply->product_graph_worker_count; owner++)
+    {
+      call->status->product_graph_vpp_owner_thread_index[owner] =
+        reply->product_graph_vpp_owner_thread_index[owner];
+      call->status->product_graph_vpp_owner_core[owner] =
+        reply->product_graph_vpp_owner_core[owner];
+    }
   call->status->product_graph_enabled = reply->product_graph_enabled;
   call->status->product_graph_accepting = reply->product_graph_accepting;
   call->status->product_graph_worker_layout_ready =

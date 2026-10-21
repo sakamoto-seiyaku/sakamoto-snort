@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#define PRODUCT_HOST_FIXTURE_WORKERS 2
+
 /* Private Host fixtures; included in the graph's original translation unit. */
 static u32
 product_ipv4_fixture (u8 *packet, u8 protocol, u32 source, u16 source_port,
@@ -102,7 +104,7 @@ product_packet_graph_configure_cli (vlib_main_t *vm, unformat_input_t *input,
       return clib_error_return (0, "expected: workers 2 fixture %s",
                                 PRODUCT_GRAPH_FIXTURE);
     }
-  if (workers != PRODUCT_GRAPH_WORKERS || vlib_num_workers () != workers
+  if (workers != PRODUCT_HOST_FIXTURE_WORKERS || vlib_num_workers () != workers
       || (strcmp ((char *) fixture, PRODUCT_GRAPH_FIXTURE) != 0
           && strcmp ((char *) fixture, PRODUCT_GRAPH_FRAGMENT_FIXTURE) != 0)
       || clib_atomic_load_acq_n (&graph->enabled)
@@ -439,7 +441,7 @@ product_packet_graph_enable_cli (vlib_main_t *vm, unformat_input_t *input,
   clib_atomic_store_rel_n (&graph->policy_last_drop_winner, 0);
   clib_atomic_store_rel_n (&graph->policy_last_drop_uid_known, 0);
   clib_atomic_store_rel_n (&graph->policy_last_drop_device_direction, 0);
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < PRODUCT_HOST_FIXTURE_WORKERS; worker++)
     {
       u32 thread = vlib_get_worker_thread_index (worker);
       graph->ingress_fq_head_start[worker] =
@@ -713,7 +715,7 @@ product_packet_graph_run_congestion_fixture_cli (
       product_packet_ingress_t ingress;
       product_packet_lease_t lease;
       product_worker_layout_t layout = {
-        .worker_count = PRODUCT_GRAPH_WORKERS,
+        .worker_count = PRODUCT_HOST_FIXTURE_WORKERS,
         .hash_seed = PRODUCT_GRAPH_HASH_SEED,
       };
       product_ingress_evidence_t *evidence = &graph->ingress[index];
@@ -882,7 +884,7 @@ product_lifecycle_enqueue_two_outstanding (vlib_main_t *vm)
           product_packet_ingress_t ingress;
           product_packet_lease_t lease;
           product_worker_layout_t layout = {
-            .worker_count = PRODUCT_GRAPH_WORKERS,
+            .worker_count = PRODUCT_HOST_FIXTURE_WORKERS,
             .hash_seed = PRODUCT_GRAPH_HASH_SEED,
           };
           clib_memset (&ingress, 0, sizeof (ingress));
@@ -920,7 +922,7 @@ product_lifecycle_enqueue_stale_events (vlib_main_t *vm, u16 generation)
     product_packet_lease_t lease;
     product_buffer_metadata_t metadata;
     product_worker_layout_t layout = {
-      .worker_count = PRODUCT_GRAPH_WORKERS,
+      .worker_count = PRODUCT_HOST_FIXTURE_WORKERS,
       .hash_seed = PRODUCT_GRAPH_HASH_SEED,
     };
     vlib_buffer_reset (buffer);
@@ -1135,7 +1137,7 @@ product_packet_graph_show_cli (vlib_main_t *vm, unformat_input_t *input,
   product_packet_graph_gate_status (&gate_status);
   product_packet_graph_l4_status (&l4_status);
   product_packet_graph_flow_status (&flow_status);
-  for (worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (worker = 0; worker < PRODUCT_HOST_FIXTURE_WORKERS; worker++)
     {
       u32 thread = vlib_get_worker_thread_index (worker);
       ingress_head_delta += ingress_fqm->vlib_frame_queues[thread]->head
@@ -1371,7 +1373,7 @@ product_packet_graph_association_prepare_lease (
 {
   product_packet_ingress_t ingress;
   product_worker_layout_t layout = {
-    .worker_count = PRODUCT_GRAPH_WORKERS,
+    .worker_count = PRODUCT_HOST_FIXTURE_WORKERS,
     .hash_seed = PRODUCT_GRAPH_HASH_SEED,
   };
   product_packet_result_t result;
@@ -1961,7 +1963,7 @@ product_packet_graph_frame_queue_occupancy (u32 frame_queue)
   vlib_frame_queue_main_t *fqm =
     vec_elt_at_index (thread_main->frame_queue_mains, frame_queue);
   u64 occupancy = 0;
-  for (u32 worker = 0; worker < PRODUCT_GRAPH_WORKERS; worker++)
+  for (u32 worker = 0; worker < PRODUCT_HOST_FIXTURE_WORKERS; worker++)
     {
       u32 thread = vlib_get_worker_thread_index (worker);
       occupancy += fqm->vlib_frame_queues[thread]->tail

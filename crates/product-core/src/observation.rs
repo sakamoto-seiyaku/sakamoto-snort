@@ -49,7 +49,7 @@ pub struct ChannelHealth {
     pub capacity: u32,
 }
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct ObservationHealth {
     pub generation: u64,
     pub mapping_bytes: u64,
@@ -58,10 +58,39 @@ pub struct ObservationHealth {
     pub flow_capacity: u32,
     pub connected: u32,
     pub blocked_capacity: u32,
-    pub blocked_active: [u32; 2],
-    pub blocked_capacity_misses: [u64; 2],
-    pub blocked_retired: [u64; 2],
-    pub channels: [ChannelHealth; 4],
+    pub blocked_active: [u32; 62],
+    pub blocked_capacity_misses: [u64; 62],
+    pub blocked_retired: [u64; 62],
+    pub channels: [ChannelHealth; 124],
+}
+
+impl Default for ObservationHealth {
+    fn default() -> Self {
+        Self { generation: 0, mapping_bytes: 0, version: 0, owners: 0,
+            flow_capacity: 0, connected: 0, blocked_capacity: 0,
+            blocked_active: [0; 62], blocked_capacity_misses: [0; 62],
+            blocked_retired: [0; 62], channels: [ChannelHealth::default(); 124] }
+    }
+}
+
+impl Serialize for ObservationHealth {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let owners = (self.owners as usize).min(62);
+        let mut out = serializer.serialize_struct("ObservationHealth", 11)?;
+        out.serialize_field("generation", &self.generation)?;
+        out.serialize_field("mapping_bytes", &self.mapping_bytes)?;
+        out.serialize_field("version", &self.version)?;
+        out.serialize_field("owners", &self.owners)?;
+        out.serialize_field("flow_capacity", &self.flow_capacity)?;
+        out.serialize_field("connected", &self.connected)?;
+        out.serialize_field("blocked_capacity", &self.blocked_capacity)?;
+        out.serialize_field("blocked_active", &&self.blocked_active[..owners])?;
+        out.serialize_field("blocked_capacity_misses", &&self.blocked_capacity_misses[..owners])?;
+        out.serialize_field("blocked_retired", &&self.blocked_retired[..owners])?;
+        out.serialize_field("channels", &&self.channels[..owners * 2])?;
+        out.end()
+    }
 }
 
 #[repr(C)]
@@ -161,20 +190,30 @@ impl LiveFlowAttribution {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct LiveFlowPage {
     pub generation: u64,
-    pub allocated_bytes: [u64; 2],
-    pub capacity_misses: [u64; 2],
-    pub capacity: [u32; 2],
-    pub active: [u32; 2],
-    pub high_watermark: [u32; 2],
+    pub allocated_bytes: [u64; 62],
+    pub capacity_misses: [u64; 62],
+    pub capacity: [u32; 62],
+    pub active: [u32; 62],
+    pub high_watermark: [u32; 62],
+    pub owner_count: u32,
     pub cursor: u32,
     pub next_cursor: u32,
     pub scanned: u32,
     pub count: u32,
     pub done: u32,
     pub entries: [LiveFlowEntry; 16],
+}
+
+impl Default for LiveFlowPage {
+    fn default() -> Self {
+        Self { generation: 0, allocated_bytes: [0; 62], capacity_misses: [0; 62],
+            capacity: [0; 62], active: [0; 62], high_watermark: [0; 62],
+            owner_count: 0, cursor: 0, next_cursor: 0, scanned: 0, count: 0,
+            done: 0, entries: [LiveFlowEntry::default(); 16] }
+    }
 }
 
 impl LiveFlowEntry {
@@ -216,14 +255,16 @@ impl LiveFlowPage {
     fn json(&self) -> serde_json::Value {
         serde_json::json!({
             "source":"vpp","generation":self.generation,
+            "owner_count":self.owner_count,
             "cursor":self.cursor,"next_cursor":self.next_cursor,
             "scanned":self.scanned,"count":self.count,"done":self.done != 0,
             "page_limit":16,"scan_limit":256,
             "snapshot_consistent_across_pages":false,
-            "capacity":self.capacity,"active":self.active,
-            "high_watermark":self.high_watermark,
-            "allocated_bytes":self.allocated_bytes,
-            "capacity_misses":self.capacity_misses,
+            "capacity":&self.capacity[..self.owner_count as usize],
+            "active":&self.active[..self.owner_count as usize],
+            "high_watermark":&self.high_watermark[..self.owner_count as usize],
+            "allocated_bytes":&self.allocated_bytes[..self.owner_count as usize],
+            "capacity_misses":&self.capacity_misses[..self.owner_count as usize],
             "entries":self.entries[..self.count as usize].iter().map(LiveFlowEntry::json).collect::<Vec<_>>()
         })
     }
@@ -612,10 +653,13 @@ impl ProductCore {
 
     pub fn start_observation_at(&mut self, path: &std::path::Path) -> Result<(), String> {
         if self.observation.is_none() {
-            self.observation = Some(crate::observation_service::ObservationService::start(
+            let owners = self.query().map_err(|error| format!("{error:?}"))?
+                .product_graph_worker_count;
+            self.observation = Some(crate::observation_service::ObservationService::start_for_owners(
                 &self.api_path,
                 self.generation,
                 path,
+                owners,
             )?);
         }
         Ok(())
@@ -661,10 +705,12 @@ mod live_flow_query_tests {
     fn native_page_layout_and_published_facts_keep_their_identity() {
         assert_eq!(std::mem::size_of::<LiveFlowAttribution>(), 160);
         assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 496);
-        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 8024);
-        let mut page = LiveFlowPage { generation: 19, count: 1, scanned: 2,
-            next_cursor: 2, capacity: [1024, 1024], active: [1, 0],
+        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 9704);
+        let mut page = LiveFlowPage { generation: 19, owner_count: 2,
+            count: 1, scanned: 2, next_cursor: 2,
             ..LiveFlowPage::default() };
+        page.capacity[..2].copy_from_slice(&[1024, 1024]);
+        page.active[0] = 1;
         page.entries[0] = LiveFlowEntry {
             incarnation: 7, worker: 0, slot: 1, family: 4, protocol: 17,
             ports: [44000, 53], protocols: 1, protocols_available: 1,
@@ -691,5 +737,26 @@ mod live_flow_query_tests {
         let unknown = page.json();
         assert_eq!(unknown["entries"][0]["protocols_available"], false);
         assert!(unknown["entries"][0]["protocol_labels"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn third_owner_is_visible_in_flow_and_observation_status() {
+        let mut page = LiveFlowPage { generation: 7, owner_count: 3,
+            count: 1, scanned: 1, ..LiveFlowPage::default() };
+        page.capacity[..3].copy_from_slice(&[1024, 1024, 1024]);
+        page.active[2] = 1;
+        page.entries[0].worker = 2;
+        let visible = page.json();
+        assert_eq!(visible["owner_count"], 3);
+        assert_eq!(visible["active"], serde_json::json!([0, 0, 1]));
+        assert_eq!(visible["entries"][0]["worker"], 2);
+
+        let mut health = ObservationHealth { owners: 3, ..ObservationHealth::default() };
+        health.blocked_active[2] = 1;
+        health.channels[4].attempted = 9;
+        let status = serde_json::to_value(health).unwrap();
+        assert_eq!(status["blocked_active"], serde_json::json!([0, 0, 1]));
+        assert_eq!(status["channels"].as_array().unwrap().len(), 6);
+        assert_eq!(status["channels"][4]["attempted"], 9);
     }
 }
