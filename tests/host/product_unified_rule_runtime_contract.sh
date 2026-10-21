@@ -11,8 +11,10 @@ core="$artifact_root/bin/sakamoto-product-core-host"
 launcher="$repo_root/tools/product/run-host-vpp.sh"
 stopper="$repo_root/tools/product/stop-host-vpp.sh"
 residue="$repo_root/tools/product/host-residue-check.sh"
-case_root="${SAKAMOTO_RULE_RUNTIME_EVIDENCE_DIR:-$(mktemp -d /tmp/sakamoto-rule-runtime.XXXXXX)}"
-mkdir -p -- "$case_root/config"
+evidence_base="${SAKAMOTO_RULE_RUNTIME_EVIDENCE_DIR:-/tmp}"
+mkdir -p -- "$evidence_base"
+case_root="$(mktemp -d "$evidence_base/sakamoto-rule-runtime.XXXXXX")"
+mkdir -- "$case_root/config"
 export LD_LIBRARY_PATH="$artifact_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 vpp_pid=
 runtime_dir=

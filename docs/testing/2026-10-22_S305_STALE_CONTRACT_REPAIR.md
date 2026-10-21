@@ -30,7 +30,9 @@ restart, and clean stop. Bare Host VPP has no Root/VPN Adapter, so it reports
 publish result `6`, saves the new revision and keeps active revision `0`. The test
 asserts that distinction; it does not claim a live packet-policy publication.
 The separate policy executable tests and S303 device witnesses cover the active
-packet path. See [archived test mapping](../archived/tests/README.md).
+packet path. Host CTest does not make a fresh live Adapter packet claim; the
+S303 device runners remain the current executable integration gate. See
+[archived test mapping](../archived/tests/README.md).
 
 ## Commands and results
 
@@ -51,7 +53,9 @@ Its manifest sets `product.host.evidence=OFF`. The S303 APK verified below is
 | `cmake -S . -B build-output/host-tests -G Ninja` then `cmake --build build-output/host-tests` twice | Configure succeeded; both unchanged builds reported `ninja: no work to do.` No new native Product artifact was built. |
 | `bash tests/android/runtime-contract-test.sh` after edit | PASS; `after-android-aggregate.log` and `after-android-status`. |
 | `PRODUCT_ARTIFACT_DIR="$PWD/build-output/product-vpp-host" SAKAMOTO_RULE_RUNTIME_EVIDENCE_DIR="$PWD/build-output/s305-stale-tests-20261022/unified-rule-runtime-ctest" ctest --test-dir build-output/host-tests --output-on-failure -R sakamoto-product-unified-rule-runtime-contract` with local socket access | 1/1; `target-unified-rule-ctest.log` and full API/source/stop traces in `unified-rule-runtime-ctest/`. Earlier failed attempts and their raw output remain under `unified-rule-runtime-{first,second,third}/`; they found and corrected test harness assumptions about runtime paths and pre-Adapter publication. |
+| The same targeted CTest twice with `SAKAMOTO_RULE_RUNTIME_EVIDENCE_DIR="$PWD/build-output/s305-stale-tests-20261022/unified-rule-runtime-repeat"` | Both 1/1 PASS; `target-unified-rule-repeat{1,2}.log`. Each invocation created a distinct `sakamoto-rule-runtime.*` child, preserving the prior trace and source. |
 | `PRODUCT_ARTIFACT_DIR="$PWD/build-output/product-vpp-host" SAKAMOTO_RULE_RUNTIME_EVIDENCE_DIR="$PWD/build-output/s305-stale-tests-20261022/unified-rule-runtime-full" ctest --test-dir build-output/host-tests --output-on-failure` with local socket access | **67/67 PASS**, 153.28 seconds, including the new #44 and unmodified Rust UDS #64; `final-host-ctest.log`, `final-host-status`, and `unified-rule-runtime-full/`. |
+| The same full CTest after the evidence-directory repair, using the same artifact and `unified-rule-runtime-full` evidence parent | **67/67 PASS**, 152.40 seconds; `final-host-repeat-ctest.log`, `final-host-repeat-status`, and a new child under `unified-rule-runtime-full/`. The prior full-run traces remain intact. |
 
 The original S303 Root and VPN N=1/N=3 APK and source-bound raw runs were
 rechecked with the current independent verifiers, without replacing those raw
@@ -68,8 +72,8 @@ qualification report. The Product and APK bytes are unchanged by this ticket;
 these are rechecks of frozen Product runtime evidence, not new device traffic.
 
 The [portable S305 raw archive](evidence/s305-test-contract-20261022.zip)
-contains 101 baseline, passing and failed-attempt files (49,792 bytes,
-SHA-256 `1c19e459407c001cbeec25914f635a63cd7f145991d4b1cc6c97a7bb0140eb0f`).
+contains 155 baseline, passing and failed-attempt files (81,563 bytes,
+SHA-256 `d84b3ccc5bfc1aa5ed0059652ee288d98917a838b37ba3007a01c94faad9b513`).
 Its [index](evidence/s305-test-contract-20261022-index.json) records each member's
 relative path, byte count and SHA-256. The zip members and index were verified
 against each other after creation. It contains no compiler cache or APK copy;
