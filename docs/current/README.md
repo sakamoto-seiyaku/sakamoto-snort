@@ -9,8 +9,8 @@ policy/configuration/observation behavior; they do not extend implementation cla
 
 Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md)
 defines shared Root/VPN application DNS query and subsequent-connection control.
-KSU/libnetd integration is deferred. The decision does not prove DNS ingress,
-filtering or association consumption is implemented.
+[S310](../testing/2026-10-22_S310_ROOT_UDP_DNS.md) qualifies controlled Android Root UDP53 query filtering and normal observations.
+VPN/TCP/replacement/association consumption and KSU/libnetd integration remain deferred or later work.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP

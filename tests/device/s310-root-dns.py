@@ -143,16 +143,19 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--owners', default='1,3', choices=('1', '3', '1,3'))
     parser.add_argument('--extended', action='store_true')
+    parser.add_argument('--fixtures-only', action='store_true')
     args = parser.parse_args()
     args.apk = args.apk.resolve()
     args.stage = args.stage.resolve()
     args.backup = args.backup.resolve()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
+    (args.output / 'runner.py').write_bytes(Path(__file__).read_bytes())
     manifest = json.loads((args.backup / 'manifest.json').read_text())
     assert manifest['state'] == 'stopped' and manifest['serial'] == SERIAL
     result = dict(status='HOLD', task='SAKAMOTO-310', serial=SERIAL,
-                  source='normal RuntimeService Root NFQUEUE + real Java App UDP socket',
+                  source=('known system-UID real NFQUEUE fixture; not netd IPC' if args.fixtures_only
+                          else 'normal RuntimeService Root NFQUEUE + real Java App UDP socket'),
                   apk_sha256=digest(args.apk), runner_sha256=digest(__file__),
                   backup_manifest_sha256=digest(args.backup / 'manifest.json'),
                   runs=[], cases=[], started_ns=time.time_ns())
@@ -346,24 +349,35 @@ def main():
         source = 49702 if denied else 49701
         local = args.output / (label + '-request.bin')
         local.write_bytes(wire)
-        remote = '/data/local/tmp/s310-query.bin'
-        adb('push', local, remote)
+        helper = args.output / 's310-dns-query'
+        remote = '/data/local/tmp/s310-dns-query'
+        compiler = '/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang'
+        source_path = ROOT / 'tests/device/helpers/s310_dns_query.c'
+        (args.output / 's310_dns_query.c').write_bytes(source_path.read_bytes())
+        if not helper.exists():
+            subprocess.run([compiler, '-O2', '-Wall', '-Wextra', '-Werror', str(source_path),
+                            '-o', str(helper)], check=True)
+        adb('push', helper, remote)
+        adb('shell', 'chmod', '755', remote)
+        assert adb('shell', 'sha256sum', remote).split()[0] == digest(helper)
         rule = ('-d ' + args.endpoint4 + ' -p udp --dport 53 --sport ' + str(source)
                 + ' -m owner --uid-owner 2000 -m comment --comment S310_UNKNOWN_FIXTURE'
                   ' -j NFQUEUE --queue-num 176 --queue-bypass')
         save(label + '-capture-before.txt', root('iptables-save -t mangle'))
         root('iptables -t mangle -I OUTPUT 1 ' + rule)
         try:
-            command = f'cat {remote} | toybox nc -u -n -q 1 -W 2 -p {source} {args.endpoint4} 53'
-            encoded = save(label + '-socket-base64.txt',
-                           adb('shell', 'sh', '-c', shlex.quote(command + ' | toybox base64')))
-            response = base64.b64decode(''.join(encoded.split()), validate=True)
+            save(label + '-capture-active.txt', root('iptables-save -c -t mangle'))
+            client = json.loads(save(label + '-socket.json', adb('shell', remote,
+                                    args.endpoint4, str(source), wire.hex())))
+            assert client['uid'] == 2000 and client['source_port'] == source
+            response = bytes.fromhex(client['reply_hex'])
             (args.output / (label + '-response.bin')).write_bytes(response)
             found = [row for row in resolver.rows if row['request_hex'] == wire.hex()]
             if denied:
-                assert not response and not found
+                assert client['timed_out'] is True and not response and not found
             else:
                 assert len(found) == 1 and response.hex() == found[0]['reply_hex']
+                assert found[0]['peer'][1] == source
             value = observation(label)
             records = [row['record'] for row in value['consumer']['persistent']['dns']['recent'].values()
                        if row['record']['generation'] == result['runs'][-1]['generation']
@@ -375,18 +389,60 @@ def main():
             assert record['actual_action'] == (2 if denied else 1)
             assert record['winner'] == int(status[f'rule.{0 if denied else 2}.version'])
             result['cases'].append(dict(label=label, source='known system-UID real NFQUEUE fixture; not netd IPC',
-                                        capture_rule=rule, denied=denied, dns_records=records))
+                                        capture_rule=rule, denied=denied, dns_records=records,
+                                        client_source_sha256=digest(source_path), client_sha256=digest(helper)))
+            save(label + '-capture-counters.txt', root('iptables-save -c -t mangle'))
         finally:
             root('iptables -t mangle -D OUTPUT ' + rule)
             adb('shell', 'rm', '-f', remote)
             save(label + '-capture-after.txt', root('iptables-save -t mangle'))
+
+    def ordinary_cases(label, owners):
+        status = configure(label + '-block')
+        exchange(label + '-v4-block', args.endpoint4,
+                 [('allowed.test', 1), ('blocked.test', 1), ('allowed.test', 65000)],
+                 [False, True, False], status, 49300 + owners, [1, 0, 1])
+        exchange(label + '-v6-block', args.endpoint6,
+                 [('blocked.test', 28), ('allowed.test', 16)], [True, False], status, 49400 + owners, [0, 1])
+        if owners == 1:
+            for variant, denied in [('rank-allow', False), ('business-port', False),
+                                    ('sni-or', False), ('not', False)]:
+                status = configure(variant, variant)
+                exchange(variant, args.endpoint4, [('blocked.test', 65)], [denied], status,
+                         49500 + len(result['cases']), [1])
+            status = configure('observe', mode=1)
+            exchange('observe', args.endpoint4, [('blocked.test', 33)], [False], status, 49600, [0])
+        if args.extended and owners == 3:
+            status = configure('logical-or', 'or')
+            exchange('logical-or', args.endpoint4, [('blocked.test', 15), ('allowed.test', 33)],
+                     [True, True], status, 49710, [0, 0])
+            status = configure('logical-not', 'not')
+            exchange('logical-not', args.endpoint4, [('allowed.test', 1)], [True], status, 49711, [0])
+            status = configure('malformed-pass')
+            exchange('malformed-pass', args.endpoint4, [('ignored', 1)], [False], status,
+                     49712, [2], truncate=True)
+            status = configure('malformed-generic-drop', 'generic-drop')
+            exchange('malformed-generic-drop', args.endpoint4, [('ignored', 1)], [True], status,
+                     49713, [2], truncate=True)
+            status = configure('short-generic-or', 'unknown-generic')
+            exchange('short-generic-or', args.endpoint4, [('ignored', 1)], [True], status,
+                     49714, [0], truncate=3)
+            status = configure('empty-list-not', 'empty-not')
+            exchange('empty-list-not', args.endpoint4, [('blocked.test', 1)], [True], status,
+                     49715, [0])
+            unknown_fixture('unknown-caller-pass', False)
+            unknown_fixture('unknown-independent-generic-drop', True)
 
     resolver = None
     active = False
     try:
         before = props(save('before-state.properties', app('files/runtime-state/snapshot.properties')))
         assert before['state'] == 'stopped' and before['mayBeActive'] == 'false'
-        save('install.txt', adb('install', '-r', args.apk))
+        processes = save('processes-before.txt', root('ps -A -o PID,UID,ARGS'))
+        assert not any(len(parts := line.split()) >= 3 and Path(parts[2]).name == 'libvpp_runtime.so'
+                       for line in processes.splitlines())
+        if not args.fixtures_only:
+            save('install.txt', adb('install', '-r', args.apk))
         package = save('package.txt', adb('shell', 'dumpsys', 'package', PKG))
         code = re.search(r'codePath=(\S+)', package)[1]
         assert save('installed-apk.txt', adb('shell', 'sha256sum', code + '/base.apk')).split()[0] == result['apk_sha256']
@@ -422,40 +478,11 @@ def main():
             topology = cli(label + '-topology', 'show product topology', 'show product root lanes',
                            'show product dns', 'product metadata check')
             assert 'metadata.udp_check roundtrip=1 bounds_guard=1 variants=3 ip_padding_excluded=5 buffer_return=1' in topology
-            status = configure(label + '-block')
-            exchange(label + '-v4-block', args.endpoint4,
-                     [('allowed.test', 1), ('blocked.test', 1), ('allowed.test', 65000)],
-                     [False, True, False], status, 49300 + owners, [1, 0, 1])
-            exchange(label + '-v6-block', args.endpoint6,
-                     [('blocked.test', 28), ('allowed.test', 16)], [True, False], status, 49400 + owners, [0, 1])
-            if owners == 1:
-                for variant, denied in [('rank-allow', False), ('business-port', False),
-                                        ('sni-or', False), ('not', False)]:
-                    status = configure(variant, variant)
-                    exchange(variant, args.endpoint4, [('blocked.test', 65)], [denied], status,
-                             49500 + len(result['cases']), [1])
-                status = configure('observe', mode=1)
-                exchange('observe', args.endpoint4, [('blocked.test', 33)], [False], status, 49600, [0])
-            if args.extended and owners == 3:
-                status = configure('logical-or', 'or')
-                exchange('logical-or', args.endpoint4, [('blocked.test', 15), ('allowed.test', 33)],
-                         [True, True], status, 49710, [0, 0])
-                status = configure('logical-not', 'not')
-                exchange('logical-not', args.endpoint4, [('allowed.test', 1)], [True], status, 49711, [0])
-                status = configure('malformed-pass')
-                exchange('malformed-pass', args.endpoint4, [('ignored', 1)], [False], status,
-                         49712, [2], truncate=True)
-                status = configure('malformed-generic-drop', 'generic-drop')
-                exchange('malformed-generic-drop', args.endpoint4, [('ignored', 1)], [True], status,
-                         49713, [2], truncate=True)
-                status = configure('short-generic-or', 'unknown-generic')
-                exchange('short-generic-or', args.endpoint4, [('ignored', 1)], [True], status,
-                         49714, [0], truncate=3)
-                status = configure('empty-list-not', 'empty-not')
-                exchange('empty-list-not', args.endpoint4, [('blocked.test', 1)], [True], status,
-                         49715, [0])
+            if args.fixtures_only:
                 unknown_fixture('unknown-caller-pass', False)
                 unknown_fixture('unknown-independent-generic-drop', True)
+            else:
+                ordinary_cases(label, owners)
             status_text = cli(label + '-final', 'show product dns', 'show product completion')
             assert 'codec_live_bytes=0 active_operations=0' in status_text, status_text
             save(label + '-before-stop.log', app('files/profiles/root/vpp/logs/vpp-stdout.log'))
@@ -486,6 +513,7 @@ def main():
         result['completed_ns'] = time.time_ns()
         save('result.json', json.dumps(result, indent=2) + '\n')
     print(json.dumps(dict(status=result['status'], output=str(args.output), cases=len(result['cases']))))
+
 
 
 if __name__ == '__main__':
