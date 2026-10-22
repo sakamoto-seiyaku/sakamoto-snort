@@ -5,8 +5,9 @@
 This qualification is separate from the earlier
 [S308 CPU attribution](2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md).
 Those historical controls, measurements and artifact identities retain their
-original meaning. This package has no new comparative CPU result. S293 remains
-open.
+original meaning. This package has no new comparative CPU result. Parent
+acceptance and current work state are tracked in
+[SAKAMOTO-293](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/727dbca5-9a92-46c1-89b5-a068eb51022d).
 
 ## Implemented rules
 
@@ -204,8 +205,11 @@ Independent explicit GPT-6.1 Spec and Standards code reviews found no Product
 correctness or documented-standard violation. The UBSan recovery recommendation
 was applied and rechecked; both reviewers verified all eight current-source
 evidence hashes. The additional tools passed Standards rechecks, including historical CPU-schema
-compatibility and independently scoped receiver receipts. Final combined report
-and performance/restoration review remains pending.
+compatibility and independently scoped receiver receipts. The final combined
+report and performance/restoration review were completed during S308 closeout.
+The [TCP download and CPU record](2026-10-22_S308_TCP_DOWNLOAD_CPU.md) and
+`build-output/s308-final-closeout-summary-20261022/summary.json` retain the final
+results and review receipts.
 
 Raw evidence, APKs and symbols are local gitignored artifacts, not a portable
 archive. The committed report and tests retain their named evidence paths and
