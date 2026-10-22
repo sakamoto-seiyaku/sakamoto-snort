@@ -8,7 +8,7 @@
  * seven token bits name an exact free slot; a full token and generation are
  * checked before reading or releasing it. No packet pointer or UID lives here. */
 #define PRODUCT_VPN_RETURN_STAMP_SLOTS 128U
-typedef struct { uint64_t token, incarnation; } product_vpn_return_stamp_slot_t;
+typedef struct { uint64_t token, incarnation, session, epoch; } product_vpn_return_stamp_slot_t;
 typedef struct {
   uint64_t generation;
   product_vpn_return_stamp_slot_t slots[PRODUCT_VPN_RETURN_STAMP_SLOTS];
@@ -38,17 +38,26 @@ static inline int product_vpn_return_stamp_empty(
   return 1;
 }
 
-static inline int product_vpn_return_stamp_publish(
+static inline int product_vpn_return_stamp_publish_context(
   product_vpn_return_stamp_t *ledger, uint64_t generation, uint64_t token,
-  uint64_t incarnation)
+  uint64_t incarnation, uint64_t session, uint64_t epoch)
 {
   unsigned index = (unsigned)(token & (PRODUCT_VPN_RETURN_STAMP_SLOTS - 1));
   product_vpn_return_stamp_slot_t *slot = &ledger->slots[index];
   if (!token || !generation || ledger->generation != generation ||
       __atomic_load_n(&slot->token, __ATOMIC_ACQUIRE)) return 0;
   slot->incarnation = incarnation;
+  slot->session = session;
+  slot->epoch = epoch;
   __atomic_store_n(&slot->token, token, __ATOMIC_RELEASE);
   return 1;
+}
+
+static inline int product_vpn_return_stamp_publish(
+  product_vpn_return_stamp_t *ledger, uint64_t generation, uint64_t token,
+  uint64_t incarnation)
+{
+  return product_vpn_return_stamp_publish_context(ledger, generation, token, incarnation, 0, 0);
 }
 
 static inline int product_vpn_return_stamp_lookup(
@@ -63,6 +72,16 @@ static inline int product_vpn_return_stamp_lookup(
   if (!incarnation || !token || ledger->generation != generation ||
       __atomic_load_n(&slot->token, __ATOMIC_ACQUIRE) != token) return 0;
   *incarnation = slot->incarnation;
+  return 1;
+}
+
+static inline int product_vpn_return_stamp_context(
+  const product_vpn_return_stamp_t *ledger, uint64_t generation, uint64_t token,
+  uint64_t *incarnation, uint64_t *session, uint64_t *epoch)
+{
+  if (!session || !epoch || !product_vpn_return_stamp_lookup(ledger, generation, token, incarnation)) return 0;
+  const product_vpn_return_stamp_slot_t *slot = &ledger->slots[token & (PRODUCT_VPN_RETURN_STAMP_SLOTS - 1)];
+  *session = slot->session; *epoch = slot->epoch;
   return 1;
 }
 

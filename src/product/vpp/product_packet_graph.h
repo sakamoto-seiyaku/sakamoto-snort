@@ -207,6 +207,7 @@ typedef struct
   uint8_t declared_action, actual_action, mode;
 #ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
   uint8_t policy_qualified;
+
 #endif
   uint32_t rule_index;
   uint32_t winner;
@@ -344,4 +345,12 @@ int product_packet_graph_sni_query (uint64_t generation, uint32_t worker,
   uint32_t slot, uint64_t incarnation, sakamoto_product_sni_status_t *);
 int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
   sakamoto_product_flow_page_t *);
+/* Exact owner-local UDP transport admission and ordered binding events. These
+ * enrich transport context only; they never revise a DNS caller or decision. */
+void product_packet_graph_dns_request_transport(vlib_main_t *, uint64_t generation,
+  uint64_t token, uint64_t incarnation, uint64_t session, uint64_t epoch,
+  uint32_t context, int context_known);
+void product_packet_graph_dns_transport_bound(vlib_main_t *, uint64_t generation,
+  uint64_t session, uint64_t epoch, uint32_t context, int context_known);
+
 #endif

@@ -147,6 +147,52 @@ static unsigned protocol_gap_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   return n;
 }
+static unsigned dns_reply_fixture (product_observation_transport_t *t) {
+  product_dns_observation_record_t r = {
+    .length=sizeof(r), .version=PRODUCT_OBSERVATION_VERSION, .flags=PRODUCT_OBSERVATION_DNS,
+    .generation=77, .token=17, .incarnation=8, .mono_us=100, .activity_utc_us=1700000000000000ULL,
+    .policy_generation=77, .policy_revision=3, .policy_hash=123, .winner=310,
+    .uid=10123, .network=UINT32_MAX, .slot=3, .id=0x1234, .query_flags=0x0100,
+    .qtype=1, .qclass=1, .source_port=40000, .resolver_port=53, .name_length=11,
+    .family=4, .protocol=17, .direction=3, .availability=9, .caller=1, .coverage=1,
+    .declared_action=1, .actual_action=1, .domain_available=1, .stage=1,
+    .source_address={192,0,2,2}, .resolver_address={192,0,2,53},
+    .name="example.com", .rule_name="original allow", .network_revision=5, .adapter_profile=1,
+    .packet_uid=10123, .packet_availability=9,
+  };
+  unsigned n = product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  r.token=18; r.stage=2; r.direction=1; r.query_flags=0x8180; r.packet_availability=1;
+  r.policy_revision=9; r.policy_hash=456; r.winner=312;
+  r.query_token=17; r.query_policy_generation=77; r.query_policy_revision=3;
+  r.query_policy_hash=123; r.query_winner=310; r.query_incarnation=8;
+  r.matched_requests=1; r.candidate_count=2; r.correlation=1;
+  r.declared_action=r.actual_action=2;
+  memset(r.rule_name,0,sizeof(r.rule_name)); memcpy(r.rule_name,"reply deny",10);
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  r.name_index=r.name_source=1; r.name_length=10;
+  memset(r.name,0,sizeof(r.name)); memcpy(r.name,"alias.test",10);
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  r.token=19; r.query_token=r.query_policy_generation=r.query_policy_revision=0;
+  r.query_policy_hash=r.query_winner=r.query_incarnation=0;
+  r.correlation=3; r.matched_requests=2; r.caller=0; r.availability=1;
+  r.domain_available=0; r.declared_action=r.actual_action=1; r.winner=0;
+  memset(r.rule_name,0,sizeof(r.rule_name));
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  r.name_index=r.name_source=0; r.name_length=11;
+  memset(r.name,0,sizeof(r.name)); memcpy(r.name,"example.com",11);
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  /* Actual graph observations when a UDP53 return has no readable header,
+   * followed by a chained-buffer copy gap. Do not invent a QR bit. */
+  r.token=20; r.query_flags=r.qtype=r.qclass=r.id=0;
+  r.name_length=r.candidate_count=r.matched_requests=0;
+  r.correlation=2; r.coverage=2;
+  memset(r.name,0,sizeof(r.name));
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  r.token=21; r.coverage=5;
+  n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  return n;
+}
+
 int main (int argc, char **argv) {
   assert (argc == 2);
   assert (clib_mem_init (NULL, 4 * 1024 * 1024));
@@ -186,6 +232,8 @@ int main (int argc, char **argv) {
         product_observation_account (t, channel / 2, 0, 60);
       }
       printf ("EMITTED %u\n", admitted);
+    } else if (!strncmp (command, "dns-reply", 9)) {
+      printf ("DNS-REPLY %u\n", dns_reply_fixture (t));
     } else if (!strncmp (command, "attribution", 11)) {
       printf ("ATTRIBUTION %u\n", attribution_fixture (t));
     } else if (!strncmp (command, "blocked", 7)) {

@@ -2860,7 +2860,7 @@ impl ObservationStore {
             right.received_us.cmp(&left.received_us).then_with(|| right_key.cmp(left_key)));
         let dns_recent: BTreeMap<_, _> = dns_recent.into_iter().take(128).collect();
         response["dns"] = serde_json::json!({
-            "scope": "root_original_udp_query_decisions", "recent": dns_recent,
+            "scope": "root_vpn_original_udp_query_and_response_decisions", "recent": dns_recent,
             "accepted": self.state.meta.dns_accepted, "rejected": self.state.meta.dns_rejected,
             "unknown_caller": self.state.meta.dns_unknown_caller,
             "incomplete_message": self.state.meta.dns_incomplete,

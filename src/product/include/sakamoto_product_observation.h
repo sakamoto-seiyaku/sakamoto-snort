@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include "sakamoto_product_limits.h"
 
-#define PRODUCT_OBSERVATION_VERSION 5
+#define PRODUCT_OBSERVATION_VERSION 6
 /* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
 #define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
 #define PRODUCT_OBSERVATION_CHANNELS (2 * PRODUCT_OBSERVATION_OWNERS)
@@ -15,7 +15,7 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 480
+#define PRODUCT_OBSERVATION_MAX_RECORD 576
 
 /* Direction-local provenance; no pointers, source conditions or packet bytes.
  * A segment starts at the counters immediately preceding its first packet. */
@@ -67,10 +67,18 @@ typedef struct {
   uint16_t id, query_flags, qtype, qclass, source_port, resolver_port, name_length;
   uint8_t family, protocol, direction, availability, caller, coverage;
   uint8_t declared_action, actual_action, mode, domain_available, stage, delivery;
-  uint8_t padding[2];
+  uint8_t name_index, chain_status;
   uint8_t source_address[16], resolver_address[16], rule_name[64], name[256];
+  uint64_t query_token, query_policy_generation, query_policy_revision, query_policy_hash;
+  uint64_t query_winner, network_revision, transport_session, underlay_epoch, query_incarnation;
+  uint16_t matched_requests, retransmits;
+  uint8_t candidate_count, name_source, correlation, packet_availability;
+  uint64_t domain_lists;
+  uint16_t rcode;
+  uint8_t adapter_profile, reserved_extension2;
+  uint32_t packet_uid;
 } product_dns_observation_record_t;
-_Static_assert (sizeof (product_dns_observation_record_t) == 480, "DNS observation ABI");
+_Static_assert (sizeof (product_dns_observation_record_t) == 576, "DNS observation ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 
 typedef struct {
@@ -117,7 +125,7 @@ product_observation_transport_t *product_observation_connect (
 product_observation_transport_t *product_observation_connect_for_owners (
   const char *socket_path, uint64_t generation, uint32_t owner_count);
 int product_observation_receive (product_observation_transport_t *, unsigned channel,
-                                 product_observation_record_t *);
+                                 void *, uint32_t capacity);
 int product_observation_wait (product_observation_transport_t *, int timeout_ms);
 /* A duplicated local interrupt fd may cross to the service owner solely to
  * wake shutdown/pause. The mapping handle remains on the consumer thread. */

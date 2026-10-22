@@ -51,6 +51,8 @@ typedef struct {
   u64 generation;
   unsigned enabled, accepting, adapter_kind;
   product_dns_owner_status_t dns[2];
+  product_dns_owner_t dns_requests[2];
+  void *flow_pools[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main = {.generation=77};
 typedef struct { u64 generation; product_domains_t *domains; } bank_t;
@@ -59,6 +61,7 @@ typedef struct {
   struct {u64 revision, snapshot_hash;} identity;
   u8 domain_source, domain_available;
   u64 domain_lists;
+  const product_dns_response_t *dns_response;
 } product_policy_snapshot_t;
 #define clib_memset memset
 #define clib_memcpy_fast memcpy
@@ -77,6 +80,17 @@ static void product_policy_snapshot_acquire(void *graph, product_policy_snapshot
 static void product_policy_snapshot_release(void *graph, product_policy_snapshot_t *snapshot) {
   assert(graph==&product_packet_graph_main && snapshot);
 }
+static double vlib_time_now(vlib_main_t *vm) { assert(vm->thread_index==1); return 1.0; }
+static unsigned vlib_get_worker_index(unsigned thread) { assert(thread==1); return 0; }
+static struct { u64 revision; } network={.revision=5};
+static __typeof__(network) *product_network_snapshot_current(void) { return &network; }
+static u64 product_flow_entry_current_incarnation(void *pool, const void *assignment, u64 generation, u64 now) {
+  assert(pool==product_packet_graph_main.flow_pools[0] && assignment && generation==77 && now==1000000); return 8;
+}
+static int product_vpn_tun_return_context(u64 generation, u64 token, u64 *inc, u64 *session, u64 *epoch) {
+  assert(generation==77 && token==42); *inc=8;*session=55;*epoch=7;return 1;
+}
+unsigned product_dns_owner_active(product_dns_owner_t *owner, uint64_t now) { assert(owner && now==1000000); return 0; }
 product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
 static void vlib_cli_output(vlib_main_t *vm, const char *format, ...) {
   assert(vm->thread_index==1);
@@ -95,6 +109,17 @@ void product_dns_inspect_query(const uint8_t *wire, size_t size,
   query->packet.domain_source = PRODUCT_POLICY_DOMAIN_DNS_QNAME;
   query->packet.domain_available = context->caller != PRODUCT_DNS_CALLER_UNKNOWN;
   query->packet.domain_lists = query->packet.domain_available ? 4 : 0;
+}
+static unsigned response_inspected;
+static product_dns_identity_t response_identity;
+void product_dns_inspect_response(const uint8_t *wire, size_t size,
+  const product_dns_context_t *context, const product_dns_identity_t *identity,
+  product_dns_owner_t *owner, product_dns_response_t *response) {
+  ++response_inspected; response_identity=*identity;last_context=*context;
+  assert(owner==&product_packet_graph_main.dns_requests[0]);
+  assert((!wire && !size) || (wire==buffer.data+48 && size==19));
+  memset(response,0,sizeof(*response));response->question.packet=context->packet;
+  response->question.coverage=PRODUCT_DNS_QUERY_COMPLETE;
 }
 '''
 
@@ -145,6 +170,35 @@ int main(void) {
   product_packet_graph_dns_prepare(&vm,3,&lease,&snapshot,&query,&observed);
   assert(observed && query.coverage==PRODUCT_DNS_COPY_GAP);
   assert(snapshot.domain_source==PRODUCT_POLICY_DOMAIN_DNS_QNAME);
+  lease.facts.source_port=53;lease.facts.destination_port=40000;buffer.current_length=70;
+  lease.origin_obligation_id=42;
+  for(unsigned provenance=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE;
+      provenance<=PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED;++provenance) {
+    lease.platform.provenance=provenance;
+    for(unsigned direction=PRODUCT_PACKET_DIRECTION_INPUT;
+        direction<=PRODUCT_PACKET_DIRECTION_OUTPUT;++direction) {
+      lease.platform.direction=direction;
+      product_policy_snapshot_t current={.bank=&bank};product_dns_response_t response;
+      int reply_observed=99;unsigned before_response=response_inspected;
+      product_packet_graph_dns_response_prepare(&vm,3,&lease,&current,&response,&reply_observed);
+      int eligible=(provenance==PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+        provenance==PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN) && direction==PRODUCT_PACKET_DIRECTION_INPUT;
+      assert(reply_observed==eligible && response_inspected==before_response+(unsigned)eligible);
+      if(eligible) {
+        assert(current.dns_response==&response && current.domain_source==PRODUCT_POLICY_DOMAIN_DNS_QNAME);
+        assert(response_identity.generation==77 && response_identity.incarnation==8 && response_identity.network_revision==5);
+        assert(response_identity.profile==(provenance==PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ? 1 : 2));
+        if(provenance==PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
+          assert(response_identity.transport_session==55 && response_identity.underlay_epoch==7);
+        assert(last_context.packet.source_port==53 && last_context.packet.destination_port==40000);
+      }
+    }
+  }
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+  lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;buffer.current_length=60;
+  product_dns_response_t response;
+  product_packet_graph_dns_response_prepare(&vm,3,&lease,&snapshot,&response,&observed);
+  assert(observed && response.question.coverage==PRODUCT_DNS_COPY_GAP);
   for(unsigned kind=PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE;
       kind<=PRODUCT_ADAPTER_OBLIGATION_VPN_TUN;++kind) {
     product_packet_graph_main.adapter_kind=kind;
@@ -163,6 +217,8 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-dns-graph-') as tmp:
     source.write_text(prefix + function('product_packet_graph_l4_direction_from_platform', 'static void')
                       + function('product_packet_graph_l4_packet_projection', 'static void')
                       + function('product_packet_graph_dns_prepare', 'static product_packet_result_t')
+                      + function('product_packet_graph_dns_identity', 'static product_dns_identity_t')
+                      + function('product_packet_graph_dns_response_prepare', 'static void')
                       + function('product_dns_status_cli', 'static clib_error_t *')
                       + suffix)
     subprocess.run(['cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror',

@@ -45,6 +45,7 @@ struct hev_owner {
   struct tcp_pcb *tcp_listener;
   owner_session_t *sessions, *output_session;
   hev_owner_facts_t input_facts;
+  hev_owner_input_context_t input_context;
   hev_owner_input_result_t input_result;
   uint64_t session_serial, event_serial, output_serial, next_tcp_timer;
   pthread_t thread;
@@ -438,6 +439,10 @@ static void receive_input(void *opaque, struct udp_pcb *pcb, struct pbuf *packet
     failure(owner, HEV_OWNER_FAULT_ALLOCATION, session->id, ENOMEM);
     return;
   }
+  owner->input_context = (hev_owner_input_context_t) {
+    .session = session->id, .underlay_epoch = session->facts.underlay_epoch,
+    .network_context = session->facts.network_context,
+    .context_known = !!(session->facts.availability & HEV_OWNER_CONTEXT_KNOWN)};
   ++owner->stats.input_packets;
   if (owner->stats.input_packets > owner->stats.input_peak)
     owner->stats.input_peak = owner->stats.input_packets;
@@ -482,6 +487,7 @@ static void create_session(void *opaque, struct udp_pcb *pcb, struct pbuf *packe
   session->facts.network_context = 0;
   session->facts.underlay_epoch = 0;
   session->id = ++owner->session_serial;
+  session->facts.transport_session = session->id;
   session->receive = pcb->recv;
   session->receive_arg = pcb->recv_arg;
   udp_recv(pcb, receive_input, session);
@@ -762,6 +768,7 @@ static err_t create_tcp_session(u8_t id, struct tcp_pcb_listen *listener,
   session->facts.network_context = 0;
   session->facts.underlay_epoch = 0;
   session->id = ++owner->session_serial;
+  session->facts.transport_session = session->id;
   hev_socks5_session_set_task(HEV_SOCKS5_SESSION(session->tcp), task);
   tcp_ext_arg_set(pcb, id, session);
   tcp_ext_arg_set_callbacks(pcb, id, &callbacks);
@@ -922,12 +929,14 @@ hev_owner_t *hev_owner_create(const hev_owner_config_t *config)
   return owner;
 }
 
-hev_owner_input_result_t hev_owner_input_copy(hev_owner_t *owner,
+hev_owner_input_result_t hev_owner_input_copy_context(hev_owner_t *owner,
     const uint8_t *l3, size_t length, const hev_owner_facts_t *facts,
-    uint64_t generation)
+    uint64_t generation, hev_owner_input_context_t *context)
 {
+  if (context) memset(context, 0, sizeof(*context));
   owner_scope_t scope;
   if (enter(owner, &scope)) return HEV_OWNER_INPUT_FAILED;
+  memset(&owner->input_context, 0, sizeof(owner->input_context));
   ++owner->stats.input_calls;
   owner->input_result = HEV_OWNER_INPUT_FAILED;
   if (!owner->stats.running) owner->input_result = HEV_OWNER_INPUT_NOT_RUNNING;
@@ -962,11 +971,20 @@ hev_owner_input_result_t hev_owner_input_copy(hev_owner_t *owner,
       }
     }
   }
+  if (context && owner->input_result == HEV_OWNER_INPUT_ACCEPTED)
+    *context = owner->input_context;
   hev_owner_input_result_t result = owner->input_result;
   if (result == HEV_OWNER_INPUT_ACCEPTED) ++owner->stats.input_accepted;
   else ++owner->stats.input_rejected;
   leave(owner, &scope);
   return result;
+}
+
+hev_owner_input_result_t hev_owner_input_copy(hev_owner_t *owner,
+    const uint8_t *l3, size_t length, const hev_owner_facts_t *facts,
+    uint64_t generation)
+{
+  return hev_owner_input_copy_context(owner, l3, length, facts, generation, NULL);
 }
 
 int hev_owner_broker_complete(hev_owner_t *owner, uint64_t generation,

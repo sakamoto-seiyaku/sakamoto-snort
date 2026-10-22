@@ -55,7 +55,7 @@ static hev_owner_output_result_t output(void *opaque,
     platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
   switch (stack->config.output(stack->config.opaque, borrowed, count, total,
                               &platform, generation, serial, facts->underlay_epoch,
-                              facts->flow_incarnation)) {
+                              facts->flow_incarnation, facts->transport_session)) {
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED: return HEV_OWNER_OUTPUT_ACCEPTED;
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY: return HEV_OWNER_OUTPUT_NO_MEMORY;
   default: return HEV_OWNER_OUTPUT_REJECTED;
@@ -98,11 +98,12 @@ product_vpn_flow_stack_t *product_vpn_flow_stack_create(
   return stack;
 }
 
-product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy_context(
   product_vpn_flow_stack_t *stack, const uint8_t *l3, size_t length,
   const product_platform_packet_facts_t *platform, uint64_t generation,
-  uint64_t flow_incarnation)
+  uint64_t flow_incarnation, product_vpn_flow_stack_transport_t *transport)
 {
+  if (transport) *transport = (product_vpn_flow_stack_transport_t){0};
   if (!stack || !platform) return PRODUCT_VPN_FLOW_STACK_FAILED;
   if (platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
       platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT)
@@ -111,7 +112,13 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
     .flow_incarnation = flow_incarnation};
   if (platform->availability & PRODUCT_PLATFORM_UID_KNOWN)
     facts.availability |= HEV_OWNER_UID_KNOWN;
-  switch (hev_owner_input_copy(stack->owner, l3, length, &facts, generation)) {
+  hev_owner_input_context_t selected = {0};
+  hev_owner_input_result_t result = hev_owner_input_copy_context(
+    stack->owner, l3, length, &facts, generation, &selected);
+  if (transport && result == HEV_OWNER_INPUT_ACCEPTED)
+    *transport = (product_vpn_flow_stack_transport_t) {
+      selected.session, selected.underlay_epoch, selected.network_context, selected.context_known};
+  switch (result) {
   case HEV_OWNER_INPUT_ACCEPTED: return PRODUCT_VPN_FLOW_STACK_ACCEPTED;
   case HEV_OWNER_INPUT_NO_CAPACITY: return PRODUCT_VPN_FLOW_STACK_NO_CAPACITY;
   case HEV_OWNER_INPUT_UNSUPPORTED: return PRODUCT_VPN_FLOW_STACK_UNSUPPORTED;
@@ -119,6 +126,15 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
   case HEV_OWNER_INPUT_WRONG_GENERATION: return PRODUCT_VPN_FLOW_STACK_INVALID_GENERATION;
   default: return PRODUCT_VPN_FLOW_STACK_FAILED;
   }
+}
+
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
+  product_vpn_flow_stack_t *stack, const uint8_t *l3, size_t length,
+  const product_platform_packet_facts_t *platform, uint64_t generation,
+  uint64_t flow_incarnation)
+{
+  return product_vpn_flow_stack_input_copy_context(stack, l3, length, platform,
+    generation, flow_incarnation, NULL);
 }
 
 product_vpn_flow_stack_step_result_t product_vpn_flow_stack_step(

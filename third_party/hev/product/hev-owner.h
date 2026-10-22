@@ -15,6 +15,7 @@ typedef struct {
   uint32_t network_context;
   uint64_t underlay_epoch;
   uint64_t flow_incarnation; /* admitted Product flow, zero if unavailable */
+  uint64_t transport_session; /* Exact owner-local session; never an App ID. */
   uint8_t availability;
 } hev_owner_facts_t;
 
@@ -25,6 +26,12 @@ typedef struct {
   uint32_t network_context;
   uint8_t context_known;
 } hev_owner_binding_t;
+
+typedef struct {
+  uint64_t session, underlay_epoch;
+  uint32_t network_context;
+  uint8_t context_known;
+} hev_owner_input_context_t;
 
 typedef struct {
   const uint8_t *data;
@@ -173,6 +180,10 @@ hev_owner_t *hev_owner_create (const hev_owner_config_t *config);
 hev_owner_input_result_t hev_owner_input_copy (
   hev_owner_t *owner, const uint8_t *l3, size_t length,
   const hev_owner_facts_t *facts, uint64_t generation);
+/* Synchronous result of this exact admitted UDP input, before any broker wait. */
+hev_owner_input_result_t hev_owner_input_copy_context (
+  hev_owner_t *owner, const uint8_t *l3, size_t length,
+  const hev_owner_facts_t *facts, uint64_t generation, hev_owner_input_context_t *context);
 hev_owner_step_result_t hev_owner_step (hev_owner_t *owner,
                                        uint32_t quanta, uint32_t max_us);
 int hev_owner_broker_complete (hev_owner_t *owner, uint64_t generation,

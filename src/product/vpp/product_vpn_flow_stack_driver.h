@@ -19,6 +19,6 @@ int product_vpn_flow_stack_driver_reject_after(uint32_t owner, uint32_t packets)
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   vlib_main_t *vm, vlib_node_runtime_t *node, const uint8_t *l3, size_t length,
   const product_platform_packet_facts_t *platform, uint64_t generation,
-  uint64_t flow_incarnation);
+  uint64_t flow_incarnation, uint64_t request_token);
 
 #endif

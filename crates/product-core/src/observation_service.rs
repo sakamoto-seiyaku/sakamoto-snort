@@ -18,6 +18,7 @@ mod live {
             handle: *mut c_void,
             channel: u32,
             out: *mut RawRecord,
+            capacity: u32,
         ) -> c_int;
         fn product_observation_wait(handle: *mut c_void, timeout_ms: c_int) -> c_int;
         fn product_observation_interrupt_fd(handle: *mut c_void) -> c_int;
@@ -25,7 +26,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 480]);
+    struct RawRecord([u8; 576]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -216,9 +217,9 @@ mod live {
                         let mut dns_records = Vec::new();
                         for channel in 0..health.owners * 2 {
                             for _ in 0..128 {
-                                let mut raw = RawRecord([0; 480]);
+                                let mut raw = RawRecord([0; 576]);
                                 let rv = unsafe {
-                                    product_observation_receive(handle, channel, &mut raw)
+                                    product_observation_receive(handle, channel, &mut raw, 576)
                                 };
                                 if rv == 0 {
                                     break;
@@ -410,6 +411,80 @@ mod live {
         use std::io::{BufRead, BufReader, Write};
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
+
+        #[test]
+        #[ignore = "requires the actual Product C producer executable"]
+        fn native_dns_reply_query_and_alias_identities_survive_sqlite_reopen() {
+            let root = std::env::temp_dir().join(format!("s312-observation-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped())
+                .spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "dns-reply").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "DNS-REPLY 7");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let check = |reply: &serde_json::Value| {
+                assert_eq!(reply["storage"], "sqlite");
+                assert_eq!(reply["dns"]["accepted"], 7);
+                assert_eq!(reply["dns"]["rejected"], 0);
+                let rows = reply["dns"]["recent"].as_object().unwrap();
+                assert_eq!(rows.len(), 7);
+                let query = rows.values().find(|r| r["record"]["stage"] == 1).unwrap();
+                assert_eq!(query["record"]["policy_revision"], 3);
+                assert_eq!(query["record"]["winner"], 310);
+                for row in rows.values().filter(|r| r["record"]["token"] == 18) {
+                    let record = &row["record"];
+                    assert_eq!(record["stage"], 2);
+                    assert_eq!(record["query_token"], 17);
+                    assert_eq!(record["query_policy_revision"], 3);
+                    assert_eq!(record["policy_revision"], 9);
+                    assert_eq!(record["winner"], 312);
+                    assert_eq!(record["actual_action"], 2);
+                    assert_eq!(record["delivery"], 0);
+                }
+                let alias = rows.values().find(|r| r["record"]["token"] == 18 && r["record"]["name_source"] == 1).unwrap();
+                assert_eq!(alias["record"]["name"], "alias.test");
+                for row in rows.values().filter(|r| r["record"]["token"] == 19) {
+                    assert_eq!(row["record"]["caller"], 0);
+                    assert_eq!(row["record"]["correlation"], 3);
+                    assert_eq!(row["record"]["query_token"], 0);
+                }
+                for (token, coverage) in [(20, 2), (21, 5)] {
+                    let row = rows.values().find(|r| r["record"]["token"] == token).unwrap();
+                    let record = &row["record"];
+                    assert_eq!(record["stage"], 2);
+                    assert_eq!(record["query_flags"], 0);
+                    assert_eq!(record["coverage"], coverage);
+                    assert_eq!(record["name"], "");
+                    assert_eq!(record["correlation"], 2);
+                    assert_eq!(record["caller"], 0);
+                    assert_eq!(record["query_token"], 0);
+                }
+            };
+            loop {
+                let snapshot = service.snapshot();
+                if snapshot["persistent"]["dns"]["accepted"] == 7 {
+                    check(&snapshot["persistent"]);
+                    assert_eq!(snapshot["overview"]["packets"], serde_json::json!([0, 0]));
+                    break;
+                }
+                assert!(Instant::now() < deadline, "normal consumer did not accept reply records: {snapshot}");
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(service);
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            check(&restored.query());
+            drop(restored);
+            std::fs::remove_dir_all(root).unwrap();
+        }
 
         #[test]
         #[ignore = "requires the actual Product C producer and one-shot WAL delay shim"]

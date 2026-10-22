@@ -1,4 +1,4 @@
-//! Bounded DNS query-decision records on the existing observation transport.
+//! Bounded original DNS query/response records on the existing observation transport.
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,17 +40,47 @@ pub struct DnsRecord {
     pub resolver_address: [u8; 16],
     pub rule_name: String,
     pub name: String,
+    #[serde(default)] pub query_token: u64,
+    #[serde(default)] pub query_policy_generation: u64,
+    #[serde(default)] pub query_policy_revision: u64,
+    #[serde(default)] pub query_policy_hash: u64,
+    #[serde(default)] pub query_winner: u64,
+    #[serde(default)] pub network_revision: u64,
+    #[serde(default)] pub transport_session: u64,
+    #[serde(default)] pub underlay_epoch: u64,
+    #[serde(default)] pub query_incarnation: u64,
+    #[serde(default)] pub matched_requests: u16,
+    #[serde(default)] pub retransmits: u16,
+    #[serde(default)] pub candidate_count: u8,
+    #[serde(default)] pub name_index: u8,
+    #[serde(default)] pub name_source: u8,
+    #[serde(default)] pub chain_status: u8,
+    #[serde(default)] pub correlation: u8,
+    #[serde(default)] pub domain_lists: u64,
+    #[serde(default)] pub rcode: u16,
+    #[serde(default)] pub adapter_profile: u8,
+    #[serde(default)] pub packet_uid: u32,
+    #[serde(default)] pub packet_availability: u8,
 }
 
 impl DnsRecord {
     pub fn valid(&self) -> bool {
+        // The INPUT/UDP53 control point is known even when the DNS header
+        // could not be read. Preserve that bounded error without inventing QR
+        // or accepting complete/correlated answers without response flags.
+        let header_unavailable = self.query_flags == 0 && self.id == 0
+            && self.qtype == 0 && self.qclass == 0 && self.name.is_empty()
+            && self.candidate_count == 0 && self.name_index == 0 && self.name_source == 0
+            && self.chain_status == 0 && self.matched_requests == 0
+            && self.correlation == 2 && matches!(self.coverage, 2 | 5);
         self.generation != 0 && self.token != 0 && self.owner < 62
             && matches!(self.family, 4 | 6) && self.protocol == 17
-            && self.direction == 3 && self.resolver_port == 53
-            && self.stage == 1 && self.delivery == 0
+            && self.resolver_port == 53 && self.delivery == 0
+            && ((self.stage == 1 && self.direction == 3 && self.query_flags & 0x8000 == 0)
+                || (self.stage == 2 && self.direction == 1
+                    && (self.query_flags & 0x8000 != 0 || header_unavailable)))
             && self.coverage >= 1 && self.coverage <= 5
             && self.caller <= 1 && self.availability & !15 == 0
-            && self.query_flags & 0x8000 == 0
             && self.codec_peak_bytes <= 512 * 1024
             && self.name.len() <= 255 && self.name.is_ascii()
             && !self.name.as_bytes().contains(&0)
@@ -61,6 +91,25 @@ impl DnsRecord {
             && (self.slot == u32::MAX) == (self.incarnation == 0)
             && (!self.domain_available || (self.caller == 1 && self.coverage == 1
                 && !self.name.is_empty()))
+            && self.correlation <= 5 && self.chain_status <= 3 && self.adapter_profile <= 2
+            && self.candidate_count <= 33 && self.name_source <= 1 && self.rcode <= 4095
+            && self.packet_availability & !15 == 0
+            && (self.adapter_profile == 0 || ((self.packet_availability & 1 != 0)
+                == (self.packet_uid != u32::MAX)))
+            && (self.candidate_count == 0 || self.name_index < self.candidate_count)
+            && (self.stage != 1 || (self.name_index == 0 && self.name_source == 0
+                && self.chain_status == 0 && self.query_token == 0))
+            && (self.stage != 2 || ((self.name_source == 1) == (self.name_index != 0)
+                && (self.correlation == 1 || (self.caller == 0 && !self.domain_available))
+                && (if self.correlation == 1 {
+                    self.query_token != 0 && self.query_policy_generation == self.generation
+                        && self.query_incarnation != 0 && self.matched_requests == 1
+                        && (self.adapter_profile != 2 || (self.transport_session != 0 && self.underlay_epoch != 0))
+                } else {
+                    self.query_token == 0 && self.query_policy_generation == 0
+                        && self.query_policy_revision == 0 && self.query_policy_hash == 0
+                        && self.query_winner == 0 && self.query_incarnation == 0
+                })))
             && self.declared_action <= 2 && self.actual_action <= 2 && self.mode <= 1
             && (if self.winner == 0 {
                 self.mode == 0 && self.actual_action == self.declared_action
@@ -72,18 +121,23 @@ impl DnsRecord {
     }
 
     pub(crate) fn key(&self) -> String {
-        format!("{:020}:{:020}:{:04}", self.generation, self.token, self.owner)
+        let base = format!("{:020}:{:020}:{:04}", self.generation, self.token, self.owner);
+        if self.stage == 1 { base } else { format!("{base}:{}:{:02}", self.stage, self.name_index) }
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 480 || data[2..4] != [5, 16]
-            || data[6..8] != [0, 0] || data[126..128] != [0, 0] {
+        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6)
+            || data[6..8] != [0, 0] {
             return None;
         }
         let u16_at = |n| u16::from_le_bytes(data[n..n + 2].try_into().unwrap());
         let u32_at = |n| u32::from_le_bytes(data[n..n + 4].try_into().unwrap());
         let u64_at = |n| u64::from_le_bytes(data[n..n + 8].try_into().unwrap());
-        if u16_at(0) != 480 || u16_at(112) > 255 || data[123] > 1 { return None; }
+        let extended = data[2] == 6;
+        if u16_at(0) != if extended { 576 } else { 480 }
+            || (extended && (data.len() < 576 || data[571] != 0))
+            || (!extended && data[126..128] != [0, 0])
+            || u16_at(112) > 255 || data[123] > 1 { return None; }
         let name_length = u16_at(112) as usize;
         if data[224 + name_length..480].iter().any(|byte| *byte != 0) { return None; }
         let rule_name = &data[160..224];
@@ -106,6 +160,27 @@ impl DnsRecord {
             resolver_address: data[144..160].try_into().ok()?,
             rule_name: std::str::from_utf8(&rule_name[..rule_length]).ok()?.into(),
             name: std::str::from_utf8(&data[224..224 + name_length]).ok()?.into(),
+            query_token: if extended { u64_at(480) } else { 0 },
+            query_policy_generation: if extended { u64_at(488) } else { 0 },
+            query_policy_revision: if extended { u64_at(496) } else { 0 },
+            query_policy_hash: if extended { u64_at(504) } else { 0 },
+            query_winner: if extended { u64_at(512) } else { 0 },
+            network_revision: if extended { u64_at(520) } else { 0 },
+            transport_session: if extended { u64_at(528) } else { 0 },
+            underlay_epoch: if extended { u64_at(536) } else { 0 },
+            query_incarnation: if extended { u64_at(544) } else { 0 },
+            matched_requests: if extended { u16_at(552) } else { 0 },
+            retransmits: if extended { u16_at(554) } else { 0 },
+            candidate_count: if extended { data[556] } else { 0 },
+            name_index: if extended { data[126] } else { 0 },
+            name_source: if extended { data[557] } else { 0 },
+            chain_status: if extended { data[127] } else { 0 },
+            correlation: if extended { data[558] } else { 0 },
+            domain_lists: if extended { u64_at(560) } else { 0 },
+            rcode: if extended { u16_at(568) } else { 0 },
+            adapter_profile: if extended { data[570] } else { 0 },
+            packet_uid: if extended { u32_at(572) } else { u32_at(80) },
+            packet_availability: if extended { data[559] } else { data[117] },
         };
         record.valid().then_some(record)
     }
@@ -173,5 +248,62 @@ mod tests {
         assert!(!unknown.domain_available);
         data[235] = b'x';
         assert!(DnsRecord::decode(&data).is_none());
+    }
+
+    #[test]
+    fn decodes_reply_names_with_separate_query_and_response_identities() {
+        let mut data = [0; 576];
+        data[..480].copy_from_slice(&wire_record());
+        data[..2].copy_from_slice(&576u16.to_le_bytes());
+        data[2] = 6;
+        data[102..104].copy_from_slice(&0x8180u16.to_le_bytes());
+        data[116] = 1;
+        data[124] = 2;
+        data[126] = 1; // Actual connected alias, second name of this answer.
+        data[480..488].copy_from_slice(&17u64.to_le_bytes());
+        data[488..496].copy_from_slice(&77u64.to_le_bytes());
+        data[496..504].copy_from_slice(&3u64.to_le_bytes());
+        data[504..512].copy_from_slice(&456u64.to_le_bytes());
+        data[520..528].copy_from_slice(&5u64.to_le_bytes());
+        data[544..552].copy_from_slice(&8u64.to_le_bytes());
+        data[552..554].copy_from_slice(&1u16.to_le_bytes());
+        data[556] = 2; data[557] = 1; data[558] = 1;
+        let record = DnsRecord::decode(&data).expect("reply on normal owner channel");
+        assert_eq!(record.stage, 2);
+        assert_eq!(record.query_token, 17);
+        assert_eq!(record.query_policy_revision, 3);
+        assert_eq!(record.policy_revision, 9);
+        assert_eq!(record.name_index, 1);
+        assert_eq!(record.name_source, 1);
+        assert_eq!(record.correlation, 1);
+        assert_eq!(record.delivery, 0);
+        let mut query = DnsRecord::decode(&wire_record()).unwrap();
+        query.token = record.token;
+        assert_ne!(query.key(), record.key());
+        let mut first = record.clone(); first.name_index = 0; first.name_source = 0;
+        assert_ne!(first.key(), record.key());
+    }
+
+    #[test]
+    fn missing_response_header_is_only_a_qualified_coverage_gap() {
+        let mut data = [0; 576];
+        data[..480].copy_from_slice(&wire_record());
+        data[..2].copy_from_slice(&576u16.to_le_bytes());
+        data[2] = 6;
+        data[100..108].fill(0);
+        data[112..114].fill(0);
+        data[116] = 1;
+        data[117] = 1; data[118] = 0; data[119] = 2; data[123] = 0; data[124] = 2;
+        data[224..480].fill(0);
+        data[558] = 2;
+        assert!(DnsRecord::decode(&data).is_some());
+        data[119] = 5;
+        assert!(DnsRecord::decode(&data).is_some());
+        // A missing header cannot claim a complete answer, Question or match.
+        for (offset, value) in [(119, 1), (104, 1), (556, 1), (558, 1)] {
+            let mut invalid = data;
+            invalid[offset] = value;
+            assert!(DnsRecord::decode(&invalid).is_none(), "offset {offset}");
+        }
     }
 }

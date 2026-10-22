@@ -122,7 +122,7 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
   const product_vpn_flow_stack_span_t *spans, unsigned count, size_t total,
   const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t epoch,
-  uint64_t flow_incarnation)
+  uint64_t flow_incarnation, uint64_t transport_session)
 {
   product_vpn_stack_owner_t *owner = opaque;
   if (__atomic_load_n(&owner->stop_requested, __ATOMIC_ACQUIRE))
@@ -130,7 +130,7 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
   return product_vpn_tun_submit_return(vlib_get_main(), owner->output_node,
                                        owner->output_next, spans, count, total,
                                        platform, generation, serial, epoch,
-                                       flow_incarnation);
+                                       flow_incarnation, transport_session);
 }
 
 static int request(void *opaque, uint64_t generation, uint64_t session, int fd)
@@ -146,6 +146,8 @@ static int reply(void *opaque, uint64_t generation, uint64_t session, unsigned e
   if (__atomic_load_n(&owner->stop_requested, __ATOMIC_ACQUIRE)) return -1;
   int result = product_vpn_flow_stack_broker_complete(owner->stack,
       generation, session, error, epoch, context, known);
+  if (!result && !error)
+    product_packet_graph_dns_transport_bound(vlib_get_main(), generation, session, epoch, context, known);
   if (owner->trace)
     fprintf(stderr, "s237 event=broker_reply thread=%u tls=%u generation=%llu session=%llu success=%d epoch=%llu context=%u known=%d result=%d error=%u\n",
       vlib_get_main()->thread_index, vlib_get_thread_index(),
@@ -328,7 +330,7 @@ int product_vpn_flow_stack_driver_reject_after(uint32_t index, uint32_t packets)
 product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   vlib_main_t *vm, vlib_node_runtime_t *node, const uint8_t *l3, size_t length,
   const product_platform_packet_facts_t *platform, uint64_t generation,
-  uint64_t flow_incarnation)
+  uint64_t flow_incarnation, uint64_t request_token)
 {
   if (!vm || !vm->thread_index ||
       vlib_get_worker_index(vm->thread_index) >= active_owner_count())
@@ -345,9 +347,14 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   }
   owner->output_node = node;
   owner->output_next = 1; /* product-vpn-egress -> product-packet-admit */
+  product_vpn_flow_stack_transport_t transport = {0};
   product_vpn_flow_stack_input_result_t result =
-    product_vpn_flow_stack_input_copy(owner->stack, l3, length, platform,
-      generation, flow_incarnation);
+    product_vpn_flow_stack_input_copy_context(owner->stack, l3, length, platform,
+      generation, flow_incarnation, &transport);
+  if (result == PRODUCT_VPN_FLOW_STACK_ACCEPTED && transport.session)
+    product_packet_graph_dns_request_transport(vm, generation, request_token,
+      flow_incarnation, transport.session, transport.underlay_epoch,
+      transport.network_context, transport.context_known);
   owner->output_node = NULL;
   schedule(vm); /* Admission and rejection-with-close can both wake HEV tasks. */
   return result;

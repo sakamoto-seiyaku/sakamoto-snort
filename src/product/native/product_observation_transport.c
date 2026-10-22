@@ -61,7 +61,7 @@ struct product_observation_transport {
 
 static svm_msg_q_ring_cfg_t rings[] = {
   { .nitems = OBS_SLOTS, .elsize = 464 },
-  { .nitems = OBS_SLOTS, .elsize = 480 },
+  { .nitems = OBS_SLOTS, .elsize = PRODUCT_OBSERVATION_MAX_RECORD },
 };
 static svm_msg_q_cfg_t config = {
   .q_nitems = OBS_SLOTS * 2, .n_rings = 2, .ring_cfgs = rings,
@@ -378,8 +378,9 @@ product_observation_transport_t *product_observation_connect (
 }
 
 int product_observation_receive (product_observation_transport_t *t, unsigned channel,
-                                 product_observation_record_t *record) {
-  if (!t || !t->consumer || channel >= t->channels || !record) return -1;
+                                 void *record, uint32_t capacity) {
+  if (!t || !t->consumer || channel >= t->channels || !record || capacity < 4 ||
+      capacity > PRODUCT_OBSERVATION_MAX_RECORD) return -1;
   svm_msg_q_t *mq = &t->queue[channel];
   if (!LOAD (&mq->q.shr->cursize)) return 0;
   svm_msg_q_msg_t msg;
@@ -387,8 +388,8 @@ int product_observation_receive (product_observation_transport_t *t, unsigned ch
   if (msg.ring_index >= 2 || msg.elt_index >= OBS_SLOTS) return -1;
   const product_observation_record_t *source = svm_msg_q_msg_data (mq, &msg);
   uint16_t length = source->length;
-  int valid = length >= 4 && length <= sizeof (*record) && length <= rings[msg.ring_index].elsize;
-  memset (record, 0, sizeof (*record));
+  int valid = length >= 4 && length <= capacity && length <= rings[msg.ring_index].elsize;
+  memset (record, 0, capacity);
   if (valid) memcpy (record, source, length);
   svm_msg_q_free_msg (mq, &msg);
   __atomic_fetch_add (&t->shared->ring_consumed[channel][msg.ring_index], 1, __ATOMIC_RELEASE);

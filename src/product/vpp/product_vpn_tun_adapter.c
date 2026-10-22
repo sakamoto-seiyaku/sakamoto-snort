@@ -206,7 +206,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t epoch,
-  uint64_t flow_incarnation)
+  uint64_t flow_incarnation, uint64_t transport_session)
 {
   if (!vm || !vm->thread_index ||
       vlib_get_worker_index(vm->thread_index) >= active_owner_count())
@@ -279,8 +279,8 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   product_adapter_obligation_t obligation = {.token = token,
     .queue_generation = generation, .kind = PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
     .origin_worker = tun.origin_worker, .origin_lane = 0, .packet_id = owner_index + 1};
-  if (!product_vpn_return_stamp_publish(&owner->stamps, generation, token,
-                                         flow_incarnation)) abort();
+  if (!product_vpn_return_stamp_publish_context(&owner->stamps, generation, token,
+      flow_incarnation, transport_session, epoch)) abort();
   if (serial <= product_packet_graph_trace_limit()) {
     fprintf(stderr, "s237 event=return_copy thread=%u tls=%u generation=%llu serial=%llu buffer=%u token=%llu spans=%u bytes=%zu uid=%u availability=%u context=%u epoch=%llu\n",
       vm->thread_index, vlib_get_thread_index(), (unsigned long long)generation,
@@ -334,6 +334,16 @@ int product_vpn_tun_return_incarnation (u64 generation, u64 token,
   if (owner_index >= active_owner_count()) return 0;
   return product_vpn_return_stamp_lookup(&returns[owner_index].stamps,
     generation, token, incarnation);
+}
+
+int product_vpn_tun_return_context (u64 generation, u64 token,
+  u64 *incarnation, u64 *session, u64 *epoch)
+{
+  if (!(token & (1ULL << 63))) return 0;
+  u32 owner_index = return_token_owner(token);
+  if (owner_index >= active_owner_count()) return 0;
+  return product_vpn_return_stamp_context(&returns[owner_index].stamps,
+    generation, token, incarnation, session, epoch);
 }
 
 int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,

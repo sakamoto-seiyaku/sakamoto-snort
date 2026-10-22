@@ -19,11 +19,12 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
     const product_vpn_flow_stack_span_t *spans, unsigned count, size_t total,
     const product_platform_packet_facts_t *platform,
     uint64_t generation, uint64_t serial, uint64_t epoch,
-    uint64_t flow_incarnation)
+    uint64_t flow_incarnation, uint64_t transport_session)
 {
   fixture_t *f = opaque;
   assert(count && spans && total == (f->ipv6 ? 49U : 29U) && generation == 9 && serial && epoch == 13);
   assert(flow_incarnation == UINT64_C(0x100000007));
+  assert(transport_session == f->session && transport_session);
   unsigned char returned[49];
   size_t offset = 0;
   for (unsigned i = 0; i < count; ++i) {
@@ -127,8 +128,10 @@ int main(int argc, char **argv)
   platform.provenance = PRODUCT_PACKET_PROVENANCE_VPN_TUN;
   assert(product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 8, UINT64_C(0x100000007))
     == PRODUCT_VPN_FLOW_STACK_INVALID_GENERATION);
+  product_vpn_flow_stack_transport_t transport={0};
   product_vpn_flow_stack_input_result_t result =
-    product_vpn_flow_stack_input_copy(stack, input, input_length, &platform, 9, UINT64_C(0x100000007));
+    product_vpn_flow_stack_input_copy_context(stack, input, input_length, &platform,
+      9, UINT64_C(0x100000007), &transport);
   if (malformed) {
     assert(result != PRODUCT_VPN_FLOW_STACK_ACCEPTED);
     product_vpn_flow_stack_quiesce(stack);
@@ -141,8 +144,10 @@ int main(int argc, char **argv)
     return 0;
   }
   assert(result == PRODUCT_VPN_FLOW_STACK_ACCEPTED);
+  assert(transport.session && !transport.underlay_epoch && !transport.context_known);
   memset(input, 0, input_length); /* Borrow ended; copied packet must survive. */
   step(stack);
+  assert(transport.session==fixture.session); /* Actual selected, pending session. */
   assert(fixture.session && !product_vpn_flow_stack_snapshot(stack).direct_sent);
   assert(!product_vpn_flow_stack_broker_complete(stack, 9, fixture.session, 0, 13, 0, 1));
   step(stack);

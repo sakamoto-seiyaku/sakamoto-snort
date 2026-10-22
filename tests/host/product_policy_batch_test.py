@@ -209,10 +209,31 @@ static product_packet_result_t product_packet_graph_dns_prepare(vlib_main_t *vm,
   (void)vm;(void)index;(void)snapshot;(void)query;
   assert(lease->facts.destination_port!=53);*observed=0;return PRODUCT_PACKET_OK;
 }
+static void product_packet_graph_dns_response_prepare(vlib_main_t *vm,u32 index,
+  const product_packet_lease_t *lease,product_policy_snapshot_t *snapshot,
+  product_dns_response_t *response,int *observed) {
+  (void)vm;(void)index;(void)snapshot;(void)response;
+  assert(lease->facts.source_port!=53);*observed=0;
+}
+static product_dns_identity_t product_packet_graph_dns_identity(vlib_main_t *vm,
+  const product_packet_lease_t *lease) {
+  (void)vm;(void)lease;assert(0);return (product_dns_identity_t){0};
+}
+product_dns_correlation_t product_dns_remember(product_dns_owner_t *owner,
+  const product_dns_query_t *query,const product_dns_identity_t *identity,
+  uint64_t token,const product_dns_policy_identity_t *policy) {
+  (void)owner;(void)query;(void)identity;(void)token;(void)policy;assert(0);return PRODUCT_DNS_UNMATCHED;
+}
+product_l4_policy_status_t product_dns_response_match(const product_l4_policy_view_t *view,
+  const product_l4_policy_packet_t *packet,const product_dns_response_t *response,
+  product_l4_policy_position_t position,product_l4_policy_match_result_t *result) {
+  (void)view;(void)packet;(void)response;(void)position;(void)result;assert(0);return PRODUCT_L4_POLICY_STATUS_INVALID_ARGUMENT;
+}
 static void product_packet_graph_dns_record(vlib_main_t *vm,const product_packet_lease_t *lease,
   const product_policy_snapshot_t *snapshot,const product_dns_query_t *query,
+  const product_dns_response_t *response,product_dns_correlation_t correlation,
   const product_packet_graph_policy_evaluation_t *evaluation,const product_flow_entry_observation_t *flow) {
-  (void)vm;(void)lease;(void)snapshot;(void)query;(void)evaluation;(void)flow;assert(0);
+  (void)vm;(void)lease;(void)snapshot;(void)query;(void)response;(void)correlation;(void)evaluation;(void)flow;assert(0);
 }
 static vlib_buffer_t buffers[VLIB_FRAME_SIZE];
 static product_buffer_metadata_t metadata_storage[VLIB_FRAME_SIZE];

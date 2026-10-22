@@ -29,8 +29,10 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t underlay_epoch,
-  uint64_t flow_incarnation);
+  uint64_t flow_incarnation, uint64_t transport_session);
 /* Exact full-width lineage lookup for an admitted Product VPN return. */
+int product_vpn_tun_return_context (u64 generation, u64 token,
+  u64 *incarnation, u64 *session, u64 *epoch);
 int product_vpn_tun_return_incarnation (u64 generation, u64 token,
   u64 *incarnation);
 

@@ -142,7 +142,7 @@ static product_vpn_flow_stack_output_result_t output(vlib_node_runtime_t *source
    .direction=PRODUCT_PACKET_DIRECTION_INPUT,.uid=10456,.network_context_id=4};
  callback_active=1;
  product_vpn_flow_stack_output_result_t result=product_vpn_tun_submit_return(&owner_vm,source_node,2,
-   spans,2,sizeof(a)+sizeof(b),&platform,tun.generation,10,11,700+scheduled);
+   spans,2,sizeof(a)+sizeof(b),&platform,tun.generation,10,11,700+scheduled,701);
  callback_active=0;assert(!graph_runs);
  if(result==PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED){
   u32 index=publication_order[scheduled-1];

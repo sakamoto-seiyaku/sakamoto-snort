@@ -37,7 +37,7 @@ typedef product_vpn_flow_stack_output_result_t (*product_vpn_flow_stack_output_f
   void *opaque, const product_vpn_flow_stack_span_t *spans, unsigned count,
   size_t total, const product_platform_packet_facts_t *platform,
   uint64_t generation, uint64_t serial, uint64_t underlay_epoch,
-  uint64_t flow_incarnation);
+  uint64_t flow_incarnation, uint64_t transport_session);
 
 typedef struct {
   uint32_t quanta, runnable;
@@ -109,6 +109,18 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy(
   product_vpn_flow_stack_t *stack, const uint8_t *l3, size_t length,
   const product_platform_packet_facts_t *platform, uint64_t generation,
   uint64_t flow_incarnation);
+
+/* Exact UDP transport selected by this synchronous input. An unbound session
+ * has epoch=0; only the ordered broker completion may supply its later binding. */
+typedef struct {
+  uint64_t session, underlay_epoch;
+  uint32_t network_context;
+  uint8_t context_known;
+} product_vpn_flow_stack_transport_t;
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy_context(
+  product_vpn_flow_stack_t *, const uint8_t *, size_t,
+  const product_platform_packet_facts_t *, uint64_t generation,
+  uint64_t flow_incarnation, product_vpn_flow_stack_transport_t *);
 
 /* Each turn consumes bounded real transport work, including while draining.
  * timeout_ms is a transport timer, not the FlowRuntime Conntrack deadline. */
