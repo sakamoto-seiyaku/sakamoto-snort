@@ -27,6 +27,7 @@ and [build commands](../tooling/README.md) for Host checks.
 
 | Scope | Record |
 | --- | --- |
+| N1 maximum-frequency little-core baseline (2026-10-22): current 65,528-byte profile, main/owner/I/O/receiver on CPU0/1/2/3, three unprofiled 20s downloads at verified 1.803 GHz give 306.9–316.5 Mbps and VPP 53.9–55.8% of one core; zero recorded Product rejects/drops/write failures, clean stops and original device settings restored | [Baseline, frequency and affinity evidence](2026-10-22_TCP_SINGLE_LITTLE_MAXFREQ_BASELINE.md) |
 | User-selected TCP send capacity (2026-10-22): default 65,528-byte HEV ring/sndbuf, explicit 32,768-byte override; 54 real transport checks, Host/Android/APK cache and stale-stage packaging checks pass. No new device or performance campaign | [Default implementation and local verification](2026-10-22_TCP_SEND64_DEFAULT.md) |
 | Historical approximately 500 Mbps conditions (2026-10-22 investigation of October 21 records): ordinary dynamic-frequency, little-core N2/TUN-owner0, 32 KiB, one download plus one probe; separate frequency interventions, native controls and current N1 differences | [Complete conditions and original evidence](2026-10-22_PREVIOUS_500MBPS_CONDITIONS.md) |
 | ADR-0012 Product function (2026-10-22): controlled Pixel Root/VPN `N=1` and `N=3`, dedicated VPN I/O, original-buffer completion, bounded faults, fragments, ordinary protection and clean stop; release and performance remain separate | [S303 Android qualification](2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md) |

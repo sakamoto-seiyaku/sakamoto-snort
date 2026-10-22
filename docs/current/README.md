@@ -62,8 +62,10 @@ its existing buffer profile. From October 22, the user selects a 65,528-byte
 TCP ring/sndbuf default (approximately 64 KiB), retaining the explicit 32,768-byte
 override and unchanged 32,768-byte receive window; see the
 [capacity decision](../adr/0007-owner-local-lwip-direct-egress.md#2026-10-22-user-selected-tcp-send-buffer-capacity).
-TCP batch and readiness gating remain opt-in. This capacity selection has no new
-device or performance qualification. The earlier 32 KiB default
+TCP batch and readiness gating remain opt-in. The
+[N1 little-core baseline at 1.803 GHz](../testing/2026-10-22_TCP_SINGLE_LITTLE_MAXFREQ_BASELINE.md)
+records three current-configuration downloads; it does not isolate a capacity
+or frequency benefit. The earlier 32 KiB default
 20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
 TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
