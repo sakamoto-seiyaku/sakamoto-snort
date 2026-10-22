@@ -4524,6 +4524,8 @@ void product_packet_graph_dns_request_transport (vlib_main_t *vm, uint64_t gener
   if (!vm || !vm->thread_index || vm->thread_index > product_packet_graph_worker_count ()) return;
   product_dns_request_transport (&product_packet_graph_main.dns_requests[vlib_get_worker_index (vm->thread_index)],
     generation, token, incarnation, session, epoch, context, known);
+  product_dns_tcp_transport (&product_packet_graph_main.dns_tcp[vlib_get_worker_index (vm->thread_index)],
+    generation, incarnation, session, epoch, context, known);
 }
 
 void product_packet_graph_dns_transport_bound (vlib_main_t *vm, uint64_t generation,
@@ -4531,6 +4533,8 @@ void product_packet_graph_dns_transport_bound (vlib_main_t *vm, uint64_t generat
 {
   if (!vm || !vm->thread_index || vm->thread_index > product_packet_graph_worker_count ()) return;
   product_dns_transport_bound (&product_packet_graph_main.dns_requests[vlib_get_worker_index (vm->thread_index)],
+    generation, session, epoch, context, known);
+  product_dns_tcp_transport_bound (&product_packet_graph_main.dns_tcp[vlib_get_worker_index (vm->thread_index)],
     generation, session, epoch, context, known);
 }
 
@@ -4696,7 +4700,10 @@ product_packet_graph_dns_tcp_flow_facts (void *opaque, product_l4_policy_packet_
   packet->protocol_set = entry ? entry->lpi.protocols : 0;
   packet->protocol_set_known = entry ? entry->lpi.available : 0;
   packet->sni_result = entry ? entry->sni.result : 0;
-  identity->incarnation = entry ? entry->incarnation : 0;
+  /* Return lineage comes from the exact outstanding Adapter token. Missing
+   * current Flow facts cannot relabel it as a new or unknown incarnation. */
+  if (context->lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
+    identity->incarnation = entry ? entry->incarnation : 0;
   return 0;
 }
 
@@ -4745,9 +4752,9 @@ product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
   product_dns_tcp_graph_t *context)
 {
   clib_memset (context, 0, sizeof (*context));
-  /* S313 is Root original TCP only. VPN TCP admission/return is qualified by
-   * its subsequent slice; UDP keeps the established shared path above. */
-  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+  if ((lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+       lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+       lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN) ||
       lease->facts.protocol != 6 || lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE ||
       !lease->policy_owner_ready || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE ||
       !((lease->platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT && lease->facts.destination_port == 53) ||
@@ -4765,7 +4772,11 @@ product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
   context->vm = vm; context->lease = lease; context->snapshot = snapshot; context->buffer_index = buffer_index;
   context->flow.entry = product_flow_entry_current (product_packet_graph_main.flow_pools[owner],
     &lease->assignment, identity.generation, identity.now_us, &context->flow.slot);
-  if ((lease->facts.tcp_flags & 2) && context->flow.entry)
+  if (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
+      context->flow.entry && context->flow.entry->incarnation != identity.incarnation)
+    { context->flow.entry = NULL; context->flow.slot = UINT32_MAX; }
+  if ((lease->facts.tcp_flags & 2) && context->flow.entry &&
+      lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN)
     {
       product_tcp_state_t candidate = context->flow.entry->protocol_state.tcp;
       product_flow_direction_t direction = lease->assignment.source_is_a == context->flow.entry->origin_is_endpoint_a
@@ -4918,7 +4929,9 @@ product_packet_graph_policy_on_owner (
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
   if (result == PRODUCT_PACKET_OK && observation.entry &&
-      lease->facts.protocol == 6 && lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE)
+      lease->facts.protocol == 6 &&
+      (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+       lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN))
     {
       product_dns_context_t context = {0};
       product_packet_graph_l4_packet_projection (lease, &context.packet);
@@ -5383,7 +5396,7 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
   product_dns_resources_t resources = product_dns_resources ();
   product_policy_snapshot_t snapshot;
   product_policy_snapshot_acquire (g, &snapshot);
-  vlib_cli_output (vm, "dns.profile=original enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=%u root=1 vpn=1 response=1 root_tcp=1 vpn_tcp=0 request_limit_per_owner=%u request_state_bytes_per_owner=%u request_state_bytes_total=%llu aliases_limit=%u request_timeout_us=%llu owned_work_limit_per_owner=%u owned_work_limit_total=%llu",
+  vlib_cli_output (vm, "dns.profile=original enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=%u root=1 vpn=1 response=1 root_tcp=1 vpn_tcp=1 request_limit_per_owner=%u request_state_bytes_per_owner=%u request_state_bytes_total=%llu aliases_limit=%u request_timeout_us=%llu owned_work_limit_per_owner=%u owned_work_limit_total=%llu",
     g->enabled && g->accepting &&
       (g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE ||
        g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN),
@@ -5392,7 +5405,8 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
     PRODUCT_DNS_MESSAGE_MAX, PRODUCT_DNS_CODEC_BYTES,
     (unsigned long long) product_packet_graph_worker_count () * PRODUCT_DNS_CODEC_BYTES,
     (unsigned long long) resources.codec_live_bytes, (unsigned long long) resources.active_operations,
-    g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
+    g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE ||
+      g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
     PRODUCT_DNS_REQUESTS, (unsigned) sizeof (product_dns_owner_t),
     (unsigned long long) product_packet_graph_worker_count () * sizeof (product_dns_owner_t),
     PRODUCT_DNS_NAMES - 1, (unsigned long long) PRODUCT_DNS_REQUEST_US,

@@ -57,6 +57,12 @@ uint64_t product_dns_tcp_deadline (const product_dns_tcp_owner_t *);
 void product_dns_tcp_bind (product_dns_tcp_owner_t *, product_dns_owner_t *,
   const product_dns_context_t *, const product_dns_identity_t *);
 void product_dns_tcp_end (product_dns_tcp_owner_t *, uint64_t generation, uint64_t incarnation);
+/* Existing Direct input/broker events bind an admitted framing incarnation.
+ * Return stamps are checked against this identity, never used to create it. */
+void product_dns_tcp_transport (product_dns_tcp_owner_t *, uint64_t generation,
+  uint64_t incarnation, uint64_t session, uint64_t epoch, uint32_t context, int known);
+void product_dns_tcp_transport_bound (product_dns_tcp_owner_t *, uint64_t generation,
+  uint64_t session, uint64_t epoch, uint32_t context, int known);
 void product_dns_tcp_process (product_dns_tcp_owner_t *, product_dns_owner_t *,
   const product_dns_tcp_input_t *, product_dns_tcp_observer_t, void *);
 #endif

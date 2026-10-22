@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Actual Root TCP graph glue + shared DNS core with controlled Flow/VPP dependencies.
+"""Actual Root/VPN TCP graph glue + shared DNS core with controlled Flow/VPP dependencies.
 
 This is a Host semantic/integration seam, not NFQUEUE, Android caller or wire proof.
 The Product functions and record producer are extracted unchanged at test time.
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / 'src/product/vpp/product_packet_graph.c').read_text()
 
 def function(name, result):
-    match = re.search(r'\n' + name + r'\s*\([^;]*?\n\{', SOURCE, re.S)
+    match = re.search(r'\n(?:void )?' + name + r'\s*\([^;]*?\n\{', SOURCE, re.S)
     assert match, name
     tokens = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|[{}]', re.S)
     depth = 0
@@ -22,7 +22,7 @@ def function(name, result):
         if token.group() == '{': depth += 1
         elif token.group() == '}':
             depth -= 1
-            if not depth: return result + '\n' + SOURCE[match.start() + 1:token.end()] + '\n'
+            if not depth: return result + '\n' + re.sub(r'^void ', '', SOURCE[match.start() + 1:token.end()]) + '\n'
     raise AssertionError(name)
 
 def typedef(name):
@@ -47,6 +47,7 @@ static vlib_buffer_t buffer;
 static u64 clock_us=100;
 static unsigned flow_present, flow_observations, retire_during_flow;
 static u64 fresh_protocols;
+static u64 return_incarnation, return_session, return_epoch;
 static product_flow_entry_t entry;
 static char pool_marker;
 static vlib_main_t vm={1};
@@ -95,7 +96,8 @@ const product_flow_entry_t *product_flow_entry_current(product_flow_runtime_t *p
  const product_owner_assignment_t *assignment,uint64_t generation,uint64_t now,uint32_t *slot)
 {(void)assignment;(void)now;assert(pool==(void*)&pool_marker && generation==77);*slot=flow_present?3:UINT32_MAX;return flow_present?&entry:NULL;}
 static int product_vpn_tun_return_context(u64 generation,u64 token,u64 *inc,u64 *session,u64 *epoch)
-{(void)generation;(void)token;(void)inc;(void)session;(void)epoch;assert(0);return 0;}
+{assert(generation==77 && token);*inc=return_incarnation;*session=return_session;*epoch=return_epoch;return !!return_session;}
+static unsigned product_packet_graph_worker_count(void) {return 2;}
 static void product_packet_graph_flow_observe(vlib_main_t *v,u32 index,product_packet_lease_t *lease,
  const product_packet_graph_policy_evaluation_t *evaluation,int trace,product_flow_entry_observation_t *out)
 {
@@ -168,6 +170,7 @@ static void reset(unsigned family)
  lease.assignment.source_is_a=1;lease.assignment.valid=1;
  memset(&entry,0,sizeof(entry));entry.incarnation=8;entry.origin_is_endpoint_a=1;
  flow_present=flow_observations=retire_during_flow=record_count=0;fresh_protocols=0;
+ return_incarnation=return_session=return_epoch=0;
 }
 static product_dns_tcp_graph_t packet_copied(uint32_t sequence,const uint8_t *bytes,size_t length,uint8_t flags,size_t copied)
 {
@@ -293,11 +296,116 @@ static void insufficient_coverage_keeps_actual_root_records_and_generic_verdict(
  assert(context.pending_valid && context.pending.stage==2 && context.pending.facts.correlation==PRODUCT_DNS_UNMATCHED);
  assert(context.pending.facts.question.coverage==PRODUCT_DNS_TCP_MIDSTREAM);
 }
-static void root_eligibility_does_not_enable_vpn_tcp(void)
+static void injected_packets_do_not_acquire_original_path_framing(void)
 {
  reset(4);
- for(unsigned provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;provenance<=PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED;++provenance) {
-  lease.platform.provenance=provenance;product_dns_tcp_graph_t context=packet(101,frame,sizeof(frame),0x18);
+ lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED;
+ product_dns_tcp_graph_t context=packet(101,frame,sizeof(frame),0x18);
+ assert(!context.complete && !context.pending_valid && !product_packet_graph_main.dns_tcp[0].active);
+}
+static void vpn_direct_queries_share_framing_and_per_message_policy(void)
+{
+ for(unsigned family=4;family<=6;family+=2) {
+  reset(family);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+  anchor();
+  product_l4_policy_rule_t deny=rule(314,2,0);
+  assert(!product_l4_policy_compile(&bank.view,&deny,1));
+  product_dns_tcp_graph_t context=packet(101,frame,1,0x18);
+  assert(!context.complete && context.pending_valid);
+  context=packet(102,frame+1,sizeof(frame)-1,0x18);
+  assert(context.complete && context.match.rule_id==314 && context.match.actual_action==2);
+  assert(record_count==1 && records[0].adapter_profile==2 && records[0].protocol==6);
+  assert(records[0].caller==PRODUCT_DNS_CALLER_PLATFORM_APP && records[0].message_sequence==1);
+ }
+}
+static void vpn_direct_binding_preserves_original_query_and_actual_return_context(void)
+{
+ for(unsigned family=4;family<=6;family+=2) {
+  reset(family);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+  lease.platform.availability|=PRODUCT_PLATFORM_CONTEXT_KNOWN;lease.platform.network_context_id=3;
+  anchor();
+  /* The Direct input accepts SYN before the asynchronous protect/bind reply. */
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,0,0,0);
+  product_packet_graph_dns_transport_bound(&vm,77,71,9,7,1);
+  packet(101,frame,sizeof(frame),0x18);
+  const uint64_t query_token=lease.origin_obligation_id;
+  product_packet_graph_dns_request_transport(&vm,77,query_token,8,71,9,7,1);
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+  lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+  lease.platform.availability=PRODUCT_PLATFORM_CONTEXT_KNOWN;lease.platform.network_context_id=7;
+  lease.facts.source_port=53;lease.facts.destination_port=40000;
+  uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+  memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+  memcpy(lease.facts.destination_address,address,16);
+  return_incarnation=8;return_session=71;return_epoch=9;
+  packet(500,NULL,0,0x12);
+  uint8_t response[sizeof(frame)];memcpy(response,frame,sizeof(frame));response[4]=0x81;response[5]=0x80;
+  product_dns_tcp_graph_t context=packet(501,response,sizeof(response),0x18);
+  assert(context.complete && record_count==2);
+  assert(records[1].correlation==PRODUCT_DNS_CORRELATED && records[1].query_token==query_token);
+  assert(records[1].query_incarnation==8 && records[1].transport_session==71 && records[1].underlay_epoch==9);
+  assert(records[1].caller==PRODUCT_DNS_CALLER_PLATFORM_APP && records[1].packet_uid==UINT32_MAX);
+  assert(records[1].network==7 && records[1].adapter_profile==2 && records[1].packet_direction==1);
+  assert(product_packet_graph_main.dns_tcp[0].active==1);
+ }
+}
+static void return_stamp_survives_an_unavailable_current_flow(void)
+{
+ reset(4);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+ product_dns_tcp_graph_t context={.lease=&lease,.flow_observed=1};
+ product_l4_policy_packet_t packet={0};
+ product_dns_identity_t identity={.generation=77,.incarnation=8,.transport_session=71,.underlay_epoch=9};
+ assert(!product_packet_graph_dns_tcp_flow_facts(&context,&packet,&identity));
+ assert(identity.incarnation==8 && identity.transport_session==71 && identity.underlay_epoch==9);
+ assert(!packet.ct_state_known && !packet.flow_direction_known);
+}
+static void stale_direct_returns_cannot_change_current_framing_or_reopen_a_closed_flow(void)
+{
+ for(unsigned scenario=0;scenario<7;++scenario) {
+  reset(scenario%2?6:4);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;anchor();
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,9,0,0);
+  packet(101,frame,sizeof(frame),0x18);uint64_t query_token=lease.origin_obligation_id;
+  product_packet_graph_dns_request_transport(&vm,77,query_token,8,71,9,0,0);
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+  lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+  lease.facts.source_port=53;lease.facts.destination_port=40000;
+  uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+  memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+  memcpy(lease.facts.destination_address,address,16);
+  return_incarnation=8;return_session=71;return_epoch=9;
+  packet(500,NULL,0,0x12);
+  if(scenario==0) return_incarnation=7;
+  if(scenario==1) return_session=70;
+  if(scenario==2) return_epoch=8;
+  if(scenario==3) return_session=return_epoch=return_incarnation=0;
+  if(scenario==4) ++network.revision;
+  if(scenario==5) {lease.platform.availability|=PRODUCT_PLATFORM_CONTEXT_KNOWN;lease.platform.network_context_id=3;}
+  if(scenario==6) {
+   /* Old-generation/incarnation events have no effect on the current flow. */
+   product_dns_tcp_end(&product_packet_graph_main.dns_tcp[0],76,8);
+   product_dns_tcp_end(&product_packet_graph_main.dns_tcp[0],77,7);
+   product_packet_graph_dns_request_transport(&vm,76,query_token,8,99,99,0,0);
+   product_packet_graph_dns_transport_bound(&vm,76,71,99,0,0);
+   product_packet_graph_dns_request_transport(&vm,77,query_token,7,99,99,0,0);
+   return_session=99;
+  }
+  uint8_t response[sizeof(frame)];memcpy(response,frame,sizeof(frame));response[4]=0x81;response[5]=0x80;
+  product_dns_tcp_graph_t context=packet(501,response,7,0x18);
+  assert(!context.complete && context.pending_valid && context.pending.facts.question.coverage==PRODUCT_DNS_TCP_MIDSTREAM);
+  assert(product_packet_graph_main.dns_tcp[0].active==1 && record_count==1);
+  return_incarnation=8;return_session=71;return_epoch=9;network.revision=5;lease.platform.availability=0;
+  context=packet(501,response,sizeof(response),0x18);
+  assert(context.complete && record_count==2 && records[1].correlation==PRODUCT_DNS_CORRELATED);
+  assert(records[1].query_token==query_token && records[1].message_sequence==1);
+  product_dns_tcp_end(&product_packet_graph_main.dns_tcp[0],77,8);
+  assert(!product_packet_graph_main.dns_tcp[0].active && !product_packet_graph_main.dns_tcp[0].allocated_bytes);
+  context=packet(501,response,sizeof(response),0x18);
+  assert(!context.complete && context.pending_valid && !product_packet_graph_main.dns_tcp[0].active);
+  product_dns_tcp_stop(&product_packet_graph_main.dns_tcp[0]);
+  product_dns_owner_stop(&product_packet_graph_main.dns_requests[0]);
+  product_packet_graph_dns_request_transport(&vm,77,query_token,8,71,9,0,0);
+  product_packet_graph_dns_transport_bound(&vm,77,71,9,0,0);
+  context=packet(501,response,sizeof(response),0x18);
   assert(!context.complete && !context.pending_valid && !product_packet_graph_main.dns_tcp[0].active);
  }
 }
@@ -350,15 +458,19 @@ static void every_coalesced_malformed_frame_keeps_its_own_normal_identity(void)
 }
 int main(void)
 {
+ stale_direct_returns_cannot_change_current_framing_or_reopen_a_closed_flow();
+ return_stamp_survives_an_unavailable_current_flow();
+ vpn_direct_binding_preserves_original_query_and_actual_return_context();
+ vpn_direct_queries_share_framing_and_per_message_policy();
  every_coalesced_malformed_frame_keeps_its_own_normal_identity();
  fresh_post_facts_and_rank_advance_flow_once_for_coalesced_frames();
  pre_drop_skips_flow_and_incomplete_bytes_keep_the_normal_final_decision();
  current_flow_retirement_cannot_reuse_or_free_an_active_byte_borrow();
  insufficient_coverage_keeps_actual_root_records_and_generic_verdict();
- root_eligibility_does_not_enable_vpn_tcp();
+ injected_packets_do_not_acquire_original_path_framing();
  for(unsigned n=0;n<2;++n) {product_dns_tcp_stop(&product_packet_graph_main.dns_tcp[n]);product_dns_owner_stop(&product_packet_graph_main.dns_requests[n]);}
  product_domains_destroy(bank.domains);
- puts("Root TCP graph full PRE/Flow/POST facts, coalesced identity, coverage and retirement: PASS");
+ puts("Root/VPN TCP graph PRE/Flow/POST, Direct lineage, coalesced identity, coverage and retirement: PASS");
 }
 """
 
@@ -371,6 +483,8 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-dns-tcp-graph-') as tmp:
         + function('product_packet_graph_l4_direction_from_platform', 'static void')
         + function('product_packet_graph_l4_packet_projection', 'static void')
         + function('product_packet_graph_dns_identity', 'static product_dns_identity_t')
+        + function('product_packet_graph_dns_request_transport', 'void')
+        + function('product_packet_graph_dns_transport_bound', 'void')
         + function('product_packet_graph_dns_record', 'static void')
         + typedef('product_dns_tcp_graph_t')
         + function('product_packet_graph_dns_tcp_flow_facts', 'static int')

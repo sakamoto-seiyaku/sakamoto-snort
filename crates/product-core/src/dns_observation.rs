@@ -86,7 +86,7 @@ impl DnsRecord {
                     && (self.query_flags & 0x8000 != 0 || header_unavailable)))
             && self.coverage >= 1 && self.coverage <= if self.protocol == 6 { 11 } else { 5 }
             && (if self.protocol == 6 {
-                self.adapter_profile == 1 && matches!(self.packet_direction, 1 | 3)
+                matches!(self.adapter_profile, 1 | 2) && matches!(self.packet_direction, 1 | 3)
                     && self.tcp_continuation <= 1
                     && (self.tcp_continuation == 1 || self.packet_direction == self.direction)
                     && (self.coverage != 1 || self.message_sequence != 0)
@@ -333,6 +333,35 @@ mod tests {
             let mut invalid = data;
             invalid[offset] = value;
             assert!(DnsRecord::decode(&invalid).is_none(), "offset {offset}");
+        }
+    }
+    #[test]
+    fn vpn_tcp_uses_the_normal_frame_contract_without_weakening_return_binding() {
+        let mut data = [0; 592];
+        data[..480].copy_from_slice(&wire_record());
+        data[..2].copy_from_slice(&592u16.to_le_bytes());
+        data[2] = 7; data[115] = 6; data[570] = 2;
+        data[559] = 9; data[572..576].copy_from_slice(&10123u32.to_le_bytes());
+        data[576..584].copy_from_slice(&1u64.to_le_bytes()); data[589] = 3;
+        let query = DnsRecord::decode(&data).expect("VPN TCP query belongs to normal history");
+        assert_eq!(query.adapter_profile, 2);
+        data[24..32].copy_from_slice(&8u64.to_le_bytes());
+        data[96..100].copy_from_slice(&3u32.to_le_bytes());
+        data[102..104].copy_from_slice(&0x8180u16.to_le_bytes());
+        data[116] = 1; data[124] = 2; data[589] = 1;
+        data[480..488].copy_from_slice(&310u64.to_le_bytes());
+        data[488..496].copy_from_slice(&77u64.to_le_bytes());
+        data[544..552].copy_from_slice(&8u64.to_le_bytes());
+        data[552..554].copy_from_slice(&1u16.to_le_bytes());
+        data[558] = 1;
+        assert!(DnsRecord::decode(&data).is_none(), "correlated VPN returns require actual binding");
+        data[528..536].copy_from_slice(&71u64.to_le_bytes());
+        data[536..544].copy_from_slice(&9u64.to_le_bytes());
+        let reply = DnsRecord::decode(&data).expect("stamped VPN TCP response");
+        assert_eq!((reply.transport_session, reply.underlay_epoch, reply.query_incarnation), (71, 9, 8));
+        for (offset, value) in [(570, 0), (570, 3), (589, 0), (558, 6)] {
+            let mut invalid = data; invalid[offset] = value;
+            assert!(DnsRecord::decode(&invalid).is_none(), "guard offset {offset}");
         }
     }
     #[test]

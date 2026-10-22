@@ -19,7 +19,8 @@ struct product_dns_tcp_flow {
   dns_tcp_side_t side[2];
   product_dns_tcp_event_t fact[2];
   product_dns_policy_identity_t checked;
-  uint8_t fact_valid[2], blocked, processing, retired;
+  uint32_t bound_context;
+  uint8_t fact_valid[2], blocked, processing, retired, bound_context_known;
 };
 _Static_assert(sizeof(product_dns_tcp_flow_t) <= PRODUCT_DNS_TCP_FLOW_BYTES,
   "TCP observation is bounded by the bidirectional flow budget");
@@ -38,18 +39,24 @@ static int tuple(const product_l4_policy_packet_t *a,const product_l4_policy_pac
 }
 static int context_matches(const product_dns_tcp_flow_t *f,const product_dns_tcp_input_t *i)
 {
-  return f->identity.generation==i->identity.generation &&
-    f->identity.network_revision==i->identity.network_revision &&
-    f->identity.profile==i->identity.profile &&
-    f->context.packet.network_context_known==i->context.packet.network_context_known &&
+  if(f->identity.generation!=i->identity.generation ||
+     f->identity.network_revision!=i->identity.network_revision ||
+     f->identity.profile!=i->identity.profile ||
+     (f->identity.incarnation && i->identity.incarnation &&
+       f->identity.incarnation!=i->identity.incarnation) ||
+     !(tuple(&f->context.packet,&i->context.packet,0) ||
+       tuple(&f->context.packet,&i->context.packet,1))) return 0;
+  if(i->identity.profile==2 && i->context.packet.direction==1)
+    return i->identity.incarnation && f->identity.incarnation==i->identity.incarnation &&
+      i->identity.transport_session && f->identity.transport_session==i->identity.transport_session &&
+      i->identity.underlay_epoch && f->identity.underlay_epoch==i->identity.underlay_epoch &&
+      f->bound_context_known==i->context.packet.network_context_known &&
+      (!f->bound_context_known || f->bound_context==i->context.packet.network_context_id);
+  return f->context.packet.network_context_known==i->context.packet.network_context_known &&
     (!f->context.packet.network_context_known ||
       f->context.packet.network_context_id==i->context.packet.network_context_id) &&
     f->context.packet.ifindex_known==i->context.packet.ifindex_known &&
-    (!f->context.packet.ifindex_known || f->context.packet.ifindex==i->context.packet.ifindex) &&
-    (!f->identity.incarnation || !i->identity.incarnation ||
-      f->identity.incarnation==i->identity.incarnation) &&
-    (tuple(&f->context.packet,&i->context.packet,0) ||
-      tuple(&f->context.packet,&i->context.packet,1));
+    (!f->context.packet.ifindex_known || f->context.packet.ifindex==i->context.packet.ifindex);
 }
 void product_dns_tcp_start(product_dns_tcp_owner_t *owner,uint64_t generation)
 {
@@ -102,6 +109,33 @@ void product_dns_tcp_bind(product_dns_tcp_owner_t *owner,product_dns_owner_t *re
                 request->identity.incarnation=identity->incarnation;
             }
       }
+}
+void product_dns_tcp_transport(product_dns_tcp_owner_t *owner,uint64_t generation,
+  uint64_t incarnation,uint64_t session,uint64_t epoch,uint32_t context,int known)
+{
+  if(!owner || !owner->accepting || owner->generation!=generation || !incarnation || !session) return;
+  for(unsigned n=0;n<PRODUCT_DNS_TCP_FLOWS;++n)
+    {
+      product_dns_tcp_flow_t *f=owner->flows[n];
+      if(!f || f->identity.profile!=2 || f->identity.incarnation!=incarnation ||
+        (f->identity.transport_session && f->identity.transport_session!=session) ||
+        (f->identity.underlay_epoch && f->identity.underlay_epoch!=epoch)) continue;
+      f->identity.transport_session=session;f->identity.underlay_epoch=epoch;
+      f->bound_context=context;f->bound_context_known=!!known;
+    }
+}
+void product_dns_tcp_transport_bound(product_dns_tcp_owner_t *owner,uint64_t generation,
+  uint64_t session,uint64_t epoch,uint32_t context,int known)
+{
+  if(!owner || !owner->accepting || owner->generation!=generation || !session || !epoch) return;
+  for(unsigned n=0;n<PRODUCT_DNS_TCP_FLOWS;++n)
+    {
+      product_dns_tcp_flow_t *f=owner->flows[n];
+      if(!f || f->identity.profile!=2 || f->identity.transport_session!=session ||
+        f->identity.underlay_epoch) continue;
+      f->identity.underlay_epoch=epoch;
+      f->bound_context=context;f->bound_context_known=!!known;
+    }
 }
 void product_dns_tcp_expire(product_dns_tcp_owner_t *owner,uint64_t now)
 {
@@ -445,6 +479,10 @@ void product_dns_tcp_process(product_dns_tcp_owner_t *owner,product_dns_owner_t 
     }
   if(!flow)
     {
+      /* An old or unstamped Direct return still follows ordinary packet
+       * completion, but cannot establish or mutate a framing incarnation. */
+      if(input->identity.profile==2 && input->context.packet.direction==1)
+        {if(input->length) coverage(input,PRODUCT_DNS_TCP_MIDSTREAM,observer,context);return;}
       if(empty==PRODUCT_DNS_TCP_FLOWS || !(flow=calloc(1,sizeof(*flow))))
         {++owner->capacity;if(input->length) coverage(input,PRODUCT_DNS_CAPACITY,observer,context);return;}
       flow->context=input->context;flow->context.domains=NULL;

@@ -415,6 +415,16 @@ mod live {
         #[test]
         #[ignore = "requires the actual Product C producer executable"]
         fn native_tcp_dns_frames_and_continuation_survive_sqlite_reopen() {
+            check_native_tcp_dns_frames("dns-tcp", 1);
+        }
+
+        #[test]
+        #[ignore = "requires the actual Product C producer executable"]
+        fn native_vpn_tcp_dns_frames_and_continuation_survive_sqlite_reopen() {
+            check_native_tcp_dns_frames("dns-vpn-tcp", 2);
+        }
+
+        fn check_native_tcp_dns_frames(command: &str, profile: u64) {
             let root = std::env::temp_dir().join(format!("s313-observation-{}", std::process::id()));
             std::fs::create_dir(&root).unwrap();
             let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
@@ -426,7 +436,7 @@ mod live {
             output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
             let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
             line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
-            writeln!(input, "dns-tcp").unwrap(); input.flush().unwrap();
+            writeln!(input, "{command}").unwrap(); input.flush().unwrap();
             line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "DNS-TCP 11");
             let check = |reply: &serde_json::Value| {
                 assert_eq!(reply["storage"], "sqlite");
@@ -455,7 +465,15 @@ mod live {
                 assert_eq!(record["query_policy_revision"], 3);
                 assert_eq!(record["policy_revision"], 9);
                 assert_eq!(record["actual_action"], 2);
-                for row in rows.values() { assert_eq!(row["record"]["protocol"], 6); }
+                for row in rows.values() {
+                    assert_eq!(row["record"]["protocol"], 6);
+                    assert_eq!(row["record"]["adapter_profile"], profile);
+                    if profile == 2 && row["record"]["correlation"] == 1 && row["record"]["stage"] == 2 {
+                        assert_eq!(row["record"]["transport_session"], 71);
+                        assert_eq!(row["record"]["underlay_epoch"], 9);
+                        assert_eq!(row["record"]["query_incarnation"], 8);
+                    }
+                }
             };
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {

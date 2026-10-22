@@ -151,7 +151,7 @@ static unsigned protocol_gap_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   return n;
 }
-static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned tcp) {
+static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned tcp, unsigned profile) {
   product_dns_observation_record_t r = {
     .length=sizeof(r), .version=PRODUCT_OBSERVATION_VERSION, .flags=PRODUCT_OBSERVATION_DNS,
     .generation=77, .token=17, .incarnation=8, .mono_us=100, .activity_utc_us=(activity_base + 1000000),
@@ -161,7 +161,7 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned 
     .family=4, .protocol=17, .direction=3, .availability=9, .caller=1, .coverage=1,
     .declared_action=1, .actual_action=1, .domain_available=1, .stage=1,
     .source_address={192,0,2,2}, .resolver_address={192,0,2,53},
-    .name="example.com", .rule_name="original allow", .network_revision=5, .adapter_profile=1,
+    .name="example.com", .rule_name="original allow", .network_revision=5, .adapter_profile=profile,
     .packet_uid=10123, .packet_availability=9,
   };
   if (tcp) {
@@ -178,6 +178,7 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned 
   r.query_token=17; r.query_policy_generation=77; r.query_policy_revision=3;
   r.query_policy_hash=123; r.query_winner=310; r.query_incarnation=8;
   r.matched_requests=1; r.candidate_count=2; r.correlation=1;
+  if (profile==2) { r.transport_session=71; r.underlay_epoch=9; }
   r.declared_action=r.actual_action=2;
   memset(r.rule_name,0,sizeof(r.rule_name)); memcpy(r.rule_name,"reply deny",10);
   n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
@@ -257,10 +258,12 @@ int main (int argc, char **argv) {
         product_observation_account (t, channel / 2, 0, 60);
       }
       printf ("EMITTED %u\n", admitted);
+    } else if (!strncmp (command, "dns-vpn-tcp", 11)) {
+      printf ("DNS-TCP %u\n", dns_reply_fixture (t, 1, 2));
     } else if (!strncmp (command, "dns-tcp", 7)) {
-      printf ("DNS-TCP %u\n", dns_reply_fixture (t, 1));
+      printf ("DNS-TCP %u\n", dns_reply_fixture (t, 1, 1));
     } else if (!strncmp (command, "dns-reply", 9)) {
-      printf ("DNS-REPLY %u\n", dns_reply_fixture (t, 0));
+      printf ("DNS-REPLY %u\n", dns_reply_fixture (t, 0, 1));
     } else if (!strncmp (command, "attribution", 11)) {
       printf ("ATTRIBUTION %u\n", attribution_fixture (t));
     } else if (!strncmp (command, "blocked", 7)) {
