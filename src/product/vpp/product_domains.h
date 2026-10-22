@@ -16,5 +16,10 @@ int product_domains_build(const sakamoto_product_domains_t *, product_domains_t 
 void product_domains_destroy(product_domains_t *);
 /* No allocation or mutation. Input is a validated network name, not a URL. */
 uint64_t product_domains_match(const product_domains_t *, const uint8_t *, size_t);
+/* DNS presentation input may include service-label underscores. An escaped,
+ * binary or otherwise unrepresentable name is unavailable, never membership0.
+ * Source/import validation and existing SNI matching retain their grammar. */
+int product_domains_lookup_dns(const product_domains_t *, const uint8_t *, size_t,
+                                uint64_t *memberships);
 size_t product_domains_bytes(const product_domains_t *);
 #endif

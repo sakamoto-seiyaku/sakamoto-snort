@@ -13,6 +13,7 @@ pub use rule_config::{
 };
 pub use rule_import::{export_rule_config, prepare_rule_import};
 pub mod observation;
+pub mod dns_observation;
 mod observation_service;
 pub mod observation_store;
 mod session;

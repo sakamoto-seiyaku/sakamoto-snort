@@ -57,6 +57,22 @@ static uid_t consumer_uid;
 static int claimed;
 static char socket_path[sizeof (((struct sockaddr_un *) 0)->sun_path)];
 
+void product_observation_dns (vlib_main_t *vm, const product_dns_observation_record_t *input) {
+  unsigned owner = vlib_get_worker_index (vm->thread_index);
+  if (!transport || !input || owner >= PRODUCT_OBSERVATION_OWNERS ||
+      input->generation != owners[owner].generation) return;
+  product_dns_observation_record_t record = *input;
+  record.length = sizeof (record);
+  record.version = PRODUCT_OBSERVATION_VERSION;
+  record.flags = PRODUCT_OBSERVATION_DNS;
+  record.owner = owner;
+  record.mono_us = (uint64_t) (vlib_time_now (vm) * 1000000.0);
+  struct timespec wall;
+  if (!clock_gettime (CLOCK_REALTIME, &wall))
+    record.activity_utc_us = (uint64_t) wall.tv_sec * 1000000U + wall.tv_nsec / 1000U;
+  (void) product_observation_publish (transport, owner * 2, &record, sizeof (record));
+}
+
 static void remove_pending (observation_owner_t *o, uint32_t slot) {
   observation_slot_t *s = &o->slots[slot];
   if (!s->due) return;

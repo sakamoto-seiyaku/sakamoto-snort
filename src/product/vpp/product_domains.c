@@ -57,7 +57,7 @@ void *product_domains_rax_realloc(void *p, size_t bytes) {
     return next;
 }
 
-static int name_valid(const uint8_t *name, size_t length) {
+static int name_valid(const uint8_t *name, size_t length, int service_labels) {
     if (!length || length > 253) return 0;
     size_t label = 0;
     for (size_t i = 0; i < length; ++i) {
@@ -67,7 +67,7 @@ static int name_valid(const uint8_t *name, size_t length) {
             label = 0;
         } else {
             if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                  (c >= '0' && c <= '9') || c == '-') ||
+                  (c >= '0' && c <= '9') || c == '-' || (service_labels && c == '_')) ||
                 (!label && c == '-') || ++label > 63) return 0;
         }
     }
@@ -84,7 +84,7 @@ int product_domains_normalize(sakamoto_product_domains_t *source) {
         for (size_t j = entry->length; j < sizeof entry->name; ++j)
             if (entry->name[j]) return PRODUCT_DOMAINS_INVALID;
         if (entry->name[entry->length - 1] == '.') entry->name[--entry->length] = 0;
-        if (!name_valid(entry->name, entry->length)) return PRODUCT_DOMAINS_INVALID;
+        if (!name_valid(entry->name, entry->length, 0)) return PRODUCT_DOMAINS_INVALID;
         for (size_t j = 0; j < entry->length; ++j)
             if (entry->name[j] >= 'A' && entry->name[j] <= 'Z') entry->name[j] += 'a' - 'A';
     }
@@ -107,7 +107,7 @@ int product_domains_build(const sakamoto_product_domains_t *source, product_doma
         source->entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES) return PRODUCT_DOMAINS_INVALID;
     for (uint32_t i = 0; i < source->entry_count; ++i)
         if (source->entries[i].list >= source->list_count || source->entries[i].mode > 1 ||
-            !name_valid(source->entries[i].name, source->entries[i].length))
+            !name_valid(source->entries[i].name, source->entries[i].length, 0))
             return PRODUCT_DOMAINS_INVALID;
     if (!source->entry_count) return PRODUCT_DOMAINS_OK;
     void *heap = product_domains_memory_heap();
@@ -153,8 +153,7 @@ void product_domains_destroy(product_domains_t *domains) {
     product_domains_memory_free(domains->heap, domains);
 }
 
-uint64_t product_domains_match(const product_domains_t *domains, const uint8_t *name, size_t length) {
-    if (!domains || !name || !name_valid(name, length)) return 0;
+static uint64_t match_name(const product_domains_t *domains, const uint8_t *name, size_t length) {
     uint8_t key[SAKAMOTO_DOMAIN_NAME_BYTES];
     reverse_key(key, name, length);
     key[0] = SAKAMOTO_DOMAIN_EXACT;
@@ -168,5 +167,17 @@ uint64_t product_domains_match(const product_domains_t *domains, const uint8_t *
         if (exists) memberships |= *(const uint64_t *)value;
     }
     return memberships;
+}
+uint64_t product_domains_match(const product_domains_t *domains, const uint8_t *name, size_t length) {
+    if (!domains || !name || !name_valid(name, length, 0)) return 0;
+    return match_name(domains, name, length);
+}
+int product_domains_lookup_dns(const product_domains_t *domains, const uint8_t *name,
+                                size_t length, uint64_t *memberships) {
+    if (!memberships) return PRODUCT_DOMAINS_INVALID;
+    *memberships = 0;
+    if (!domains || !name || !name_valid(name, length, 1)) return PRODUCT_DOMAINS_INVALID;
+    *memberships = match_name(domains, name, length);
+    return PRODUCT_DOMAINS_OK;
 }
 size_t product_domains_bytes(const product_domains_t *domains) { return domains ? domains->bytes : 0; }

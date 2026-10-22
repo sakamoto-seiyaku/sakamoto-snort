@@ -3,6 +3,8 @@
 cmake_minimum_required(VERSION 3.18)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../NOTICE.tcp" DESTINATION share/licenses/sakamoto)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/rax/LICENSE" DESTINATION share/licenses/sakamoto RENAME rax-LICENSE)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/cares/upstream/LICENSE.md"
+  DESTINATION share/licenses/sakamoto RENAME c-ares-LICENSE)
 project(sakamoto_product_core_plugin LANGUAGES C CXX)
 option(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
   "Build the Root whole-path batch implementation" ON)
@@ -230,6 +232,8 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/libprotoident
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/mbedtls"
                  "${CMAKE_CURRENT_BINARY_DIR}/mbedtls")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/cares"
+                 "${CMAKE_CURRENT_BINARY_DIR}/cares")
 
 option(SAKAMOTO_PRODUCT_HOST_EVIDENCE
   "Build the Host-only installed Product graph evidence seam" OFF)
@@ -270,6 +274,7 @@ add_vpp_plugin(product_core
     product_packet.c
     product_fragment.c
     product_l4_policy.c
+    product_dns.c
     product_rule_config.c
     product_domains.c
     product_domains_memory.c
@@ -325,7 +330,8 @@ if(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS OR
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS=1)
 endif()
-target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto m)
+target_link_libraries(product_core_plugin sakamoto_hev_owner sakamoto_lpi sakamoto_quic_crypto sakamoto_dns_wire m)
+target_link_options(product_core_plugin PRIVATE -Wl,--exclude-libs,libsakamoto_dns_wire.a)
 if(SAKAMOTO_PRODUCT_HOST_EVIDENCE)
   target_compile_definitions(product_core_plugin PRIVATE
     SAKAMOTO_PRODUCT_HOST_EVIDENCE=1)

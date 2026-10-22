@@ -1,5 +1,6 @@
-//! Minimal transactional overall-window store. No raw event log or repository framework.
+//! Transactional observation windows and bounded recent DNS decisions.
 use crate::observation::{historical_protocol_label, protocol_label, protocol_mask, Attribution, FlowRecord};
+use crate::dns_observation::DnsRecord;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,6 +15,7 @@ const MAX_SNAPSHOT: u64 = 64 * 1024 * 1024;
 const MAX_BASELINES: usize = 131072;
 const MAX_END_MARKERS: usize = 262144;
 const MAX_RECENT: usize = 32768;
+const MAX_DNS_RECENT: usize = 4096;
 const MAX_MINUTES: usize = 262144;
 const MAX_DIRTY: usize = 4096;
 const MAX_EFFECT_WINDOWS: usize = 65536;
@@ -22,7 +24,7 @@ const MAX_RULE_NAMES: usize = 65536;
 const FLUSH_ROWS: usize = 2048;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 // The 256 MiB owner budget includes the retained <=64 MiB predecessor,
-// <=64 MiB database (indexes included), <=81 MiB WAL and bookkeeping. With
+// <=64 MiB database (indexes included), bounded WAL and bookkeeping. With
 // cache spilling disabled, one bounded transaction writes each database page
 // at most once at commit. Checkpoint before another transaction at 16 MiB.
 const DATABASE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -41,7 +43,8 @@ const RETENTION_ROWS_PER_BATCH: usize = 256;
 const FULL_RECLAIM_ATTEMPTS: usize = 32;
 const MAX_PROTOCOLS_PER_APP_BUCKET: usize = 128;
 const STORAGE_BUDGET: u64 = 256 * 1024 * 1024;
-const WORKING_RESERVE: u64 = 48 * 1024 * 1024;
+// Includes a further 4 MiB for bounded DNS details, keys and pending writes.
+const WORKING_RESERVE: u64 = 52 * 1024 * 1024;
 const CLOCK_RECONCILE: Duration = Duration::from_secs(60);
 #[derive(Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -400,6 +403,8 @@ impl WindowSet {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct State {
+    #[serde(default)]
+    dns: BTreeMap<String, DnsStored>,
     baselines: BTreeMap<String, Baseline>,
     recent: BTreeMap<String, Baseline>,
     minutes: BTreeMap<u64, Counts>,
@@ -424,6 +429,16 @@ struct State {
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Metadata {
+    #[serde(default)]
+    dns_accepted: u64,
+    #[serde(default)]
+    dns_rejected: u64,
+    #[serde(default)]
+    dns_evicted: u64,
+    #[serde(default)]
+    dns_unknown_caller: u64,
+    #[serde(default)]
+    dns_incomplete: u64,
     schema: u32,
     #[serde(default)]
     attribution_schema: u32,
@@ -477,6 +492,8 @@ struct Metadata {
 impl Default for Metadata {
     fn default() -> Self {
         Self {
+            dns_accepted: 0, dns_rejected: 0, dns_evicted: 0,
+            dns_unknown_caller: 0, dns_incomplete: 0,
             schema: 1,
             attribution_schema: 1,
             attribution_unknown: Counts::default(),
@@ -513,6 +530,7 @@ impl Default for Metadata {
 impl Default for State {
     fn default() -> Self {
         Self {
+            dns: BTreeMap::new(),
             baselines: BTreeMap::new(),
             recent: BTreeMap::new(),
             minutes: BTreeMap::new(),
@@ -555,6 +573,7 @@ impl State {
 }
 #[derive(Default)]
 struct Dirty {
+    dns: BTreeSet<String>,
     baselines: BTreeSet<String>,
     recent: BTreeSet<String>,
     minutes: BTreeSet<u64>,
@@ -581,7 +600,7 @@ impl Dirty {
         self.meta = true;
     }
     fn len(&self) -> usize {
-        self.baselines.len()
+        self.dns.len() + self.baselines.len()
             + self.recent.len()
             + self.minutes.len()
             + self.applications.len()
@@ -596,6 +615,12 @@ impl Dirty {
 
 const UPSERT_ROW: &str = "INSERT INTO observation(kind,key,value) VALUES(?1,?2,?3)
     ON CONFLICT(kind,key) DO UPDATE SET value=excluded.value";
+
+#[derive(Clone, Serialize, Deserialize)]
+struct DnsStored {
+    record: DnsRecord,
+    received_us: u64,
+}
 
 fn identity_key(record: &FlowRecord) -> String {
     // Existing Flow keys remain byte-for-byte stable across the upgrade.
@@ -750,8 +775,72 @@ pub struct ObservationStore {
     stale_generations_pending: bool,
 }
 impl ObservationStore {
+    /// DNS detail uses the same SQLite transaction, dirty-row limit, retention
+    /// clock and pressure recovery as Flow/Blocked observations. It contributes
+    /// no synthetic Flow packets and never claims Adapter delivery.
+    pub fn consume_dns(&mut self, records: &[DnsRecord], received_us: u64) -> Result<(), String> {
+        let received_us = received_us.saturating_add(self.limits.clock_offset_us);
+        self.advance_retention(received_us)?;
+        for record in records {
+            if self.dirty.len() >= self.flush_rows() && self.save_error.is_none() {
+                self.flush()?;
+            }
+            if self.dirty.len() + 2 > MAX_DIRTY {
+                self.record_save_error("observation_dirty_capacity");
+                return Err("observation_dirty_capacity".into());
+            }
+            self.dirty.meta = true;
+            if !record.valid() || record.generation != self.state.meta.current_generation {
+                self.state.meta.dns_rejected = self.state.meta.dns_rejected.saturating_add(1);
+                self.mark_gap();
+                continue;
+            }
+            let key = record.key();
+            if let Some(previous) = self.state.dns.get(&key) {
+                if previous.record != *record {
+                    self.state.meta.dns_rejected = self.state.meta.dns_rejected.saturating_add(1);
+                    self.mark_gap();
+                }
+                continue;
+            }
+            if self.state.dns.len() == MAX_DNS_RECENT {
+                self.expire_oldest_dns();
+            }
+            self.state.dns.insert(key.clone(), DnsStored { record: record.clone(), received_us });
+            self.dirty.dns.insert(key);
+            self.state.meta.dns_accepted = self.state.meta.dns_accepted.saturating_add(1);
+            self.state.meta.dns_unknown_caller = self.state.meta.dns_unknown_caller
+                .saturating_add(u64::from(record.caller == 0));
+            self.state.meta.dns_incomplete = self.state.meta.dns_incomplete
+                .saturating_add(u64::from(record.coverage != 1));
+        }
+        self.advance_retention(received_us)?;
+        if self.dirty.len() >= self.flush_rows() && self.save_error.is_none() { self.flush()?; }
+        Ok(())
+    }
+
+    pub fn consume_dns_real(&mut self, records: &[DnsRecord], wall_now_us: u64) -> Result<(), String> {
+        let safe_now = self.safe_real_time(wall_now_us);
+        self.record_clock_anchor();
+        self.consume_dns(records, safe_now)
+    }
+
+    fn oldest_dns(&self) -> Option<(&String, &DnsStored)> {
+        self.state.dns.iter().min_by_key(|(_, row)| row.received_us)
+    }
+
+    fn expire_oldest_dns(&mut self) {
+        if let Some((key, _)) = self.oldest_dns() {
+            let key = key.clone();
+            self.state.dns.remove(&key);
+            self.dirty.dns.insert(key);
+            self.state.meta.dns_evicted = self.state.meta.dns_evicted.saturating_add(1);
+            self.dirty.meta = true;
+        }
+    }
     fn has_row(&self, kind: i32, key: &str) -> bool {
         match kind {
+            20 => self.state.dns.contains_key(key),
             1 => self.state.baselines.contains_key(key),
             2 => self.state.recent.contains_key(key),
             3 => key.parse::<u64>().ok().is_some_and(|key| self.state.minutes.contains_key(&key)),
@@ -789,6 +878,7 @@ impl ObservationStore {
         for key in &self.dirty.rule_names { candidates.push((8, key.to_string())); }
         candidates.extend(self.dirty.retained.iter().cloned());
         for key in &self.dirty.end_markers { candidates.push((19, key.clone())); }
+        for key in &self.dirty.dns { candidates.push((20, key.clone())); }
         candidates.retain(|(kind, key)| !self.has_row(*kind, key));
         candidates
     }
@@ -1122,6 +1212,11 @@ impl ObservationStore {
         // END detail can be reclaimed while a large tier transition is
         // partially staged. This gives a FULL retry space to commit the
         // transition without starting another tier transition.
+        if !self.state.dns.is_empty() {
+            if !self.dirty_room_for(1) { return Ok(false); }
+            self.expire_oldest_dns();
+            return Ok(true);
+        }
         if let Some((key, _)) = self.state.recent.first_key_value() {
             if !self.dirty_room_for(3) { return Ok(false); }
             self.expire_recent(key.clone());
@@ -1281,6 +1376,8 @@ impl ObservationStore {
     fn retention_due(&self) -> bool {
         let now = self.state.meta.retention_watermark_us;
         self.stale_generations_pending || self.state.meta.transition.is_some()
+            || self.oldest_dns().is_some_and(|(_, row)|
+                now.saturating_sub(row.received_us) >= self.limits.end_age_us)
             || self.state.recent.first_key_value().is_some_and(|(_, row)|
             row.first_end_us.is_some_and(|at| now.saturating_sub(at) >= self.limits.end_age_us))
             || self.state.minutes.first_key_value().is_some_and(|(&at, _)|
@@ -1303,7 +1400,10 @@ impl ObservationStore {
         let mut work = 0;
         let mut dropped_day = false;
         while work < RETENTION_ROWS_PER_BATCH && self.dirty.len() < MAX_DIRTY / 2 {
-            if let Some(transition) = self.state.meta.transition {
+            if self.oldest_dns().is_some_and(|(_, row)|
+                now.saturating_sub(row.received_us) >= self.limits.end_age_us) {
+                self.expire_oldest_dns();
+            } else if let Some(transition) = self.state.meta.transition {
                 match transition {
                     RetentionTransition::Rollup { from, to, start } => {
                         self.rollup_step(from, to, start, if to == 9 { 3600 } else { 86400 })?;
@@ -1498,6 +1598,10 @@ impl ObservationStore {
                         state.end_markers.insert(key,
                             serde_json::from_slice(&bytes).map_err(|e| e.to_string())?);
                     }
+                    20 => {
+                        state.dns.insert(key,
+                            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?);
+                    }
                     _ => return Err("observation_store_schema".into()),
                 }
                 Self::validate_bounds(&state)?;
@@ -1655,6 +1759,9 @@ impl ObservationStore {
             for (key, value) in &self.state.end_markers {
                 put_row(&mut put, 19, key, value)?;
             }
+            for (key, value) in &self.state.dns {
+                put_row(&mut put, 20, key, value)?;
+            }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
         let count: i64 = tx
@@ -1683,6 +1790,7 @@ impl ObservationStore {
                     set.totals.len() + set.applications.len() + set.rules.len()
                         + set.unknown.len() + set.protocols.len()).sum::<usize>()
                 + self.state.end_markers.len()
+                + self.state.dns.len()
             || meta != serde_json::to_vec(&self.state.meta).map_err(|e| e.to_string())?
             || integrity != "ok"
         {
@@ -1700,6 +1808,7 @@ impl ObservationStore {
         }
         if state.baselines.len() > MAX_BASELINES
             || state.recent.len() > MAX_RECENT
+            || state.dns.len() > MAX_DNS_RECENT
             || state.minutes.len() > MAX_MINUTES
             || state.unknown_minutes.len() > MAX_MINUTES
             || state.applications.len() > MAX_EFFECT_WINDOWS
@@ -1720,6 +1829,9 @@ impl ObservationStore {
 
     fn validate_state(state: &State) -> Result<(), String> {
         Self::validate_bounds(state)?;
+        if state.dns.iter().any(|(key, row)| !row.record.valid() || *key != row.record.key()) {
+            return Err("observation_dns_record".into());
+        }
         let hidden_day = match state.meta.transition {
             Some(RetentionTransition::EvictDay { start }) => Some(start),
             _ => None,
@@ -2155,6 +2267,9 @@ impl ObservationStore {
             }
             for key in &self.dirty.end_markers {
                 put_or_delete(&tx, &mut put, 19, key, self.state.end_markers.get(key))?;
+            }
+            for key in &self.dirty.dns {
+                put_or_delete(&tx, &mut put, 20, key, self.state.dns.get(key))?;
             }
             put_row(&mut put, 0, "", &self.state.meta)?;
         }
@@ -2738,6 +2853,20 @@ impl ObservationStore {
                 "first_activity_us": self.state.meta.first_activity_us,
                 "last_activity_us": self.state.meta.last_activity_us },
             "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
+        let dns_recent: BTreeMap<_, _> = self.state.dns.iter().rev().take(128).collect();
+        response["dns"] = serde_json::json!({
+            "scope": "root_original_udp_query_decisions", "recent": dns_recent,
+            "accepted": self.state.meta.dns_accepted, "rejected": self.state.meta.dns_rejected,
+            "unknown_caller": self.state.meta.dns_unknown_caller,
+            "incomplete_message": self.state.meta.dns_incomplete,
+            "evicted": self.state.meta.dns_evicted,
+            "retained_count": self.state.dns.len(), "retained_limit": MAX_DNS_RECENT,
+            "query_limit": 128, "query_truncated": self.state.dns.len() > 128,
+            "detail_age_us": self.limits.end_age_us,
+            "delivery_scope": "policy_intent_only",
+        });
+        response["persistence"]["dns_accepted"] = self.committed.dns_accepted.into();
+        response["limits"]["dns_recent"] = MAX_DNS_RECENT.into();
         response["protocol_windows"] = serde_json::json!(protocols);
         response["limits"]["minute_age_us"] = self.limits.minute_age_us.into();
         response["limits"]["hour_age_us"] = self.limits.hour_age_us.into();

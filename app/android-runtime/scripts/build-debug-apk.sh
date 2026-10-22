@@ -1302,6 +1302,8 @@ build_apk_only() {
       "$repo_root/third_party/libprotoident/COPYING" > "$payload_assets/product-lpi-notices.txt"
   cat "$repo_root/third_party/mbedtls/README.md" \
       "$repo_root/third_party/mbedtls/LICENSE" > "$payload_assets/product-quic-crypto-notices.txt"
+  cat "$repo_root/third_party/cares/README.md" \
+      "$repo_root/third_party/cares/upstream/LICENSE.md" > "$payload_assets/product-dns-notices.txt"
 
   mapfile -t java_sources < <(find "$java_source_dir" -type f -name '*.java' -print | sort)
   ((${#java_sources[@]} > 0)) || die "Android Java source tree is empty"

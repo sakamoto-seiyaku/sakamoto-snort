@@ -1729,6 +1729,15 @@ product_root_nfqueue_read_dispatch (clib_file_t *file)
       platform.direction = packet.hook == NF_INET_LOCAL_OUT
         ? PRODUCT_PACKET_DIRECTION_OUTPUT : packet.hook == NF_INET_LOCAL_IN
         ? PRODUCT_PACKET_DIRECTION_INPUT : PRODUCT_PACKET_DIRECTION_UNKNOWN;
+#ifdef __ANDROID__
+      /* NFQA_UID identifies the actual outgoing socket owner. Android normal
+       * App IDs (including another user/profile) identify that direct App.
+       * netd/system, SDK-sandbox and isolated IDs do not prove an original App;
+       * do not map them to one or use a Flow/IP guess for DNS policy. */
+      if (packet.uid_present && packet.hook == NF_INET_LOCAL_OUT &&
+          packet.uid % 100000U >= 10000U && packet.uid % 100000U <= 19999U)
+        platform.availability |= PRODUCT_PLATFORM_DNS_APP_RELIABLE;
+#endif
       if (packet.hook == NF_INET_LOCAL_OUT && packet.outdev_present
           && packet.outdev && packet.outdev <= INT32_MAX)
         {

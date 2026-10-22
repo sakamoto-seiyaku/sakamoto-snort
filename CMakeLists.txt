@@ -7,6 +7,7 @@ option(SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
   "Record policy completion coupled to successful Root verdicts" OFF)
 add_subdirectory(third_party/libprotoident)
 add_subdirectory(third_party/mbedtls)
+add_subdirectory(third_party/cares)
 
 # The former C++ sucre-snort daemon, its host model, and its NDK/APK staging
 # target were deliberately removed. This workspace tests standalone C semantics
@@ -60,6 +61,15 @@ target_compile_options(sakamoto-product-l4-policy-test PRIVATE
   -Wall -Wextra -Werror -pedantic)
 target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
   sakamoto_product_l4_policy)
+
+add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c)
+target_link_libraries(sakamoto_product_dns PUBLIC
+  sakamoto_product_l4_policy sakamoto_product_domains PRIVATE sakamoto_dns_wire)
+target_compile_features(sakamoto_product_dns PRIVATE c_std_11)
+target_compile_options(sakamoto_product_dns PRIVATE -Wall -Wextra -Werror)
+add_executable(sakamoto-product-dns-query-test tests/host/product_dns_query_test.c)
+target_link_libraries(sakamoto-product-dns-query-test PRIVATE sakamoto_product_dns)
+add_test(NAME sakamoto-product-dns-query-test COMMAND sakamoto-product-dns-query-test)
 
 # The first stateful seam is a fixed-capacity, worker-private FlowEntry pool.
 # It has no VPP/Android/Rust dependency so its bounded semantics stay host

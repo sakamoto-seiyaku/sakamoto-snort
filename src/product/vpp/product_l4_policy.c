@@ -136,8 +136,10 @@ expression_dependencies (const product_l4_policy_rule_t *rule)
         dependencies |= PRODUCT_POLICY_DEP_CT;
       if (op == PRODUCT_EXPRESSION_APPLICATION_PROTOCOL)
         dependencies |= PRODUCT_POLICY_DEP_LPI;
-      if (op == PRODUCT_EXPRESSION_SNI_ABSENT || op == PRODUCT_EXPRESSION_DOMAIN_LIST)
+      if (op == PRODUCT_EXPRESSION_SNI_ABSENT)
         dependencies |= PRODUCT_POLICY_DEP_SNI | PRODUCT_POLICY_DEP_LPI;
+      if (op == PRODUCT_EXPRESSION_DOMAIN_LIST)
+        dependencies |= PRODUCT_POLICY_DEP_DOMAIN | PRODUCT_POLICY_DEP_LPI;
       if (op <= PRODUCT_STATIC_NOT) continue;
       at += expression_operand_bytes (op);
     }
@@ -742,9 +744,15 @@ expression_matches (const product_l4_policy_rule_t *rule,
                     const product_l4_policy_packet_t *packet)
 {
   if (!rule->expression_length) return 1;
-  if ((expression_dependencies(rule) & PRODUCT_POLICY_DEP_SNI)
-      && (!packet->protocol_set_known || !(packet->protocol_set &
-          (product_protocol_bit(1003) | product_protocol_bit(1004))))) return 0;
+  unsigned dependencies = expression_dependencies (rule);
+  int sni_applicable = packet->protocol_set_known && (packet->protocol_set &
+    (product_protocol_bit (1003) | product_protocol_bit (1004)));
+  /* Explicit SNI conditions retain whole-rule protocol applicability even
+   * behind OR. A QName is a distinct control point, never synthetic SNI. */
+  if ((dependencies & PRODUCT_POLICY_DEP_SNI) && !sni_applicable) return 0;
+  if ((dependencies & PRODUCT_POLICY_DEP_DOMAIN) &&
+      packet->domain_source != PRODUCT_POLICY_DOMAIN_DNS_QNAME && !sni_applicable)
+    return 0;
   uint8_t values[PRODUCT_STATIC_EXPRESSION_BYTES];
   unsigned stack = 0;
   for (unsigned at = 0; at < rule->expression_length;)
@@ -765,7 +773,12 @@ expression_matches (const product_l4_policy_rule_t *rule,
         }
       else if (op == PRODUCT_EXPRESSION_DOMAIN_LIST)
         {
-          if (packet->sni_result == PRODUCT_SNI_ABSENT) value = 0;
+          if (packet->domain_source == PRODUCT_POLICY_DOMAIN_DNS_QNAME)
+            {
+              if (packet->domain_available)
+                value = !!(packet->domain_lists & (UINT64_C(1) << arg[0]));
+            }
+          else if (packet->sni_result == PRODUCT_SNI_ABSENT) value = 0;
           else if (packet->sni_result == PRODUCT_SNI_NAME)
             value = !!(packet->domain_lists & (UINT64_C(1) << arg[0]));
           ++at;
@@ -1199,7 +1212,9 @@ cache_guard (product_policy_cache_guard_t *guard,
     {
       COPY(protocol_set); COPY(protocol_set_known);
     }
-  if (dependencies & PRODUCT_POLICY_DEP_SNI) { COPY(sni_result); COPY(domain_lists); }
+  if (dependencies & PRODUCT_POLICY_DEP_SNI) COPY(sni_result);
+  if (dependencies & PRODUCT_POLICY_DEP_DOMAIN)
+    { COPY(sni_result); COPY(domain_lists); COPY(domain_source); COPY(domain_available); }
 #undef COPY
 }
 

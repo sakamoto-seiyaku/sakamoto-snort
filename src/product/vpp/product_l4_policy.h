@@ -148,7 +148,13 @@ typedef struct
   uint8_t protocol_set_known;
   uint8_t sni_result;
   uint64_t domain_lists; /* All memberships from this packet's protected snapshot. */
+  /* Zero retains the existing SNI source. DNS has independent availability;
+   * an unavailable original caller cannot supply QName policy facts. */
+  uint8_t domain_source, domain_available;
 } product_l4_policy_packet_t;
+
+#define PRODUCT_POLICY_DOMAIN_SNI 0U
+#define PRODUCT_POLICY_DOMAIN_DNS_QNAME 1U
 
 typedef struct
 {
@@ -316,6 +322,7 @@ product_l4_policy_rule_rank (const product_l4_policy_view_t *view,
 #define PRODUCT_POLICY_DEP_CT 2U
 #define PRODUCT_POLICY_DEP_LPI 4U
 #define PRODUCT_POLICY_DEP_SNI 8U
+#define PRODUCT_POLICY_DEP_DOMAIN 16U
 #define PRODUCT_POLICY_CACHE_CAPACITY 128U
 #define PRODUCT_POLICY_CACHE_MAX_CAPACITY 128U
 

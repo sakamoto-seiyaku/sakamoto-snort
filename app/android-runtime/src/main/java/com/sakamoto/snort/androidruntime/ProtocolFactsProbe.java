@@ -289,6 +289,39 @@ final class ProtocolFactsProbe {
         }
     }
 
+    private static void dnsQueries(JSONObject plan, JSONObject result,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        org.json.JSONArray queries = plan.getJSONArray("dnsQueries");
+        int timeout = plan.optInt("dnsTimeoutMs", 1000);
+        if (queries.length() < 1 || queries.length() > 64 || port != 53
+                || timeout < 100 || timeout > 3000)
+            throw new IllegalArgumentException("bounded ordinary DNS probe");
+        org.json.JSONArray exchanges = new org.json.JSONArray();
+        result.put("dnsExchanges", exchanges);
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port); socket.setSoTimeout(timeout);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            result.put("resolver", socket.getRemoteSocketAddress().toString());
+            byte[] received = new byte[8193];
+            for (int i = 0; i < queries.length(); ++i) {
+                byte[] request = hex(queries.getString(i));
+                if (request.length > 4096) throw new IllegalArgumentException("DNS probe query size");
+                JSONObject exchange = new JSONObject().put("sentHex", toHex(request));
+                exchanges.put(exchange);
+                socket.send(new DatagramPacket(request, request.length));
+                DatagramPacket reply = new DatagramPacket(received, received.length);
+                try {
+                    socket.receive(reply);
+                    if (reply.getLength() > 8192) throw new IllegalStateException("DNS probe reply size");
+                    exchange.put("replyHex", toHex(Arrays.copyOf(reply.getData(), reply.getLength())));
+                } catch (SocketTimeoutException expected) {
+                    exchange.put("timedOut", true);
+                }
+            }
+        }
+    }
+
     private static void udp(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         try (DatagramSocket socket = new DatagramSocket(null)) {
@@ -583,7 +616,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
+                if (plan.has("dnsQueries")) dnsQueries(plan, result, endpoint, local, source, port);
+                else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);

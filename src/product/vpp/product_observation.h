@@ -16,6 +16,7 @@ void product_observation_end (vlib_main_t *, const product_flow_entry_t *, uint3
 uint64_t product_observation_deadline (unsigned owner);
 void product_observation_flush_due (vlib_main_t *, uint64_t);
 void product_observation_basic (vlib_main_t *, unsigned outcome, uint32_t bytes);
+void product_observation_dns (vlib_main_t *, const product_dns_observation_record_t *);
 void product_observation_status (product_observation_status_t *);
 /* Read only under the VPP worker barrier; an absent context remains invalid. */
 void product_observation_current (unsigned owner, uint32_t slot,

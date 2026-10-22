@@ -2,6 +2,7 @@
 #[cfg(product_vapi)]
 mod live {
     use crate::observation::{FlowRecord, ObservationHealth, Overview};
+    use crate::dns_observation::DnsRecord;
     use crate::observation_store::ObservationStore;
     use std::ffi::{c_char, c_int, c_void, CString};
     use std::path::Path;
@@ -32,6 +33,7 @@ mod live {
         error: Option<String>,
         waits: u64,
         malformed: u64,
+        dns_received: u64,
         store_error: Option<String>,
     }
     #[derive(Default)]
@@ -129,6 +131,7 @@ mod live {
                 error: None,
                 waits: 0,
                 malformed: 0,
+                dns_received: 0,
                 store_error: None,
             };
             let control: Control = Arc::new((Mutex::new(Command::default()), Condvar::new()));
@@ -210,6 +213,7 @@ mod live {
                         answer_query(&worker_state, store.as_ref(), &worker_control);
                         let mut work = false;
                         let mut records = Vec::new();
+                        let mut dns_records = Vec::new();
                         for channel in 0..health.owners * 2 {
                             for _ in 0..128 {
                                 let mut raw = RawRecord([0; 480]);
@@ -226,6 +230,22 @@ mod live {
                                     break 'consume;
                                 }
                                 work = true;
+                                if raw.0[3] == 16 {
+                                    match DnsRecord::decode(&raw.0) {
+                                        Some(record) if channel % 2 == 0
+                                            && record.owner as u32 == channel / 2
+                                            && record.generation == generation
+                                            && (record.slot == u32::MAX || record.slot < health.flow_capacity) => {
+                                                worker_state.dns_received += 1;
+                                                dns_records.push(record);
+                                            }
+                                        _ => {
+                                            worker_state.malformed += 1;
+                                            worker_state.overview.incomplete = true;
+                                        }
+                                    }
+                                    continue;
+                                }
                                 {
                                     let s = &mut worker_state;
                                     match FlowRecord::decode(&raw.0) {
@@ -266,7 +286,7 @@ mod live {
                                 store.mark_gap();
                                 coverage_reported = true;
                             }
-                            if !records.is_empty() || newly_incomplete || store.has_pending() {
+                            if !records.is_empty() || !dns_records.is_empty() || newly_incomplete || store.has_pending() {
                                 let now = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_micros() as u64)
@@ -274,6 +294,11 @@ mod live {
                                 let result = store.consume_real(&records, now);
                                 if let Err(error) = result {
                                     worker_state.store_error = Some(error);
+                                }
+                                if !dns_records.is_empty() {
+                                    if let Err(error) = store.consume_dns_real(&dns_records, now) {
+                                        worker_state.store_error = Some(error);
+                                    }
                                 }
                             }
                         }

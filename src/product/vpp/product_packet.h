@@ -100,6 +100,8 @@ enum
   PRODUCT_PLATFORM_UID_KNOWN = 1 << 0,
   PRODUCT_PLATFORM_IFINDEX_KNOWN = 1 << 1,
   PRODUCT_PLATFORM_CONTEXT_KNOWN = 1 << 2,
+  /* Explicit original DNS App evidence, distinct from a known socket UID. */
+  PRODUCT_PLATFORM_DNS_APP_RELIABLE = 1 << 3,
 };
 
 typedef struct

@@ -13,6 +13,7 @@
 #define PRODUCT_OBSERVATION_CREATE 2
 #define PRODUCT_OBSERVATION_CLOCK_CHANGED 4
 #define PRODUCT_OBSERVATION_BLOCKED 8
+#define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
 #define PRODUCT_OBSERVATION_MAX_RECORD 480
 
@@ -52,6 +53,25 @@ typedef struct {
 } product_observation_record_t;
 _Static_assert (sizeof (product_observation_record_t) == 480, "observation record ABI");
 _Static_assert (offsetof (product_observation_record_t, address) == 448, "record addresses");
+
+/* DNS query decisions share the existing owner channel and storage budget.
+ * The original-path policy intent is recorded before Adapter Completion;
+ * delivery=0 explicitly means this record does not prove wire delivery. */
+typedef struct {
+  uint16_t length;
+  uint8_t version, flags;
+  uint16_t owner, reserved;
+  uint64_t generation, token, incarnation, mono_us, activity_utc_us;
+  uint64_t policy_generation, policy_revision, policy_hash, winner;
+  uint32_t uid, network, ifindex, codec_peak_bytes, slot;
+  uint16_t id, query_flags, qtype, qclass, source_port, resolver_port, name_length;
+  uint8_t family, protocol, direction, availability, caller, coverage;
+  uint8_t declared_action, actual_action, mode, domain_available, stage, delivery;
+  uint8_t padding[2];
+  uint8_t source_address[16], resolver_address[16], rule_name[64], name[256];
+} product_dns_observation_record_t;
+_Static_assert (sizeof (product_dns_observation_record_t) == 480, "DNS observation ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;
