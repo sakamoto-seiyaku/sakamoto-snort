@@ -27,6 +27,7 @@ typedef struct {
   product_l4_policy_packet_t packet;
   const product_domains_t *domains; /* synchronous protected-snapshot borrow */
   product_dns_caller_t caller;
+  uint8_t domains_available; /* a valid empty snapshot may have no trie */
 } product_dns_context_t;
 
 typedef struct {

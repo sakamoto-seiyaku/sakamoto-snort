@@ -4391,6 +4391,7 @@ product_packet_graph_dns_prepare (
       lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE)
     return PRODUCT_PACKET_OK;
   product_dns_context_t context = {
+    .domains_available = snapshot->bank->generation == product_packet_graph_main.generation,
     .domains = snapshot->bank->generation == product_packet_graph_main.generation
       ? snapshot->bank->domains : NULL,
     .caller = (lease->platform.availability & PRODUCT_PLATFORM_DNS_APP_RELIABLE)

@@ -26,14 +26,14 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
   out->caller = context->caller == PRODUCT_DNS_CALLER_KERNEL_APP &&
     context->packet.uid_known && context->packet.uid != UINT32_MAX
       ? PRODUCT_DNS_CALLER_KERNEL_APP : PRODUCT_DNS_CALLER_UNKNOWN;
+  out->packet.domain_source = PRODUCT_POLICY_DOMAIN_DNS_QNAME;
+  out->packet.domain_available = 0;
+  out->packet.domain_lists = 0;
   if (!wire || length < 4)
     { out->coverage = PRODUCT_DNS_MALFORMED; return; }
   out->id = read_u16 (wire);
   out->flags = read_u16 (wire + 2);
   if (out->flags & 0x8000) return;
-  out->packet.domain_source = PRODUCT_POLICY_DOMAIN_DNS_QNAME;
-  out->packet.domain_available = 0;
-  out->packet.domain_lists = 0;
   if (length < 12 || length > PRODUCT_DNS_MESSAGE_MAX)
     { out->coverage = PRODUCT_DNS_MALFORMED; return; }
   if ((out->flags & 0x7800) || read_u16 (wire + 4) != 1)
@@ -55,8 +55,12 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
           out->qclass = dnsclass;
           out->name_length = strlen (name);
           memcpy (out->name, name, out->name_length + 1);
+          /* c-ares represents the valid DNS root as an empty string. Keep an
+           * explicit root QName distinct from missing/unrepresentable facts. */
+          if (!out->name_length)
+            { out->name[0] = '.'; out->name[1] = 0; out->name_length = 1; }
           out->coverage = PRODUCT_DNS_QUERY_COMPLETE;
-          if (out->caller == PRODUCT_DNS_CALLER_KERNEL_APP)
+          if (out->caller == PRODUCT_DNS_CALLER_KERNEL_APP && context->domains_available)
             {
               out->packet.domain_available = !product_domains_lookup_dns (
                 context->domains, (const uint8_t *) out->name, out->name_length,

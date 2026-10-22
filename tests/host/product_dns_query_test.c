@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_dns.h"
+#include "product_packet.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,7 +30,7 @@ static void fixture (void)
                 { .length = 12, .name = "else.example", .list = 1 }} };
   assert (!product_domains_build (&source, &fixture_domains));
   fixture_context = (product_dns_context_t) {
-    .domains = fixture_domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP,
+    .domains = fixture_domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP, .domains_available = 1,
     .packet = { .uid = 10123, .uid_known = 1, .family = 4, .protocol = 17,
       .direction = 3, .direction_known = 1, .ports_available = 1,
       .source_port = 40000, .destination_port = 53,
@@ -63,7 +64,7 @@ static void reliable_query_is_denied_before_original_forwarding (void)
   product_domains_t *domains = NULL;
   assert (!product_domains_build (&source, &domains));
   product_dns_context_t context = {
-    .domains = domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP,
+    .domains = domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP, .domains_available = 1,
     .packet = { .uid = 10123, .uid_known = 1, .family = 4, .protocol = 17,
       .direction = 3, .direction_known = 1, .ports_available = 1,
       .source_port = 40000, .destination_port = 53 }
@@ -283,8 +284,112 @@ static void bounded_wire_mutations_release_every_operation (void)
   product_domains_destroy (fixture_domains);
 }
 
+static void an_empty_declared_list_is_available_false (void)
+{
+  fixture ();
+  product_domains_destroy (fixture_domains);
+  sakamoto_product_domains_t empty = { .list_count = 1 };
+  assert (!product_domains_build (&empty, &fixture_domains));
+  fixture_context.domains = fixture_domains;
+  product_l4_policy_rule_t r = rule (310, 1, 2);
+  r.expression[2] = PRODUCT_STATIC_NOT;
+  r.expression_length = 3;
+  product_dns_query_t query;
+  product_l4_policy_match_result_t result = evaluate (query_wire, sizeof (query_wire), &r, 1, &query);
+  assert (query.coverage == PRODUCT_DNS_QUERY_COMPLETE && query.packet.domain_available);
+  assert (!query.packet.domain_lists && result.rule_id == 310 && result.actual_action == 2);
+  fixture_context.domains_available = 0;
+  result = evaluate (query_wire, sizeof (query_wire), &r, 1, &query);
+  assert (!query.packet.domain_available && !result.evaluation);
+  product_domains_destroy (fixture_domains);
+}
+
+static void the_dns_root_name_is_known_without_memberships (void)
+{
+  fixture ();
+  static const uint8_t wire[] = {0x12,0x34,1,0,0,1,0,0,0,0,0,0,0,0,1,0,1};
+  product_l4_policy_rule_t r = rule (310, 1, 2);
+  product_dns_query_t query;
+  product_l4_policy_match_result_t result = evaluate (wire, sizeof (wire), &r, 1, &query);
+  assert (query.coverage == PRODUCT_DNS_QUERY_COMPLETE && query.packet.domain_available);
+  assert (!strcmp (query.name, ".") && !query.packet.domain_lists && !result.evaluation);
+  r.expression[2] = PRODUCT_STATIC_NOT; r.expression_length = 3;
+  result = evaluate (wire, sizeof (wire), &r, 1, &query);
+  assert (result.rule_id == 310 && result.actual_action == 2);
+  product_domains_destroy (fixture_domains);
+}
+
+static void every_malformed_message_keeps_available_generic_branches (void)
+{
+  fixture ();
+  product_l4_policy_rule_t r = rule (310, 1, 2);
+  memcpy (r.expression, (uint8_t[]) { PRODUCT_EXPRESSION_DOMAIN_LIST, 0,
+    PRODUCT_STATIC_PROTOCOL, 17, PRODUCT_STATIC_OR }, 5);
+  r.expression_length = 5;
+  for (size_t length = 0; length < 4; ++length)
+    {
+      product_dns_query_t query;
+      product_l4_policy_match_result_t result = evaluate (query_wire, length, &r, 1, &query);
+      assert (query.coverage == PRODUCT_DNS_MALFORMED && !query.packet.domain_available);
+      assert (result.rule_id == 310 && result.actual_action == 2);
+    }
+  product_domains_destroy (fixture_domains);
+}
+
+static void ip_padding_cannot_change_the_udp_query (void)
+{
+  fixture ();
+  product_l4_policy_rule_t r = rule (310, 1, 2);
+  for (unsigned family = 4; family <= 6; family += 2)
+    {
+      uint8_t packet[128] = {0}, original[128];
+      size_t ip = family == 4 ? 20 : 40;
+      size_t length = ip + 8 + sizeof (query_wire) + 5;
+      packet[0] = family == 4 ? 0x45 : 0x60;
+      if (family == 4)
+        {
+          packet[3] = length; packet[8] = 64; packet[9] = 17;
+          packet[12] = packet[16] = 192;
+          packet[15] = 1; packet[19] = 53;
+        }
+      else
+        {
+          packet[5] = length - 40; packet[6] = 17; packet[7] = 64;
+          packet[8] = packet[24] = 0xfd;
+          packet[23] = 1; packet[39] = 53;
+        }
+      packet[ip] = 0x9c; packet[ip + 1] = 0x40;
+      packet[ip + 3] = 53; packet[ip + 5] = 8 + sizeof (query_wire);
+      memcpy (packet + ip + 8, query_wire, sizeof (query_wire));
+      memset (packet + ip + 8 + sizeof (query_wire), 0xff, 5);
+      memcpy (original, packet, sizeof (packet));
+      product_worker_layout_t layout = { .worker_count = 1 };
+      product_packet_ingress_t ingress = { .data = packet, .length = length,
+        .origin_obligation_id = family, .platform = { .uid = 10123,
+          .availability = PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_DNS_APP_RELIABLE,
+          .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
+          .provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE } };
+      product_packet_lease_t lease;
+      assert (product_packet_admit (&layout, &ingress, &lease) == PRODUCT_PACKET_OK);
+      assert (lease.facts.l4_status == PRODUCT_PACKET_L4_COMPLETE);
+      fixture_context.packet.family = lease.facts.ip_family;
+      fixture_context.packet.destination_port = lease.facts.destination_port;
+      product_dns_query_t query;
+      product_l4_policy_match_result_t result = evaluate (
+        packet + lease.facts.transport_offset + lease.facts.l4_header_length,
+        lease.facts.transport_length - lease.facts.l4_header_length, &r, 1, &query);
+      assert (query.coverage == PRODUCT_DNS_QUERY_COMPLETE && result.rule_id == 310);
+      assert (!memcmp (packet, original, sizeof (packet)));
+    }
+  product_domains_destroy (fixture_domains);
+}
+
 int main (void)
 {
+  the_dns_root_name_is_known_without_memberships ();
+  ip_padding_cannot_change_the_udp_query ();
+  every_malformed_message_keeps_available_generic_branches ();
+  an_empty_declared_list_is_available_false ();
   reliable_query_is_denied_before_original_forwarding ();
   caller_availability_boolean_and_real_transport ();
   rank_observe_rr_types_and_cache ();

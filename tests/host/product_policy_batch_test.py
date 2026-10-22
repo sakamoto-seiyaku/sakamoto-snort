@@ -118,6 +118,7 @@ prefix = r'''
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "product_packet_graph.h"
+#include "product_dns.h"
 #include "product_flow_entry.h"
 #include "product_observation.h"
 #include "product_root_receive_pool.h"
@@ -200,6 +201,19 @@ static u32 tracked_claim(u32 *p, u32 value, int order) {
 snapshot_code = snapshot_functions + "\n#undef __atomic_fetch_add\n"
 
 stubs = r'''
+/* This pre-existing batch/window fixture uses UDP443 only. DNS message and
+ * Adapter behavior are qualified through their public seams separately. */
+static product_packet_result_t product_packet_graph_dns_prepare(vlib_main_t *vm,u32 index,
+  const product_packet_lease_t *lease,product_policy_snapshot_t *snapshot,
+  product_dns_query_t *query,int *observed) {
+  (void)vm;(void)index;(void)snapshot;(void)query;
+  assert(lease->facts.destination_port!=53);*observed=0;return PRODUCT_PACKET_OK;
+}
+static void product_packet_graph_dns_record(vlib_main_t *vm,const product_packet_lease_t *lease,
+  const product_policy_snapshot_t *snapshot,const product_dns_query_t *query,
+  const product_packet_graph_policy_evaluation_t *evaluation,const product_flow_entry_observation_t *flow) {
+  (void)vm;(void)lease;(void)snapshot;(void)query;(void)evaluation;(void)flow;assert(0);
+}
 static vlib_buffer_t buffers[VLIB_FRAME_SIZE];
 static product_buffer_metadata_t metadata_storage[VLIB_FRAME_SIZE];
 static u64 revisions[VLIB_FRAME_SIZE];

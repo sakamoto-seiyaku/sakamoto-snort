@@ -250,7 +250,7 @@ def main():
             expression = '11000cbb01bb0101'  # list0 AND actual dport443
         elif variant == 'sni-or':
             expression = '1001110002'  # explicit SNI absent OR list0; whole rule TLS/QUIC only
-        elif variant == 'not':
+        elif variant in ('not', 'empty-not'):
             expression = '110003'  # NOT list0
         elif variant == 'or':
             expression = '1100110102'  # list0 OR list1
@@ -264,6 +264,8 @@ def main():
                  f'0 0 4294967295 4294967295 4294967295 100 0 17 0 {2 if variant == "generic-drop" else 1} * * 0 65535 0 65535',
                  'group 10', 'edge 10 1 0', 'group 20', 'edge 20 1 1', 'group 30', 'edge 30 1 2',
                  f'bind 1 {subject} 2 10 {mode}', f'bind 2 {subject} 2 20 0', f'bind 3 {subject} 2 30 0']
+        if variant == 'empty-not':
+            lines = [line for line in lines if not line.startswith('domain ')]
         text = '\n'.join(lines)
         old = props(app(config_path)).get('queryElapsedMillis')
         save(label + '-request.txt', text + '\n')
@@ -297,7 +299,7 @@ def main():
         for name, qtype in names:
             number += 1
             wire = query(number, name, qtype)
-            wires.append(wire[:11] if truncate else wire)
+            wires.append(wire[:11 if truncate is True else truncate] if truncate else wire)
         nonce = 's310-' + label + '-' + str(time.time_ns())
         plan = dict(nonce=nonce, endpoint=address, port=53, source=source, bindDefault=True,
                     dnsQueries=[wire.hex() for wire in wires], dnsTimeoutMs=700)
@@ -317,13 +319,14 @@ def main():
                 assert found[0]['peer'][1] == source
         value = observation(label)
         rows = value['consumer']['persistent']['dns']['recent'].values()
+        ids = [int.from_bytes(wire[:2], 'big') if len(wire) >= 4 else 0 for wire in wires]
         records = [row['record'] for row in rows if row['record']['generation'] == result['runs'][-1]['generation']
-                   and row['record']['id'] in [number - len(wires) + i + 1 for i in range(len(wires))]]
+                   and row['record']['source_port'] == source and row['record']['id'] in ids]
         assert len(records) == len(wires), (label, value)
         for record in records:
             assert record['caller'] == 1 and record['uid'] == uid and record['resolver_port'] == 53
             assert record['policy_revision'] == int(status['activeRevision']) and record['delivery'] == 0
-            index = record['id'] - (number - len(wires) + 1)
+            index = ids.index(record['id'])
             assert record['actual_action'] == (2 if denied[index] else 1)
             if expected_rules is not None:
                 expected = expected_rules[index]
@@ -352,16 +355,15 @@ def main():
         root('iptables -t mangle -I OUTPUT 1 ' + rule)
         try:
             command = f'cat {remote} | toybox nc -u -n -q 1 -W 2 -p {source} {args.endpoint4} 53'
-            process = subprocess.run([str(ROOT / 'dev/adb'), '-s', SERIAL, 'exec-out', 'sh', '-c',
-                                      shlex.quote(command)], capture_output=True, timeout=10)
-            (args.output / (label + '-response.bin')).write_bytes(process.stdout)
-            save(label + '-stderr.txt', process.stderr.decode(errors='replace'))
-            assert process.returncode == 0
+            encoded = save(label + '-socket-base64.txt',
+                           adb('shell', 'sh', '-c', shlex.quote(command + ' | toybox base64')))
+            response = base64.b64decode(''.join(encoded.split()), validate=True)
+            (args.output / (label + '-response.bin')).write_bytes(response)
             found = [row for row in resolver.rows if row['request_hex'] == wire.hex()]
             if denied:
-                assert not process.stdout and not found
+                assert not response and not found
             else:
-                assert len(found) == 1 and process.stdout.hex() == found[0]['reply_hex']
+                assert len(found) == 1 and response.hex() == found[0]['reply_hex']
             value = observation(label)
             records = [row['record'] for row in value['consumer']['persistent']['dns']['recent'].values()
                        if row['record']['generation'] == result['runs'][-1]['generation']
@@ -444,6 +446,12 @@ def main():
                 status = configure('malformed-generic-drop', 'generic-drop')
                 exchange('malformed-generic-drop', args.endpoint4, [('ignored', 1)], [True], status,
                          49713, [2], truncate=True)
+                status = configure('short-generic-or', 'unknown-generic')
+                exchange('short-generic-or', args.endpoint4, [('ignored', 1)], [True], status,
+                         49714, [0], truncate=3)
+                status = configure('empty-list-not', 'empty-not')
+                exchange('empty-list-not', args.endpoint4, [('blocked.test', 1)], [True], status,
+                         49715, [0])
                 unknown_fixture('unknown-caller-pass', False)
                 unknown_fixture('unknown-independent-generic-drop', True)
             status_text = cli(label + '-final', 'show product dns', 'show product completion')

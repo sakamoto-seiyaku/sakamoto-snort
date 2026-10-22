@@ -176,8 +176,11 @@ int product_domains_lookup_dns(const product_domains_t *domains, const uint8_t *
                                 size_t length, uint64_t *memberships) {
     if (!memberships) return PRODUCT_DOMAINS_INVALID;
     *memberships = 0;
-    if (!domains || !name || !name_valid(name, length, 1)) return PRODUCT_DOMAINS_INVALID;
-    *memberships = match_name(domains, name, length);
+    /* Source entries cannot name the root. A valid DNS root QName therefore
+     * has known zero membership without changing source or SNI grammar. */
+    if (name && length == 1 && name[0] == '.') return PRODUCT_DOMAINS_OK;
+    if (!name || !name_valid(name, length, 1)) return PRODUCT_DOMAINS_INVALID;
+    if (domains) *memberships = match_name(domains, name, length);
     return PRODUCT_DOMAINS_OK;
 }
 size_t product_domains_bytes(const product_domains_t *domains) { return domains ? domains->bytes : 0; }

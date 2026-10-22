@@ -2853,7 +2853,12 @@ impl ObservationStore {
                 "first_activity_us": self.state.meta.first_activity_us,
                 "last_activity_us": self.state.meta.last_activity_us },
             "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
-        let dns_recent: BTreeMap<_, _> = self.state.dns.iter().rev().take(128).collect();
+        // Root packet tokens advance independently per lane. Their numeric
+        // order cannot select the newest decisions across owners/lanes.
+        let mut dns_recent: Vec<_> = self.state.dns.iter().collect();
+        dns_recent.sort_unstable_by(|(left_key, left), (right_key, right)|
+            right.received_us.cmp(&left.received_us).then_with(|| right_key.cmp(left_key)));
+        let dns_recent: BTreeMap<_, _> = dns_recent.into_iter().take(128).collect();
         response["dns"] = serde_json::json!({
             "scope": "root_original_udp_query_decisions", "recent": dns_recent,
             "accepted": self.state.meta.dns_accepted, "rejected": self.state.meta.dns_rejected,

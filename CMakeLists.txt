@@ -67,7 +67,8 @@ target_link_libraries(sakamoto_product_dns PUBLIC
   sakamoto_product_l4_policy sakamoto_product_domains PRIVATE sakamoto_dns_wire)
 target_compile_features(sakamoto_product_dns PRIVATE c_std_11)
 target_compile_options(sakamoto_product_dns PRIVATE -Wall -Wextra -Werror)
-add_executable(sakamoto-product-dns-query-test tests/host/product_dns_query_test.c)
+add_executable(sakamoto-product-dns-query-test tests/host/product_dns_query_test.c
+  src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-dns-query-test PRIVATE sakamoto_product_dns)
 add_test(NAME sakamoto-product-dns-query-test COMMAND sakamoto-product-dns-query-test)
 

@@ -25,17 +25,11 @@ records a CPU-cost and paced-UDP loss trade-off against the former local-owner
 VPN path. Adoption or rollback after those measurements remains the user's
 decision; neither ADR acceptance nor functional qualification chooses it.
 
-The [S307 tuning](../testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md) retained dedicated
-I/O and original-buffer transfer. Credits48 provided scoped UDP loss headroom;
-capture/publication/completion scans established no CPU win. VPN then defaulted
-to32 credits. `product tun capture-batch <1..64>` is an optional empty-graph
-diagnostic independent of the TCP experiment.
-
-The [S308 attribution](../testing/2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md) distinguishes UDP readiness/publication from TCP TUN-write costs.
-The user adopted topology parsing removal,48 default VPN primary credits (Root already48),
-capture threshold/budget64, native return frames256, and shared primary/completion/reclaim windows64 independent of the TCP experiment.
-Each packet still receives one nonblocking TUN write; [combined qualification](../testing/2026-10-22_S308_ADOPTED_UNIFIED_WINDOWS.md) is separate from CPU attribution.
-[Single/four-flow TCP download CPU](../testing/2026-10-22_S308_TCP_DOWNLOAD_CPU.md) records occupancy/flames; equal-throughput whole-path gains remain unestablished.
+[S307 tuning](../testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md) retained dedicated I/O and original-buffer transfer.
+[S308 attribution](../testing/2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md) led to user-adopted topology parsing removal,
+48 default VPN primary credits, capture threshold/budget64, return frames256 and shared primary/completion/reclaim windows64.
+[Combined qualification](../testing/2026-10-22_S308_ADOPTED_UNIFIED_WINDOWS.md) and [TCP CPU attribution](../testing/2026-10-22_S308_TCP_DOWNLOAD_CPU.md)
+retain their separate scopes; equal-throughput whole-path gains remain unestablished. Optional TUN capture-batch diagnostics remain independent of TCP experiments.
 
 ## What exists
 
@@ -62,28 +56,13 @@ its existing buffer profile. From October 22, the user selects a 65,528-byte
 TCP ring/sndbuf default (approximately 64 KiB), retaining the explicit 32,768-byte
 override and unchanged 32,768-byte receive window; see the
 [capacity decision](../adr/0007-owner-local-lwip-direct-egress.md#2026-10-22-user-selected-tcp-send-buffer-capacity).
-TCP batch and readiness gating remain opt-in. The
-[N1 little-core baseline at 1.803 GHz](../testing/2026-10-22_TCP_SINGLE_LITTLE_MAXFREQ_BASELINE.md)
-records three current-configuration downloads; it does not isolate a capacity
-or frequency benefit. The [historical N2/32 KiB replay at the same fixed frequency](../testing/2026-10-22_OLD_500_MAXFREQ_REPRODUCTION.md)
-records 313.86/303.05 Mbps and does not reproduce the earlier 496.62/535.54 Mbps pair.
-[Subsequent four/64-flow and Wi-Fi reconnect measurements](../testing/2026-10-22_OLD_500_MULTIFLOW_MAXFREQ.md)
-retain all failed gates; the separately requested post-reconnect four-flow repeats
-record 541.53 Mbps (probe UID gate failed) and 494.62 Mbps (collector complete).
-These sequential observations do not establish a Wi-Fi bottleneck or reconnect effect. The
-[post-reconnect old single-flow check](../testing/2026-10-22_POSTWIFI_SINGLE_OLD_AND_CURRENT.md)
-then records 306.74/333.05 Mbps despite high PHY rates; its conditional latest-APK
-stage was not run because the predefined approximately 500 Mbps trigger was not met. A
-[separately requested current-APK single-flow cohort](../testing/2026-10-22_POSTWIFI_CURRENT_SINGLE.md)
-then records 303.62/335.54 Mbps before another requested Wi-Fi toggle and
-257.50/300.00 Mbps afterward, with unchanged current defaults and1.803 GHz.
-All four measurements pass their scoped gates; no500 Mbps recovery is observed.
-The [subsequent current multiflow cohort](../testing/2026-10-22_CURRENT_MULTIFLOW_MAXFREQ.md)
-records 479.31/461.85 Mbps with4 flows;64-flow endpoints440.52/469.51 Mbps
-remain diagnostic because final UID gates fail. It retains N1 and the same
-post-toggle network/defaults/frequency conditions, with separate raw evidence. The earlier 32 KiB default
-20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
-TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
+TCP batch and readiness gating remain opt-in. The [large-MTU implementation](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md)
+records the earlier 32 KiB download and same-pool MTU3000/10000 ABBA checks.
+Current measurements remain scoped observations: [N1 fixed-frequency baseline](../testing/2026-10-22_TCP_SINGLE_LITTLE_MAXFREQ_BASELINE.md),
+[historical N2 replay](../testing/2026-10-22_OLD_500_MAXFREQ_REPRODUCTION.md), [old multiflow/reconnect](../testing/2026-10-22_OLD_500_MULTIFLOW_MAXFREQ.md),
+[old/current single-flow checks](../testing/2026-10-22_POSTWIFI_SINGLE_OLD_AND_CURRENT.md), [current single-flow cohort](../testing/2026-10-22_POSTWIFI_CURRENT_SINGLE.md)
+and [current multiflow cohort](../testing/2026-10-22_CURRENT_MULTIFLOW_MAXFREQ.md).
+Those reports retain raw identities, failed UID gates and explicit limits; they do not establish Wi-Fi causation, a capacity/frequency benefit or approximately500 Mbps single-flow recovery.
 
 The [foundation joint report](../testing/2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md)
 records `PASS_WITH_EXPLICIT_LIMITS` across Linux Root and 64 distinct Pixel

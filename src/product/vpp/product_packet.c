@@ -215,6 +215,9 @@ parse_transport (const uint8_t *packet, size_t packet_length,
           facts->l4_status = PRODUCT_PACKET_L4_INVALID_OR_UNAVAILABLE;
           return PRODUCT_PACKET_OK;
         }
+      /* UDP consumes its declared datagram, not any trailing IP payload.
+       * All owner-local application parsers use this validated boundary. */
+      facts->transport_length = declared_length;
       facts->l4_header_length = 8;
     }
   else if ((facts->ip_family == 4 && facts->protocol == 1)

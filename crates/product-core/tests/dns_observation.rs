@@ -128,3 +128,23 @@ fn dns_rows_obey_existing_database_byte_pressure() {
     assert!(std::fs::metadata(path.with_extension("sqlite3")).unwrap().len() <= 76 * 1024);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn recent_dns_uses_receive_time_across_independent_lane_tokens() {
+    let root = test_root("lane-order");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut store = ObservationStore::open(&root.join("observation.json")).unwrap();
+    store.begin_generation(77).unwrap();
+    let busy_lane: Vec<_> = (1000..1128).map(|token| query(token, 1, 2)).collect();
+    store.consume_dns(&busy_lane, 61_000_000).unwrap();
+    let mut newest = query(1, 1, 1);
+    newest.owner = 1;
+    store.consume_dns(&[newest], 61_000_001).unwrap();
+    let reply = store.query();
+    let recent = reply["dns"]["recent"].as_object().unwrap();
+    assert_eq!(recent.len(), 128);
+    assert!(recent.values().any(|row| row["record"]["token"] == 1
+        && row["record"]["owner"] == 1));
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
