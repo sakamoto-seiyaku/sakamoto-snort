@@ -30,7 +30,7 @@ static void fixture (void)
                 { .length = 12, .name = "else.example", .list = 1 }} };
   assert (!product_domains_build (&source, &fixture_domains));
   fixture_context = (product_dns_context_t) {
-    .domains = fixture_domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP, .domains_available = 1,
+    .domains = fixture_domains, .caller = PRODUCT_DNS_CALLER_PLATFORM_APP, .domains_available = 1,
     .packet = { .uid = 10123, .uid_known = 1, .family = 4, .protocol = 17,
       .direction = 3, .direction_known = 1, .ports_available = 1,
       .source_port = 40000, .destination_port = 53,
@@ -64,7 +64,7 @@ static void reliable_query_is_denied_before_original_forwarding (void)
   product_domains_t *domains = NULL;
   assert (!product_domains_build (&source, &domains));
   product_dns_context_t context = {
-    .domains = domains, .caller = PRODUCT_DNS_CALLER_KERNEL_APP, .domains_available = 1,
+    .domains = domains, .caller = PRODUCT_DNS_CALLER_PLATFORM_APP, .domains_available = 1,
     .packet = { .uid = 10123, .uid_known = 1, .family = 4, .protocol = 17,
       .direction = 3, .direction_known = 1, .ports_available = 1,
       .source_port = 40000, .destination_port = 53 }
@@ -109,7 +109,7 @@ static void caller_availability_boolean_and_real_transport (void)
   r.expression[4] = PRODUCT_STATIC_AND;
   result = evaluate (query_wire, sizeof (query_wire), &r, 1, &query);
   assert (!result.evaluation);
-  fixture_context.caller = PRODUCT_DNS_CALLER_KERNEL_APP;
+  fixture_context.caller = PRODUCT_DNS_CALLER_PLATFORM_APP;
   memcpy (r.expression, (uint8_t[]) { PRODUCT_EXPRESSION_DOMAIN_LIST, 0,
     PRODUCT_STATIC_DESTINATION_PORT, 0xbb, 1, 0xbb, 1, PRODUCT_STATIC_AND }, 8);
   r.expression_length = 8;
@@ -396,6 +396,6 @@ int main (void)
   malformed_messages_are_not_successful_no_match ();
   canonical_and_unrepresentable_names ();
   bounded_wire_mutations_release_every_operation ();
-  puts ("Root DNS query semantic seam: PASS");
+  puts ("Shared Root/VPN DNS query semantic seam: PASS");
   return 0;
 }

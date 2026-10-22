@@ -71,6 +71,10 @@ add_executable(sakamoto-product-dns-query-test tests/host/product_dns_query_test
   src/product/vpp/product_packet.c)
 target_link_libraries(sakamoto-product-dns-query-test PRIVATE sakamoto_product_dns)
 add_test(NAME sakamoto-product-dns-query-test COMMAND sakamoto-product-dns-query-test)
+add_test(NAME sakamoto-product-dns-graph-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_graph_test.py")
+add_test(NAME sakamoto-product-vpn-uid-dns-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpn_uid_dns_test.py")
 
 # The first stateful seam is a fixed-capacity, worker-private FlowEntry pool.
 # It has no VPP/Android/Rust dependency so its bounded semantics stay host

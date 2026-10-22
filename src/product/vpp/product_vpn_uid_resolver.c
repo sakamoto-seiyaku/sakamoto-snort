@@ -224,8 +224,12 @@ void product_vpn_uid_resolver_lookup (vlib_main_t *vm,
   u64 generation)
 {
   uid_owner_t *owner;
-  if (!platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
-      !owner_for(vm, pool, assignment, facts, generation, &owner)) return;
+  if (!platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) return;
+  /* TUN ingress alone supplies no original DNS caller. Only this owner's
+   * current Android tuple result may qualify a later packet; an old flag,
+   * diagnostic UID or a system resolver socket must never qualify it. */
+  platform->availability &= ~PRODUCT_PLATFORM_DNS_APP_RELIABLE;
+  if (!owner_for(vm, pool, assignment, facts, generation, &owner)) return;
   uid_tuple_t key = tuple_for(facts);
   u32 index_in_cache = slot_index(&key);
   uid_cache_slot_t *slot = &owner->cache[index_in_cache];
@@ -251,6 +255,11 @@ void product_vpn_uid_resolver_lookup (vlib_main_t *vm,
        * SYN is handled above; UDP has no equivalent reuse signal. */
       platform->uid = slot->uid;
       platform->availability |= PRODUCT_PLATFORM_UID_KNOWN;
+      /* Android's normal per-user App range identifies an app-owned socket.
+       * System/netd UIDs identify only the delegate, not its IPC caller.
+       * Isolated and other special UID ranges remain conservative Unknown. */
+      if (slot->uid % 100000U >= 10000U && slot->uid % 100000U <= 19999U)
+        platform->availability |= PRODUCT_PLATFORM_DNS_APP_RELIABLE;
     }
   }
 }

@@ -4396,10 +4396,10 @@ product_packet_graph_dns_prepare (
   product_policy_snapshot_t *snapshot, product_dns_query_t *query, int *observed)
 {
   *observed = 0;
-  /* This ticket enables only Root original-path UDP queries. The shared core
-   * is independent of that Adapter selection. mDNS and responses stay on
-   * their existing paths, and no resolver destination is replaced. */
-  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+  /* Only original outbound packets enter query policy. Flow-stack responses
+   * keep their return lineage; neither Adapter replaces the resolver. */
+  if ((lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+       lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) ||
       lease->platform.direction != PRODUCT_PACKET_DIRECTION_OUTPUT ||
       lease->facts.protocol != 17 || lease->facts.destination_port != 53 ||
       lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE)
@@ -4409,7 +4409,7 @@ product_packet_graph_dns_prepare (
     .domains = snapshot->bank->generation == product_packet_graph_main.generation
       ? snapshot->bank->domains : NULL,
     .caller = (lease->platform.availability & PRODUCT_PLATFORM_DNS_APP_RELIABLE)
-      ? PRODUCT_DNS_CALLER_KERNEL_APP : PRODUCT_DNS_CALLER_UNKNOWN,
+      ? PRODUCT_DNS_CALLER_PLATFORM_APP : PRODUCT_DNS_CALLER_UNKNOWN,
   };
   product_packet_graph_l4_packet_projection (lease, &context.packet);
   vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
@@ -5005,8 +5005,10 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
   product_dns_resources_t resources = product_dns_resources ();
   product_policy_snapshot_t snapshot;
   product_policy_snapshot_acquire (g, &snapshot);
-  vlib_cli_output (vm, "dns.profile=root-original-udp enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=0 vpn=0",
-    g->enabled && g->accepting && g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
+  vlib_cli_output (vm, "dns.profile=original-udp enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=0 root=1 vpn=1",
+    g->enabled && g->accepting &&
+      (g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE ||
+       g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN),
     (unsigned long long) g->generation, (unsigned long long) snapshot.identity.revision,
     (unsigned long long) snapshot.identity.snapshot_hash, product_packet_graph_worker_count (),
     PRODUCT_DNS_MESSAGE_MAX, PRODUCT_DNS_CODEC_BYTES,

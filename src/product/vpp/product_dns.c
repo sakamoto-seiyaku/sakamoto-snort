@@ -23,9 +23,9 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
   memset (out, 0, sizeof (*out));
   if (!context) return;
   out->packet = context->packet;
-  out->caller = context->caller == PRODUCT_DNS_CALLER_KERNEL_APP &&
+  out->caller = context->caller == PRODUCT_DNS_CALLER_PLATFORM_APP &&
     context->packet.uid_known && context->packet.uid != UINT32_MAX
-      ? PRODUCT_DNS_CALLER_KERNEL_APP : PRODUCT_DNS_CALLER_UNKNOWN;
+      ? PRODUCT_DNS_CALLER_PLATFORM_APP : PRODUCT_DNS_CALLER_UNKNOWN;
   out->packet.domain_source = PRODUCT_POLICY_DOMAIN_DNS_QNAME;
   out->packet.domain_available = 0;
   out->packet.domain_lists = 0;
@@ -60,7 +60,7 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
           if (!out->name_length)
             { out->name[0] = '.'; out->name[1] = 0; out->name_length = 1; }
           out->coverage = PRODUCT_DNS_QUERY_COMPLETE;
-          if (out->caller == PRODUCT_DNS_CALLER_KERNEL_APP && context->domains_available)
+          if (out->caller == PRODUCT_DNS_CALLER_PLATFORM_APP && context->domains_available)
             {
               out->packet.domain_available = !product_domains_lookup_dns (
                 context->domains, (const uint8_t *) out->name, out->name_length,

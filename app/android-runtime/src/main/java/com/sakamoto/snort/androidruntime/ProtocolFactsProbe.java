@@ -17,6 +17,8 @@ import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -293,8 +295,9 @@ final class ProtocolFactsProbe {
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         org.json.JSONArray queries = plan.getJSONArray("dnsQueries");
         int timeout = plan.optInt("dnsTimeoutMs", 1000);
+        int delay = plan.optInt("dnsQueryDelayMs", 0);
         if (queries.length() < 1 || queries.length() > 64 || port != 53
-                || timeout < 100 || timeout > 3000)
+                || timeout < 100 || timeout > 3000 || delay < 0 || delay > 1000)
             throw new IllegalArgumentException("bounded ordinary DNS probe");
         org.json.JSONArray exchanges = new org.json.JSONArray();
         result.put("dnsExchanges", exchanges);
@@ -305,6 +308,7 @@ final class ProtocolFactsProbe {
             result.put("resolver", socket.getRemoteSocketAddress().toString());
             byte[] received = new byte[8193];
             for (int i = 0; i < queries.length(); ++i) {
+                if (i != 0 && delay != 0) Thread.sleep(delay);
                 byte[] request = hex(queries.getString(i));
                 if (request.length > 4096) throw new IllegalArgumentException("DNS probe query size");
                 JSONObject exchange = new JSONObject().put("sentHex", toHex(request));
@@ -319,6 +323,41 @@ final class ProtocolFactsProbe {
                     exchange.put("timedOut", true);
                 }
             }
+        }
+    }
+
+    private static void systemDns(JSONObject plan, JSONObject result) throws Exception {
+        String name = plan.getString("systemDnsName");
+        if (!name.matches("[a-zA-Z0-9.-]{1,253}"))
+            throw new IllegalArgumentException("bounded system DNS probe name");
+        CountDownLatch completed = new CountDownLatch(1);
+        android.os.CancellationSignal cancel = new android.os.CancellationSignal();
+        final byte[][] answer = new byte[1][];
+        final int[] rcode = {-1};
+        final String[] error = new String[1];
+        try {
+            android.net.DnsResolver.getInstance().rawQuery(null, name,
+                    android.net.DnsResolver.CLASS_IN, android.net.DnsResolver.TYPE_A,
+                    android.net.DnsResolver.FLAG_NO_CACHE_LOOKUP
+                            | android.net.DnsResolver.FLAG_NO_CACHE_STORE
+                            | android.net.DnsResolver.FLAG_NO_RETRY,
+                    Runnable::run, cancel, new android.net.DnsResolver.Callback<byte[]>() {
+                        @Override public void onAnswer(byte[] value, int code) {
+                            if (value.length <= 65535) answer[0] = value;
+                            else error[0] = "system DNS reply size";
+                            rcode[0] = code; completed.countDown();
+                        }
+                        @Override public void onError(android.net.DnsResolver.DnsException failure) {
+                            error[0] = failure.toString(); completed.countDown();
+                        }
+                    });
+            if (!completed.await(10, TimeUnit.SECONDS))
+                throw new SocketTimeoutException("system DNS probe deadline");
+            result.put("systemDnsRcode", rcode[0]);
+            if (answer[0] != null) result.put("systemDnsAnswerHex", toHex(answer[0]));
+            if (error[0] != null) result.put("systemDnsError", error[0]);
+        } finally {
+            cancel.cancel();
         }
     }
 
@@ -616,7 +655,8 @@ final class ProtocolFactsProbe {
                 InetAddress local = plan.optBoolean("bindDefault") ? null : InetAddress.getByName(VpnTunPlatformSession.IPV4_ADDRESS);
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
-                if (plan.has("dnsQueries")) dnsQueries(plan, result, endpoint, local, source, port);
+                if (plan.has("systemDnsName")) systemDns(plan, result);
+                else if (plan.has("dnsQueries")) dnsQueries(plan, result, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);

@@ -17,10 +17,11 @@ typedef enum {
   PRODUCT_DNS_COPY_GAP,
 } product_dns_coverage_t;
 
-/* A known socket UID alone does not establish the original DNS caller. */
+/* Adapter-qualified normal App ownership. A known socket UID alone does
+ * not establish the original DNS caller; system delegates stay Unknown. */
 typedef enum {
   PRODUCT_DNS_CALLER_UNKNOWN = 0,
-  PRODUCT_DNS_CALLER_KERNEL_APP = 1,
+  PRODUCT_DNS_CALLER_PLATFORM_APP = 1,
 } product_dns_caller_t;
 
 typedef struct {
