@@ -46,7 +46,7 @@ if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 &&
 fi
 vpn_buffer_virtual_only=OFF
 if [[ "$vpn_buffer_data_bytes" == 10240 ]]; then vpn_buffer_virtual_only=ON; fi
-vpn_tcp_buffer_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT:-OFF}"
+vpn_tcp_buffer_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT:-ON}"
 if [[ "$vpn_tcp_buffer_experiment" != ON && "$vpn_tcp_buffer_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT must be ON or OFF" >&2
   exit 2

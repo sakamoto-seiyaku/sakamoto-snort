@@ -162,6 +162,32 @@ synchronization machinery.
 
 ## Android socket and lifecycle boundary
 
+### 2026-10-22 User-selected TCP send-buffer capacity
+
+The user selects the existing approximately 64 KiB send-buffer profile as the
+default for subsequent VPN builds. The exact usable capacity is **65,528 bytes**
+for both the owner-local HEV Direct ring and lwIP `TCP_SND_BUF`, replacing the
+32,768-byte default. The current non-window-scaled lwIP uses a 16-bit
+`tcpwnd_size_t`; assigning 65,536 would overflow. This selection uses the
+existing bounded profile rather than changing TCP window-scaling semantics.
+Keep its explicit 32,768-byte diagnostic override and existing low-water
+threshold compatible with MSS 9,940 and lwIP's enabled sanity checks.
+
+`TCP_WND` remains 32,768 bytes: it is the receive-direction window, not the
+selected send capacity. MTU 10,000, MSS 9,940, owner topology, protected-socket
+settings, packet credits and native handoff/completion windows are independent
+settings. No ownership copy, ACK lifetime, readiness policy, scheduler budget,
+spill or retry policy changes as part of this capacity selection.
+
+This is a user-selected capacity change, not an established throughput gain.
+The October 21 slow-topology buffer intervention and approximately 500 Mbps
+32 KiB records keep their original configurations and conclusions. Verify the
+new default and explicit smaller override through actual dual-stack transport,
+held ACK/ring-wrap and bounded stop/settlement checks. Freeze new artifact
+identities separately from all earlier 32 KiB measurements. No new device
+campaign is selected here; the user's fixed-frequency, all-little-core placement
+comparison is a separate, still unexecuted measurement decision.
+
 ### 2026-09-11 Worker-isolated return capacity
 
 Return-packet capacity is reserved separately for each canonical worker and

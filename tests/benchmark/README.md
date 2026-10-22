@@ -167,12 +167,18 @@ when read interest was paused. `interest_changes`, `read_pauses` and
 `read_resumes` show actual mask transitions; the real `hold-ack` fixture checks
 queued socket data resumes before a periodic timer could rescue it.
 
-`SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT` defaultsOFF and changes only the
-TCP send buffer and Direct ring32768→65528, keeping `TCP_WND` unchanged. Native
-`buffer_bytes` and ring/flight peaks show actual capacity; RSS samples refer to
-one process and must not be summed across threads. The fixed-download evidence
-also records increased return-credit rejection, so this is a conditional
-experiment, not a default-capacity recommendation.
+`SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT` defaultsON from October 22,
+selecting a 65,528-byte TCP send buffer and owner-local Direct ring (approximately
+64 KiB); explicit OFF restores 32,768 bytes. `TCP_WND` stays 32,768 bytes and
+window scaling stays disabled. The exact send capacity fits the existing
+16-bit lwIP window type; 65,536 does not. The existing low-water threshold and
+MSS 9,940 sanity checks remain enabled. Native `buffer_bytes` and ring/flight
+peaks show actual capacity; RSS samples refer to one process and must not be
+summed across threads. This is a user-selected capacity change; the earlier
+fixed-download evidence records increased return-credit rejection and establishes
+no performance gain for the new default. Historical artifacts retain their
+original flags and identities. See the
+[capacity decision](../../docs/adr/0007-owner-local-lwip-direct-egress.md#2026-10-22-user-selected-tcp-send-buffer-capacity).
 
 It runs Root, then ordinary VPN. Each mode uses this fixed order:
 

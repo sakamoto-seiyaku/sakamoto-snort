@@ -18,6 +18,11 @@ not make every historical execution claim current.
   The first version targets Root/NFQ and VPN; KSU's system-resolver integration
   is a future extension. A design decision, not runtime evidence.
 - [Per-worker flow ownership](PER_WORKER_FLOW_OWNERSHIP.md).
+- [Owner-local TCP send capacity](../adr/0007-owner-local-lwip-direct-egress.md):
+  the 2026-10-22 addendum selects the existing 65,528-byte HEV ring/lwIP send
+  profile for subsequent default builds, retaining the receive window and
+  32,768-byte diagnostic override. Historical 32 KiB results remain separate;
+  the selection does not claim a performance gain.
 - [Configurable FlowOwners and dedicated VPN TUN I/O](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md):
   accepted topology and direct-buffer contract; [S303](../testing/2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md)
   qualifies scoped Root/VPN Product function on Pixel, while [S304](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md)

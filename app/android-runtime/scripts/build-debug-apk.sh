@@ -48,7 +48,7 @@ if [[ "$vpn_buffer_data_bytes" != 2048 && "$vpn_buffer_data_bytes" != 3072 &&
 fi
 vpn_buffer_virtual_only=OFF
 if [[ "$vpn_buffer_data_bytes" == 10240 ]]; then vpn_buffer_virtual_only=ON; fi
-vpn_tcp_buffer_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT:-OFF}"
+vpn_tcp_buffer_experiment="${SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT:-ON}"
 if [[ "$vpn_tcp_buffer_experiment" != ON && "$vpn_tcp_buffer_experiment" != OFF ]]; then
   echo "SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT must be ON or OFF" >&2
   exit 2
@@ -1061,6 +1061,8 @@ build_apk_only() {
   local staged_vpn_tcp_progress
   staged_vpn_tcp_progress="$(sed -n 's/^vpnTcpProgressExperiment=//p' "$product_manifest")"
   staged_vpn_tcp_progress="${staged_vpn_tcp_progress:-OFF}"
+  # Missing buffer fields describe the legacy 32 KiB payload, even though new
+  # builds default to ON. Keep that identity so apk-only rejects stale stages.
   local staged_vpn_tcp_buffer staged_vpn_tcp_buffer_bytes
   staged_vpn_tcp_buffer="$(sed -n 's/^vpnTcpBufferExperiment=//p' "$product_manifest")"
   staged_vpn_tcp_buffer_bytes="$(sed -n 's/^vpnTcpBufferBytes=//p' "$product_manifest")"

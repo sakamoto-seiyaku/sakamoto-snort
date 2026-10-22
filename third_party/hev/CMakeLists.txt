@@ -86,7 +86,7 @@ if(SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT)
     SAKAMOTO_PRODUCT_VPN_LARGE_SEGMENT_EXPERIMENT=1)
 endif()
 option(SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT
-  "Use 65528-byte owner-local TCP sndbuf/ring with unchanged receive window" OFF)
+  "Use 65528-byte owner-local TCP sndbuf/ring with unchanged receive window" ON)
 if(SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT)
   target_compile_definitions(sakamoto_hev_lwip PUBLIC
     SAKAMOTO_PRODUCT_VPN_TCP_BUFFER_EXPERIMENT=1)

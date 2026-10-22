@@ -58,8 +58,12 @@ capacity change, with no whole-path CPU benefit claim. See the scoped
 
 VPN builds default to inner MTU10000/MSS9940 from October 21. The software-only
 VPP pool uses ordinary pages, 10240-byte data and exactly 2048 buffers; Root keeps
-its existing buffer profile. The default 32KiB TCP ring/sndbuf remains, while
-TCP batch, readiness gating and 64KiB buffering are still opt-in. A default
+its existing buffer profile. From October 22, the user selects a 65,528-byte
+TCP ring/sndbuf default (approximately 64 KiB), retaining the explicit 32,768-byte
+override and unchanged 32,768-byte receive window; see the
+[capacity decision](../adr/0007-owner-local-lwip-direct-egress.md#2026-10-22-user-selected-tcp-send-buffer-capacity).
+TCP batch and readiness gating remain opt-in. This capacity selection has no new
+device or performance qualification. The earlier 32 KiB default
 20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
 TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
