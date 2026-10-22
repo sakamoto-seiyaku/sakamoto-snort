@@ -172,7 +172,7 @@ typedef struct
   uint32_t tcp_sequence;
   uint32_t tcp_acknowledgment;
   uint16_t tcp_window;
-  uint16_t transport_length;
+  uint16_t transport_length; /* validated UDP datagram; otherwise IP transport span */
   uint16_t transport_offset;
   uint16_t icmp_identifier;
   uint16_t icmp_sequence;

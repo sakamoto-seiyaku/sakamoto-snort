@@ -89,6 +89,7 @@ typedef struct
 typedef union
 {
   struct { u32 sequence, acknowledgment; u16 window; u8 flags, scale; } tcp;
+  struct { u16 length; } udp;
   struct { u16 identifier, sequence; u8 type, code, identity_known; } icmp;
 } product_transport_metadata_t;
 
@@ -845,6 +846,8 @@ product_metadata_from_lease (product_buffer_metadata_t *metadata,
       metadata->transport.tcp.scale = facts->tcp_window_scale_known
                                        ? facts->tcp_window_scale : 255;
     }
+  else if (facts->protocol == 17)
+    metadata->transport.udp.length = facts->transport_length;
   else if (facts->protocol == 1 || facts->protocol == 58)
     {
       metadata->transport.icmp.identifier = facts->icmp_identifier;
@@ -913,6 +916,17 @@ product_lease_from_metadata (const product_buffer_metadata_t *metadata,
                         packet + offset + width, width);
       facts->transport_offset = facts->l3_header_length;
       facts->transport_length = facts->packet_length - facts->l3_header_length;
+      if (facts->protocol == 17)
+        {
+          /* The once-parsed UDP datagram may be shorter than the IP payload.
+           * Preserve its boundary across local/remote/reassembly transitions;
+           * neither owner parser may consume IP padding or reparse headers. */
+          facts->transport_length = metadata->transport.udp.length;
+          if (facts->transport_length > facts->packet_length - facts->l3_header_length
+              || (facts->l4_status == PRODUCT_PACKET_L4_COMPLETE
+                  && (facts->l4_header_length != 8 || facts->transport_length < 8)))
+            goto invalid_span;
+        }
     }
   if (facts->protocol == 6)
     {
@@ -5449,6 +5463,45 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
   product_platform_packet_facts_t platform;
   int generation_guard = !product_packet_graph_get_platform_facts (buffer,
     generation + UINT64_C (0x100000000), &platform) && platform.availability == 0;
+  int udp_roundtrip = 1, udp_bounds_guard = 1;
+  for (u32 variant = 0; variant < 3; ++variant)
+    {
+      /* Independent UDP fixtures include five bytes beyond the datagram.
+       * Exercise IPv4, IPv6 and IPv6 with a validated extension header. */
+      u32 header = variant == 0 ? 20 : variant == 1 ? 40 : 48;
+      u32 length = header + 8 + 17 + 5;
+      buffer->current_length = length;
+      clib_memset (bytes, 0, length);
+      bytes[0] = variant == 0 ? 0x45 : 0x60;
+      if (variant == 0)
+        {
+          bytes[3] = length; bytes[8] = 64; bytes[9] = 17;
+          bytes[12] = bytes[16] = 192; bytes[15] = 1; bytes[19] = 53;
+        }
+      else
+        {
+          bytes[5] = length - 40; bytes[6] = variant == 2 ? 0 : 17; bytes[7] = 64;
+          bytes[8] = bytes[24] = 0xfd; bytes[23] = 1; bytes[39] = 53;
+          if (variant == 2) bytes[40] = 17;
+        }
+      bytes[header] = 0x9c; bytes[header + 1] = 0x40;
+      bytes[header + 3] = 53; bytes[header + 5] = 25;
+      ingress.data = bytes; ingress.length = length;
+      ingress.platform.uid = 10123; ingress.platform.availability = 15;
+      udp_roundtrip &= product_packet_admit (&layout, &ingress, &before) == PRODUCT_PACKET_OK;
+      product_packet_graph_set_platform_facts (buffer, &ingress.platform, generation);
+      product_metadata_from_lease (&metadata, &before, generation, buffer);
+      product_metadata_store (buffer, &metadata);
+      product_metadata_load (buffer, &metadata);
+      udp_roundtrip &= product_lease_from_metadata (&metadata, buffer, &after)
+        && memcmp (&before.facts, &after.facts, sizeof (before.facts)) == 0
+        && memcmp (&before.platform, &after.platform, sizeof (before.platform)) == 0
+        && memcmp (&before.assignment, &after.assignment, sizeof (before.assignment)) == 0
+        && after.facts.transport_length == 25;
+      metadata.transport.udp.length = length - header + 1;
+      udp_bounds_guard &= !product_lease_from_metadata (&metadata, buffer, &after)
+        && after.runtime_drop_reason == PRODUCT_PACKET_DROP_INVALID_ENVELOPE;
+    }
   vlib_buffer_free (vm, &bi, 1);
   vlib_cli_output (vm, "metadata.layout opaque=%u opaque2=%u owner=%u transport=%u platform=%u obligation=%u alignment=%u platform_offset=%u transport_offset=%u span_offset=%u",
     (u32)sizeof (buffer->opaque), (u32)sizeof (buffer->opaque2),
@@ -5460,7 +5513,9 @@ product_metadata_check_cli (vlib_main_t *vm, unformat_input_t *input,
     (u32)offsetof (product_buffer_metadata_t, span_current_data));
   vlib_cli_output (vm, "metadata.check roundtrip=%u data_guard=%u length_guard=%u generation_guard=%u buffer_return=1",
     ok, data_guard, length_guard, generation_guard);
-  return ok && data_guard && length_guard && generation_guard ? 0
+  vlib_cli_output (vm, "metadata.udp_check roundtrip=%u bounds_guard=%u variants=3 ip_padding_excluded=5 buffer_return=1",
+    udp_roundtrip, udp_bounds_guard);
+  return ok && data_guard && length_guard && generation_guard && udp_roundtrip && udp_bounds_guard ? 0
     : clib_error_return (0, "metadata check failed");
 }
 VLIB_CLI_COMMAND (product_metadata_check_command, static) = {

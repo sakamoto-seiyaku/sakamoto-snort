@@ -261,7 +261,6 @@ dependencies = "\n".join(function(graph, name) for name in (
     "product_packet_graph_get_platform_facts", "product_metadata_terminal_intent",
     "product_metadata_set_terminal_intent", "product_metadata_from_lease",
     "product_lease_from_metadata", "product_handoff_credit_reserve", "product_handoff_credit_release"))
-dependencies += function(packet, "product_packet_bypass_primary_capacity")
 dependencies += function(admit, "product_batch_prefetch_buffer")
 stats = r'''
 static product_packet_batch_stats_t packet_stats[PRODUCT_GRAPH_WORKERS + 1];
@@ -445,6 +444,7 @@ static product_buffer_metadata_t primary(u32 index, u16 owner, u8 provenance) {
     .origin_obligation_id = 10000 + index,
     .facts = { .l3_status = PRODUCT_PACKET_L3_COMPLETE, .l4_status = PRODUCT_PACKET_L4_COMPLETE,
       .ip_family = 4, .protocol = 17, .packet_length = 28, .l3_header_length = 20, .l4_header_length = 8,
+      .transport_offset = 20, .transport_length = 8,
       .source_port = 24000 + index, .destination_port = 25000 },
     .assignment = { .execution_owner = owner, .valid = 1, .source_is_a = 1,
       .key = { .kind = PRODUCT_OWNER_KEY_L4_PORTS }, .canonical_hash = 40000 + index },
@@ -917,6 +917,60 @@ static void origin_window_matrix(void) {
   puts("PASS origin64 boundary matrix: native256 frames consumed64+partial, mixed Root pool/VPN native free, free-before-return-credit and zero final lifecycle debt");
 }
 
+static void parsed_udp_facts_survive_inline_metadata(void) {
+  for(unsigned profile=0;profile<3;profile++)
+    for(unsigned payload=0;payload<=29;payload+=29)
+      for(unsigned padding=0;padding<=5;padding+=5)
+        for(unsigned remote=0;remote<2;remote++) {
+          reset();
+          vlib_buffer_t *buffer=new_buffer(0);
+          unsigned family=profile?6:4, header=family==4?20:profile==2?48:40;
+          unsigned length=header+8+payload+padding;
+          buffer->current_length=length;
+          u8 *bytes=buffer->data;
+          bytes[0]=family==4?0x45:0x60;
+          if(family==4) {
+            bytes[3]=length;bytes[8]=64;bytes[9]=17;
+            bytes[12]=bytes[16]=192;bytes[15]=1;bytes[19]=53;
+          } else {
+            bytes[5]=length-40;bytes[6]=profile==2?0:17;bytes[7]=64;
+            bytes[8]=bytes[24]=0xfd;bytes[23]=1;bytes[39]=53;
+            if(profile==2)bytes[40]=17;
+          }
+          bytes[header]=0x9c;bytes[header+1]=0x40;bytes[header+3]=53;
+          bytes[header+5]=8+payload;
+          memset(bytes+header+8,0x5a,payload);
+          memset(bytes+header+8+payload,0xff,padding);
+          product_worker_layout_t layout={.worker_count=2,.hash_seed=310};
+          product_packet_ingress_t ingress={.data=bytes,.length=length,.origin_obligation_id=310,
+            .platform={.uid=10123,.availability=15,.direction=PRODUCT_PACKET_DIRECTION_OUTPUT,
+              .provenance=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE}};
+          product_packet_lease_t before,after;
+          assert(product_packet_admit(&layout,&ingress,&before)==PRODUCT_PACKET_OK);
+          assert(before.facts.l4_status==PRODUCT_PACKET_L4_COMPLETE);
+          before.primary_handoff_count=remote;
+          product_buffer_metadata_t metadata;
+          product_packet_graph_set_platform_facts(buffer,&ingress.platform,741);
+          product_metadata_from_lease(&metadata,&before,741,buffer);
+          product_metadata_store(buffer,&metadata);
+          product_metadata_load(buffer,&metadata);
+          assert(product_lease_from_metadata(&metadata,buffer,&after));
+          assert(!memcmp(&before.facts,&after.facts,sizeof(before.facts)));
+          assert(!memcmp(&before.platform,&after.platform,sizeof(before.platform)));
+          assert(!memcmp(&before.assignment,&after.assignment,sizeof(before.assignment)));
+          assert(after.facts.transport_length==8+payload);
+          assert(after.primary_handoff_count==remote);
+          metadata.transport.udp.length=7;
+          assert(!product_lease_from_metadata(&metadata,buffer,&after));
+          metadata.transport.udp.length=length-header+1;
+          assert(!product_lease_from_metadata(&metadata,buffer,&after));
+          metadata.transport.udp.length=before.facts.transport_length;
+          buffer->current_length--;
+          assert(!product_lease_from_metadata(&metadata,buffer,&after));
+        }
+  puts("PASS actual parse/inline metadata: UDP4/UDP6/extensions, payload/IP padding, local/remote identity and truncated-span guard");
+}
+
 int main(void) {
   page_bytes = (size_t)sysconf(_SC_PAGESIZE);
   assert(page_bytes >= sizeof(vlib_buffer_t));
@@ -924,6 +978,7 @@ int main(void) {
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   assert(arena != MAP_FAILED);
   setvbuf(stdout, 0, _IONBF, 0);
+  parsed_udp_facts_survive_inline_metadata();
   primary_mixed64_regression();
   primary_partial();
   primary_boundaries();
@@ -953,7 +1008,8 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-packet-batch-") as temporary:
             "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=1",
             f"-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE={verdict_mode}"])
         subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all",
-                        *flags, "-I", str(PRODUCT), str(c_source), "-o", str(executable)],
+                        *flags, "-I", str(PRODUCT), str(c_source), str(PRODUCT / "product_packet.c"),
+                        "-o", str(executable)],
                        check=True, timeout=30)
         subprocess.run([str(executable)], check=True, timeout=5)
         print("origin_verdict_mode=" + ("OFF" if verdict_mode is None else str(verdict_mode)))

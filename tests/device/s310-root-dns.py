@@ -419,7 +419,9 @@ def main():
                     and Path(line.split()[2]).name == 'libvpp_runtime.so']
             assert len(pids) == 1, process
             result['runs'].append(dict(owners=owners, generation=int(running['generation']), pid=int(pids[0])))
-            cli(label + '-topology', 'show product topology', 'show product root lanes', 'show product dns')
+            topology = cli(label + '-topology', 'show product topology', 'show product root lanes',
+                           'show product dns', 'product metadata check')
+            assert 'metadata.udp_check roundtrip=1 bounds_guard=1 variants=3 ip_padding_excluded=5 buffer_return=1' in topology
             status = configure(label + '-block')
             exchange(label + '-v4-block', args.endpoint4,
                      [('allowed.test', 1), ('blocked.test', 1), ('allowed.test', 65000)],
