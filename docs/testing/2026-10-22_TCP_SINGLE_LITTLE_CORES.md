@@ -170,3 +170,14 @@ it did not accept measurement permission as authorization to disclose the
 specific internal scope, artifact hashes and operational details. No retry or
 bypass occurred. A local scope/results draft is retained for user review; S293
 stays open and S308 stays Done. Tracker publication remains pending permission.
+
+### Later publication authorization
+
+After the measurement was committed, the user explicitly authorized Plane
+publication and further analysis. The exact completed-results draft was
+published once to S293 as comment
+`63f13439-4da2-429c-9811-ddc656f81145`; normalized content read-back PASS and
+parent remains open. Receipt:
+`build-output/tcp-single-little-20261022/plane-publication-approved-receipt.json`.
+This resolves the earlier publication block without changing the historical
+rejection or measurement evidence.
