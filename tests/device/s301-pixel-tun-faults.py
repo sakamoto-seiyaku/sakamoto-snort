@@ -37,11 +37,15 @@ def main():
     p.add_argument('--ordinary-product', action='store_true')
     p.add_argument('--owner-cpus', default='1,2,1')
     p.add_argument('--io-cpu', default='3')
+    p.add_argument('--capture-batch', type=int, choices=range(1, 65))
+    p.add_argument('--completion-phase-primary-credits', type=int, choices=(32, 48), default=32)
+    p.add_argument('--hold-completions', action='store_true')
     p.add_argument('--stop-during-congestion', action='store_true')
     p.add_argument('--prestop-draining', action='store_true')
     a = p.parse_args()
     assert not (a.stop_during_congestion or a.prestop_draining) or not a.ordinary_product
     assert not (a.stop_during_congestion and a.prestop_draining)
+    assert not a.hold_completions or not a.ordinary_product
     owner_cpus = a.owner_cpus.split(',')
     assert all(cpu.isdecimal() for cpu in owner_cpus) and owner_cpus
     assert a.io_cpu.isdecimal()
@@ -50,6 +54,9 @@ def main():
     def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
     result = dict(status='HOLD', started_ns=time.time_ns(), ordinary_product=a.ordinary_product,
                   requested_owner_cpus=a.owner_cpus, requested_tun_io_cpu=a.io_cpu,
+                  requested_capture_batch=a.capture_batch,
+                  completion_phase_primary_credits=a.completion_phase_primary_credits,
+                  completion_fault_mode='held-original' if a.hold_completions else 'ring-pressure',
                   apk_sha256=digest(apk), restore_sha256=digest(restore),
                   helper_sha256=digest(helper),
                   source_sha256=digest(Path(__file__)),
@@ -168,6 +175,11 @@ def main():
                     break
                 time.sleep(.2)
         if not attached_ok: raise RuntimeError('TUN did not attach')
+        if a.capture_batch is not None:
+            configured = cli('capture-batch-configured',
+                             'product tun capture-batch ' + str(a.capture_batch))
+            values = fields(configured, 'tun.capture_batch_configured ')
+            assert values['generation'] == generation and values['limit'] == str(a.capture_batch)
         if not a.ordinary_product:
             save('attached.properties', app('files/product-state/s213-tun-graph.properties'))
         log = app('files/profiles/vpn/vpp/logs/vpp-stdout.log')
@@ -223,7 +235,7 @@ def main():
         assert int(recovered[2]['received']) >= int(rejected[2]['received']) + 1
         assert recovered[2]['owner_failures'] == '0'
         capacity('completion-capacity',
-            'product capacity credits 32 primary-slots 64 completion-slots 2')
+            f'product capacity credits {a.completion_phase_primary_credits} primary-slots 64 completion-slots 2')
         if a.stop_during_congestion:
             held = cli('original-hold', 'product tun original-hold 5000')
             assert 'tun.original_hold milliseconds=5000' in held
@@ -274,9 +286,18 @@ def main():
             result['status'] = 'RAW_COMPLETE'
             return
         for burst in range(6):
+            if a.hold_completions:
+                held = cli('completion-hold', 'product tun original-hold 5000')
+                assert 'tun.original_hold milliseconds=5000' in held
             save(f'completion-burst-send-{burst}.txt',
                  root('/data/local/tmp/s301-tun-packets ' +
                       shlex.quote(interface) + ' valid 64'))
+            if a.hold_completions:
+                held = status('completion-held')
+                assert int(held[0]['pending']) > 0
+                assert int(held[2]['deferred']) > int(recovered[2]['deferred'])
+                released = cli('completion-release', 'product tun original-hold 0')
+                assert 'tun.original_hold milliseconds=0' in released
             congested = drain('completion-congested',
                               int(recovered[0]['captured']) + 64 * (burst + 1))
             if int(congested[2]['deferred']) > int(recovered[2]['deferred']) and \

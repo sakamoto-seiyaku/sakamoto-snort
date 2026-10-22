@@ -39,6 +39,7 @@ def main():
     parser.add_argument('--preselect-other-io-cpu', action='store_true')
     parser.add_argument('--stress-ingress', action='store_true')
     parser.add_argument('--ordinary-product', action='store_true')
+    parser.add_argument('--capture-batch', type=int, choices=range(1, 65))
     parser.add_argument('--flow-end-mode', choices=['none', 'close', 'expiry'], default='none')
     parser.add_argument('--stop-with-held-return', action='store_true')
     parser.add_argument('--stale-return-before-stop', action='store_true')
@@ -112,6 +113,7 @@ def main():
     result['owner'] = a.owner
     result['stress_ingress'] = a.stress_ingress
     result['ordinary_product'] = a.ordinary_product
+    result['capture_batch'] = a.capture_batch
     test_inputs = ['tests/device/s298-pixel-udp-return.py', 'tests/device/s207-owner-oracle.py',
                    'tests/device/helpers/s223-udp.c',
                    'tests/device/helpers/s298-tun-ingress-flood.c',
@@ -203,6 +205,11 @@ def main():
                     if line.startswith('topology.tun_io_lane='))
         assert f'actual_core={io_cpu}' in lane and f'thread_index={a.owner_count + 1}' in lane, lane
         assert f'origin_thread={a.owner_count + 1}' in before_topology, before_topology
+        if a.capture_batch is not None:
+            configured = cli('capture-batch-configured',
+                             [f'product tun capture-batch {a.capture_batch}'])
+            assert ('tun.capture_batch_configured generation=' + str(result['generation']) +
+                    ' limit=' + str(a.capture_batch)) in configured
         assert all(f'enabled=1 owner={i} ready=1' in (a.output / 'before.txt').read_text()
                    for i in range(a.owner_count))
         assert f'enabled=1 owner={a.owner_count} ' not in before_topology

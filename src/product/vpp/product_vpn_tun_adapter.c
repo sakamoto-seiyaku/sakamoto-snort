@@ -30,7 +30,11 @@
 
 #define TUN_PENDING PRODUCT_VPN_TUN_CAPTURE_CAPACITY
 #define TUN_CAPTURE_BUDGET 64
+#define TUN_CAPTURE_BATCH_CAPACITY 64
 #define TUN_BUFFER_RETRY_SECONDS 0.05
+
+_Static_assert(TUN_CAPTURE_BATCH_CAPACITY <= VLIB_FRAME_SIZE,
+               "capture submission fits one native graph frame");
 
 static u64 trace_monotonic_ns(void)
 {
@@ -97,6 +101,7 @@ static struct {
   u64 fault_capture_alloc_at;
   u64 pregraph_returns, local, remote;
   u32 pending, test_uid, tun_file, listener_file, snapshot_interface;
+  u32 capture_batch_limit;
   int tun_fd, listener_fd;
   u8 enabled, draining, stop_started, graph_quiesced;
   u8 test_uid_known, origin_worker, read_paused;
@@ -480,12 +485,11 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
       PRODUCT_VPN_RETURN_CAPACITY);
 }
 
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
 static void tun_submit_captured(vlib_main_t *vm,
   product_packet_graph_external_item_t *items, u32 count)
 {
   if (!count) return;
-  u8 accepted[64];
+  u8 accepted[TUN_CAPTURE_BATCH_CAPACITY];
   product_packet_graph_submit_external_batch(vm, items, count, accepted);
   ++tun.capture_batch_calls;
   tun.capture_batch_packets += count;
@@ -498,7 +502,6 @@ static void tun_submit_captured(vlib_main_t *vm,
     vlib_buffer_free(vm, &items[i].buffer_index, 1);
   }
 }
-#endif
 
 static clib_error_t *tun_read_ready (clib_file_t *file) {
   vlib_main_t *vm = vlib_get_main ();
@@ -508,10 +511,8 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
   u64 started_ns = trace_monotonic_ns();
   u32 captured = 0;
   ++tun.capture_callbacks;
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
-  product_packet_graph_external_item_t batch[64];
+  product_packet_graph_external_item_t batch[TUN_CAPTURE_BATCH_CAPACITY];
   u32 count = 0;
-#endif
   for (u32 budget = 0; budget < TUN_CAPTURE_BUDGET && tun.pending < TUN_PENDING; ++budget) {
     u64 token = tun.next_token + 1;
     if (!token || token >= (1ULL << 63)) {
@@ -587,24 +588,26 @@ static clib_error_t *tun_read_ready (clib_file_t *file) {
       for (ssize_t i = 0; i < length; ++i) fprintf (stderr, "%02x", data[i]);
       fprintf (stderr, "\n"); funlockfile (stderr);
     }
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
-    batch[count++] = (product_packet_graph_external_item_t){
-      .buffer_index = bi, .platform = platform, .obligation = obligation,
-    };
-#else
-    ++tun.capture_batch_calls; ++tun.capture_batch_packets; tun.capture_batch_max = 1;
-    if (!product_packet_graph_submit_external (vm, bi, &platform, &obligation)) {
-      pending->active = 0; tun.pending--; tun.pregraph_returns++;
-      tun.transport_unavailable++;
-      vlib_buffer_free (vm, &bi, 1);
-    } else tun.submitted++;
-#endif
+    if (tun.capture_batch_limit > 1) {
+      batch[count++] = (product_packet_graph_external_item_t){
+        .buffer_index = bi, .platform = platform, .obligation = obligation,
+      };
+      if (count == tun.capture_batch_limit) {
+        tun_submit_captured(vm, batch, count);
+        count = 0;
+      }
+    } else {
+      ++tun.capture_batch_calls; ++tun.capture_batch_packets; tun.capture_batch_max = 1;
+      if (!product_packet_graph_submit_external (vm, bi, &platform, &obligation)) {
+        pending->active = 0; tun.pending--; tun.pregraph_returns++;
+        tun.transport_unavailable++;
+        vlib_buffer_free (vm, &bi, 1);
+      } else tun.submitted++;
+    }
   }
   if (tun.pending == TUN_PENDING) tun_pause_reads(vm, 0);
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
   /* Publish all ready captures even when the final read/allocation failed. */
   tun_submit_captured(vm, batch, count);
-#endif
   if (captured == TUN_CAPTURE_BUDGET) ++tun.capture_budget_exits;
   u64 elapsed_ns = trace_monotonic_ns() - started_ns;
   tun.capture_callback_ns += elapsed_ns;
@@ -779,6 +782,11 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   tun.origin_worker = (u8) product_runtime_topology_current (
     PRODUCT_TOPOLOGY_VPN).tun_io_worker;
   if (!active_owner_count() || active_owner_count() > PRODUCT_VPN_RETURN_WORKERS) return 0;
+#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
+  tun.capture_batch_limit = TUN_CAPTURE_BATCH_CAPACITY;
+#else
+  tun.capture_batch_limit = 1;
+#endif
   for (u32 i = 0; i < active_owner_count(); ++i)
     {
       if (product_vpn_return_credit_init(&returns[i].credit, generation,
@@ -817,6 +825,30 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   return 1;
 }
 
+static clib_error_t *tun_capture_batch_cli(vlib_main_t *vm,
+  unformat_input_t *input, vlib_cli_command_t *command) {
+  u64 limit = 0;
+  (void)command;
+  if (!unformat(input, "%llu", &limit) || !limit ||
+      limit > TUN_CAPTURE_BATCH_CAPACITY ||
+      unformat_check_input(input) != UNFORMAT_END_OF_INPUT)
+    return clib_error_return(0, "expected capture submission limit 1..64");
+  if (!tun.enabled || tun.tun_fd < 0 || tun.draining || tun.stop_started ||
+      tun.graph_quiesced || tun.pending || !product_packet_graph_enabled() ||
+      product_packet_graph_obligation_debt() || product_packet_graph_buffer_debt() ||
+      product_packet_graph_handoff_debt() || product_packet_graph_completion_frame_debt())
+    return clib_error_return(0, "capture batch change requires an active empty VPN graph");
+  /* The CLI worker barrier excludes an active callback and its stack batch.
+   * Only indexes and bounded metadata remain here until this callback ends. */
+  tun.capture_batch_limit = (u32)limit;
+  vlib_cli_output(vm, "tun.capture_batch_configured generation=%llu limit=%u",
+    (unsigned long long)tun.generation, tun.capture_batch_limit);
+  return 0;
+}
+VLIB_CLI_COMMAND(product_tun_capture_batch_command, static) = {
+  .path = "product tun capture-batch", .function = tun_capture_batch_cli,
+};
+
 static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command) {
   (void) input; (void) command;
   u64 packets = 0, submitted = 0, copy_calls = 0, copy_bytes = 0;
@@ -850,10 +882,10 @@ static clib_error_t *tun_status (vlib_main_t *vm, unformat_input_t *input, vlib_
     (unsigned long long)tun.tun_write_error);
   vlib_cli_output(vm, "tun.copies calls=%llu bytes=%llu",
     (unsigned long long)copy_calls, (unsigned long long)copy_bytes);
-  vlib_cli_output(vm, "tun.capture_batch calls=%llu packets=%llu max=%llu",
+  vlib_cli_output(vm, "tun.capture_batch calls=%llu packets=%llu max=%llu limit=%u",
     (unsigned long long)tun.capture_batch_calls,
     (unsigned long long)tun.capture_batch_packets,
-    (unsigned long long)tun.capture_batch_max);
+    (unsigned long long)tun.capture_batch_max, tun.capture_batch_limit);
   vlib_cli_output(vm, "tun.capture_io budget=%u callbacks=%llu budget_exits=%llu callback_ns=%llu callback_max_ns=%llu",
     TUN_CAPTURE_BUDGET, (unsigned long long)tun.capture_callbacks,
     (unsigned long long)tun.capture_budget_exits,

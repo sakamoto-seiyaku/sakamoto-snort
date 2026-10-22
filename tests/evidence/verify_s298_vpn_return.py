@@ -44,6 +44,14 @@ def one(values, **expected):
     assert len(found) == 1, (expected, found)
     return found[0]
 
+if result.get('capture_batch') is not None:
+    configured = records(run / 'capture-batch-configured.txt', 'tun.capture_batch_configured ')
+    one(configured, generation=result['generation'], limit=result['capture_batch'])
+    batches = records(run / 'after.txt', 'tun.capture_batch ')
+    assert len(batches) == 1 and int(batches[0]['limit']) == result['capture_batch']
+    if result.get('stress_ingress') and result['capture_batch'] > 1:
+        assert int(batches[0]['max']) > 1, 'configured capture batching never batched real ingress'
+
 def payload(raw):
     packet = bytes.fromhex(raw)
     if len(packet) < 28 or packet[0] >> 4 != 4 or packet[9] != 17:

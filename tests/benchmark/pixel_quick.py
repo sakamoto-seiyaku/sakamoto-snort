@@ -404,6 +404,9 @@ def run(args):
     primary_credits = manifest.get("primary_handoff_credits")
     if primary_credits is not None and (not vpn_only or type(primary_credits) is not int or primary_credits not in (32, 48)):
         raise ValueError("primary_handoff_credits requires VPN suite and 32 or 48")
+    capture_batch = manifest.get("vpn_capture_batch_size")
+    if capture_batch is not None and (not vpn_only or type(capture_batch) is not int or not 1 <= capture_batch <= 64):
+        raise ValueError("vpn_capture_batch_size requires VPN suite and 1..64")
     tcp_source_port = manifest.get("tcp_fixed_source_port_base")
     if tcp_source_port is not None:
         last_port = tcp_source_port + manifest['threads'] * (manifest['flows_per_thread'] + 1) - 1 if type(tcp_source_port) is int else 65536
@@ -507,6 +510,12 @@ def run(args):
                     if not any(row.get("generation") == running["generation"] and row.get("credits") == str(primary_credits)
                                for row in rows(configured, "capacity.configured ")):
                         raise RuntimeError("diagnostic capacity requires an active empty graph; no retry")
+                if capture_batch is not None:
+                    configured = device.cli(profile, [f"product tun capture-batch {capture_batch}"])
+                    (cell / "capture-batch-configured.txt").write_text(configured)
+                    if not any(row.get("generation") == running["generation"] and row.get("limit") == str(capture_batch)
+                               for row in rows(configured, "tun.capture_batch_configured ")):
+                        raise RuntimeError("capture batch requires an active empty graph; no retry")
                 client_prefix = ["shell", "su", str(manifest["uid"]), "-c"] if profile == "root" else ["shell"]
                 # Warm only existing tracing and the actual LAN path. Its flows and time are explicit.
                 warm = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), "14", "tcp-fixed", "250", "2", "8"]
@@ -517,7 +526,7 @@ def run(args):
                     warm_result = json.loads(warm_value)
                     if not warm_result.get("bytes"):
                         raise RuntimeError("phone cannot deliver warmup data from the selected LAN peer")
-                commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows", "show buffers"]
+                commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows", "show buffers", "show product batch"]
                 if vpn_only:
                     commands.append("show product flow-stack")
                     if tun_io_cpu is not None:

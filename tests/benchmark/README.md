@@ -460,3 +460,32 @@ rtk proxy python3 tests/benchmark/s304_archive.py verify \
 ```
 
 Select the original Wi-Fi again and verify the final device audit.
+
+## S307 bounded VPN handoff tuning
+
+[`s307_vpn_tuning.py`](s307_vpn_tuning.py) consumes a JSON array of explicit
+cells with `label`, `apk`, `credits`32/48, optional `capture_batch`1..64,
+`rate`4000/8000/12000/16000, `owners`1/2/3 and `case`udp-fixed/tcp-fixed.
+An omitted capture setting requests the APK's native default and removes any
+prepared override; older experimental APKs predate the capture CLI. Current
+capture comparisons specify every arm. The prepared manifest must retain the
+original S304 base25000 tuples,4×16 sockets,burst1 and current collector hash.
+Plan bytes are retained exactly. Each cell gets a fresh runtime generation;
+the runner restores the supplied original APK even after a collector exception.
+Select the saved controlled Wi-Fi first and restore the original Wi-Fi last.
+
+`product tun capture-batch <1..64>` changes only grouping of already-ready
+capture indexes/metadata within one callback. It requires an attached active
+VPN graph, worker barrier and zero origin/buffer/handoff/completion debt.
+Default1 preserves scalar capture when the TCP experiment isOFF. A callback
+flushes its final partial batch on every exit; no timer, polling, extra payload
+copy or persistent queue is introduced. `vpn_capture_batch_size` in a collector
+manifest applies this setting and verifies its generation/limit response.
+
+[`s307_summary.py`](s307_summary.py) verifies completed raw campaigns, installed
+APK/native/helper identities, exact collector/runner snapshots, CPU sample
+coverage, endpoint measures, probe denominators, topology and native stop.
+It reports instrumented hold evidence separately from uninstrumented CPU cost.
+See the [S307 measurement and capacity audit](../../docs/testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md)
+for exact commands/inputs, measured alternatives, unexercised fault attempts and
+the local evidence portability limit.

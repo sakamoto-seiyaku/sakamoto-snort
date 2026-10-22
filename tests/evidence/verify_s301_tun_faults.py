@@ -31,6 +31,24 @@ def check(directory):
             result['installed_native_sha256'] == result['apk_native_sha256'],
             'installed Product APK/native bytes differ from published artifact')
     require(result['restored_sha256'] == result['restore_sha256'], 'APK not restored')
+    if result.get('completion_fault_mode') == 'held-original':
+        held_text = (directory / 'completion-held.txt').read_bytes().replace(b'\0', b'').decode(errors='replace')
+        held_tun = events(held_text, 'tun.status ')
+        held_primary = events(held_text, 'primary.status ')
+        require(len(held_tun) == len(held_primary) == 1
+                and int(held_tun[0]['pending']) > 0 and int(held_primary[0]['deferred']) > 0,
+                'held completion fixture did not create actual bounded debt')
+        require('tun.original_hold milliseconds=0' in
+                (directory / 'completion-release.txt').read_text(), 'held completion not released')
+    if result.get('requested_capture_batch') is not None:
+        configured = events((directory / 'capture-batch-configured.txt').read_text(),
+                            'tun.capture_batch_configured ')
+        require(len(configured) == 1 and configured[0]['generation'] == str(result['generation'])
+                and int(configured[0]['limit']) == result['requested_capture_batch'],
+                'capture batching differs from requested configuration')
+        batches = events((directory / 'fragmented.txt').read_text(), 'tun.capture_batch ')
+        require(len(batches) == 1 and int(batches[0]['limit']) == result['requested_capture_batch'],
+                'capture batching changed during fault matrix')
     require(result['final_route'] == result['initial_route'], 'device route changed')
     stopped = (directory / 'stopped.properties').read_text()
     require('state=stopped' in stopped and 'mayBeActive=false' in stopped,

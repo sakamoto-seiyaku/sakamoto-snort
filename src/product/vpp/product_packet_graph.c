@@ -4525,7 +4525,7 @@ product_packet_graph_policy_on_owner (
   return result;
 }
 
-#if defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
+#if !defined(SAKAMOTO_PRODUCT_HOST_EVIDENCE) || defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
 static u32
 product_packet_graph_submit_external_batch_internal (
   vlib_main_t *vm, const product_packet_graph_external_item_t *items,
@@ -4821,7 +4821,7 @@ product_batch_status_cli (vlib_main_t *vm, unformat_input_t *input,
   vlib_worker_thread_barrier_release (vm);
 #endif
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
-  for (u32 i = 0; i <= product_packet_graph_worker_count (); ++i)
+  for (u32 i = 0; i <= vlib_num_workers (); ++i)
     vlib_cli_output (vm, "batch.thread=%u admit_frames=%llu admit_vectors=%llu prepare_windows=%llu prepared_packets=%llu primary_calls=%llu primary_publications=%llu primary_vectors=%llu primary_failed=%llu policy_claims=%llu policy_packets=%llu policy_hold_ns=%llu policy_hold_max_ns=%llu completion_calls=%llu completion_publications=%llu completion_vectors=%llu retry_windows=%llu origin_frames=%llu origin_vectors=%llu",
       i, (unsigned long long) stats[i].admit_frames,
       (unsigned long long) stats[i].admit_vectors,

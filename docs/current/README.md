@@ -28,6 +28,13 @@ records a CPU-cost and paced-UDP loss trade-off against the former local-owner
 VPN path. Adoption or rollback after those measurements remains the user's
 decision; neither ADR acceptance nor functional qualification chooses it.
 
+The subsequent [S307 bounded handoff tuning](../testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md)
+retains the dedicated-I/O topology and original buffer-index transfer. Credits48
+provided scoped UDP loss headroom, while tested capture/publication/completion
+settings established no whole-path CPU improvement. Defaults remain32 credits
+and scalar capture submission; `product tun capture-batch <1..64>` is an optional
+empty-graph diagnostic independent of the TCP experiment.
+
 ## What exists
 
 The product packet domain is VPP-native C. Root uses native NFQUEUE lanes; the
