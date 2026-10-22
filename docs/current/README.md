@@ -73,7 +73,15 @@ record 541.53 Mbps (probe UID gate failed) and 494.62 Mbps (collector complete).
 These sequential observations do not establish a Wi-Fi bottleneck or reconnect effect. The
 [post-reconnect old single-flow check](../testing/2026-10-22_POSTWIFI_SINGLE_OLD_AND_CURRENT.md)
 then records 306.74/333.05 Mbps despite high PHY rates; its conditional latest-APK
-stage was not run because the predefined approximately 500 Mbps trigger was not met. The earlier 32 KiB default
+stage was not run because the predefined approximately 500 Mbps trigger was not met. A
+[separately requested current-APK single-flow cohort](../testing/2026-10-22_POSTWIFI_CURRENT_SINGLE.md)
+then records 303.62/335.54 Mbps before another requested Wi-Fi toggle and
+257.50/300.00 Mbps afterward, with unchanged current defaults and1.803 GHz.
+All four measurements pass their scoped gates; no500 Mbps recovery is observed.
+The [subsequent current multiflow cohort](../testing/2026-10-22_CURRENT_MULTIFLOW_MAXFREQ.md)
+records 479.31/461.85 Mbps with4 flows;64-flow endpoints440.52/469.51 Mbps
+remain diagnostic because final UID gates fail. It retains N1 and the same
+post-toggle network/defaults/frequency conditions, with separate raw evidence. The earlier 32 KiB default
 20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
 TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
