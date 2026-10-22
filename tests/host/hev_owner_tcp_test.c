@@ -39,7 +39,7 @@ ssize_t sendmsg(int fd, const struct msghdr *message, int flags)
 typedef struct { size_t length; uint8_t bytes[MTU]; } packet_t;
 typedef struct {
   hev_owner_t *owner;
-  uint64_t generation, broker_session;
+  uint64_t generation, broker_session, handshake_session;
   int broker_pending, fd, index, family, refusal, reset, remote_fin;
   int drop_syn, dropped, reject_data, drop_data, rejected_data, dropped_data;
   uint16_t port;
@@ -130,6 +130,15 @@ static hev_owner_output_result_t output(void *opaque, const hev_owner_span_t *sp
     ++f->other_outputs; --f->tail;
     return HEV_OWNER_OUTPUT_ACCEPTED;
   }
+  if (p->bytes[ip_length + 13] == 0x12) {
+    assert(total == ip_length + tcp_length);
+    assert(facts->transport_session);
+    if (f->handshake_session) assert(f->handshake_session == facts->transport_session);
+    else {
+      assert(!facts->underlay_epoch && !(facts->availability & HEV_OWNER_CONTEXT_KNOWN));
+      f->handshake_session = facts->transport_session;
+    }
+  }
   if (total > ip_length + tcp_length) {
     if (f->reject_data && !f->rejected_data) {
       f->rejected_data = 1; --f->tail;
@@ -188,7 +197,24 @@ static hev_owner_input_result_t inject_port(fixture_t *f, uint16_t port, uint8_t
   write16(tcp + 16, checksum(pseudo + sum(tcp, tcp_length)));
   hev_owner_facts_t facts = {.uid = (uint32_t)(10001 + f->index),
     .availability = HEV_OWNER_UID_KNOWN};
-  return hev_owner_input_copy(f->owner, packet, total, &facts, f->generation);
+  hev_owner_input_context_t context = {0};
+  hev_owner_input_result_t result = hev_owner_input_copy_context(
+    f->owner, packet, total, &facts, f->generation, &context);
+  /* A newly admitted TCP SYN must expose its actual selected session even
+   * before the asynchronous protect/bind broker has supplied an epoch. */
+  if (result == HEV_OWNER_INPUT_ACCEPTED && flags == 2 && port == 12345) {
+    assert(context.session && !context.underlay_epoch && !context.context_known);
+    assert(context.session == f->handshake_session);
+  }
+  /* Existing packets must report the same actual broker-bound transport.
+   * Pure ACKs do not require a TCP application receive callback. */
+  if (result == HEV_OWNER_INPUT_ACCEPTED && f->established && !f->fin_sent
+      && !(flags & 4) && port == 12345) {
+    assert(context.session == f->broker_session);
+    assert(context.underlay_epoch == (uint64_t)(50 + f->index));
+    assert(context.context_known && context.network_context == (uint32_t)(3 + f->index));
+  }
+  return result;
 }
 
 static void inject(fixture_t *f, uint8_t flags, uint32_t seq, size_t offset, size_t length)

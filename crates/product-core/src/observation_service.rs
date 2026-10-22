@@ -425,7 +425,7 @@ mod live {
         }
 
         fn check_native_tcp_dns_frames(command: &str, profile: u64) {
-            let root = std::env::temp_dir().join(format!("s313-observation-{}", std::process::id()));
+            let root = std::env::temp_dir().join(format!("s313-observation-{}-{profile}", std::process::id()));
             std::fs::create_dir(&root).unwrap();
             let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
                 .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped())

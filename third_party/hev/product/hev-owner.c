@@ -205,8 +205,18 @@ static void pbuf_event(void *opaque, void *object, unsigned kind, int allocated)
   trace(owner, allocated ? "pbuf_alloc" : "pbuf_free", 0, object, 0, 0, kind);
 }
 
+static void select_input_context(owner_session_t *session)
+{
+  session->owner->input_context = (hev_owner_input_context_t) {
+    .session = session->id, .underlay_epoch = session->facts.underlay_epoch,
+    .network_context = session->facts.network_context,
+    .context_known = !!(session->facts.availability & HEV_OWNER_CONTEXT_KNOWN)};
+}
+
 static void close_session(owner_session_t *session, const char *reason)
 {
+  if (session->owner->input_context.session == session->id)
+    memset(&session->owner->input_context, 0, sizeof(session->owner->input_context));
   if (session->closing) return;
   session->closing = 1; /* Gate send/receive before waking its task. */
   trace(session->owner, reason, session->id,
@@ -217,6 +227,8 @@ static void close_session(owner_session_t *session, const char *reason)
 static void release_session(owner_session_t *session)
 {
   hev_owner_t *owner = session->owner;
+  if (owner->input_context.session == session->id)
+    memset(&owner->input_context, 0, sizeof(owner->input_context));
   owner_session_t **link = &owner->sessions;
   while (*link != session) link = &(*link)->next;
   *link = session->next;
@@ -439,10 +451,7 @@ static void receive_input(void *opaque, struct udp_pcb *pcb, struct pbuf *packet
     failure(owner, HEV_OWNER_FAULT_ALLOCATION, session->id, ENOMEM);
     return;
   }
-  owner->input_context = (hev_owner_input_context_t) {
-    .session = session->id, .underlay_epoch = session->facts.underlay_epoch,
-    .network_context = session->facts.network_context,
-    .context_known = !!(session->facts.availability & HEV_OWNER_CONTEXT_KNOWN)};
+  select_input_context(session);
   ++owner->stats.input_packets;
   if (owner->stats.input_packets > owner->stats.input_peak)
     owner->stats.input_peak = owner->stats.input_packets;
@@ -779,6 +788,7 @@ static err_t create_tcp_session(u8_t id, struct tcp_pcb_listen *listener,
   trace(owner, "session_created", session->id, session->tcp, 0, 0, 6);
   trace(owner, "tcp_pcb_created", session->id, pcb, 0, pcb->state, 6);
   hev_task_run(task, tcp_session_task, session);
+  select_input_context(session);
   owner->input_result = HEV_OWNER_INPUT_ACCEPTED;
   return ERR_OK;
 allocation_failed:
@@ -842,6 +852,7 @@ static err_t guard_tcp_input(void *opaque, struct tcp_pcb *pcb)
     failure(owner, HEV_OWNER_FAULT_PACKET_CREDIT, session->id, ENOBUFS);
     return ERR_MEM;
   }
+  select_input_context(session);
   return ERR_OK;
 }
 

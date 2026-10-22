@@ -349,6 +349,69 @@ static void vpn_direct_binding_preserves_original_query_and_actual_return_contex
   assert(product_packet_graph_main.dns_tcp[0].active==1);
  }
 }
+static void prebroker_synack_anchors_only_the_exact_selected_tcp_session(void)
+{
+ for(unsigned family=4;family<=6;family+=2)
+  for(unsigned bound_before=0;bound_before<2;++bound_before) {
+  reset(family);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;anchor();
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,0,0,0);
+  if(bound_before) product_packet_graph_dns_transport_bound(&vm,77,71,9,7,1);
+  packet(101,frame,sizeof(frame),0x18);
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,bound_before?9:0,7,bound_before);
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+  lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;lease.platform.availability=0;
+  lease.facts.source_port=53;lease.facts.destination_port=40000;
+  uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+  memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+  memcpy(lease.facts.destination_address,address,16);
+  return_incarnation=8;return_session=71;return_epoch=0;
+  /* The local handshake was stamped before the broker completed, even when
+   * its queued graph execution happens after the real binding publication. */
+  packet(500,NULL,0,0x12);
+  if(!bound_before) product_packet_graph_dns_transport_bound(&vm,77,71,9,7,1);
+  /* Zero-epoch DNS data remains ineligible and cannot consume the frame. */
+  uint8_t response[sizeof(frame)];memcpy(response,frame,sizeof(frame));response[4]=0x81;response[5]=0x80;
+  product_dns_tcp_graph_t context=packet(501,response,sizeof(response),0x18);
+  assert(!context.complete && context.pending_valid && record_count==1);
+  return_epoch=9;lease.platform.availability=PRODUCT_PLATFORM_CONTEXT_KNOWN;
+  lease.platform.network_context_id=7;
+  context=packet(501,response,sizeof(response),0x18);
+  assert(context.complete && record_count==2 && records[1].coverage==PRODUCT_DNS_QUERY_COMPLETE);
+  assert(records[1].transport_session==71 && records[1].underlay_epoch==9);
+ }
+}
+static void invalid_prebroker_handshakes_cannot_anchor_current_reverse_bytes(void)
+{
+ for(unsigned scenario=0;scenario<7;++scenario) {
+  reset(scenario%2?6:4);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;anchor();
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,0,0,0);
+  packet(101,frame,sizeof(frame),0x18);
+  product_packet_graph_dns_request_transport(&vm,77,lease.origin_obligation_id,8,71,0,0,0);
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+  lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;lease.platform.availability=0;
+  lease.facts.source_port=53;lease.facts.destination_port=40000;
+  uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+  memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+  memcpy(lease.facts.destination_address,address,16);
+  return_incarnation=8;return_session=71;return_epoch=0;
+  if(scenario==0) return_incarnation=7;
+  if(scenario==1) return_session=70;
+  if(scenario==2) return_incarnation=return_session=0;
+  if(scenario==3) ++network.revision;
+  if(scenario==4) {lease.platform.availability=PRODUCT_PLATFORM_CONTEXT_KNOWN;lease.platform.network_context_id=7;}
+  uint8_t one=0;
+  packet(999,scenario==5?&one:NULL,scenario==5?1:0,scenario==6?2:0x12);
+  return_incarnation=8;return_session=71;return_epoch=0;network.revision=5;
+  lease.platform.availability=0;
+  packet(500,NULL,0,0x12);
+  product_packet_graph_dns_transport_bound(&vm,77,71,9,7,1);
+  return_epoch=9;lease.platform.availability=PRODUCT_PLATFORM_CONTEXT_KNOWN;lease.platform.network_context_id=7;
+  uint8_t response[sizeof(frame)];memcpy(response,frame,sizeof(frame));response[4]=0x81;response[5]=0x80;
+  product_dns_tcp_graph_t context=packet(501,response,sizeof(response),0x18);
+  assert(context.complete && record_count==2 && records[1].coverage==PRODUCT_DNS_QUERY_COMPLETE);
+  assert(records[1].correlation==PRODUCT_DNS_CORRELATED && records[1].underlay_epoch==9);
+ }
+}
 static void return_stamp_survives_an_unavailable_current_flow(void)
 {
  reset(4);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
@@ -459,6 +522,8 @@ static void every_coalesced_malformed_frame_keeps_its_own_normal_identity(void)
 int main(void)
 {
  stale_direct_returns_cannot_change_current_framing_or_reopen_a_closed_flow();
+ prebroker_synack_anchors_only_the_exact_selected_tcp_session();
+ invalid_prebroker_handshakes_cannot_anchor_current_reverse_bytes();
  return_stamp_survives_an_unavailable_current_flow();
  vpn_direct_binding_preserves_original_query_and_actual_return_context();
  vpn_direct_queries_share_framing_and_per_message_policy();

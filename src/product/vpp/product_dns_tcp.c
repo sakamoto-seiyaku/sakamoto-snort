@@ -47,11 +47,20 @@ static int context_matches(const product_dns_tcp_flow_t *f,const product_dns_tcp
      !(tuple(&f->context.packet,&i->context.packet,0) ||
        tuple(&f->context.packet,&i->context.packet,1))) return 0;
   if(i->identity.profile==2 && i->context.packet.direction==1)
-    return i->identity.incarnation && f->identity.incarnation==i->identity.incarnation &&
-      i->identity.transport_session && f->identity.transport_session==i->identity.transport_session &&
-      i->identity.underlay_epoch && f->identity.underlay_epoch==i->identity.underlay_epoch &&
-      f->bound_context_known==i->context.packet.network_context_known &&
-      (!f->bound_context_known || f->bound_context==i->context.packet.network_context_id);
+    {
+      if(!i->identity.incarnation || f->identity.incarnation!=i->identity.incarnation ||
+         !i->identity.transport_session || f->identity.transport_session!=i->identity.transport_session)
+        return 0;
+      /* lwIP emits the local SYN/ACK before protect/bind completes. Its exact
+       * session stamp may be consumed after the binding publication. Only this
+       * byte-free handshake can anchor the reverse sequence without an epoch;
+       * it never supplies resolver data or replaces the current binding. */
+      if(!i->identity.underlay_epoch && i->flags==0x12 && !i->length &&
+         !i->context.packet.network_context_known) return 1;
+      return i->identity.underlay_epoch && f->identity.underlay_epoch==i->identity.underlay_epoch &&
+        f->bound_context_known==i->context.packet.network_context_known &&
+        (!f->bound_context_known || f->bound_context==i->context.packet.network_context_id);
+    }
   return f->context.packet.network_context_known==i->context.packet.network_context_known &&
     (!f->context.packet.network_context_known ||
       f->context.packet.network_context_id==i->context.packet.network_context_id) &&
