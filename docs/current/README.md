@@ -65,7 +65,15 @@ override and unchanged 32,768-byte receive window; see the
 TCP batch and readiness gating remain opt-in. The
 [N1 little-core baseline at 1.803 GHz](../testing/2026-10-22_TCP_SINGLE_LITTLE_MAXFREQ_BASELINE.md)
 records three current-configuration downloads; it does not isolate a capacity
-or frequency benefit. The earlier 32 KiB default
+or frequency benefit. The [historical N2/32 KiB replay at the same fixed frequency](../testing/2026-10-22_OLD_500_MAXFREQ_REPRODUCTION.md)
+records 313.86/303.05 Mbps and does not reproduce the earlier 496.62/535.54 Mbps pair.
+[Subsequent four/64-flow and Wi-Fi reconnect measurements](../testing/2026-10-22_OLD_500_MULTIFLOW_MAXFREQ.md)
+retain all failed gates; the separately requested post-reconnect four-flow repeats
+record 541.53 Mbps (probe UID gate failed) and 494.62 Mbps (collector complete).
+These sequential observations do not establish a Wi-Fi bottleneck or reconnect effect. The
+[post-reconnect old single-flow check](../testing/2026-10-22_POSTWIFI_SINGLE_OLD_AND_CURRENT.md)
+then records 306.74/333.05 Mbps despite high PHY rates; its conditional latest-APK
+stage was not run because the predefined approximately 500 Mbps trigger was not met. The earlier 32 KiB default
 20-second download and a separate same-pool MTU3000/10000 ABBA passed the scoped
 TCP checks; see the [large-MTU implementation and evidence](../testing/2026-10-21_VPN_LONG_TCP_SEGMENTS_AND_PROGRESS.md).
 
