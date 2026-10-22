@@ -3,17 +3,14 @@
 Baseline: 2026-10-22. This is the short implementation entry, not a backlog or a
 release announcement. Current task state belongs to Plane.
 
-Accepted design update, 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)
-and the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md)
-define the next policy/configuration/normal-observation behavior. They do not
-extend the implementation or acceptance claims listed below.
+Accepted 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)
+and the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md) define
+policy/configuration/observation behavior; they do not extend implementation claims.
 
-Accepted design extension, 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md)
-aligns application DNS filtering across Root and VPN through query-stage and
-subsequent-connection control. The first-version scope is Root/NFQ and VPN using
-the same DNS core; KSU/libnetd integration is deferred to a future extension.
-This is not evidence that DNS ingress, filtering or association consumption has
-been implemented.
+Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md)
+defines shared Root/VPN application DNS query and subsequent-connection control.
+KSU/libnetd integration is deferred. The decision does not prove DNS ingress,
+filtering or association consumption is implemented.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
@@ -28,18 +25,17 @@ records a CPU-cost and paced-UDP loss trade-off against the former local-owner
 VPN path. Adoption or rollback after those measurements remains the user's
 decision; neither ADR acceptance nor functional qualification chooses it.
 
-The subsequent [S307 bounded handoff tuning](../testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md)
-retains the dedicated-I/O topology and original buffer-index transfer. Credits48
-provided scoped UDP loss headroom, while tested capture/publication/completion
-settings established no whole-path CPU improvement. Defaults remain32 credits
-and scalar capture submission; `product tun capture-batch <1..64>` is an optional
-empty-graph diagnostic independent of the TCP experiment.
+The [S307 tuning](../testing/2026-10-22_S307_VPN_HANDOFF_TUNING.md) retained dedicated
+I/O and original-buffer transfer. Credits48 provided scoped UDP loss headroom;
+capture/publication/completion scans established no CPU win. VPN then defaulted
+to32 credits. `product tun capture-batch <1..64>` is an optional empty-graph
+diagnostic independent of the TCP experiment.
 
-The [S308 I/O CPU attribution](../testing/2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md)
-locates packet-path topology environment parsing and the distinct UDP
-readiness/publication versus TCP TUN-write kernel costs. A measured parsing
-removal candidate showed no consistent whole-path CPU gain. Product source was
-restored; the report retains exact negative evidence and attribution limits.
+The [S308 attribution](../testing/2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md) distinguishes UDP readiness/publication from TCP TUN-write costs.
+The user adopted topology parsing removal,48 default VPN primary credits (Root already48),
+capture threshold/budget64, native return frames256, and shared primary/completion/reclaim windows64 independent of the TCP experiment.
+Each packet still receives one nonblocking TUN write; [combined qualification](../testing/2026-10-22_S308_ADOPTED_UNIFIED_WINDOWS.md) is separate from CPU attribution.
+[Single/four-flow TCP download CPU](../testing/2026-10-22_S308_TCP_DOWNLOAD_CPU.md) records occupancy/flames; equal-throughput whole-path gains remain unestablished.
 
 ## What exists
 
@@ -97,9 +93,6 @@ That identity describes the frozen Product sources, not every later docs/test co
 | Verification | [Testing map](../testing/README.md), [test layout](../../tests/README.md) |
 | Intended product | [Product docs](../product/README.md) |
 
-For older reasoning or measurements, use the [documentation map](../README.md)
-to select a focused record. Large source modules are still present intentionally;
-this repository organization does not change their behavior or split their ownership.
-
-For the subsequent private-module refactor and its separate fresh regression,
-see [KISS code organization](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md).
+Use the [documentation map](../README.md) for older reasoning and measurements.
+Repository organization preserves large modules' behavior and ownership; see
+[KISS code organization](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md) for the private-module refactor and its fresh regression.

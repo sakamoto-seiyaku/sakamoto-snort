@@ -202,7 +202,7 @@ if submit_external.index("origin_obligation_id == 0") > submit_external.index("v
     raise AssertionError("missing origin identity is checked after buffer ownership")
 
 for required in (
-        "PRODUCT_GRAPH_HANDOFF_CREDITS 32",
+        "PRODUCT_GRAPH_HANDOFF_CREDITS 48",
         "duplicate_terminals",
         "duplicate_settlements",
         "stale_events_rejected",

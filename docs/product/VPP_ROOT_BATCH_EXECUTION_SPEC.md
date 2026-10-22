@@ -8,6 +8,8 @@ Plane 规格：[SAKAMOTO-291](http://192.168.4.22:2080/work/projects/f55a54bf-16
 
 后续用户选择，2026-10-13：完成[容量调参诊断](../testing/2026-10-13_ROOT_NFQUEUE_CAPACITY_TUNING.md)后，用户确认采用组合参数。当前Root启动默认改为128个普通接收／pending槽、48 primary credits、read budget16、1MiB socket请求（Pixel有效2MiB）及maxlen4096，默认构建batch＋packed；VPN仍为32 credits，产品原队列分配保持。见[实现与真机回归](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md)。这是后来明确选择的容量变更，不是下文固定预算CPU验收通过的声明，也不把测试双lane夹具视为通用产品分流。原规格正文与历史失败保持原样。
 
+后续用户选择，2026-10-22：用户确认移除逐包 topology 环境解析，并把 VPN primary packet credits 启动／重置默认值改为48；Root 已采用的48不变。显式32-credit诊断和原始固定预算量测仍有效，native frame-queue slots 不变。随后用户确认把已就绪TUN capture提交的默认阈值设为64，callback读取预算仍为64；读取当前为空或阈值／预算／容量／错误退出时提交已收集的原buffer索引与metadata，不跨callback持包，不启用全局TCP batch实验。用户另采纳返程 owner-local native graph frame、现有 completion handoff 与 I/O frame 消费的批处理；HEV 多 spans 仍是一包，保留独立 VPP buffer 的既有复制，每包一次 nonblocking TUN write 和独立结果／free，不新增返程持久队列、等待、ledger 或 retry。随后用户明确统一 TUN读取、primary publication、正常completion、已有retry和origin/I/O消费／native回收窗口为64包；owner-local native frame容量256保留，超过64的frame按64及末尾部分消费，不等满。每目标owner48 primary credits逐包取得，owner接手即归还；混合owner publication可64，不把48误作全局提交上限。policy snapshot16、prepare/unroll4、Root receive预算及native queue element数不随之更改。逐包实际free后才释放返程stamp／credit。此前CPU收益未确立的量测结论保持原样。
+
 ## Problem Statement
 
 个人本机端点防火墙需要在正确执行规则、维护 Flow 状态和释放每个捕获义务的同时，减少 Root 流量处理的 CPU 成本。当前 VPP-native C 主线已使用共享 graph、固定 FlowOwner、native frame queues 和通知合并，但入口将 readiness burst 拆成单包 frame，节点缺少相互配合的准备/预取流水线，primary 与 completion 的 producer publication 仍逐包执行。

@@ -29,9 +29,16 @@ they do not establish whole-device CPU savings.
 
 `product_root_defaults_test.py` exercises actual Root adapter and shared graph
 startup: 128+8 preallocated receive buffers, 16-read callbacks, socket request and
-capped readback, failures before listener registration, profile-specific
-Root 48 / VPN 32 credits and restart reset of diagnostics. Run the registered CTest
+capped readback, failures before listener registration, Root and VPN
+48 packet credits and restart reset of diagnostics. Run the registered CTest
 `sakamoto-product-root-defaults-test`; related pending/capacity checks retain
 ASan/UBSan with no-PIE Host fixtures. The corresponding
 [default adoption record](../../docs/testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md)
 separates startup correctness from complete policy throughput.
+
+`product_vpn_capture_batch_test.py` executes actual VPN generation startup and
+the TUN READY callback in both TCP experiment compile modes. Startup selects
+read submission threshold64 and callback budget64 independently of that
+experiment; an empty graph accepts explicit limits1..64, and a new generation
+resets the limit to64. Partial EAGAIN/EINTR/EOF/error/capacity exits publish
+ready original buffer indexes, with exactly-once rejection reclamation.

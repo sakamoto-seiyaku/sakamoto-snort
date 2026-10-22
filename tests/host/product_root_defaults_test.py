@@ -115,13 +115,20 @@ graph_prefix=r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include "product_packet.h"
 #include "product_root_defaults.h"
 #include "product_runtime_topology.h"
-typedef uint32_t u32;typedef uint64_t u64;
+typedef uint16_t u16;typedef uint32_t u32;typedef uint64_t u64;
 typedef struct {u32 thread_index;} vlib_main_t;
 #define PRODUCT_GRAPH_WORKERS 2
-#define PRODUCT_GRAPH_HANDOFF_CREDITS 32
+#define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48
+#define PRODUCT_EVIDENCE_ADD(field,n) ((void)0)
+#define PRODUCT_EVIDENCE_SUB(field,n) ((void)0)
+#define clib_atomic_fetch_add_relax(p,n) __atomic_fetch_add((p),(n),__ATOMIC_RELAXED)
+#define clib_atomic_fetch_sub_relax(p,n) __atomic_fetch_sub((p),(n),__ATOMIC_RELAXED)
+#define clib_atomic_cmp_and_swap_acq_relax_n(p,e,n,w) __atomic_compare_exchange_n((p),(e),(n),(w),__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)
+#define PRODUCT_GRAPH_HANDOFF_CREDITS TEST_PRODUCTION_HANDOFF_CREDITS
 #define SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT 1
 #define clib_memset memset
 #define clib_warning(...) ((void)0)
@@ -136,7 +143,8 @@ typedef struct {
  u64 completion_returns,completion_deferred,completion_retry_attempts,completion_pending_returns;
  u32 l4_policy_bank_readers[2],l4_policy_active_bank,policy_publish_sequence;
  u64 l4_policy_banks[2],l4_policy_view_active,lifecycle_terminal_intents,lifecycle_settlements,lifecycle_returns;
- u32 configured_credits;
+ u32 primary_credit_limit,primary_ring_slots,completion_ring_slots,handoff_credits[2];
+ u32 primary_frame_queue,completion_return_frame_queue;
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
 static u64 product_packet_batch_stats[3];
@@ -146,34 +154,100 @@ static u32 vlib_num_workers(void){return vpn_mode?3:2;}
 static int product_fragment_start(vlib_main_t *vm){assert(vm);calls++;return 1;}
 static void product_fragment_abort(void){calls++;}
 static unsigned product_vpn_tun_product_mode(void){return vpn_mode;}
-static void product_capacity_configure_empty(product_packet_graph_main_t *g,u32 credits,u32 primary,u32 completion){
- assert(g && primary==64 && completion==128);g->configured_credits=credits;calls++;
+static unsigned ring_ready=1,ring_slots[2];
+static void product_capacity_set_empty_ring(u32 queue,u32 slots){assert(queue<2 && ring_ready);ring_slots[queue]=slots;}
+static int product_capacity_ring_empty(u32 queue){assert(queue<2);return ring_ready;}
+static u32 product_packet_graph_worker_count(void){return product_packet_graph_main.owner_count;}
+typedef int clib_error_t;typedef struct {} vlib_cli_command_t;
+typedef struct {u32 mode,credits,primary,completion,trailing;} unformat_input_t;
+#define UNFORMAT_END_OF_INPUT 0
+#define clib_error_return(...) ((clib_error_t*)1)
+#define vlib_cli_output(vm,...) ((void)(vm))
+static int unformat_check_input(unformat_input_t *input){return input->trailing;}
+static int unformat(unformat_input_t *input,const char *pattern,...){
+ if(!strcmp(pattern,"off"))return input->mode==0;
+ if(input->mode!=1)return 0;
+ va_list args;va_start(args,pattern);
+ *va_arg(args,u32*)=input->credits;*va_arg(args,u32*)=input->primary;*va_arg(args,u32*)=input->completion;
+ va_end(args);return 1;
 }
+typedef enum {PRODUCT_HANDOFF_PRIMARY,PRODUCT_HANDOFF_CORRECTIVE} product_handoff_stage_t;
 static int product_packet_graph_flow_pools_reset(product_packet_graph_main_t *g){assert(g);calls++;return 1;}
 static void product_packet_graph_flow_pools_abort(product_packet_graph_main_t *g){assert(g);calls++;}
 static void product_policy_domains_clear(product_packet_graph_main_t *g){assert(g);calls++;}
 static int product_core_policy_start(u64 gen){assert(gen);calls++;return policy_ready;}
 '''
-graph_code=graph_prefix+graph_function('product_packet_graph_default_handoff_credits')+graph_function('product_packet_graph_start_external')+r'''
+graph_prefix = '#define TEST_PRODUCTION_HANDOFF_CREDITS ' + re.search(r'^#define PRODUCT_GRAPH_HANDOFF_CREDITS (\d+)$', graph_source, re.M).group(1) + '\n' + graph_prefix
+graph_code=graph_prefix+''.join(graph_function(name) for name in ('product_packet_graph_default_handoff_credits','product_capacity_configure_empty','product_handoff_credit_reserve','product_handoff_credit_release','product_capacity_cli','product_packet_graph_handoff_credits','product_packet_graph_start_external'))+r'''
 int main(void){
  vlib_main_t vm={0};product_packet_graph_main_t *g=&product_packet_graph_main;
+ assert(product_packet_graph_handoff_credits()==48);
+ g->completion_return_frame_queue=1;
  assert(product_packet_graph_start_external(&vm,42,PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE));
- assert(g->configured_credits==48 && g->enabled && g->accepting && g->adapter_kind==PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE);
+ assert(g->primary_credit_limit==48 && g->enabled && g->accepting && g->adapter_kind==PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE);
  unsigned before=calls;
  assert(!product_packet_graph_start_external(&vm,43,PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE) && calls==before);
- g->enabled=g->accepting=0;g->configured_credits=1;
+ g->enabled=g->accepting=0;g->primary_credit_limit=1;
  assert(product_packet_graph_start_external(&vm,43,PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE));
- assert(g->configured_credits==48 && g->generation==43);
+ assert(g->primary_credit_limit==48 && g->generation==43);
  g->enabled=g->accepting=0;vpn_mode=1;
  assert(product_packet_graph_start_external(&vm,44,PRODUCT_ADAPTER_OBLIGATION_VPN_TUN));
- assert(g->configured_credits==32 && !g->trace_limit && g->adapter_kind==PRODUCT_ADAPTER_OBLIGATION_VPN_TUN);
+ assert(g->primary_credit_limit==48 && !g->trace_limit && g->adapter_kind==PRODUCT_ADAPTER_OBLIGATION_VPN_TUN);
+ assert(g->primary_ring_slots==64 && g->completion_ring_slots==128);
+ assert(ring_slots[0]==64 && ring_slots[1]==128);
+ assert(g->handoff_credits[0]==48 && g->handoff_credits[1]==48);
+ for(u32 selected=32;selected<=48;selected+=16){
+  unformat_input_t input={.mode=1,.credits=selected,.primary=64,.completion=128};
+  assert(!product_capacity_cli(&vm,&input,0));
+  assert(product_packet_graph_handoff_credits()==selected);
+  for(u32 owner=0;owner<2;owner++){
+   for(u32 i=0;i<selected;i++)assert(product_handoff_credit_reserve(g,owner,PRODUCT_HANDOFF_PRIMARY,100+i));
+   assert(!product_handoff_credit_reserve(g,owner,PRODUCT_HANDOFF_PRIMARY,999));
+   assert(g->lifecycle_handoffs==selected && g->handoff_credits[owner]==0);
+   /* Capacity cannot change while these exact credits remain unsettled. */
+   unformat_input_t off={0};assert(product_capacity_cli(&vm,&off,0));
+   for(u32 i=0;i<selected;i++)product_handoff_credit_release(g,owner);
+   assert(!g->lifecycle_handoffs && g->handoff_credits[owner]==selected);
+  }
+ }
+ for(u32 mode=0;mode<12;mode++){
+  unformat_input_t input={.mode=1,.credits=32,.primary=64,.completion=128};
+  if(mode==0)input.credits=49;
+  if(mode==1)input.primary=63;
+  if(mode==2)input.completion=127;
+  if(mode==3)input.trailing=1;
+  if(mode==4)g->accepting=0;
+  if(mode==5)g->lifecycle_obligations=1;
+  if(mode==6)g->lifecycle_buffers=1;
+  if(mode==7)g->lifecycle_handoffs=1;
+  if(mode==8)g->lifecycle_completion_frames=1;
+  if(mode==9)g->completion_pending_returns=1;
+  if(mode==10)ring_ready=0;
+  if(mode==11)input.mode=2;
+  const product_packet_graph_main_t before=*g;
+  assert(product_capacity_cli(&vm,&input,0));
+  assert(!memcmp(&before,g,sizeof(before)));
+  g->accepting=1;g->lifecycle_obligations=g->lifecycle_buffers=g->lifecycle_handoffs=0;
+  g->lifecycle_completion_frames=g->completion_pending_returns=0;ring_ready=1;
+ }
+ unformat_input_t control={.mode=1,.credits=32,.primary=2,.completion=2};
+ assert(!product_capacity_cli(&vm,&control,0));
+ assert(g->primary_credit_limit==32 && g->primary_ring_slots==2 && g->completion_ring_slots==2);
+ unformat_input_t zero={.mode=1,.credits=0,.primary=2,.completion=2};
+ assert(!product_capacity_cli(&vm,&zero,0));
+ assert(!product_handoff_credit_reserve(g,0,PRODUCT_HANDOFF_PRIMARY,100));
+ assert(!g->lifecycle_handoffs);
+ unformat_input_t off={0};assert(!product_capacity_cli(&vm,&off,0));
+ assert(g->primary_credit_limit==48 && g->handoff_credits[0]==48 && g->handoff_credits[1]==48);
+ assert(g->primary_ring_slots==64 && g->completion_ring_slots==128);
+ assert(ring_slots[0]==64 && ring_slots[1]==128);
  g->enabled=g->accepting=0;before=calls;
  assert(!product_packet_graph_start_external(&vm,45,PRODUCT_ADAPTER_OBLIGATION_NONE) && calls==before);
  g->lifecycle_buffers=1;
  assert(!product_packet_graph_start_external(&vm,45,PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE) && calls==before);
  g->lifecycle_buffers=0;policy_ready=0;
  assert(!product_packet_graph_start_external(&vm,45,PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE) && !g->enabled && !g->accepting);
- puts("PASS actual startup:Root48/VPN32 credits,restart resets diagnostics,live debt/invalid adapter/publication failure never report ready");
+ puts("PASS actual startup:Root48/VPN48 credits,actual configure/off reset,32/48 overrides,reserve/exhaust/release settlement,invalid bounds/empty gates,restart resets diagnostics,live debt/invalid adapter/publication failure never report ready");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='graph-defaults-') as folder:

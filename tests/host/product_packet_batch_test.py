@@ -328,8 +328,8 @@ static int product_vpn_tun_complete_from_graph(vlib_main_t *main, u32 index,
 static void vlib_buffer_free(vlib_main_t *main, u32 *indices, u32 count) {
   assert(main == &vm && count && count <= PRODUCT_PACKET_BATCH_SIZE && native_free_calls < 64);
   if (origin_case == 1) {
-    const u32 buffers[] = {33,17,1}, obligations[] = {23,12,1};
-    assert(native_free_calls < 3);
+    const u32 buffers[] = {33}, obligations[] = {23};
+    assert(native_free_calls < 1);
     assert(product_packet_graph_main.lifecycle_buffers == buffers[native_free_calls]);
     assert(product_packet_graph_main.lifecycle_completion_frames == buffers[native_free_calls]);
     assert(product_packet_graph_main.lifecycle_obligations == obligations[native_free_calls]);
@@ -362,6 +362,8 @@ static u32 vlib_buffer_enqueue_to_thread_retained(vlib_main_t *main,
   native_queues[native_calls++] = queue;
   u32 accepted = 0, n_failed = 0;
   u8 published[PRODUCT_GRAPH_WORKERS + 1] = {0};
+  if(queue==product_packet_graph_main.primary_frame_queue)
+    assert(product_packet_graph_main.lifecycle_handoffs>=count);
   for (u32 i = count; i; --i)
     if (rejected[indices[i - 1]]) failed[n_failed++] = indices[i - 1];
   for (u32 i = 0; i < count; ++i) {
@@ -373,7 +375,6 @@ static u32 vlib_buffer_enqueue_to_thread_retained(vlib_main_t *main,
       assert(count <= PRODUCT_PACKET_BATCH_SIZE);
       product_metadata_load((vlib_buffer_t *)(arena + page_bytes * index), &transferred_metadata[index]);
       assert(transferred_metadata[index].state_bits & PRODUCT_META_HANDOFF_CREDIT);
-      assert(product_packet_graph_main.lifecycle_handoffs >= count);
     } else {
       assert(queue == product_packet_graph_main.completion_return_frame_queue && !held[index]);
       memcpy(&transferred_completion[index], arena + page_bytes * index + offsetof(vlib_buffer_t, opaque2),
@@ -496,6 +497,21 @@ static void seed_queue(u32 count, u16 head, int hold_all) {
   assert(product_packet_graph_main.completion_pending_returns == count);
 }
 
+static void primary_mixed64_regression(void) {
+  reset();product_packet_graph_main.primary_credit_limit=48;
+  product_packet_graph_main.handoff_credits[0]=product_packet_graph_main.handoff_credits[1]=48;
+  product_primary_batch_t batch={0};
+  product_packet_processing_bypass_reason_t reason=PRODUCT_PACKET_BYPASS_NONE;
+  for(u32 i=0;i<64;i++) {
+    product_buffer_metadata_t metadata=primary(i,i%2,PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+    assert(product_primary_batch_append(&vm,&node,&batch,i,&metadata,&reason));
+    assert(native_calls==(i==63));
+  }
+  assert(native_sizes[0]==64 && batch.count==0);
+  assert(product_packet_graph_main.handoff_credits[0]==16 && product_packet_graph_main.handoff_credits[1]==16);
+  assert(product_packet_graph_main.lifecycle_handoffs==64);
+}
+
 static void primary_partial(void) {
   reset();
   product_primary_batch_t batch = {0};
@@ -543,12 +559,12 @@ static void primary_boundaries(void) {
   for (u32 i = 0; i < 32; ++i) {
     product_buffer_metadata_t metadata = primary(i, 1, PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE);
     assert(product_primary_batch_append(&vm, &node, &batch, i, &metadata, &reason));
-    assert(batch.count == (i + 1) % 16 && native_calls == (i + 1) / 16);
+    assert(batch.count == i + 1 && native_calls == 0);
   }
   product_buffer_metadata_t metadata = primary(32, 1, PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE);
   assert(!product_primary_batch_append(&vm, &node, &batch, 32, &metadata, &reason));
-  assert(reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED && native_calls == 2);
-  assert(native_sizes[0] == 16 && native_sizes[1] == 16);
+  assert(reason == PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED && native_calls == 1);
+  assert(native_sizes[0] == 32);
   assert(product_packet_graph_main.handoff_credits[1] == 0 && product_packet_graph_main.lifecycle_handoffs == 32);
   assert(product_packet_graph_main.primary_rejected == 1 && live[32] && !transfers[32]);
   assert(product_packet_graph_main.primary_rejected_credit == 1 && product_packet_graph_main.primary_rejected_enqueue == 0);
@@ -585,7 +601,62 @@ static void primary_boundaries(void) {
   product_primary_batch_flush(&vm, &node, &batch);
   assert(product_packet_graph_main.handoff_credits[0] == 32 && product_packet_graph_main.handoff_credits[1] == 32);
   assert(product_packet_graph_main.lifecycle_handoffs == 0);
-  puts("PASS primary 16-window/32-credit bounds: flush-before-exhaustion, retained release retry, canonical owner credit, nonblocking rejection");
+  puts("PASS primary 64-window/explicit32-credit bounds: flush-before-exhaustion, retained release retry, canonical owner credit, nonblocking rejection");
+}
+
+static void primary_no_progress48(void) {
+  reset();product_packet_graph_main.primary_credit_limit=48;
+  product_packet_graph_main.handoff_credits[0]=product_packet_graph_main.handoff_credits[1]=48;
+  product_primary_batch_t batch={0};
+  product_packet_processing_bypass_reason_t reason=PRODUCT_PACKET_BYPASS_NONE;
+  for(u32 i=0;i<48;i++) {
+    product_buffer_metadata_t metadata=primary(i,1,PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+    assert(product_primary_batch_append(&vm,&node,&batch,i,&metadata,&reason));
+    assert(!native_calls);
+  }
+  product_buffer_metadata_t metadata=primary(48,1,PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+  assert(!product_primary_batch_append(&vm,&node,&batch,48,&metadata,&reason));
+  assert(reason==PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED);
+  assert(native_calls==1 && native_sizes[0]==48 && !batch.count);
+  assert(!product_packet_graph_main.handoff_credits[1] && product_packet_graph_main.handoff_credits[0]==48);
+  assert(product_packet_graph_main.lifecycle_handoffs==48 && live[48] && !attempted[48]);
+  assert(product_packet_graph_main.primary_rejected_credit==1);
+  for(u32 i=0;i<48;i++)product_handoff_credit_release(&product_packet_graph_main,1);
+  assert(product_packet_graph_main.handoff_credits[1]==48 && !product_packet_graph_main.lifecycle_handoffs);
+}
+
+static const u32 boundary_lengths[]={15,16,17,47,48,49,63,64,65,255,256,257};
+static void primary_window_matrix(void) {
+  for(u32 mixed=0;mixed<2;mixed++)for(u32 at=0;at<sizeof(boundary_lengths)/sizeof(boundary_lengths[0]);at++) {
+    u32 count=boundary_lengths[at];reset();
+    product_packet_graph_main.primary_credit_limit=48;
+    product_packet_graph_main.handoff_credits[0]=product_packet_graph_main.handoff_credits[1]=48;
+    release_primary_on_transfer=1;
+    product_primary_batch_t batch={0};
+    product_packet_processing_bypass_reason_t reason=PRODUCT_PACKET_BYPASS_NONE;
+    for(u32 i=0;i<count;i++) {
+      product_buffer_metadata_t metadata=primary(i,mixed?i%2:1,
+        i%3?PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE:PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+      rejected[i]=i==1 || i==17 || i==48 || i==63 || i==64 || i==255;
+      assert(product_primary_batch_append(&vm,&node,&batch,i,&metadata,&reason));
+      assert(native_calls==(mixed?(i+1)/64:i/48));
+    }
+    product_primary_batch_flush(&vm,&node,&batch);
+    assert(native_calls==(count+(mixed?63:47))/(mixed?64:48));
+    assert(!batch.count && !product_packet_graph_main.lifecycle_handoffs);
+    assert(product_packet_graph_main.handoff_credits[0]==48 && product_packet_graph_main.handoff_credits[1]==48);
+    u32 failed=0;
+    for(u32 i=0;i<count;i++) {
+      assert(attempted[i]==1 && transfers[i]==!rejected[i]);
+      assert(terminals[i]==rejected[i]);failed+=rejected[i];
+      const product_buffer_metadata_t *metadata=rejected[i]?&terminal_metadata[i]:&transferred_metadata[i];
+      assert(metadata->origin_obligation_id==10000+i && metadata->expected_owner==(mixed?i%2:1));
+      assert(metadata->canonical_hash==40000+i);
+    }
+    assert(product_packet_graph_main.primary_published==count-failed);
+    assert(product_packet_graph_main.primary_rejected_enqueue==failed);
+  }
+  puts("PASS primary64 boundary matrix15/16/17,47/48/49,63/64/65,255/256/257: single/mixed owner48 credits, flush-before-exhaustion, nonprefix failures, original canonical identity, immediate consumer credit return");
 }
 
 static product_completion_batch_t mixed_completion(void) {
@@ -632,9 +703,9 @@ static void completion_dispatch_and_direct(void) {
   }
   assert(batch.count == 0 && native_sizes[0] == PRODUCT_PACKET_BATCH_SIZE);
   product_completion_dispatch[vm.thread_index].active = 0;
-  product_packet_completion_frame_t item = completion_item(30, 0);
-  product_completion_return(&vm, &node, 30, &item);
-  assert(native_calls == 2 && native_sizes[1] == 1 && transfers[30] == 1);
+  product_packet_completion_frame_t item = completion_item(100, 0);
+  product_completion_return(&vm, &node, 100, &item);
+  assert(native_calls == 2 && native_sizes[1] == 1 && transfers[100] == 1);
   reset();
   seed_queue(PRODUCT_COMPLETION_RETURN_CAPACITY, 480, 0);
   rejected[0] = 1;
@@ -644,6 +715,37 @@ static void completion_dispatch_and_direct(void) {
   assert(product_completion_returns[vm.thread_index].count == 512);
   assert(product_packet_graph_main.completion_pending_returns == 512 && product_packet_graph_main.completion_deferred == 512);
   puts("PASS completion active dispatch and immediate fallback: fresh work tries directly with full old backlog, no added FIFO");
+}
+
+static void completion_window_matrix(void) {
+  for(u32 at=0;at<sizeof(boundary_lengths)/sizeof(boundary_lengths[0]);at++) {
+    u32 count=boundary_lengths[at];reset();product_completion_batch_t batch={0};
+    for(u32 i=0;i<count;i++) {
+      product_packet_completion_frame_t item=completion_item(i,i%2);
+      rejected[i]=i==1 || i==17 || i==48 || i==63 || i==64 || i==255;
+      held[i]=i==2 || i==47;
+      product_completion_batch_append(&vm,&node,&batch,i,&item);
+      assert(native_calls==(i+1)/64);
+    }
+    product_completion_batch_flush(&vm,&node,&batch);
+    assert(native_calls==(count+63)/64 && !batch.count);
+    u32 pending=0;
+    for(u32 i=0;i<count;i++) {
+      assert(transfers[i]==!(rejected[i]||held[i]));
+      pending+=rejected[i]||held[i];
+    }
+    assert(product_packet_graph_main.completion_pending_returns==pending);
+    memset(rejected,0,sizeof(rejected));memset(held,0,sizeof(held));
+    while(product_completion_returns[vm.thread_index].count) {
+      u32 before=product_completion_returns[vm.thread_index].count;
+      scheduled=0;
+      assert(product_packet_completion_retry_node_fn(&vm,&node,0)==clib_min(before,64));
+    }
+    assert(!product_packet_graph_main.completion_pending_returns);
+    for(u32 i=0;i<count;i++)assert(transfers[i]==1 && !live[i]);
+    assert(product_packet_graph_main.completion_returns==count);
+  }
+  puts("PASS normal completion64 boundary matrix: 64+partial publication, nonprefix/held outcomes, retained original queue and bounded retry to complete drain");
 }
 
 static void retry_wrap_and_drain(void) {
@@ -741,11 +843,11 @@ static void origin_reclaim(void) {
   assert(product_packet_graph_main.lifecycle_completion_frames == 33 && product_packet_graph_main.lifecycle_obligations == 23);
   assert(product_packet_origin_completion_node_fn(&vm, &node, &frame) == 33);
 #ifdef SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT
-  assert(root_window_calls == 3);
+  assert(root_window_calls == 1);
 #else
   assert(root_window_calls == 0);
 #endif
-  assert(native_free_calls == 3 && native_free_sizes[0] == 13 && native_free_sizes[1] == 13 && native_free_sizes[2] == 1);
+  assert(native_free_calls == 1 && native_free_sizes[0] == 27);
   assert(product_packet_graph_main.lifecycle_buffers == 0 && product_packet_graph_main.lifecycle_completion_frames == 0);
   assert(product_packet_graph_main.lifecycle_obligations == 0);
   assert(product_packet_graph_main.lifecycle_settlements == 23 && product_packet_graph_main.lifecycle_returns == 23);
@@ -760,7 +862,7 @@ static void origin_reclaim(void) {
   }
   product_origin_reclaim_t empty = {0};
   product_origin_reclaim_flush(&vm, &empty);
-  assert(native_free_calls == 3 && product_packet_graph_main.lifecycle_settlements == 23);
+  assert(native_free_calls == 1 && product_packet_graph_main.lifecycle_settlements == 23);
   reset();
   frame.n_vectors = 2;
   prepare_origin(0, PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE, PRODUCT_COMPLETION_TRACE);
@@ -782,7 +884,37 @@ static void origin_reclaim(void) {
   assert(product_packet_graph_main.lifecycle_buffers == 0 && product_packet_graph_main.lifecycle_completion_frames == 0);
   assert(product_packet_graph_main.lifecycle_obligations == 0 && product_packet_graph_main.lifecycle_settlements == 0);
   assert(product_packet_graph_main.lifecycle_returns == 0);
-  puts("PASS actual origin node/reclaim: mixed Root/VPN/graph/replay, 16-window native free, free-before-VPN credit, local trace, exact pool/native returns and final debt");
+  puts("PASS actual origin node/reclaim: mixed Root/VPN/graph/replay, 64-window native free, free-before-VPN credit, local trace, exact pool/native returns and final debt");
+}
+
+static void origin_window_matrix(void) {
+  for(u32 mixed=0;mixed<2;mixed++)for(u32 at=0;at<sizeof(boundary_lengths)/sizeof(boundary_lengths[0]);at++) {
+    u32 count=boundary_lengths[at];reset();
+    for(u32 i=0;i<count;i++)
+      prepare_origin(i,mixed && !(i%2)?PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE:PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,0);
+    u32 expected_calls=0;
+    for(u32 base=0;base<count;base+=VLIB_FRAME_SIZE) {
+      vlib_frame_t frame={.n_vectors=clib_min(VLIB_FRAME_SIZE,count-base)};
+      for(u32 i=0;i<frame.n_vectors;i++)frame.vectors[i]=base+i;
+      assert(product_packet_origin_completion_node_fn(&vm,&node,&frame)==frame.n_vectors);
+      for(u32 start=base;start<base+frame.n_vectors;start+=64) {
+        u32 end=clib_min(start+64,base+frame.n_vectors),native=0;
+        for(u32 i=start;i<end;i++)native+=!mixed || i%2;
+        if(native)assert(native_free_sizes[expected_calls++]==native);
+      }
+    }
+    assert(native_free_calls==expected_calls);
+    assert(!product_packet_graph_main.lifecycle_buffers && !product_packet_graph_main.lifecycle_completion_frames);
+    assert(!product_packet_graph_main.lifecycle_obligations);
+    assert(product_packet_graph_main.lifecycle_settlements==count && product_packet_graph_main.lifecycle_returns==count);
+    for(u32 i=0;i<count;i++) {
+      assert(!live[i] && transfers[i]==1);
+      assert(root_pool_returns[i]==(mixed && !(i%2)));
+      assert(native_frees[i]==(!mixed || i%2));
+      assert(vpn_return_reclaims[i]==(!mixed || i%2));
+    }
+  }
+  puts("PASS origin64 boundary matrix: native256 frames consumed64+partial, mixed Root pool/VPN native free, free-before-return-credit and zero final lifecycle debt");
 }
 
 int main(void) {
@@ -792,13 +924,18 @@ int main(void) {
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   assert(arena != MAP_FAILED);
   setvbuf(stdout, 0, _IONBF, 0);
+  primary_mixed64_regression();
   primary_partial();
   primary_boundaries();
+  primary_no_progress48();
+  primary_window_matrix();
   completion_partial();
   completion_dispatch_and_direct();
+  completion_window_matrix();
   retry_wrap_and_drain();
   held_and_blocked_target();
   origin_reclaim();
+  origin_window_matrix();
   assert(munmap(arena, page_bytes * TEST_BUFFERS) == 0);
   puts("PASS actual Product primary/completion/origin batch helpers and ON retry/origin nodes");
   return 0;
@@ -815,7 +952,7 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-packet-batch-") as temporary:
         flags = ([] if verdict_mode is None else [
             "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=1",
             f"-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE={verdict_mode}"])
-        subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+        subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined", "-fno-sanitize-recover=all",
                         *flags, "-I", str(PRODUCT), str(c_source), "-o", str(executable)],
                        check=True, timeout=30)
         subprocess.run([str(executable)], check=True, timeout=5)

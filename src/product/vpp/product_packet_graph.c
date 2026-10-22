@@ -51,7 +51,7 @@
 _Static_assert (PRODUCT_GRAPH_WORKERS + 2 == FRAME_QUEUE_MAX_NELTS,
                 "Product owner storage follows the pinned VPP thread limit");
 #define PRODUCT_GRAPH_HASH_SEED UINT64_C (0x6f776e65722d3137)
-#define PRODUCT_GRAPH_HANDOFF_CREDITS 32
+#define PRODUCT_GRAPH_HANDOFF_CREDITS 48
 #define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48
 
 _Static_assert (PRODUCT_GRAPH_HANDOFF_CREDITS < FRAME_QUEUE_MAX_NELTS,
@@ -590,15 +590,18 @@ static int
 product_packet_graph_origin_valid (const product_packet_graph_main_t *graph,
                                    const product_adapter_obligation_t *obligation)
 {
-  if (!graph || !obligation || obligation->kind != graph->adapter_kind)
+  if (!graph || !obligation || obligation->kind != graph->adapter_kind
+      || !graph->owner_count || graph->owner_count > PRODUCT_GRAPH_WORKERS)
     return 0;
-  product_runtime_topology_profile_t profile =
-    obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-      ? PRODUCT_TOPOLOGY_ROOT : PRODUCT_TOPOLOGY_VPN;
-  product_runtime_topology_t topology = product_runtime_topology_current (profile);
-  return profile == PRODUCT_TOPOLOGY_ROOT
-    ? product_runtime_topology_is_owner (topology, obligation->origin_worker)
-    : obligation->origin_worker == topology.tun_io_worker;
+  /* start_external validates and snapshots the immutable generation topology
+   * before enabling admission. ADR-0012 places the VPN I/O lane immediately
+   * after its owners; packet admission must not reparse startup environment. */
+  if (graph->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE)
+    return obligation->origin_worker < graph->owner_count;
+  if (graph->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
+    return graph->owner_count < PRODUCT_VPP_MAX_FLOW_OWNERS
+      && obligation->origin_worker == graph->owner_count;
+  return 0;
 }
 
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
@@ -1079,7 +1082,7 @@ product_handoff_credit_release (product_packet_graph_main_t *graph,
 #ifdef SAKAMOTO_PRODUCT_HOST_EVIDENCE
 /*
  * This FQM is private to the Product graph. Its 64 slots are guarded by only
- * 32 credits per target worker. The retained enqueue is still nonblocking: a
+ * 48 default packet credits per target worker. The retained enqueue is still nonblocking: a
  * rejected live buffer remains here with its obligation identity intact so
  * the Product terminal can settle it explicitly.
  */
@@ -2496,9 +2499,8 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
   u32 *from = vlib_frame_vector_args (frame);
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
   (void) graph;
-  vlib_buffer_t *buffers[VLIB_FRAME_SIZE];
+  vlib_buffer_t *buffers[PRODUCT_PACKET_BATCH_SIZE];
   product_origin_reclaim_t reclaim = {0};
-  vlib_get_buffers (vm, from, buffers, frame->n_vectors);
   product_packet_batch_counters (vm)->origin_frames++;
   product_packet_batch_counters (vm)->origin_vectors += frame->n_vectors;
 #endif
@@ -2507,14 +2509,19 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
       u32 bi = from[i];
       product_packet_completion_frame_t completion;
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
-      product_batch_prefetch_buffer (buffers, i + 4, frame->n_vectors, 0);
-      if (i + 2 < frame->n_vectors)
+      u32 window_at = i % PRODUCT_PACKET_BATCH_SIZE;
+      u32 window_count = clib_min (PRODUCT_PACKET_BATCH_SIZE,
+                                    frame->n_vectors - (i - window_at));
+      if (!window_at)
+        vlib_get_buffers (vm, from + i, buffers, window_count);
+      product_batch_prefetch_buffer (buffers, window_at + 4, window_count, 0);
+      if (window_at + 2 < window_count)
         {
           product_packet_completion_frame_t future;
-          clib_memcpy_fast (&future, buffers[i + 2]->opaque2, sizeof (future));
+          clib_memcpy_fast (&future, buffers[window_at + 2]->opaque2, sizeof (future));
           product_root_nfqueue_prefetch_completion (vm, &future);
         }
-      clib_memcpy_fast (&completion, buffers[i]->opaque2, sizeof (completion));
+      clib_memcpy_fast (&completion, buffers[window_at]->opaque2, sizeof (completion));
 #else
       clib_memcpy_fast (&completion, vlib_get_buffer (vm, bi)->opaque2, sizeof (completion));
 #endif
@@ -4525,7 +4532,6 @@ product_packet_graph_policy_on_owner (
   return result;
 }
 
-#if !defined(SAKAMOTO_PRODUCT_HOST_EVIDENCE) || defined(SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT) || defined(SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT)
 static u32
 product_packet_graph_submit_external_batch_internal (
   vlib_main_t *vm, const product_packet_graph_external_item_t *items,
@@ -4548,9 +4554,7 @@ product_packet_graph_submit_external_batch_internal (
         platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
         product_packet_graph_origin_valid (graph, obligation) &&
         obligation->origin_lane == 0 &&
-        product_runtime_topology_is_owner (
-          product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
-          vlib_get_worker_index (vm->thread_index)) &&
+        vlib_get_worker_index (vm->thread_index) < graph->owner_count &&
         obligation->packet_id == vlib_get_worker_index (vm->thread_index) + 1 &&
         obligation->packet_id <= graph->owner_count;
       if (!vm || !product_packet_graph_origin_valid (graph, obligation) ||
@@ -4607,7 +4611,6 @@ product_packet_graph_submit_external_batch (
   return product_packet_graph_submit_external_batch_internal(vm, items, count,
                                                             accepted, 0, 0);
 }
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
 int product_packet_graph_submit_vpn_return_next (
   vlib_main_t *vm, vlib_node_runtime_t *node, u32 next, u32 buffer_index,
   const product_platform_packet_facts_t *platform,
@@ -4624,8 +4627,6 @@ int product_packet_graph_submit_vpn_return_next (
   return product_packet_graph_submit_external_batch_internal(vm, &item, 1,
                                                             &accepted, node, next) == 1;
 }
-#endif
-#endif
 
 int
 product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
@@ -4653,9 +4654,7 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
     platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
     product_packet_graph_origin_valid (graph, obligation) &&
     obligation->origin_lane == 0 &&
-    product_runtime_topology_is_owner (
-      product_runtime_topology_current (PRODUCT_TOPOLOGY_VPN),
-      vlib_get_worker_index (vm->thread_index)) &&
+    vlib_get_worker_index (vm->thread_index) < graph->owner_count &&
     obligation->packet_id == vlib_get_worker_index(vm->thread_index) + 1 &&
     obligation->packet_id <= graph->owner_count;
   if (!vm || !product_packet_graph_origin_valid (graph, obligation)

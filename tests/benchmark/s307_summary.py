@@ -19,6 +19,16 @@ def read(path):
     return json.loads(path.read_text())
 
 
+def verify_cpu_summary(raw, client, recorded):
+    # Historical rows predate interval metadata. Recompute their original full
+    # schema exactly; when either interval endpoint is supplied, require both
+    # endpoints and all original CPU evidence to match the raw samples.
+    cpu = quick.monitor_summary(raw, client, include_interval=any(
+        key in recorded for key in ('begin_monotonic_ns', 'end_monotonic_ns')))
+    assert cpu == recorded
+    return cpu
+
+
 def summarize(path, snapshots, runners, *, allow_profile=False):
     campaign = read(path / "campaign.json")
     assert campaign["status"] == "COMPLETE" and not campaign["errors"]
@@ -71,8 +81,7 @@ def summarize(path, snapshots, runners, *, allow_profile=False):
             assert len(status) == 1 and status[0] == dict(credits=str(credits), primary_slots="64", completion_slots="128")
             if "vpn_capture_batch_size" in manifest:
                 assert quick.rows(text, "tun.capture_batch ")[0]["limit"] == str(manifest["vpn_capture_batch_size"])
-        cpu = quick.monitor_summary((cell / "cpu.jsonl").read_text(), client)
-        assert cpu == case["cpu"]
+        cpu = verify_cpu_summary((cell / "cpu.jsonl").read_text(), client, case["cpu"])
         score = quick.score(client, peer, cpu, after, before)
         assert score == case["score"]
         elapsed = (client["end_monotonic_ns"] - client["start_monotonic_ns"]) / 1e9

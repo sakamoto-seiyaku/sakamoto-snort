@@ -98,8 +98,10 @@ static int sendto_calls, sendmmsg_calls, write_fault_errno=EFAULT;
 static int fail_id=-1, unknown_write_id=-1, wrong_length_id=-1;
 static u32 sent_order[256], sent_count;
 static u32 call_messages[64], datagram_messages[64], datagram_count;
-static product_packet_completion_frame_t completions[32];
-static u32 indices[32];
+/* One guard element catches writes beyond the selected 64-packet window. */
+#define FIXTURE_WINDOW 64U
+static product_packet_completion_frame_t completions[FIXTURE_WINDOW + 1];
+static u32 indices[FIXTURE_WINDOW + 1];
 _Static_assert(sizeof(product_nfqueue_verdict_request_t)==32,"verdict request wire size");
 _Static_assert(_Alignof(product_nfqueue_verdict_request_t)>=NLMSG_ALIGNTO,"aligned requests");
 static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lane,
@@ -215,20 +217,24 @@ static void reset(u32 n) {
   }
 }
 static void run(u32 n) {
-  u8 returned[32]; memset(returned,0xff,sizeof(returned));
+  u8 returned[FIXTURE_WINDOW + 1]; memset(returned,0xff,sizeof(returned));
   product_root_nfqueue_complete_batch_from_graph(&vm,indices,completions,n,returned);
   for (u32 i=0;i<n;i++) {
     u32 id=indices[i];
     assert(returned[i]==1 && attempts[id]==1 && returns[id]==1);
   }
-  for (u32 i=n;i<32;i++) assert(returned[i]==0xff);
+  for (u32 i=n;i<FIXTURE_WINDOW+1;i++) assert(returned[i]==0xff);
+  for (u32 l=0;l<4;l++) {
+    assert(!product_root_nfqueue_main.lanes[l].pending_active_slots);
+    assert(!product_root_nfqueue_main.lanes[l].pending_active_slots_high);
+  }
   assert(product_root_nfqueue_main.pending_count==0);
   assert(product_root_nfqueue_main.verdict_attempts==n);
   assert(product_root_nfqueue_main.internal_settlements==n);
   assert(product_root_nfqueue_main.buffer_returns==n);
 }
 static void successful_windows(void) {
-  const u32 lengths[]={0,1,2,7,15,16};
+  const u32 lengths[]={0,1,2,7,15,16,17,47,48,49,63,64};
   for (u32 at=0;at<sizeof(lengths)/sizeof(lengths[0]);at++) {
     u32 n=lengths[at]; reset(n); run(n);
     assert(sent_count==n && product_root_nfqueue_main.verdict_succeeded==n);
@@ -384,6 +390,81 @@ static void partitions_and_settlement(void) {
   reset(1); assert(product_root_nfqueue_complete_from_graph(&vm,0,completions));
   assert(calls==1 && returns[0]==1 && attempts[0]==1);
 }
+/* Exercise formerly hidden upper indexes in all actual senders. The sender
+ * dependency decodes every original identity before its individual pool return. */
+static void full_window_boundaries(void) {
+  const u32 positions[]={15,16,17,47,48,49,63};
+  for (u32 at=0;at<sizeof(positions)/sizeof(positions[0]);at++) {
+    u32 boundary=positions[at];
+    reset(FIXTURE_WINDOW); wrong_length_id=(int)boundary; run(FIXTURE_WINDOW);
+    u32 uncertain=SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE==3 ? FIXTURE_WINDOW : 1;
+    assert(product_root_nfqueue_main.verdict_outcome_unknown==uncertain);
+    assert(product_root_nfqueue_main.verdict_succeeded==FIXTURE_WINDOW-uncertain);
+    assert(!product_root_nfqueue_main.verdict_failed_definite);
+    reset(FIXTURE_WINDOW); unknown_write_id=(int)boundary; run(FIXTURE_WINDOW);
+#if SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE == 2
+    assert(product_root_nfqueue_main.verdict_outcome_unknown==1);
+    assert(product_root_nfqueue_main.verdict_succeeded==FIXTURE_WINDOW-1);
+    assert(calls==(boundary==FIXTURE_WINDOW-1 ? 1 : 2));
+#else
+    u32 failed=SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE==3 ? FIXTURE_WINDOW : 1;
+    assert(product_root_nfqueue_main.verdict_failed_definite==failed);
+    assert(product_root_nfqueue_main.verdict_succeeded==FIXTURE_WINDOW-failed);
+#endif
+    for (u32 i=0;i<FIXTURE_WINDOW;i++) assert(sent_order[i]==i);
+  }
+  reset(FIXTURE_WINDOW);
+  product_packet_completion_frame_t original[FIXTURE_WINDOW];
+  memcpy(original,completions,sizeof(original));
+  for (u32 i=0;i<FIXTURE_WINDOW;i++) {
+    u32 id=(i*17)%FIXTURE_WINDOW;
+    indices[i]=id; completions[i]=original[id];
+  }
+  run(FIXTURE_WINDOW);
+  for (u32 i=0;i<FIXTURE_WINDOW;i++) assert(sent_order[i]==(i*17)%FIXTURE_WINDOW);
+
+  /* Four contiguous lane windows, each containing mixed ALLOW/DROP outcomes. */
+  reset(FIXTURE_WINDOW);
+  for (u32 i=16;i<FIXTURE_WINDOW;i++) if ((i/16)%2) {
+    completions[i].obligation.origin_lane=2;
+    product_root_nfqueue_main.lanes[2].pending[i]=product_root_nfqueue_main.lanes[0].pending[i];
+    product_root_nfqueue_main.lanes[2].pending[i].completion=completions[i];
+    product_root_nfqueue_main.lanes[0].pending[i].active=0;
+    product_root_nfqueue_main.lanes[0].pending_active_slots &= ~(UINT64_C(1)<<i);
+    product_root_nfqueue_main.lanes[2].pending_active_slots |= UINT64_C(1)<<i;
+    product_root_nfqueue_main.lanes[0].pending_count--;
+    product_root_nfqueue_main.lanes[2].pending_count++;
+  }
+  run(FIXTURE_WINDOW);
+  assert(calls==(SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE==1 ? FIXTURE_WINDOW : 4));
+  assert(product_root_nfqueue_main.lanes[0].graph_verdict_windows==2);
+  assert(product_root_nfqueue_main.lanes[2].graph_verdict_windows==2);
+  for (u32 i=0;i<FIXTURE_WINDOW;i++) assert(sent_order[i]==i);
+
+  /* Non-prefix invalid identities do not settle or return their original pool
+   * loans. Restoring those same identities permits exactly their first attempt. */
+  reset(FIXTURE_WINDOW);
+  const u32 rejected[]={1,17,48,63};
+  for (u32 i=0;i<sizeof(rejected)/sizeof(rejected[0]);i++)
+    completions[rejected[i]].obligation.queue_generation=41;
+  u8 returned[FIXTURE_WINDOW+1]; memset(returned,0xff,sizeof(returned));
+  product_root_nfqueue_complete_batch_from_graph(&vm,indices,completions,FIXTURE_WINDOW,returned);
+  assert(returned[FIXTURE_WINDOW]==0xff);
+  assert(product_root_nfqueue_main.pending_count==4);
+  for (u32 i=0;i<FIXTURE_WINDOW;i++) {
+    int invalid=i==1 || i==17 || i==48 || i==63;
+    assert(returned[i]==!invalid && attempts[i]==!invalid && returns[i]==!invalid);
+  }
+  for (u32 i=0;i<sizeof(rejected)/sizeof(rejected[0]);i++) {
+    u32 at=rejected[i]; completions[at].obligation.queue_generation=42;
+    product_root_nfqueue_complete_batch_from_graph(&vm,indices+at,completions+at,1,returned);
+    assert(returned[0] && attempts[at]==1 && returns[at]==1);
+  }
+  assert(product_root_nfqueue_main.pending_count==0);
+  assert(product_root_nfqueue_main.internal_settlements==FIXTURE_WINDOW);
+  assert(product_root_nfqueue_main.buffer_returns==FIXTURE_WINDOW);
+  assert(!product_root_nfqueue_main.lanes[0].pending_active_slots);
+}
 static u32 control_reply(u8 *bytes,int error,u32 sequence,u32 extra) {
   u32 length=NLMSG_LENGTH(sizeof(struct nlmsgerr))+extra;
   memset(bytes,0,length);
@@ -485,6 +566,7 @@ static void diagnostic_guard_expiry(void) {
 }
 int main(void) {
   successful_windows(); sendmmsg_boundaries(); sendto_results(); partitions_and_settlement();
+  full_window_boundaries();
   control_envelopes();
   diagnostic_guard_expiry();
   printf("NFQUEUE independent verdict window mode=%u: PASS\n",SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE);
@@ -499,7 +581,8 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-verdict-batch-") as folder:
     for mode in (None, 1, 2, 3):
         mode_flags = ([] if mode is None else [f"-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE={mode}"])
         subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g",
-                        "-Wall", "-Wextra", "-Werror",
+                        "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
+                        "-fno-sanitize-recover=all",
                         "-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_EXPERIMENT=1",
                         *mode_flags,
                         "-I", str(PRODUCT), "-I", str(ROOT / "src/product/include"),

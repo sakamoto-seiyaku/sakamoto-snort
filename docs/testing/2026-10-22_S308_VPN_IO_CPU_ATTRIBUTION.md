@@ -1,5 +1,16 @@
 # S308 dedicated VPN I/O CPU attribution
 
+This records attribution checkpoint `c3e22eae`. The user subsequently selected
+packet-path topology lookup removal,48 default VPN primary packet credits and
+ready-capture submission batches64 (callback budget64, independent of the TCP
+experiment), plus native return graph/completion frame batching with individual
+nonblocking writes and settlement. The user then unified primary publication,
+normal completion, existing retry and origin/I/O consumption/reclamation at64,
+retaining per-owner primary credits48 and native return frames256.
+That later [implementation/qualification](2026-10-22_S308_ADOPTED_UNIFIED_WINDOWS.md) is separate from the unchanged
+measurements below. The selection does not turn these results into a CPU win.
+The subsequent [single/four-flow download study](2026-10-22_S308_TCP_DOWNLOAD_CPU.md) has its own frozen protocol, measurements and CPU/flame coverage.
+
 2026-10-22, Pixel 6a `28201JEGR0XPAJ`, Plane SAKAMOTO-308 under S293.
 **Removing measured packet-path environment parsing did not establish a
 whole-path CPU improvement. The candidate was frozen and Product source restored.**

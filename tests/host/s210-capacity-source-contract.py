@@ -50,6 +50,11 @@ fixture = body(graph,'product_capacity_cli')
 assert 'lifecycle_obligations' in fixture and 'completion_pending_returns' in fixture and 'product_capacity_ring_empty' in fixture
 reset = body(graph,'product_packet_graph_start_external')
 defaults = body(graph,'product_packet_graph_default_handoff_credits')
+assert '#define PRODUCT_GRAPH_HANDOFF_CREDITS 48' in graph
+assert '#define PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS 48' in graph
+assert 'PRODUCT_GRAPH_HANDOFF_CREDITS < FRAME_QUEUE_MAX_NELTS' in graph
+assert 'clib_atomic_store_rel_n (&graph->handoff_credits[worker],\n                             PRODUCT_GRAPH_HANDOFF_CREDITS)' in graph
+assert 'credits > PRODUCT_GRAPH_DIAGNOSTIC_HANDOFF_CREDITS' in fixture
 assert 'PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE' in defaults
 assert 'PRODUCT_ROOT_DEFAULT_HANDOFF_CREDITS : PRODUCT_GRAPH_HANDOFF_CREDITS' in defaults
 assert 'product_capacity_configure_empty (graph,\n    product_packet_graph_default_handoff_credits (adapter_kind), 64, 128)' in reset

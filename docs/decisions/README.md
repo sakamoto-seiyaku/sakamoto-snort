@@ -21,7 +21,11 @@ not make every historical execution claim current.
 - [Configurable FlowOwners and dedicated VPN TUN I/O](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md):
   accepted topology and direct-buffer contract; [S303](../testing/2026-10-22_S303_ANDROID_CONFIGURABLE_TOPOLOGY.md)
   qualifies scoped Root/VPN Product function on Pixel, while [S304](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md)
-  records performance trade-offs. Adoption or rollback remains a user decision.
+  records performance trade-offs. The ADR's 2026-10-22 addendum records the
+  user's accepted topology snapshot, 48-credit VPN primary default, unified
+  64-packet capture/handoff/completion/reclamation windows and native 256-index
+  owner-local return frames; combined functional
+  qualification is separate from the historical performance evidence.
 - [VPP packet metadata ownership](VPP_PACKET_METADATA_OWNERSHIP.md).
 - [L4 conntrack working decisions](L4_CONNTRACK_WORKING_DECISIONS.md).
 

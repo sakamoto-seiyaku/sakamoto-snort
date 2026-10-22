@@ -247,6 +247,8 @@ add_test(NAME sakamoto-product-external-batch-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_external_batch_test.py")
 add_test(NAME sakamoto-product-vpn-capture-batch-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpn_capture_batch_test.py")
+add_test(NAME sakamoto-product-vpn-return-batch-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_vpn_return_batch_test.py")
 add_test(NAME sakamoto-product-packet-batch-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_packet_batch_test.py")
 add_test(NAME sakamoto-product-policy-batch-test

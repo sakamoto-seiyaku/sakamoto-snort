@@ -2,8 +2,8 @@
 /* Private to product_packet_graph.c; synchronous, bounded source ownership. */
 typedef struct
 {
-  u32 indices[64];
-  u16 targets[64];
+  u32 indices[PRODUCT_PACKET_BATCH_SIZE];
+  u16 targets[PRODUCT_PACKET_BATCH_SIZE];
   product_buffer_metadata_t metadata[PRODUCT_PACKET_BATCH_SIZE];
   u32 count;
 } product_primary_batch_t;
@@ -208,7 +208,7 @@ product_primary_batch_append (vlib_main_t *vm, vlib_node_runtime_t *node,
       vm->thread_index, bi, (unsigned long long) metadata->origin_obligation_id,
       (unsigned long long) metadata->generation, owner, target,
       metadata->primary_handoff_count, metadata->corrective_handoff_count);
-  if (batch->count >= clib_min (PRODUCT_PACKET_BATCH_SIZE, graph->primary_credit_limit))
+  if (batch->count == PRODUCT_PACKET_BATCH_SIZE)
     product_primary_batch_flush (vm, node, batch);
   return 1; /* This dispatch owns queued items until flush publishes them. */
 }

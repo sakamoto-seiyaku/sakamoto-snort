@@ -104,11 +104,11 @@ product_completion_batch_append (vlib_main_t *vm, vlib_node_runtime_t *node,
   product_completion_batch_t *batch, u32 bi,
   const product_packet_completion_frame_t *completion)
 {
-  if (batch->count == PRODUCT_PACKET_BATCH_SIZE)
+  if (batch->count == PRODUCT_COMPLETION_BATCH_SIZE)
     product_completion_batch_flush (vm, node, batch);
   u32 i = batch->count++;
   batch->indices[i] = bi; batch->completion[i] = *completion;
-  if (batch->count == PRODUCT_PACKET_BATCH_SIZE)
+  if (batch->count == PRODUCT_COMPLETION_BATCH_SIZE)
     product_completion_batch_flush (vm, node, batch);
 }
 

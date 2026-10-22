@@ -69,6 +69,12 @@ def main():
                 stats = quick.peer_query("127.0.0.1", port, index)
                 if case.startswith("tcp"):
                     assert client["latency_samples"] > 0 and client["p99_upper_us"] > 0
+                    if case == "tcp-fixed":
+                        assert client["tcp_latency_probes"] is True
+                        assert client["tcp_download_connections"] == 8
+                        assert client["tcp_probe_connections"] == 2
+                        assert stats["tcp_download_connections"] == 8
+                        assert stats["tcp_echo_connections"] == 2
                     if case == "tcp-new":
                         assert client["attempts"] == sum(client[k] for k in ("completed", "errors", "timeouts", "cancelled_at_deadline"))
                         assert stats["tcp_requests"] >= client["completed"]
@@ -80,6 +86,38 @@ def main():
                 reset = quick.peer_query("127.0.0.1", port, index, "R")
                 assert reset["tcp_requests"] == reset["udp_received_packets"] == 0
                 print(case + ": PASS", flush=True)
+            # Explicit no-probe mode is true server-to-client bulk delivery:
+            # exactly the selected data connections, with no echo sidecar.
+            for count, case_id in ((1, 10), (4, 11)):
+                quick.peer_query("127.0.0.1", port, case_id, "R")
+                result = json.loads(subprocess.check_output(
+                    [str(binary), "client", "127.0.0.1", str(port), str(case_id), "tcp-fixed",
+                     "250", "1", str(count), "0", "1", "0", "1", "0"], text=True, timeout=2))
+                stats = quick.peer_query("127.0.0.1", port, case_id)
+                manifest = dict(suite=quick.VPN_TCP_SUITE, threads=1,
+                                flows_per_thread=count, tcp_latency_probes=False)
+                quick.validate_tcp_download_connections(manifest, result, stats)
+                assert result["bytes"] > 0 and result["errors"] == result["timeouts"] == 0
+                assert stats["tcp_offered_bytes"] >= result["bytes"]
+                assert stats["tcp_control_requests"] == 2  # R before, Q after the client.
+                assert quick.tcp_client_options(manifest) == (False, ["0", "1", "0", "1", "0"])
+                print(f"TCP download {count} connections without probes: PASS", flush=True)
+            assert quick.tcp_client_options({}) == (True, [])
+            assert quick.tcp_client_options(dict(suite=quick.VPN_TCP_SUITE,
+                tcp_fixed_source_port_base=25000)) == (True, ["25000", "1"])
+            for bad in (dict(suite=quick.VPN_UDP_SUITE, tcp_latency_probes=False),
+                        dict(suite=quick.VPN_TCP_SUITE, tcp_latency_probes=0)):
+                try:
+                    quick.tcp_client_options(bad)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("invalid or inherited TCP probe setting accepted")
+            rejected = subprocess.run([str(binary), "client", "127.0.0.1", str(port), "15",
+                "udp-fixed", "100", "1", "1", "0", "1", "0", "1", "0"],
+                capture_output=True, text=True, timeout=2)
+            assert rejected.returncode == 2 and "requires tcp-fixed" in rejected.stderr
+            print("TCP probe option defaults and suite rejection: PASS", flush=True)
             def tcp_source_ports(count, stride=1):
                 for base in range(20000, 30000, count * stride):
                     endpoints = []

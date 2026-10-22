@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare once, then measure a frozen Pixel workload suite within 120 seconds."""
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -275,7 +276,7 @@ def validate_capture_window(profile, client, before, after):
             raise RuntimeError('New-connection window has no VPP Flow creates')
 
 
-def monitor_summary(raw, client):
+def monitor_summary(raw, client, *, include_interval=False):
     samples = [json.loads(line) for line in raw.splitlines() if line.startswith("{")]
     samples = [s for s in samples if client["start_monotonic_ns"] <= s["monotonic_ns"] <= client["end_monotonic_ns"]]
     if len(samples) < 2:
@@ -291,9 +292,12 @@ def monitor_summary(raw, client):
             values.append({"tid": t["tid"], "cpu_seconds": cpu,
                            "cpu_percent_one_core": cpu / coverage * 100,
                            "last_cpu": t["last_cpu"]})
-    return {"sample_coverage_seconds": coverage, "sample_count": len(samples),
+    result = {"sample_coverage_seconds": coverage, "sample_count": len(samples),
             "cpu_seconds": sum(t["cpu_seconds"] for t in values), "threads": values,
             "rss_peak_bytes": max(t["rss_pages"] * s["page_size"] for s in samples for t in s["threads"])}
+    if include_interval:
+        result.update(begin_monotonic_ns=first["monotonic_ns"], end_monotonic_ns=last["monotonic_ns"])
+    return result
 
 
 def validate_vpn_window(generation, client, before, after, owner_count=2):
@@ -388,6 +392,91 @@ def score(client, peer, cpu, diagnostic, before):
             "qualification": "endpoint delivery; consult admission, capacity and adapter counters for graph coverage"}
 
 
+def tcp_client_options(manifest):
+    """Explicit TCP probe selection never leaks into another frozen suite."""
+    probes = manifest.get('tcp_latency_probes', True)
+    if 'tcp_latency_probes' in manifest and (
+            manifest.get('suite') != VPN_TCP_SUITE or type(probes) is not bool):
+        raise ValueError('tcp_latency_probes requires a boolean and fixed TCP VPN suite')
+    tail = []
+    if manifest.get('tcp_fixed_source_port_base') is not None or 'tcp_latency_probes' in manifest:
+        tail = [str(manifest.get('tcp_fixed_source_port_base', 0)), '1']
+    if 'tcp_latency_probes' in manifest:
+        # Fill the existing offered-rate and UDP-burst slots explicitly.
+        tail += ['0', '1', str(int(probes))]
+    return probes, tail
+
+
+def validate_tcp_download_connections(manifest, client, peer):
+    if manifest.get('tcp_latency_probes') is not False:
+        return
+    count = manifest['threads'] * manifest['flows_per_thread']
+    if (client.get('tcp_latency_probes') is not False
+            or client.get('tcp_download_connections') != count
+            or client.get('tcp_download_streams_with_data') != count
+            or client.get('tcp_probe_connections') != 0
+            or client.get('attempts') != count
+            or client.get('latency_samples') != 0 or client.get('p99_upper_us') is not None
+            or peer.get('tcp_download_connections') != count
+            or peer.get('tcp_echo_connections') != 0 or peer.get('tcp_requests') != 0):
+        raise RuntimeError('fixed TCP download/probe connection evidence differs from manifest')
+
+
+def attributed_tcp_flows(diagnostic, host, port, uid):
+    peer_key = '0' * 24 + socket.inet_aton(host).hex()
+    return [v for v in rows(diagnostic, 'flow.entry ')
+            if v.get('protocol') == '6' and int(v.get('uid', -1)) == uid
+            and ((v.get('key_a') == peer_key and int(v.get('port_a', 0)) == port)
+                 or (v.get('key_b') == peer_key and int(v.get('port_b', 0)) == port))]
+
+
+def live_tcp_warmup(device, profile, command, manifest, cell):
+    """Prove UID/peer attribution while the bounded no-probe warm client lives.
+
+    The ADB command owns its synchronous 2s helper; the future is joined on every
+    exit before either timed CPU collection or runtime cleanup can proceed.
+    """
+    host, port = manifest['peer_host'], manifest['peer_port']
+    count = manifest['threads'] * manifest['flows_per_thread']
+    peer_query(host, port, 14, 'R')
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(device.command, *command, timeout=5)
+        try:
+            deadline = time.monotonic() + 1.2
+            while True:
+                peer = peer_query(host, port, 14)
+                (cell / 'warm-peer-live.json').write_text(json.dumps(peer, indent=2) + '\n')
+                if future.done():
+                    raise RuntimeError('no-probe warm client exited before live attribution')
+                if peer.get('tcp_download_connections') == count and peer.get('tcp_echo_connections') == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('no-probe warm downloads did not become live')
+                time.sleep(.02)
+            diagnostic = device.cli(profile, ['show threads', 'show product flows'])
+            (cell / 'warm-live-cli.txt').write_text(diagnostic)
+            if future.done():
+                raise RuntimeError('no-probe warm client ended before live CLI proof completed')
+            attributed = attributed_tcp_flows(diagnostic, host, port, 2000)
+            if not attributed:
+                raise RuntimeError('live warmup lacks a VPP FlowEntry attributed to the actual traffic UID and peer')
+        finally:
+            # Waiting for this direct command means no background warm client
+            # can leak into the subsequent timed CPU/profile interval.
+            warm_value = future.result(timeout=5)
+            (cell / 'warm.json').write_text(warm_value)
+    warm = json.loads(warm_value)
+    if (not warm.get('bytes') or warm.get('uid') != 2000
+            or warm.get('tcp_download_connections') != count
+            or warm.get('tcp_download_streams_with_data') != count
+            or warm.get('tcp_probe_connections') != 0):
+        raise RuntimeError('no-probe warm download result does not match intended UID/connections')
+    (cell / 'warm-lifecycle.json').write_text(json.dumps(dict(
+        duration_ms=2000, helper_pid=warm['pid'], joined_before_measurement=True,
+        live_uid_peer_proof='warm-live-cli.txt', source_ports='ephemeral, separate from measured fixed tuples'), indent=2) + '\n')
+    return attributed
+
+
 def run(args):
     entry = time.monotonic()
     output = args.output.resolve()
@@ -407,6 +496,7 @@ def run(args):
     capture_batch = manifest.get("vpn_capture_batch_size")
     if capture_batch is not None and (not vpn_only or type(capture_batch) is not int or not 1 <= capture_batch <= 64):
         raise ValueError("vpn_capture_batch_size requires VPN suite and 1..64")
+    _, tcp_tail = tcp_client_options(manifest)
     tcp_source_port = manifest.get("tcp_fixed_source_port_base")
     if tcp_source_port is not None:
         last_port = tcp_source_port + manifest['threads'] * (manifest['flows_per_thread'] + 1) - 1 if type(tcp_source_port) is int else 65536
@@ -519,13 +609,21 @@ def run(args):
                 client_prefix = ["shell", "su", str(manifest["uid"]), "-c"] if profile == "root" else ["shell"]
                 # Warm only existing tracing and the actual LAN path. Its flows and time are explicit.
                 warm = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), "14", "tcp-fixed", "250", "2", "8"]
+                if manifest.get('tcp_latency_probes') is False:
+                    warm[6] = '2000'
+                    warm[-2:] = [str(manifest['threads']), str(manifest['flows_per_thread'])]
+                    warm += ['0', '1', '0', '1', '0']
                 warm_command = [*client_prefix, shlex.quote(shlex.join(warm))] if profile == "root" else [*client_prefix, *warm]
+                warm_attributed = None
                 if fresh_lifetime:
-                    warm_value = device.command(*warm_command, timeout=2)
-                    (cell / "warm.json").write_text(warm_value)
-                    warm_result = json.loads(warm_value)
-                    if not warm_result.get("bytes"):
-                        raise RuntimeError("phone cannot deliver warmup data from the selected LAN peer")
+                    if manifest.get('tcp_latency_probes') is False:
+                        warm_attributed = live_tcp_warmup(device, profile, warm_command, manifest, cell)
+                    else:
+                        warm_value = device.command(*warm_command, timeout=2)
+                        (cell / "warm.json").write_text(warm_value)
+                        warm_result = json.loads(warm_value)
+                        if not warm_result.get("bytes"):
+                            raise RuntimeError("phone cannot deliver warmup data from the selected LAN peer")
                 commands = ["show product primary", "show product completion", "show product root receive", "show product root lanes", "show product tun", "show product flows", "show buffers", "show product batch"]
                 if vpn_only:
                     commands.append("show product flow-stack")
@@ -575,12 +673,9 @@ def run(args):
                     raise RuntimeError("Flow table is already busy before pressure: " + str(occupancy))
                 if any(int(v["capacity_misses"]) for v in flow_rows):
                     raise RuntimeError("Flow capacity miss before pressure")
-                peer_key = "0" * 24 + socket.inet_aton(manifest["peer_host"]).hex()
                 expected_uid = manifest["uid"] if profile == "root" else 2000
-                attributed = [v for v in rows(diagnostic, "flow.entry ")
-                              if v.get("protocol") == "6" and int(v.get("uid", -1)) == expected_uid
-                              and ((v.get("key_a") == peer_key and int(v.get("port_a", 0)) == manifest["peer_port"])
-                                   or (v.get("key_b") == peer_key and int(v.get("port_b", 0)) == manifest["peer_port"]))]
+                attributed = warm_attributed if warm_attributed is not None else attributed_tcp_flows(
+                    diagnostic, manifest['peer_host'], manifest['peer_port'], expected_uid)
                 if fresh_lifetime and not attributed:
                     raise RuntimeError("warmup lacks a VPP FlowEntry attributed to the actual traffic UID and peer")
                 (cell / "warm-flow-evidence.json").write_text(json.dumps(attributed, indent=2) + "\n")
@@ -616,8 +711,8 @@ def run(args):
                     accounting_command = "for path in " + shlex.join(cpu_paths) + "; do printf 'PATH %s\\n' \"$path\"; cat \"$path\"; done; cat /proc/uptime"
                     (cell / "system-cpu-before.txt").write_text(device.root(accounting_command, check=False))
                 argv = [helper, "client", manifest["peer_host"], str(manifest["peer_port"]), str(case_id), case, str(manifest["cell_ms"]), str(manifest["threads"]), str(manifest["flows_per_thread"])]
-                if tcp_source_port is not None:
-                    argv.extend([str(tcp_source_port), "1"])
+                if case == "tcp-fixed":
+                    argv.extend(tcp_tail)
                 if udp_rate is not None:
                     argv.extend([str(udp_source_port), "1", str(udp_rate), str(udp_burst)])
                 if client_cpu_mask is not None:
@@ -652,9 +747,10 @@ def run(args):
                 peer["measurement_wall_seconds"] = time.monotonic() - peer_since
                 peer["cpu_percent_one_core"] = peer["measurement_cpu_seconds"] / peer["measurement_wall_seconds"] * 100
                 (cell / "peer.json").write_text(json.dumps(peer, indent=2) + "\n")
+                validate_tcp_download_connections(manifest, client, peer)
                 cpu_raw = device.root("cat " + shlex.quote(remote_cpu))
                 (cell / "cpu.jsonl").write_text(cpu_raw)
-                cpu = monitor_summary(cpu_raw, client)
+                cpu = monitor_summary(cpu_raw, client, include_interval=True)
                 # Stop the owned profiler normally so its raw data is flushed before VPP exits.
                 stop_commands = []
                 for name, sample_pid in sampler_pids.items():

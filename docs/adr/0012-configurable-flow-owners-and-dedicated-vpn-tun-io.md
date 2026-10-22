@@ -114,3 +114,143 @@ covers controlled Pixel Root and VPN `N=1`/`N=3` paths, while
 [S304](../testing/2026-10-22_S304_VPN_IO_PERFORMANCE.md) reports the measured
 performance trade-off. These records do not select an adoption or rollback
 threshold; that decision remains with the user.
+
+## 2026-10-22 Accepted packet-path and batching decisions
+
+After reviewing S306–S308, the user adopts the following design. These choices
+supersede the earlier unresolved parameter/adoption discussion for these items;
+they do not claim that the measurements established a whole-path CPU benefit.
+Implementation and qualification follow this design update through S308.
+
+### Generation topology and primary capacity
+
+Startup validates the requested topology before enabling admission and stores
+the generation's owner count and Adapter kind in the graph. Packet-path origin
+and owner-return checks use that immutable, validated graph state instead of
+reparsing startup environment variables. Restart validates and publishes the
+new generation independently. Invalid topology, stale generation, invalid
+origin, per-owner identity and exactly-once settlement remain checked.
+
+VPN primary handoff defaults to **48 packet credits per target owner**. Root's
+already selected 48-credit default remains. These packet credits do not change
+native frame-queue element counts or promise a 48-packet native frame. Explicit
+bounded diagnostic overrides, including 32 and zero, remain separate settings
+with their existing empty-graph configuration constraints.
+
+### Ready-capture batch
+
+A capture batch contains original VPP buffer indexes and metadata for packets
+already read during one TUN readiness callback. Each packet is still read
+directly into its exclusive VPP buffer. The default capture submission threshold
+and callback read budget are both **64 packets**, independent of the TCP
+experiment flag.
+
+- Submit the collected captures when 64 have been collected or a nonblocking
+  read returns `EAGAIN`/`EWOULDBLOCK`.
+- Also submit the valid partial batch on any callback exit, including budget,
+  capacity, allocation failure, interruption, read error or shutdown handling;
+  settle rejected items through their existing individual obligations.
+- `EAGAIN` means the fd is temporarily drained. Reaching a budget or capacity
+  bound does not prove it is drained. Remaining runnable/readiness work must
+  retain progress without depending on a future unrelated packet.
+- Do not wait for future packets, retain a capture batch across callbacks or
+  add a timer, persistent staging queue, payload copy or busy polling.
+
+The shared graph still selects each canonical owner and partitions publications
+using the unified windows below and available per-owner credits.
+A 64-capture submission is not a promise of one 64-vector frame per owner.
+The bounded callback yields execution opportunities to completion/write work
+under continuous ingress.
+
+### Return graph batching and TUN writes
+
+HEV/lwIP continues to produce individual return packets; multiple spans describe
+one packet's storage, not a batch of independent packets. Each accepted return
+is copied into its independently owned VPP buffer under ADR-0007 and traverses
+the normal return parser/policy graph before TUN completion.
+
+Group already available returns through native owner-local graph frames,
+completion handoff to the dedicated I/O worker and consumption of the received
+frames. Reuse native frame scheduling and existing completion batching rather
+than introducing a separate persistent return queue or waiting to fill a batch.
+Output callbacks retain their acceptance result and return before the submitted
+return graph executes. Per-flow ownership/order, partial rejection and bounded
+completion congestion retain their existing semantics.
+
+Return batching is independent of unrelated TCP experiment settings. The user
+subsequently accepts the unified handoff and completion windows below. These
+windows group independent packet operations; they do not introduce a batched
+TUN write syscall.
+
+The I/O worker still performs **one nonblocking TUN write per packet** and
+records that packet's immediate result before its own settlement/free. Short
+writes and `EAGAIN` remain failed individual attempts. A batch does not become a
+single delivery acknowledgement, multi-packet TUN syscall or retry unit. No
+extra packet copy, asynchronous borrowed payload, completion ledger, owner
+rerouting or new retry policy is introduced.
+
+### Unified handoff and completion windows
+
+After distinguishing packet capacity from execution windows, the user selects
+**64 packets** as the common bounded window for this path:
+
+| Stage | Selected window |
+| --- | --- |
+| TUN ready-capture collection and callback read budget | 64 packets |
+| Primary handoff publication | Up to 64 packets across canonical target owners |
+| Normal completion handoff publication | Up to 64 packets |
+| Existing completion retry window | Up to 64 candidates |
+| Origin/I/O completion consumption and native reclamation | Up to 64 packets per settlement/free window |
+
+Replace the former Product-specific 16-packet primary publication, normal
+completion publication and origin reclamation windows. All associated index,
+metadata, result-mask and rejection arrays must support the selected bound.
+Share an explicit window definition where the same execution bound applies;
+do not leave an implicit 16-packet split in another part of this path.
+
+Primary credits remain **48 per target owner** and are reserved per packet
+before publication, then returned when that owner receives the handoff at its
+processing entry, or when the publisher settles a failed enqueue. They do not
+cover the packet's entire graph/transport/completion lifetime. A mixed-owner
+publication can contain 64 packets; the single-owner credit limit must not
+become a global 48-packet publication cap. Exhaustion flushes already collected
+work and uses the existing bounded admission/failure path without waiting for
+credits, rerouting or adding storage. One 64-packet capture is not guaranteed
+admission of all 64 to one owner.
+
+Owner-local return graph scheduling retains the pinned VPP native frame
+capacity, **256 buffer indexes**. It does not wait for 256 packets, recursively
+run the return graph from the HEV output callback, or impose a new 16-packet
+split. The following completion handoff and origin consumption use the selected
+64-packet windows. TUN completion still attempts each packet's write once and
+settles each independently; reclamation releases each return stamp/credit only
+after that packet's buffer has actually been freed.
+
+Every window submits available work at its bound and flushes any valid partial
+work before returning. Received native graph frames larger than 64 are consumed
+in bounded 64-packet windows with a final partial window. Readiness, retry
+rearming, owner order and stop/drain retain progress under continuous traffic
+and congestion. No fill timer or new persistent packet queue is introduced.
+
+Native frame capacity, native queue element counts, packet credits, policy
+snapshot claim cadence and parser/prefetch loop unrolling are distinct units.
+This decision does not change queue capacities, Root's platform receive budget,
+the policy snapshot claim cadence or parser unrolling just to match the number
+64. Existing Root and VPN paths sharing these handoff/completion helpers must
+both be qualified. Historical measurements do not establish that this new
+combined configuration is a CPU optimum.
+
+### Qualification and historical evidence
+
+Qualify the combined implementation at its selected defaults: generation and
+topology rejection/restart; capture full and partial exits; native return graph
+scheduling; mixed packet outcomes and rejection positions; per-packet write
+failure; credit/stamp/buffer conservation; readiness progress; and bounded
+stop/drain for Root and VPN at N=1 and N=3. Frame-pressure faults must actually
+exercise their stated cause; a held-completion test is distinct from a native
+ring-full test. Preserve explicit diagnostic configurations where needed.
+
+S304–S308 measurements keep their original source/artifact identities and
+32-credit/scalar control labels. They do not measure this combined adopted
+configuration. Adoption is the user's design decision; fresh functional
+qualification and any later performance evidence are reported separately.

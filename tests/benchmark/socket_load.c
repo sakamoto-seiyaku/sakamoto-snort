@@ -64,10 +64,11 @@ static void modify(int ep, int fd, uint32_t events, int index) {
 
 typedef struct {
   uint64_t tcp_bytes, tcp_requests, udp_bytes, udp_packets, duplicates;
+  uint64_t tcp_download_connections, tcp_echo_connections, tcp_control_requests;
   uint64_t unique_tuples, tuple_overflow, sequence_overflow, malformed, send_errors;
   unsigned char *seen; uint64_t *tuples;
 } peer_stats;
-typedef struct { header h; size_t used, sent; int op, id; } peer_conn;
+typedef struct { header h; size_t used, sent; int op, id, observed; } peer_conn;
 static peer_stats peer[CASES];
 static void udp_count(int id, uint64_t seq, int bytes, uint64_t key) {
   peer_stats *s = &peer[id];
@@ -130,7 +131,15 @@ static int server(const char *ip, int port) {
           if (c->used == sizeof(header)) {
             c->id = (int)ntohl(c->h.id); c->op = (int)ntohl(c->h.op);
             if (ntohl(c->h.magic) != MAGIC || c->id >= CASES || c->id < 0) close_it = 1;
-            else { if (c->op == 'E') peer[c->id].tcp_requests++; modify(ep, fd, EPOLLOUT | EPOLLRDHUP, fd); }
+            else {
+              if (!c->observed && (c->op == 'D' || c->op == 'E')) {
+                if (c->op == 'D') peer[c->id].tcp_download_connections++;
+                else peer[c->id].tcp_echo_connections++;
+                c->observed = 1;
+              }
+              if (c->op == 'E') peer[c->id].tcp_requests++;
+              modify(ep, fd, EPOLLOUT | EPOLLRDHUP, fd);
+            }
           }
         } else if (c->op == 'D') {
           ssize_t n = send(fd, bulk, sizeof(bulk), MSG_NOSIGNAL);
@@ -139,14 +148,16 @@ static int server(const char *ip, int port) {
         } else if (c->op == 'E') {
           ssize_t n = send(fd, (char *)&c->h + c->sent, sizeof(header) - c->sent, MSG_NOSIGNAL);
           if (n > 0) c->sent += (size_t)n; else if (errno != EAGAIN && errno != EINTR) close_it = 1;
-          if (c->sent == sizeof(header)) { memset(c, 0, sizeof(*c)); modify(ep, fd, EPOLLIN, fd); }
+          if (c->sent == sizeof(header)) { int observed = c->observed; memset(c, 0, sizeof(*c)); c->observed = observed; modify(ep, fd, EPOLLIN, fd); }
         } else if (c->op == 'Q' || c->op == 'R') {
           peer_stats *s = &peer[c->id]; char json[1024];
           if (c->op == 'R') { free(s->seen); free(s->tuples); memset(s, 0, sizeof(*s)); }
+          s->tcp_control_requests++;
           int len = snprintf(json, sizeof(json), "{\"case_id\":%d,\"tcp_offered_bytes\":%"PRIu64",\"tcp_requests\":%"PRIu64",\"udp_received_bytes\":%"PRIu64",\"udp_received_packets\":%"PRIu64",\"udp_duplicates\":%"PRIu64",\"underlay_unique_tuples\":%"PRIu64",\"tuple_capacity_overflow_packets\":%"PRIu64",\"sequence_overflow_packets\":%"PRIu64",\"malformed\":%"PRIu64",\"send_errors\":%"PRIu64"}\n", c->id,s->tcp_bytes,s->tcp_requests,s->udp_bytes,s->udp_packets,s->duplicates,s->unique_tuples,s->tuple_overflow,s->sequence_overflow,s->malformed,s->send_errors);
           struct rusage usage; getrusage(RUSAGE_SELF, &usage);
           double cpu = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6 + usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6;
           len -= 2; /* replace closing brace/newline with process headroom counters */
+          len += snprintf(json + len, sizeof(json) - (size_t)len, ",\"tcp_download_connections\":%"PRIu64",\"tcp_echo_connections\":%"PRIu64",\"tcp_control_requests\":%"PRIu64, s->tcp_download_connections,s->tcp_echo_connections,s->tcp_control_requests);
           len += snprintf(json + len, sizeof(json) - (size_t)len, ",\"peer_cpu_seconds\":%.6f,\"peer_maxrss_kib\":%ld}\n", cpu, usage.ru_maxrss);
           /* Tiny local control reply; a partial reply is rejected by the caller. */
           if (send(fd, json, (size_t)len, MSG_NOSIGNAL) != len) fprintf(stderr, "query reply incomplete\n");
@@ -163,9 +174,10 @@ static int server(const char *ip, int port) {
 typedef struct { int fd, connected, sent, received; uint64_t since; header h, reply; } client_conn;
 typedef struct { pthread_barrier_t ready, start; uint64_t begin, end; } paced_clock;
 typedef struct {
-  int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride, offered_rate, burst_size; const char *ip; uint64_t begin, end;
+  int index, threads, flows, mode, id, port, fixed_port_base, fixed_port_stride, offered_rate, burst_size, tcp_latency_probes; const char *ip; uint64_t begin, end;
   pid_t tid;
   uint64_t bytes, packets, attempts, completed, errors, timeouts, cancelled, tuples, exhausted;
+  uint64_t tcp_download_connections, tcp_probe_connections, tcp_download_streams_with_data;
   uint64_t offered_packets, probe_requests, pacing_cursor, pacing_scheduled, pacing_missed, pacing_capacity_missed;
   uint64_t pacing_behind_events, pacing_max_behind_ns;
   uint64_t samples, hist[HIST];
@@ -234,7 +246,7 @@ static void open_conn(worker *w, int ep, client_conn *c, int i, int probe) {
   watch(ep, c->fd, EPOLLOUT | EPOLLRDHUP, i);
 }
 static void *tcp_worker(void *arg) {
-  worker *w = arg; int ep = epoll_create1(EPOLL_CLOEXEC), total = w->flows + (w->mode == 0);
+  worker *w = arg; int ep = epoll_create1(EPOLL_CLOEXEC), total = w->flows + (w->mode == 0 && w->tcp_latency_probes);
   w->tid = gettid();
   client_conn *c = calloc((size_t)total, sizeof(*c)); if (!c || ep < 0) die("client allocation");
   for (int i = 0; i < total; i++) { c[i].fd = -1; if (!w->offered_rate) open_conn(w, ep, &c[i], i, i == w->flows); }
@@ -261,7 +273,13 @@ static void *tcp_worker(void *arg) {
       client_conn *s = &c[i]; if (s->fd < 0) continue;
       if (!s->connected) { int error = 0; socklen_t len = sizeof(error);
         if (getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &error, &len) || error) failed = 1;
-        else s->connected = 1; }
+        else {
+          s->connected = 1;
+          if (w->mode == 0) {
+            if (probe) w->tcp_probe_connections++;
+            else w->tcp_download_connections++;
+          }
+        } }
       if (!failed && s->sent < (int)sizeof(header)) {
         ssize_t b = send(s->fd, (char *)&s->h + s->sent, sizeof(header) - (size_t)s->sent, MSG_NOSIGNAL);
         if (b > 0) s->sent += (int)b; else if (errno != EAGAIN && errno != EINTR) failed = 1;
@@ -271,7 +289,7 @@ static void *tcp_worker(void *arg) {
         ssize_t b = recv(s->fd, w->mode == 0 && !probe ? (void *)data : (char *)&s->reply + s->received,
                          w->mode == 0 && !probe ? sizeof(data) : sizeof(header) - (size_t)s->received, 0);
         if (b > 0) {
-          if (w->mode == 0 && !probe) w->bytes += (uint64_t)b;
+          if (w->mode == 0 && !probe) { w->bytes += (uint64_t)b; if (!s->received) { s->received = 1; w->tcp_download_streams_with_data++; } }
           else { s->received += (int)b; if (s->received == (int)sizeof(header)) {
             if (memcmp(&s->reply, &s->h, sizeof(header))) failed = 1;
             else { latency(w, now_ns() - s->since); if (!probe) { w->completed++; w->bytes += sizeof(header); finish = 1; }
@@ -375,7 +393,7 @@ static void *udp_worker(void *arg) {
   free(used); free(fds); close(probe); return NULL;
 }
 static int client(int argc, char **argv) {
-  if (argc < 9 || argc > 13) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [FIXED_SOURCE_PORT_BASE [FIXED_SOURCE_PORT_STRIDE [OFFERED_RATE [UDP_BURST_SIZE]]]]\n"); return 2; }
+  if (argc < 9 || argc > 14) { fprintf(stderr, "client IP PORT CASE_ID tcp-fixed|tcp-new|udp-fixed|udp-new MS THREADS FLOWS_PER_THREAD [FIXED_SOURCE_PORT_BASE [FIXED_SOURCE_PORT_STRIDE [OFFERED_RATE [UDP_BURST_SIZE [TCP_LATENCY_PROBES]]]]]\n"); return 2; }
   const char *names[] = {"tcp-fixed", "tcp-new", "udp-fixed", "udp-new"}; int mode = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(argv[5], names[i])) mode = i;
   if (mode < 0) return 2;
@@ -385,6 +403,8 @@ static int client(int argc, char **argv) {
   int fixed_port_base = argc >= 10 ? number(argv[9], 0, 65535 - (threads * flows + threads - 1) * fixed_port_stride) : 0;
   int offered_rate = argc >= 12 ? number(argv[11], 0, 1000000) : 0;
   int burst_size = argc >= 13 ? number(argv[12], 1, threads * 16) : 1;
+  int tcp_latency_probes = argc >= 14 ? number(argv[13], 0, 1) : 1;
+  if (argc >= 14 && mode != 0) { fprintf(stderr, "TCP_LATENCY_PROBES requires tcp-fixed\n"); return 2; }
   if (fixed_port_base && fixed_port_base < 1024) return 2;
   if (fixed_port_base && mode != 0 && mode != 2) return 2;
   if (offered_rate && mode != 1 && mode != 2) { fprintf(stderr, "OFFERED_RATE is supported only for tcp-new (attempts/s) and udp-fixed (payload packets/s)\n"); return 2; }
@@ -395,7 +415,7 @@ static int client(int argc, char **argv) {
   paced_clock clock;
   if (offered_rate && (pthread_barrier_init(&clock.ready, NULL, (unsigned)threads + 1)
                        || pthread_barrier_init(&clock.start, NULL, (unsigned)threads + 1))) die("pacing barrier");
-  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.fixed_port_base=fixed_port_base,.fixed_port_stride=fixed_port_stride,.offered_rate=offered_rate,.burst_size=burst_size,.ip=argv[2],.begin=begin,.end=end,.clock=offered_rate ? &clock : NULL}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
+  for (int i = 0; i < threads; i++) { w[i] = (worker){.index=i,.threads=threads,.flows=flows,.mode=mode,.id=id,.port=port,.fixed_port_base=fixed_port_base,.fixed_port_stride=fixed_port_stride,.offered_rate=offered_rate,.burst_size=burst_size,.tcp_latency_probes=tcp_latency_probes,.ip=argv[2],.begin=begin,.end=end,.clock=offered_rate ? &clock : NULL}; if (pthread_create(&ids[i], NULL, mode < 2 ? tcp_worker : udp_worker, &w[i])) die("pthread_create"); }
   if (offered_rate) {
     pthread_barrier_wait(&clock.ready);
     begin = clock.begin = now_ns(); end = clock.end = begin + (uint64_t)ms * 1000000;
@@ -405,6 +425,7 @@ static int client(int argc, char **argv) {
   worker sum = {0};
   for (int i = 0; i < threads; i++) { pthread_join(ids[i], NULL);
     sum.bytes+=w[i].bytes; sum.packets+=w[i].packets; sum.attempts+=w[i].attempts; sum.completed+=w[i].completed; sum.errors+=w[i].errors; sum.timeouts+=w[i].timeouts; sum.cancelled+=w[i].cancelled; sum.tuples+=w[i].tuples; sum.samples+=w[i].samples; sum.exhausted+=w[i].exhausted;
+    sum.tcp_download_streams_with_data+=w[i].tcp_download_streams_with_data; sum.tcp_download_connections+=w[i].tcp_download_connections; sum.tcp_probe_connections+=w[i].tcp_probe_connections;
     sum.offered_packets+=w[i].offered_packets; sum.probe_requests+=w[i].probe_requests; sum.pacing_scheduled+=w[i].pacing_scheduled; sum.pacing_missed+=w[i].pacing_missed; sum.pacing_capacity_missed+=w[i].pacing_capacity_missed; sum.pacing_behind_events+=w[i].pacing_behind_events;
     if (w[i].pacing_max_behind_ns > sum.pacing_max_behind_ns) sum.pacing_max_behind_ns = w[i].pacing_max_behind_ns;
     for (int j=0;j<HIST;j++) sum.hist[j]+=w[i].hist[j]; }
@@ -416,6 +437,8 @@ static int client(int argc, char **argv) {
   printf("{\"case\":\"%s\",\"case_id\":%d,\"pid\":%d,\"uid\":%d,\"start_monotonic_ns\":%"PRIu64",\"end_monotonic_ns\":%"PRIu64",\"requested_ms\":%d,\"threads\":%d,\"flows_per_thread\":%d,\"bytes\":%"PRIu64",\"packets\":%"PRIu64",\"attempts\":%"PRIu64",\"completed\":%"PRIu64",\"errors\":%"PRIu64",\"timeouts\":%"PRIu64",\"cancelled_at_deadline\":%"PRIu64",\"input_unique_udp_tuples\":%"PRIu64",\"tuple_space_exhausted\":%"PRIu64",\"latency_samples\":%"PRIu64",\"latency_overflow_samples\":%"PRIu64",\"p99_upper_us\":",names[mode],id,getpid(),getuid(),begin,finished,ms,threads,flows,sum.bytes,sum.packets,sum.attempts,sum.completed,sum.errors,sum.timeouts,sum.cancelled,sum.tuples,sum.exhausted,sum.samples,sum.hist[HIST-1]);
   if (!p99 || p99 >= HIST) printf("null"); else printf("%d",p99*100);
   printf(",\"burst_size\":%d",burst_size);
+  printf(",\"tcp_latency_probes\":%s,\"tcp_download_connections\":%"PRIu64",\"tcp_probe_connections\":%"PRIu64, mode == 0 && tcp_latency_probes ? "true" : "false",sum.tcp_download_connections,sum.tcp_probe_connections);
+  printf(",\"tcp_download_streams_with_data\":%"PRIu64,sum.tcp_download_streams_with_data);
   printf(",\"worker_tids\":[");
   for (int i = 0; i < threads; i++) printf("%s%d", i ? "," : "", (int)w[i].tid);
   printf("]");

@@ -6,6 +6,7 @@
 #endif
 #include "product_vpn_tun_adapter.h"
 #include "product_packet_graph.h"
+#include "product_packet_batch.h"
 #include "product_network_snapshot.h"
 #include "product_vpn_flow_stack_driver.h"
 #include "product_vpn_uid_resolver.h"
@@ -29,8 +30,8 @@
 #include <unistd.h>
 
 #define TUN_PENDING PRODUCT_VPN_TUN_CAPTURE_CAPACITY
-#define TUN_CAPTURE_BUDGET 64
-#define TUN_CAPTURE_BATCH_CAPACITY 64
+#define TUN_CAPTURE_BUDGET PRODUCT_HANDOFF_COMPLETION_WINDOW
+#define TUN_CAPTURE_BATCH_CAPACITY PRODUCT_HANDOFF_COMPLETION_WINDOW
 #define TUN_BUFFER_RETRY_SECONDS 0.05
 
 _Static_assert(TUN_CAPTURE_BATCH_CAPACITY <= VLIB_FRAME_SIZE,
@@ -303,14 +304,10 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
   }
   int accepted = 0;
   if (!rejected) {
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
     if (source_node)
       accepted = product_packet_graph_submit_vpn_return_next(vm, source_node,
         source_next, bi, platform, &obligation);
     else
-#else
-    (void)source_node; (void)source_next;
-#endif
       accepted = product_packet_graph_submit_external(vm, bi, platform, &obligation);
   }
   if (!accepted) {
@@ -782,11 +779,7 @@ int product_vpn_tun_start (vlib_main_t *vm, u64 generation) {
   tun.origin_worker = (u8) product_runtime_topology_current (
     PRODUCT_TOPOLOGY_VPN).tun_io_worker;
   if (!active_owner_count() || active_owner_count() > PRODUCT_VPN_RETURN_WORKERS) return 0;
-#ifdef SAKAMOTO_PRODUCT_VPN_TCP_BATCH_EXPERIMENT
   tun.capture_batch_limit = TUN_CAPTURE_BATCH_CAPACITY;
-#else
-  tun.capture_batch_limit = 1;
-#endif
   for (u32 i = 0; i < active_owner_count(); ++i)
     {
       if (product_vpn_return_credit_init(&returns[i].credit, generation,
