@@ -207,14 +207,14 @@ def main():
     report = {'status': 'WIRE_ONLY' if args.without_restoration else 'PASS_WITH_EXPLICIT_LIMITS', 'checks': checks,
               'limits': limits, 'apk_sha256': result['apk_sha256'], 'native_sha256': native}
     if not args.without_restoration:
-        restore = read(evidence / 'restoration/receipt.json')
+        restore = read(evidence / 'restoration-resume/receipt.json')
         assert restore['status'] == 'PASS' and restore['native_process_absent']
         assert restore['members_verified_before_swap'] > 0 and restore['stage_removed']
         assert restore['preserved_generation'] >= max([run['generation'] for run in result['runs']] + [run['generation'] for _, run in stop_runs])
         assert restore['critical_state_hashes_verified'] and restore['frequency_unchanged']
         assert restore['owned_hooks_and_queues_absent']
         assert restore['stopped_profile'] == 'vpn' and restore['wifi'] == 'Openwrt_5G'
-        report['restoration_sha256'] = digest(evidence / 'restoration/receipt.json')
+        report['restoration_sha256'] = digest(evidence / 'restoration-resume/receipt.json')
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps({'status': report['status'], 'checks': len(checks), 'limits': limits}))
 
