@@ -405,7 +405,10 @@ class Qualification:
             response_id = 0 if variant == 'short' and index == 1 else identifier
             answers = sorted([r for r in recent if r['generation'] == d.generation and r['stage'] == 2
                               and r['source_port'] == source and r['id'] == response_id], key=lambda r:r['name_index'])
-            expected_caller = 0 if d.profile == 'vpn' and index == 0 else 1
+            # The denied hot answer uses the full 3s client deadline. The
+            # existing UDP UID cache lives 2s, so its following control query
+            # is cold again; keep that query's original Unknown on its reply.
+            expected_caller = 0 if d.profile == 'vpn' and (index == 0 or (hot and index == 2)) else 1
             assert query['caller'] == expected_caller and query['coverage'] == 1
             # The hot query is admitted under the old snapshot; the control
             # query following its answer uses the new one.
@@ -495,7 +498,7 @@ def main():
     for flag in ('apk', 'stage', 'backup', 'output'): parser.add_argument('--' + flag, type=Path, required=True)
     parser.add_argument('--profile', choices=('root','vpn'), required=True)
     parser.add_argument('--owners', default='1,3', choices=('1','3','1,3'))
-    parser.add_argument('--case-set', default='full', choices=('full','hot-and-errors'))
+    parser.add_argument('--case-set', default='full', choices=('full','hot-and-errors','errors-only'))
     parser.add_argument('--endpoint4', required=True); parser.add_argument('--endpoint6', required=True)
     parser.add_argument('--public4', default='1.1.1.1'); parser.add_argument('--public6', default='2606:4700:4700::1111')
     parser.add_argument('--installed', action='store_true')
@@ -505,7 +508,7 @@ def main():
     for address in (args.endpoint4,args.endpoint6,args.public4,args.public6): ipaddress.ip_address(address)
     manifest = json.loads((args.backup/'manifest.json').read_text())
     assert manifest['state']=='stopped' and manifest['serial']==SERIAL
-    result = dict(status='HOLD', task='SAKAMOTO-312', profile=args.profile, serial=SERIAL,
+    result = dict(status='HOLD', task='SAKAMOTO-312', profile=args.profile, case_set=args.case_set, serial=SERIAL,
                   started_ns=time.time_ns(), apk_sha256=digest(args.apk), runner_sha256=digest(__file__),
                   fixture_sha256=digest(FIXTURE_PATH), backup_manifest_sha256=digest(args.backup/'manifest.json'),
                   cases=[],runs=[])
@@ -520,10 +523,15 @@ def main():
         q=Qualification(d,peer,result)
         for owners in map(int,args.owners.split(',')):
             d.owners=owners; label=f'n{owners}'; result['runs'].append(d.start(owners))
-            status=d.configure(label+'-alias-drop')
-            q.exchange(label+'-v4-alias-drop',args.endpoint4,status)
-            q.exchange(label+'-v6-alias-drop',args.endpoint6,status,qtype=28)
-            if args.case_set == 'hot-and-errors':
+            if args.case_set != 'errors-only':
+                status=d.configure(label+'-alias-drop')
+                q.exchange(label+'-v4-alias-drop',args.endpoint4,status)
+                q.exchange(label+'-v6-alias-drop',args.endpoint6,status,qtype=28)
+            if args.case_set == 'errors-only':
+                status=d.configure(label+'-short-coverage')
+                q.exchange(label+'-short',args.endpoint4,status,variant='short',
+                           coverage=2,denied=False,winner=2)
+            elif args.case_set == 'hot-and-errors':
                 status=d.configure(label+'-old-hot','allow')
                 q.exchange(label+'-current-policy',args.endpoint4,status,hot=True)
                 status=d.configure(label+'-short-coverage')

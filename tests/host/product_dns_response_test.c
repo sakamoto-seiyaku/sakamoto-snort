@@ -384,6 +384,57 @@ static void malformed_truncated_and_mutated_answers_release_the_codec(void)
   product_dns_owner_stop(&owner);
 }
 
+static void response_not_requires_one_available_candidate(void)
+{
+  product_dns_owner_start(&owner,77);
+  product_dns_context_t context=conversation(0);
+  product_dns_identity_t id=identity(1);remember(&context,&id);
+  sakamoto_product_domains_t source={.list_count=2,.entry_count=2,
+    .entries={{.length=11,.name="example.com"},{.length=10,.name="alias.test",.list=1}}};
+  product_domains_t *domains=NULL;assert(!product_domains_build(&source,&domains));
+  context=conversation(1);context.domains=domains;context.domains_available=1;
+  product_dns_response_t response;
+  product_dns_inspect_response(answer,sizeof(answer),&context,&id,&owner,&response);
+  product_l4_policy_rule_t rules[]={domain_rule(7,0,1,2),domain_rule(8,1,1,1),domain_rule(9,10,0,1)};
+  rules[0].expression[2]=PRODUCT_STATIC_NOT;rules[0].expression_length=3;
+  rules[2].expression_length=0; // Independent generic fallback.
+  static product_l4_policy_view_t view;
+  product_l4_policy_match_result_t result;
+  assert(!product_l4_policy_compile(&view,rules,3));
+  assert(!product_dns_response_match(&view,&context.packet,&response,0,&result));
+  assert(result.rule_id==7 && result.actual_action==2); // Only QName satisfies NOT alias-list.
+  rules[0].priority=2;
+  assert(!product_l4_policy_compile(&view,rules,3));
+  assert(!product_dns_response_match(&view,&context.packet,&response,0,&result));
+  assert(result.rule_id==8 && result.actual_action==1); // Alias ALLOW still uses Rank.
+  rules[0].priority=0;assert(!product_l4_policy_compile(&view,rules,3));
+  product_dns_inspect_response(answer,sizeof(answer)-1,&context,&id,&owner,&response);
+  assert(response.question.coverage==PRODUCT_DNS_MALFORMED);
+  assert(!product_dns_response_match(&view,&context.packet,&response,0,&result));
+  assert(result.rule_id==9 && result.actual_action==1);
+  uint8_t wire[8192];memcpy(wire,answer,29);put16(wire+6,33);
+  size_t length=29;
+  for(unsigned i=0;i<33;++i)
+    {
+      char from[64],to[64];
+      if(!i) strcpy(from,"example.com");else snprintf(from,sizeof(from),"n%u.test",i);
+      snprintf(to,sizeof(to),"n%u.test",i+1);
+      length+=cname(wire+length,from,to);
+    }
+  product_dns_inspect_response(wire,length,&context,&id,&owner,&response);
+  assert(response.question.coverage==PRODUCT_DNS_CAPACITY && response.name_count==33);
+  assert(!product_dns_response_match(&view,&context.packet,&response,0,&result));
+  assert(result.rule_id==9 && result.actual_action==1); // No NOT hit from an incomplete chain.
+  product_dns_owner_start(&owner,77);
+  product_dns_context_t cold=conversation(0);cold.caller=PRODUCT_DNS_CALLER_UNKNOWN;
+  remember(&cold,&id);
+  product_dns_inspect_response(answer,sizeof(answer),&context,&id,&owner,&response);
+  assert(response.correlation==PRODUCT_DNS_CORRELATED && !response.question.caller);
+  assert(!product_dns_response_match(&view,&context.packet,&response,0,&result));
+  assert(result.rule_id==9 && result.actual_action==1); // Known current socket does not upgrade original caller.
+  product_dns_owner_stop(&owner);product_domains_destroy(domains);
+}
+
 static void a_different_interface_does_not_borrow_the_original_caller(void)
 {
   product_dns_owner_start(&owner,77);
@@ -491,6 +542,7 @@ int main(void)
   vpn_binding_never_enriches_a_completed_cold_caller();
   transport_and_question_context_are_required();
   whole_rules_keep_each_name_and_one_rank();
+  response_not_requires_one_available_candidate();
   request_capacity_expiry_stop_and_generation_are_bounded();
   class_any_question_keeps_its_actual_connected_cname();
   connected_chain_limits_cycles_duplicates_and_unrelated_data();
