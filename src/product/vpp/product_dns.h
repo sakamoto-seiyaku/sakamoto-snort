@@ -19,6 +19,12 @@ typedef enum {
   PRODUCT_DNS_UNSUPPORTED,
   PRODUCT_DNS_CAPACITY,
   PRODUCT_DNS_COPY_GAP,
+  PRODUCT_DNS_TCP_PENDING,
+  PRODUCT_DNS_TCP_MIDSTREAM,
+  PRODUCT_DNS_TCP_GAP,
+  PRODUCT_DNS_TCP_CONFLICT,
+  PRODUCT_DNS_TCP_EXPIRED,
+  PRODUCT_DNS_TCP_OLD_BYTES, /* completed history moved out of the retained window */
 } product_dns_coverage_t;
 
 /* Adapter-qualified normal App ownership. A known socket UID alone does
@@ -41,7 +47,9 @@ typedef struct {
   uint16_t id, flags, qtype, qclass, name_length;
   uint8_t coverage, caller;
   char name[256];
-  uint64_t wire_hash;
+  uint64_t wire_hash, message_sequence; /* nonzero only for a framed TCP message */
+  uint32_t tcp_sequence;
+  uint8_t tcp_continuation;
 } product_dns_query_t;
 
 typedef struct {
@@ -90,7 +98,7 @@ typedef struct {
   product_dns_name_t names[PRODUCT_DNS_NAMES];
 } product_dns_response_t;
 _Static_assert(sizeof(product_dns_owner_t) + sizeof(product_dns_response_t) +
-  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 576U <= PRODUCT_DNS_WORK_BYTES,
+  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 592U <= PRODUCT_DNS_WORK_BYTES,
   "DNS retained state and synchronous wire/observation work fit the owner budget");
 
 /* Owner-local original-path observations. No datagram, codec borrow or policy
@@ -98,6 +106,7 @@ _Static_assert(sizeof(product_dns_owner_t) + sizeof(product_dns_response_t) +
  * the finite request window. Caller evidence is never enriched retrospectively. */
 void product_dns_owner_start (product_dns_owner_t *, uint64_t generation);
 void product_dns_owner_stop (product_dns_owner_t *);
+uint64_t product_dns_owner_deadline (const product_dns_owner_t *);
 unsigned product_dns_owner_active (product_dns_owner_t *, uint64_t now_us);
 product_dns_correlation_t product_dns_remember (product_dns_owner_t *,
   const product_dns_query_t *, const product_dns_identity_t *, uint64_t token,

@@ -61,25 +61,43 @@ pub struct DnsRecord {
     #[serde(default)] pub adapter_profile: u8,
     #[serde(default)] pub packet_uid: u32,
     #[serde(default)] pub packet_availability: u8,
+    #[serde(default)] pub message_sequence: u64,
+    #[serde(default)] pub tcp_sequence: u32,
+    #[serde(default)] pub tcp_continuation: u8,
+    #[serde(default)] pub packet_direction: u8,
 }
 
 impl DnsRecord {
     pub fn valid(&self) -> bool {
-        // The INPUT/UDP53 control point is known even when the DNS header
+        // The INPUT port53 control point is known even when the DNS header
         // could not be read. Preserve that bounded error without inventing QR
         // or accepting complete/correlated answers without response flags.
         let header_unavailable = self.query_flags == 0 && self.id == 0
             && self.qtype == 0 && self.qclass == 0 && self.name.is_empty()
             && self.candidate_count == 0 && self.name_index == 0 && self.name_source == 0
             && self.chain_status == 0 && self.matched_requests == 0
-            && self.correlation == 2 && matches!(self.coverage, 2 | 5);
+            && self.correlation == 2 && (matches!(self.coverage, 2 | 5)
+                || (self.protocol == 6 && matches!(self.coverage, 4 | 6..=11)));
         self.generation != 0 && self.token != 0 && self.owner < 62
-            && matches!(self.family, 4 | 6) && self.protocol == 17
+            && matches!(self.family, 4 | 6) && matches!(self.protocol, 6 | 17)
             && self.resolver_port == 53 && self.delivery == 0
             && ((self.stage == 1 && self.direction == 3 && self.query_flags & 0x8000 == 0)
                 || (self.stage == 2 && self.direction == 1
                     && (self.query_flags & 0x8000 != 0 || header_unavailable)))
-            && self.coverage >= 1 && self.coverage <= 5
+            && self.coverage >= 1 && self.coverage <= if self.protocol == 6 { 11 } else { 5 }
+            && (if self.protocol == 6 {
+                self.adapter_profile == 1 && matches!(self.packet_direction, 1 | 3)
+                    && self.tcp_continuation <= 1
+                    && (self.tcp_continuation == 1 || self.packet_direction == self.direction)
+                    && (self.coverage != 1 || self.message_sequence != 0)
+                    && (self.tcp_continuation == 0 || self.coverage == 1)
+                    && (self.coverage < 6 || (self.name.is_empty() && self.qtype == 0
+                        && self.qclass == 0 && self.query_flags == 0 && self.id == 0
+                        && self.candidate_count == 0 && !self.domain_available))
+            } else {
+                self.message_sequence == 0 && self.tcp_sequence == 0
+                    && self.tcp_continuation == 0 && self.packet_direction == 0
+            })
             && self.caller <= 1 && self.availability & !15 == 0
             && self.codec_peak_bytes <= 512 * 1024
             && self.name.len() <= 255 && self.name.is_ascii()
@@ -122,20 +140,27 @@ impl DnsRecord {
 
     pub(crate) fn key(&self) -> String {
         let base = format!("{:020}:{:020}:{:04}", self.generation, self.token, self.owner);
-        if self.stage == 1 { base } else { format!("{base}:{}:{:02}", self.stage, self.name_index) }
+        if self.protocol == 6 {
+            format!("{base}:tcp:{:020}:{}:{:02}:{}", self.message_sequence,
+                self.stage, self.name_index, self.tcp_continuation)
+        } else if self.stage == 1 { base }
+        else { format!("{base}:{}:{:02}", self.stage, self.name_index) }
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6)
+        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7)
             || data[6..8] != [0, 0] {
             return None;
         }
         let u16_at = |n| u16::from_le_bytes(data[n..n + 2].try_into().unwrap());
         let u32_at = |n| u32::from_le_bytes(data[n..n + 4].try_into().unwrap());
         let u64_at = |n| u64::from_le_bytes(data[n..n + 8].try_into().unwrap());
-        let extended = data[2] == 6;
-        if u16_at(0) != if extended { 576 } else { 480 }
-            || (extended && (data.len() < 576 || data[571] != 0))
+        let extended = data[2] >= 6;
+        let tcp_extended = data[2] == 7;
+        let expected = if tcp_extended { 592 } else if extended { 576 } else { 480 };
+        if u16_at(0) != expected || data.len() < expected as usize
+            || (tcp_extended && data[590..592] != [0, 0])
+            || (extended && data[571] != 0)
             || (!extended && data[126..128] != [0, 0])
             || u16_at(112) > 255 || data[123] > 1 { return None; }
         let name_length = u16_at(112) as usize;
@@ -181,6 +206,10 @@ impl DnsRecord {
             adapter_profile: if extended { data[570] } else { 0 },
             packet_uid: if extended { u32_at(572) } else { u32_at(80) },
             packet_availability: if extended { data[559] } else { data[117] },
+            message_sequence: if tcp_extended { u64_at(576) } else { 0 },
+            tcp_sequence: if tcp_extended { u32_at(584) } else { 0 },
+            tcp_continuation: if tcp_extended { data[588] } else { 0 },
+            packet_direction: if tcp_extended { data[589] } else { 0 },
         };
         record.valid().then_some(record)
     }
@@ -306,4 +335,27 @@ mod tests {
             assert!(DnsRecord::decode(&invalid).is_none(), "offset {offset}");
         }
     }
+    #[test]
+    fn tcp_frames_keep_distinct_normal_history_identities() {
+        let mut data = [0; 592];
+        data[..480].copy_from_slice(&wire_record());
+        data[..2].copy_from_slice(&592u16.to_le_bytes());
+        data[2] = 7;
+        data[115] = 6;
+        data[576..584].copy_from_slice(&1u64.to_le_bytes());
+        data[584..588].copy_from_slice(&101u32.to_le_bytes());
+        data[589] = 3;
+        data[570] = 1; data[559] = 9;
+        data[572..576].copy_from_slice(&10123u32.to_le_bytes());
+        let first = DnsRecord::decode(&data).expect("Root TCP query through normal ABI");
+        data[576..584].copy_from_slice(&2u64.to_le_bytes());
+        data[584..588].copy_from_slice(&132u32.to_le_bytes());
+        let second = DnsRecord::decode(&data).expect("second query coalesced in the same packet");
+        assert_ne!(first.key(), second.key());
+        assert_eq!(first.protocol, 6);
+        // Existing UDP query keys remain unchanged for stored history.
+        let legacy = DnsRecord::decode(&wire_record()).unwrap();
+        assert_eq!(legacy.key(), "00000000000000000077:00000000000000000310:0000");
+    }
+
 }

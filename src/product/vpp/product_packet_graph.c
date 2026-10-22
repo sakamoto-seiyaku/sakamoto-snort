@@ -25,6 +25,7 @@
 #include "product_vpn_flow_stack_driver.h"
 #include "product_vpn_uid_resolver.h"
 #include "product_dns.h"
+#include "product_dns_tcp.h"
 #include "product_network_snapshot.h"
 #include "product_runtime_topology.h"
 #include "product_diagnostic_hex.h"
@@ -314,6 +315,7 @@ typedef struct
   product_policy_worker_t policy_workers[PRODUCT_GRAPH_WORKERS];
   product_dns_owner_status_t dns[PRODUCT_GRAPH_WORKERS];
   product_dns_owner_t dns_requests[PRODUCT_GRAPH_WORKERS];
+  product_dns_tcp_owner_t dns_tcp[PRODUCT_GRAPH_WORKERS];
   u32 l4_policy_active_bank;
   u32 l4_policy_bank_readers[2];
   u32 l4_policy_view_active;
@@ -2780,10 +2782,12 @@ product_packet_graph_stop_external (vlib_main_t *vm)
   for (unsigned owner = 0; owner < product_packet_graph_worker_count (); ++owner)
     {
       product_dns_owner_stop (&graph->dns_requests[owner]);
-      fprintf (stderr, "dns event=stop generation=%llu owner=%u requests=0 codec_live_bytes=%llu active_operations=%llu\n",
+      product_dns_tcp_stop (&graph->dns_tcp[owner]);
+      fprintf (stderr, "dns event=stop generation=%llu owner=%u requests=0 codec_live_bytes=%llu active_operations=%llu tcp_active=%u tcp_owned_bytes=%llu\n",
         (unsigned long long) graph->generation, owner,
         (unsigned long long) product_dns_resources ().codec_live_bytes,
-        (unsigned long long) product_dns_resources ().active_operations);
+        (unsigned long long) product_dns_resources ().active_operations,
+        graph->dns_tcp[owner].active, (unsigned long long) graph->dns_tcp[owner].allocated_bytes);
     }
   product_policy_domains_clear (graph);
   product_packet_graph_policy_writer_unlock (graph);
@@ -2887,7 +2891,10 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
   clib_memset (graph->policy_workers, 0, sizeof (graph->policy_workers));
   clib_memset (graph->dns, 0, sizeof (graph->dns));
   for (unsigned owner = 0; owner < product_packet_graph_worker_count (); ++owner)
-    product_dns_owner_start (&graph->dns_requests[owner], graph->generation);
+    {
+      product_dns_owner_start (&graph->dns_requests[owner], graph->generation);
+      product_dns_tcp_start (&graph->dns_tcp[owner], graph->generation);
+    }
   graph->policy_packet_lock_acquisitions = 0;
   graph->policy_publications = 0;
   clib_memset (graph->flow_unavailable, 0, sizeof (graph->flow_unavailable));
@@ -2941,6 +2948,7 @@ product_packet_graph_flow_pools_abort (product_packet_graph_main_t *graph)
       product_flow_runtime_destroy (graph->flow_pools[worker]);
       graph->flow_pools[worker] = 0;
       product_dns_owner_stop (&graph->dns_requests[worker]);
+      product_dns_tcp_stop (&graph->dns_tcp[worker]);
     }
   clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
 }
@@ -4569,7 +4577,7 @@ product_packet_graph_dns_record (
     .source_port = query->packet.source_port, .resolver_port = query->packet.destination_port,
     .name_length = query->name_length,
     .family = query->packet.family, .protocol = query->packet.protocol,
-    .direction = lease->platform.direction, .availability = lease->platform.availability,
+    .direction = query->packet.direction, .availability = lease->platform.availability,
     .caller = query->caller, .coverage = query->coverage,
     .declared_action = evaluation->matched ? evaluation->declared_action : actual,
     .actual_action = actual, .mode = evaluation->matched ? evaluation->mode : 0,
@@ -4581,7 +4589,16 @@ product_packet_graph_dns_record (
     .packet_availability = lease->platform.availability,
     .packet_uid = (lease->platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
       ? lease->platform.uid : UINT32_MAX,
+    .message_sequence = query->message_sequence,
+    .tcp_sequence = query->tcp_sequence,
+    .tcp_continuation = query->tcp_continuation,
+    .packet_direction = query->packet.protocol == 6 ? lease->platform.direction : 0,
   };
+  if (query->packet.protocol == 6)
+    record.availability = (query->packet.uid_known ? PRODUCT_PLATFORM_UID_KNOWN : 0)
+      | (query->packet.network_context_known ? PRODUCT_PLATFORM_CONTEXT_KNOWN : 0)
+      | (query->packet.ifindex_known ? PRODUCT_PLATFORM_IFINDEX_KNOWN : 0)
+      | (query->caller == PRODUCT_DNS_CALLER_PLATFORM_APP ? PRODUCT_PLATFORM_DNS_APP_RELIABLE : 0);
   memcpy (record.source_address, query->packet.source_address, 16);
   memcpy (record.resolver_address, query->packet.destination_address, 16);
   memcpy (record.name, query->name, sizeof (record.name));
@@ -4639,6 +4656,175 @@ product_packet_graph_dns_record (
     }
 }
 
+typedef struct {
+  vlib_main_t *vm;
+  product_packet_lease_t *lease;
+  const product_policy_snapshot_t *snapshot;
+  product_flow_entry_observation_t flow;
+  product_l4_policy_match_result_t match;
+  product_l4_policy_status_t status;
+  product_dns_tcp_event_t pending;
+  u32 buffer_index;
+  int complete, flow_observed, pending_valid;
+} product_dns_tcp_graph_t;
+
+static int
+product_packet_graph_dns_tcp_flow_facts (void *opaque, product_l4_policy_packet_t *packet,
+  product_dns_identity_t *identity)
+{
+  product_dns_tcp_graph_t *context = opaque;
+  const product_policy_snapshot_t *snapshot = context->snapshot;
+  if (!context->flow_observed)
+    {
+      product_packet_graph_policy_evaluation_t pending = {
+        .generation = snapshot->identity.generation, .revision = snapshot->identity.revision,
+        .snapshot_hash = snapshot->identity.snapshot_hash,
+        .verdict = PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT,
+      };
+      clib_memset (&context->flow, 0, sizeof (context->flow));
+      context->flow.slot = UINT32_MAX;
+      product_packet_graph_flow_observe (context->vm, context->buffer_index, context->lease,
+        &pending, snapshot->trace, &context->flow);
+      context->flow_observed = 1;
+    }
+  if (context->lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE) return -1;
+  packet->ct_state = context->flow.tracker.facts.state;
+  packet->ct_state_known = packet->ct_state != PRODUCT_CT_UNKNOWN;
+  packet->flow_direction = context->flow.tracker.facts.direction;
+  packet->flow_direction_known = packet->flow_direction != PRODUCT_FLOW_DIRECTION_UNKNOWN;
+  const product_flow_entry_t *entry = context->flow.entry;
+  packet->protocol_set = entry ? entry->lpi.protocols : 0;
+  packet->protocol_set_known = entry ? entry->lpi.available : 0;
+  packet->sni_result = entry ? entry->sni.result : 0;
+  identity->incarnation = entry ? entry->incarnation : 0;
+  return 0;
+}
+
+static void
+product_packet_graph_dns_tcp_record (void *opaque, const product_dns_tcp_event_t *event)
+{
+  product_dns_tcp_graph_t *context = opaque;
+  /* Every known frame, including a malformed DNS body, already ran the
+   * synchronous PRE/Flow/POST policy seam and has its own message identity.
+   * Publish it now rather than overwriting an earlier frame in this packet.
+   * Byte-level pending/gap coverage still uses the final generic packet verdict. */
+  if (event->facts.question.coverage != PRODUCT_DNS_QUERY_COMPLETE && !event->message_sequence)
+    { context->pending = *event; context->pending_valid = 1; return; }
+  const product_l4_policy_match_result_t *match = &event->match;
+  const product_policy_snapshot_t *snapshot = context->snapshot;
+  product_packet_graph_policy_evaluation_t evaluation = {
+    .generation = snapshot->identity.generation,
+    .revision = snapshot->identity.revision, .snapshot_hash = snapshot->identity.snapshot_hash,
+    .stage = PRODUCT_PACKET_GRAPH_POLICY_STAGE_L4,
+    .verdict = match->actual_action == PRODUCT_L4_POLICY_ACTION_DROP
+      ? PRODUCT_PACKET_GRAPH_POLICY_VERDICT_DROP : PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT,
+    .matched = match->evaluation, .rule_id = match->rule_id, .rule_index = match->rule_index,
+    .declared_action = match->action, .actual_action = match->actual_action,
+    .mode = match->mode, .reason_id = match->reason_id,
+    .terminal_preserved = event->status != PRODUCT_L4_POLICY_STATUS_OK,
+  };
+  product_packet_graph_dns_record (context->vm, context->lease, snapshot,
+    &event->facts.question, event->stage == 2 ? &event->facts : NULL,
+    event->facts.correlation, &evaluation, &context->flow);
+  /* A retained ALLOW only releases its DNS flow restriction. Independently
+   * applicable rules still evaluate this actual packet's direction and tuple.
+   * Every complete frame has its own whole-rule winner; the first rejecting
+   * frame controls the entire original packet. */
+  if ((!event->continuation && event->facts.question.coverage == PRODUCT_DNS_QUERY_COMPLETE)
+      || (event->continuation && match->actual_action == PRODUCT_L4_POLICY_ACTION_DROP))
+    {
+      if (!context->complete || context->match.actual_action != PRODUCT_L4_POLICY_ACTION_DROP)
+        { context->match = *match; context->status = event->status; }
+      context->complete = 1;
+    }
+}
+
+static void
+product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
+  product_packet_lease_t *lease, const product_policy_snapshot_t *snapshot,
+  product_dns_tcp_graph_t *context)
+{
+  clib_memset (context, 0, sizeof (*context));
+  /* S313 is Root original TCP only. VPN TCP admission/return is qualified by
+   * its subsequent slice; UDP keeps the established shared path above. */
+  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+      lease->facts.protocol != 6 || lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE ||
+      !lease->policy_owner_ready || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE ||
+      !((lease->platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT && lease->facts.destination_port == 53) ||
+        (lease->platform.direction == PRODUCT_PACKET_DIRECTION_INPUT && lease->facts.source_port == 53))) return;
+  unsigned owner = vlib_get_worker_index (vm->thread_index);
+  product_dns_identity_t identity = product_packet_graph_dns_identity (vm, lease);
+  product_dns_context_t dns = {
+    .domains_available = snapshot->bank->generation == product_packet_graph_main.generation,
+    .domains = snapshot->bank->generation == product_packet_graph_main.generation
+      ? snapshot->bank->domains : NULL,
+    .caller = (lease->platform.availability & PRODUCT_PLATFORM_DNS_APP_RELIABLE)
+      ? PRODUCT_DNS_CALLER_PLATFORM_APP : PRODUCT_DNS_CALLER_UNKNOWN,
+  };
+  product_packet_graph_l4_packet_projection (lease, &dns.packet);
+  context->vm = vm; context->lease = lease; context->snapshot = snapshot; context->buffer_index = buffer_index;
+  context->flow.entry = product_flow_entry_current (product_packet_graph_main.flow_pools[owner],
+    &lease->assignment, identity.generation, identity.now_us, &context->flow.slot);
+  if ((lease->facts.tcp_flags & 2) && context->flow.entry)
+    {
+      product_tcp_state_t candidate = context->flow.entry->protocol_state.tcp;
+      product_flow_direction_t direction = lease->assignment.source_is_a == context->flow.entry->origin_is_endpoint_a
+        ? PRODUCT_FLOW_DIRECTION_ORIG : PRODUCT_FLOW_DIRECTION_REPLY;
+      product_tracker_result_t tracker = product_tcp_update (&candidate, &lease->facts, direction);
+      if (tracker.create_replacement)
+        { identity.incarnation = 0; context->flow.entry = NULL; context->flow.slot = UINT32_MAX; }
+    }
+  vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+  u32 offset = lease->facts.transport_offset + lease->facts.l4_header_length;
+  u32 length = lease->facts.transport_length >= lease->facts.l4_header_length
+    ? lease->facts.transport_length - lease->facts.l4_header_length : 0;
+  u32 copied = offset <= buffer->current_length ? buffer->current_length - offset : 0;
+  if (copied > length) copied = length;
+  /* A SYN without DNS bytes acquires observation state only after ordinary
+   * Flow admission. Generic early DROP must not reserve a DNS flow slot. */
+  if (!length && (lease->facts.tcp_flags & 2) && !context->flow.entry) return;
+  product_l4_policy_view_t empty;
+  const product_l4_policy_view_t *view = &snapshot->bank->view;
+  if (snapshot->bank->generation != product_packet_graph_main.generation)
+    { product_l4_policy_init (&empty); view = &empty; }
+  product_dns_tcp_input_t input = {
+    .context = dns, .identity = identity,
+    .policy = {snapshot->identity.generation, snapshot->identity.revision, snapshot->identity.snapshot_hash, 0},
+    .view = view, .bytes = copied ? (const u8 *) vlib_buffer_get_current (buffer) + offset : NULL,
+    .copied = copied, .length = length, .token = lease->origin_obligation_id,
+    .sequence = lease->facts.tcp_sequence, .flags = lease->facts.tcp_flags,
+    .flow_facts = product_packet_graph_dns_tcp_flow_facts, .flow_context = context,
+  };
+  product_dns_tcp_process (&product_packet_graph_main.dns_tcp[owner],
+    &product_packet_graph_main.dns_requests[owner], &input, product_packet_graph_dns_tcp_record, context);
+}
+
+void
+product_packet_graph_dns_flow_end (vlib_main_t *vm, uint64_t generation, uint64_t incarnation)
+{
+  if (!vm || !vm->thread_index || vm->thread_index > product_packet_graph_worker_count ()) return;
+  product_dns_tcp_end (&product_packet_graph_main.dns_tcp[vlib_get_worker_index (vm->thread_index)],
+    generation, incarnation);
+}
+
+uint64_t
+product_packet_graph_dns_deadline (unsigned owner)
+{
+  if (owner >= product_packet_graph_worker_count ()) return UINT64_MAX;
+  uint64_t request = product_dns_owner_deadline (&product_packet_graph_main.dns_requests[owner]);
+  uint64_t tcp = product_dns_tcp_deadline (&product_packet_graph_main.dns_tcp[owner]);
+  return request < tcp ? request : tcp;
+}
+
+void
+product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
+{
+  if (!vm || !vm->thread_index || vm->thread_index > product_packet_graph_worker_count ()) return;
+  unsigned owner = vlib_get_worker_index (vm->thread_index);
+  (void) product_dns_owner_active (&product_packet_graph_main.dns_requests[owner], now_us);
+  product_dns_tcp_expire (&product_packet_graph_main.dns_tcp[owner], now_us);
+}
+
 static product_packet_result_t
 product_packet_graph_policy_on_owner (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
@@ -4665,6 +4851,8 @@ product_packet_graph_policy_on_owner (
   product_dns_query_t dns_query;
   product_dns_response_t dns_response;
   int dns_observed = 0, dns_response_observed = 0;
+  product_dns_tcp_graph_t tcp;
+  product_packet_graph_dns_tcp_prepare (vm, buffer_index, lease, &snapshot, &tcp);
   (void) product_packet_graph_dns_prepare (vm, buffer_index, lease,
     &snapshot, &dns_query, &dns_observed);
   product_packet_graph_dns_response_prepare (vm, buffer_index, lease,
@@ -4696,10 +4884,13 @@ product_packet_graph_policy_on_owner (
   int eligible = lease->policy_owner_ready
     && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE;
   if (eligible)
-    early_status = product_packet_graph_l4_view_evaluate (graph, lease, &snapshot, &early);
-  int post_flow = eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK
+    {
+      if (tcp.complete) { early = tcp.match; early_status = tcp.status; }
+      else early_status = product_packet_graph_l4_view_evaluate (graph, lease, &snapshot, &early);
+    }
+  int post_flow = !tcp.complete && eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK
     && early.evaluation == PRODUCT_L4_POLICY_EVALUATION_NO_MATCH;
-  product_flow_entry_observation_t observation = {0};
+  product_flow_entry_observation_t observation = tcp.flow_observed ? tcp.flow : (product_flow_entry_observation_t) {0};
   if (post_flow)
     {
       product_packet_graph_policy_evaluation_t pending = {
@@ -4708,7 +4899,8 @@ product_packet_graph_policy_on_owner (
         .snapshot_hash = snapshot.identity.snapshot_hash,
         .verdict = PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT,
       };
-      product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
+      if (!tcp.flow_observed)
+        product_packet_graph_flow_observe (vm, buffer_index, lease, &pending, trace, &observation);
       snapshot.ct = observation.tracker.facts;
       snapshot.flow_incarnation = observation.entry ? observation.entry->incarnation : 0;
       snapshot.protocols = observation.entry ? observation.entry->lpi.protocols : 0;
@@ -4722,9 +4914,24 @@ product_packet_graph_policy_on_owner (
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
     lease, evaluation, &snapshot,
     eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK && !post_flow ? &early : 0);
-  if (result == PRODUCT_PACKET_OK && !post_flow
+  if (result == PRODUCT_PACKET_OK && !post_flow && !tcp.flow_observed
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
+  if (result == PRODUCT_PACKET_OK && observation.entry &&
+      lease->facts.protocol == 6 && lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE)
+    {
+      product_dns_context_t context = {0};
+      product_packet_graph_l4_packet_projection (lease, &context.packet);
+      product_dns_identity_t identity = product_packet_graph_dns_identity (vm, lease);
+      identity.incarnation = observation.entry->incarnation;
+      unsigned owner = vlib_get_worker_index (vm->thread_index);
+      if ((lease->facts.tcp_flags & 2) && lease->facts.transport_length == lease->facts.l4_header_length)
+        {
+          product_dns_tcp_graph_t anchor;
+          product_packet_graph_dns_tcp_prepare (vm, buffer_index, lease, &snapshot, &anchor);
+        }
+      product_dns_tcp_bind (&graph->dns_tcp[owner], &graph->dns_requests[owner], &context, &identity);
+    }
   if (result == PRODUCT_PACKET_OK && dns_observed)
     {
       product_dns_correlation_t correlation = PRODUCT_DNS_CORRELATION_NONE;
@@ -4741,6 +4948,10 @@ product_packet_graph_policy_on_owner (
       product_packet_graph_dns_record (vm, lease, &snapshot, &dns_query, NULL,
         correlation, evaluation, &observation);
     }
+  if (result == PRODUCT_PACKET_OK && tcp.pending_valid)
+    product_packet_graph_dns_record (vm, lease, &snapshot, &tcp.pending.facts.question,
+      tcp.pending.stage == 2 ? &tcp.pending.facts : NULL, tcp.pending.facts.correlation,
+      evaluation, &observation);
   if (result == PRODUCT_PACKET_OK && dns_response_observed)
     product_packet_graph_dns_record (vm, lease, &snapshot, &dns_response.question,
       &dns_response, dns_response.correlation, evaluation, &observation);
@@ -4797,6 +5008,7 @@ product_packet_graph_policy_on_owner (
       &lease->facts, graph->generation, incarnation);
   }
 #endif
+  product_flow_expiry_changed (vm);
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
 #ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
   evaluation->policy_qualified = evaluation->policy_qualified &&
@@ -5171,7 +5383,7 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
   product_dns_resources_t resources = product_dns_resources ();
   product_policy_snapshot_t snapshot;
   product_policy_snapshot_acquire (g, &snapshot);
-  vlib_cli_output (vm, "dns.profile=original-udp enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=0 root=1 vpn=1 response=1 request_limit_per_owner=%u request_state_bytes_per_owner=%u request_state_bytes_total=%llu aliases_limit=%u request_timeout_us=%llu owned_work_limit_per_owner=%u owned_work_limit_total=%llu",
+  vlib_cli_output (vm, "dns.profile=original enabled=%u generation=%llu policy_revision=%llu snapshot_hash=%llu owners=%u message_limit=%u codec_limit_per_owner=%u codec_limit_total=%llu codec_live_bytes=%llu active_operations=%llu replacement=0 tcp=%u root=1 vpn=1 response=1 root_tcp=1 vpn_tcp=0 request_limit_per_owner=%u request_state_bytes_per_owner=%u request_state_bytes_total=%llu aliases_limit=%u request_timeout_us=%llu owned_work_limit_per_owner=%u owned_work_limit_total=%llu",
     g->enabled && g->accepting &&
       (g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE ||
        g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN),
@@ -5180,6 +5392,7 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
     PRODUCT_DNS_MESSAGE_MAX, PRODUCT_DNS_CODEC_BYTES,
     (unsigned long long) product_packet_graph_worker_count () * PRODUCT_DNS_CODEC_BYTES,
     (unsigned long long) resources.codec_live_bytes, (unsigned long long) resources.active_operations,
+    g->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
     PRODUCT_DNS_REQUESTS, (unsigned) sizeof (product_dns_owner_t),
     (unsigned long long) product_packet_graph_worker_count () * sizeof (product_dns_owner_t),
     PRODUCT_DNS_NAMES - 1, (unsigned long long) PRODUCT_DNS_REQUEST_US,
@@ -5194,6 +5407,15 @@ product_dns_status_cli (vlib_main_t *vm, unformat_input_t *input,
         (unsigned long long) requests->unmatched, (unsigned long long) requests->ambiguous,
         (unsigned long long) requests->retransmits, (unsigned long long) requests->expired,
         (unsigned long long) requests->capacity, (unsigned long long) requests->overflow_until);
+      product_dns_tcp_owner_t *tcp = &g->dns_tcp[owner];
+      product_dns_tcp_expire (tcp, (u64) (vlib_time_now (vm) * 1000000.0));
+      vlib_cli_output (vm, "dns.tcp owner=%u accepting=%u active=%u high_water=%u flow_limit=%u flow_bytes_limit=%u allocated_bytes=%llu high_water_bytes=%llu messages=%llu duplicates=%llu conflicts=%llu gaps=%llu midstream=%llu capacity=%llu expired=%llu next_us=%llu",
+        owner, tcp->accepting, tcp->active, tcp->high_water, PRODUCT_DNS_TCP_FLOWS, PRODUCT_DNS_TCP_FLOW_BYTES,
+        (unsigned long long) tcp->allocated_bytes, (unsigned long long) tcp->high_water_bytes,
+        (unsigned long long) tcp->messages, (unsigned long long) tcp->duplicates,
+        (unsigned long long) tcp->conflicts, (unsigned long long) tcp->gaps,
+        (unsigned long long) tcp->midstream, (unsigned long long) tcp->capacity,
+        (unsigned long long) tcp->expired, (unsigned long long) product_dns_tcp_deadline (tcp));
       vlib_cli_output (vm, "dns.owner=%u observed=%llu complete=%llu unknown_caller=%llu allowed=%llu dropped=%llu unchecked=%llu malformed=%llu unsupported=%llu capacity=%llu copy_gap=%llu codec_peak_bytes=%u",
         owner, (unsigned long long) s->observed, (unsigned long long) s->complete,
         (unsigned long long) s->unknown_caller, (unsigned long long) s->allowed,

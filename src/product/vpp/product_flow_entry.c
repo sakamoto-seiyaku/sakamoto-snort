@@ -173,19 +173,30 @@ product_flow_runtime_prefetch (
 }
 #endif
 
+const product_flow_entry_t *product_flow_entry_current (product_flow_runtime_t *pool,
+  const product_owner_assignment_t *assignment, uint64_t generation,
+  uint64_t timestamp_us, uint32_t *current_slot)
+{
+  if (current_slot) *current_slot = NO_SLOT;
+  if (!pool || !assignment || !assignment_is_eligible(assignment)
+      || !generation || pool->stats.generation != generation
+      || assignment->execution_owner != pool->stats.worker_index)
+    return NULL;
+  uint32_t slot = find_entry(pool, assignment);
+  if (slot == NO_SLOT) return NULL;
+  const product_flow_entry_t *entry = &pool->slots[slot].entry;
+  if (entry->deadline_us && entry->deadline_us <= timestamp_us) return NULL;
+  if (current_slot) *current_slot = slot;
+  return entry;
+}
+
 uint64_t product_flow_entry_current_incarnation (product_flow_runtime_t *pool,
   const product_owner_assignment_t *assignment, uint64_t generation,
   uint64_t timestamp_us)
 {
-  if (!pool || !assignment || !assignment_is_eligible(assignment)
-      || !generation || pool->stats.generation != generation
-      || assignment->execution_owner != pool->stats.worker_index)
-    return 0;
-  uint32_t slot = find_entry(pool, assignment);
-  if (slot == NO_SLOT) return 0;
-  const product_flow_entry_t *entry = &pool->slots[slot].entry;
-  if (entry->deadline_us && entry->deadline_us <= timestamp_us) return 0;
-  return entry->incarnation;
+  const product_flow_entry_t *entry = product_flow_entry_current (
+    pool, assignment, generation, timestamp_us, NULL);
+  return entry ? entry->incarnation : 0;
 }
 
 int product_flow_entry_enrich_uid (product_flow_runtime_t *pool,

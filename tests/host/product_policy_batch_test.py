@@ -119,6 +119,7 @@ prefix = r'''
 #include <sys/un.h>
 #include "product_packet_graph.h"
 #include "product_dns.h"
+#include "product_dns_tcp.h"
 #include "product_flow_entry.h"
 #include "product_observation.h"
 #include "product_root_receive_pool.h"
@@ -156,7 +157,7 @@ private_types = "".join(typedef(GRAPH, name) for name in (
     "product_packet_graph_l4_policy_bank_t", "product_policy_snapshot_t",
     "product_policy_worker_t", "product_compact_owner_assignment_t",
     "product_transport_metadata_t", "product_buffer_metadata_t",
-    "product_packet_batch_stats_t"))
+    "product_packet_batch_stats_t", "product_dns_tcp_graph_t"))
 private_types += anonymous_enum(GRAPH, "PRODUCT_META_ADMITTED") + graph_type
 private_types += "".join(typedef(ADAPTER, name) for name in (
     "product_root_nfqueue_fault_mode_t", "product_root_nfqueue_pending_t",
@@ -201,13 +202,14 @@ static u32 tracked_claim(u32 *p, u32 value, int order) {
 snapshot_code = snapshot_functions + "\n#undef __atomic_fetch_add\n"
 
 stubs = r'''
+static unsigned tcp_fixture_mode;
 /* This pre-existing batch/window fixture uses UDP443 only. DNS message and
  * Adapter behavior are qualified through their public seams separately. */
 static product_packet_result_t product_packet_graph_dns_prepare(vlib_main_t *vm,u32 index,
   const product_packet_lease_t *lease,product_policy_snapshot_t *snapshot,
   product_dns_query_t *query,int *observed) {
   (void)vm;(void)index;(void)snapshot;(void)query;
-  assert(lease->facts.destination_port!=53);*observed=0;return PRODUCT_PACKET_OK;
+  assert(lease->facts.protocol!=17 || lease->facts.destination_port!=53);*observed=0;return PRODUCT_PACKET_OK;
 }
 static void product_packet_graph_dns_response_prepare(vlib_main_t *vm,u32 index,
   const product_packet_lease_t *lease,product_policy_snapshot_t *snapshot,
@@ -217,7 +219,7 @@ static void product_packet_graph_dns_response_prepare(vlib_main_t *vm,u32 index,
 }
 static product_dns_identity_t product_packet_graph_dns_identity(vlib_main_t *vm,
   const product_packet_lease_t *lease) {
-  (void)vm;(void)lease;assert(0);return (product_dns_identity_t){0};
+  (void)vm;(void)lease;assert(tcp_fixture_mode);return (product_dns_identity_t){.generation=7,.incarnation=77};
 }
 product_dns_correlation_t product_dns_remember(product_dns_owner_t *owner,
   const product_dns_query_t *query,const product_dns_identity_t *identity,
@@ -301,6 +303,28 @@ static void product_packet_graph_flow_observe(vlib_main_t *vm,u32 index,product_
   if (injected_bypass) lease->processing_bypass_reason=PRODUCT_PACKET_BYPASS_FLOW_CAPACITY;
   if (publish_inside_node && (index==0 || index==PRODUCT_POLICY_BATCH_SIZE)) publish_revision(index?3:2);
 }
+static void product_packet_graph_l4_packet_projection(const product_packet_lease_t *,product_l4_policy_packet_t *);
+static void product_packet_graph_dns_tcp_prepare(vlib_main_t *vm,u32 index,product_packet_lease_t *lease,
+  const product_policy_snapshot_t *snapshot,product_dns_tcp_graph_t *context) {
+  memset(context,0,sizeof(*context));
+  if(!tcp_fixture_mode) return;
+  assert(lease->facts.protocol==6 && lease->facts.destination_port==53);
+  product_packet_graph_policy_evaluation_t pending={.generation=snapshot->identity.generation,
+    .revision=snapshot->identity.revision,.snapshot_hash=snapshot->identity.snapshot_hash,
+    .verdict=PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT};
+  product_packet_graph_flow_observe(vm,index,lease,&pending,0,&context->flow);
+  context->flow_observed=1;
+  if(tcp_fixture_mode==2) return; // Flow already advanced but no usable DNS frame.
+  product_l4_policy_packet_t packet;product_packet_graph_l4_packet_projection(lease,&packet);
+  packet.ct_state=PRODUCT_CT_ESTABLISHED;packet.ct_state_known=1;
+  context->status=product_l4_policy_match_position(&snapshot->bank->view,&packet,0,&context->match);
+  context->complete=1;
+}
+void product_dns_tcp_bind(product_dns_tcp_owner_t *owner,product_dns_owner_t *requests,
+  const product_dns_context_t *context,const product_dns_identity_t *identity) {
+  (void)owner;(void)requests;(void)context;assert(tcp_fixture_mode && identity->generation==7 && identity->incarnation==77);
+}
+void product_flow_expiry_changed(vlib_main_t *vm) {(void)vm;}
 product_flow_entry_status_t product_flow_entry_set_decision(product_flow_runtime_t *pool,
   const product_flow_entry_t *entry,const product_flow_policy_identity_t *policy,
   uint8_t decision,uint64_t winner,uint32_t reason) {
@@ -397,7 +421,7 @@ static void reset_graph(void) {
   atomic_store(&wait_enabled,0); atomic_store(&wait_seen,0); atomic_store(&writer_done,0);
   atomic_store(&delayed_claim,0); atomic_store(&claim_seen,0); atomic_store(&claim_resume,0);
   atomic_store(&retired_destroyed,0); policy_calls=enqueued=freed=fragment_calls=publish_inside_node=injected_bypass=0;
-  flow_interface_mode=flow_observe_calls=decision_submissions=0;
+  flow_interface_mode=flow_observe_calls=decision_submissions=tcp_fixture_mode=0;
   memset(&controlled_entry,0,sizeof(controlled_entry));memset(&submitted_identity,0,sizeof(submitted_identity));
   submitted_winner=submitted_reason=submitted_decision=0;
 }
@@ -609,6 +633,25 @@ static void flow_winner_commit(void) {
   assert(!flow_observe_calls);expect_flow_commit(0,0,"complete PRE DROP does not create a Flow");
   assert(!regression_failures);
 }
+static void dns_dependency_advances_do_not_duplicate_flow_or_verdict(void) {
+  for(unsigned scenario=1;scenario<=3;++scenario) {
+    reset_graph();flow_interface_mode=1;tcp_fixture_mode=scenario;
+    product_packet_graph_main.flow_pools[0]=(product_flow_runtime_t *)&controlled_pool;
+    product_l4_policy_rule_t dynamic=source_rule(scenario==3?PRODUCT_L4_POLICY_ACTION_DROP:PRODUCT_L4_POLICY_ACTION_ALLOW);
+    dynamic.expression_length=2;dynamic.expression[0]=PRODUCT_EXPRESSION_CT_STATE;
+    dynamic.expression[1]=PRODUCT_CT_ESTABLISHED;
+    assert(!product_l4_policy_compile(&product_packet_graph_main.l4_policy_banks[0].view,&dynamic,1));
+    product_packet_lease_t lease=packet_fixture();lease.facts.protocol=6;
+    lease.facts.destination_port=53;lease.facts.tcp_flags=16;
+    product_packet_graph_policy_evaluation_t evaluation;
+    product_packet_result_t result=invoke_owner(0,&lease,&evaluation);
+    assert(result==PRODUCT_PACKET_OK && evaluation.matched && evaluation.rule_id==91);
+    assert(flow_observe_calls==1 && decision_submissions==1 && submitted_winner==91);
+    assert(submitted_decision==(scenario==3?PRODUCT_FLOW_ENTRY_DECISION_DROP:PRODUCT_FLOW_ENTRY_DECISION_PASS_NEXT));
+    assert(evaluation.actual_action==(scenario==3?PRODUCT_L4_POLICY_ACTION_DROP:PRODUCT_L4_POLICY_ACTION_ALLOW));
+    complete_fixture(evaluation,result,lease,0,1,0); // Actual Root completion, including duplicate rejection.
+  }
+}
 int main(void) {
   reader_protection();
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
@@ -616,6 +659,7 @@ int main(void) {
 #endif
   qualification();
   flow_winner_commit();
+  dns_dependency_advances_do_not_duplicate_flow_or_verdict();
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
   puts("PASS actual policy/Root code: 16-packet revision windows, bank readers, PRE/cache-hit and POST winner commits, qualified/matched ALLOW/DROP verdicts, fragments, replay and failed-send pool return");
 #else

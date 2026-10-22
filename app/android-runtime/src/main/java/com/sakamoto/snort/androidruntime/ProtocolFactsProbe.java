@@ -5,6 +5,8 @@ import android.os.SystemClock;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -323,6 +325,79 @@ final class ProtocolFactsProbe {
                     exchange.put("timedOut", true);
                 }
             }
+        }
+    }
+
+    private static void dnsTcpQueries(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        org.json.JSONArray queries = plan.getJSONArray("dnsTcpQueries");
+        int repeat = plan.optInt("dnsTcpRepeat", 1);
+        int timeout = plan.optInt("dnsTimeoutMs", 1000);
+        int delay = plan.optInt("dnsQueryDelayMs", 0);
+        int writeDelay = plan.optInt("dnsTcpWriteDelayMs", 0);
+        boolean pipeline = plan.optBoolean("dnsTcpPipeline");
+        org.json.JSONArray sizes = plan.optJSONArray("dnsTcpWriteSizes");
+        if (queries.length() < 1 || queries.length() > 4096 || repeat < 1 || repeat > 4096
+                || queries.length() * repeat > 4096 || port != 53
+                || timeout < 100 || timeout > 3000 || delay < 0 || delay > 1000
+                || writeDelay < 0 || writeDelay > 1000 || (sizes != null && sizes.length() > 32))
+            throw new IllegalArgumentException("bounded ordinary TCP DNS probe");
+        byte[][] frames = new byte[queries.length() * repeat][];
+        int total = 0;
+        org.json.JSONArray exchanges = new org.json.JSONArray();
+        result.put("dnsExchanges", exchanges);
+        for (int i = 0; i < frames.length; ++i) {
+            byte[] request = hex(queries.getString(i % queries.length()));
+            if (request.length < 12 || request.length > 4096 || (total += request.length + 2) > 512 * 1024)
+                throw new IllegalArgumentException("TCP DNS probe query size");
+            frames[i] = new byte[request.length + 2];
+            frames[i][0] = (byte) (request.length >>> 8); frames[i][1] = (byte) request.length;
+            System.arraycopy(request, 0, frames[i], 2, request.length);
+            exchanges.put(new JSONObject().put("sentHex", toHex(request)));
+        }
+        try (Socket socket = new Socket()) {
+            socket.setReuseAddress(true); socket.setTcpNoDelay(true);
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(new InetSocketAddress(endpoint, port), timeout); socket.setSoTimeout(timeout);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            result.put("resolver", socket.getRemoteSocketAddress().toString());
+            DataInputStream received = new DataInputStream(socket.getInputStream());
+            long deadline = SystemClock.elapsedRealtime() + 15000;
+            int batches = pipeline ? 1 : frames.length;
+            for (int batch = 0; batch < batches; ++batch) {
+                if (SystemClock.elapsedRealtime() >= deadline) { result.put("deadlineReached", true); break; }
+                if (batch != 0 && delay != 0) Thread.sleep(delay);
+                ByteArrayOutputStream pending = new ByteArrayOutputStream();
+                int start = pipeline ? 0 : batch, end = pipeline ? frames.length : batch + 1;
+                for (int i = start; i < end; ++i) pending.write(frames[i]);
+                byte[] bytes = pending.toByteArray();
+                for (int at = 0, part = 0; at < bytes.length; ++part) {
+                    int count = sizes != null && part < sizes.length() ? sizes.getInt(part) : bytes.length - at;
+                    if (count < 1 || count > 512 * 1024) throw new IllegalArgumentException("TCP DNS write size");
+                    count = Math.min(count, bytes.length - at);
+                    socket.getOutputStream().write(bytes, at, count); socket.getOutputStream().flush(); at += count;
+                    if (at < bytes.length && writeDelay != 0) Thread.sleep(writeDelay);
+                }
+                if (plan.optBoolean("dnsTcpGate")) gate(app, nonce, result, "dns_tcp_written");
+                for (int i = start; i < end; ++i) {
+                    long remaining = deadline - SystemClock.elapsedRealtime();
+                    if (remaining <= 0) { result.put("deadlineReached", true); break; }
+                    socket.setSoTimeout((int) Math.min(timeout, remaining));
+                    try {
+                        int length = received.readUnsignedShort();
+                        if (length > 8192) throw new IllegalStateException("TCP DNS probe reply size");
+                        byte[] reply = new byte[length]; received.readFully(reply);
+                        exchanges.getJSONObject(i).put("replyHex", toHex(reply));
+                    } catch (SocketTimeoutException expected) {
+                        exchanges.getJSONObject(i).put("timedOut", true);
+                    }
+                }
+            }
+            // Keep this ordinary App socket alive until the external collector
+            // freezes its wire and normal observations. Closing can orphan
+            // kernel retransmissions outside the debug UID capture scope.
+            if (plan.optBoolean("dnsTcpHoldAfterReads"))
+                gate(app, nonce, result, "dns_tcp_read_complete");
         }
     }
 
@@ -657,6 +732,7 @@ final class ProtocolFactsProbe {
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
                 if (plan.has("systemDnsName")) systemDns(plan, result);
                 else if (plan.has("dnsQueries")) dnsQueries(plan, result, endpoint, local, source, port);
+                else if (plan.has("dnsTcpQueries")) dnsTcpQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);

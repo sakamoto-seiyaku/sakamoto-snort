@@ -20,16 +20,21 @@ code = r'''
 #include <stdio.h>
 typedef struct { int thread_index; } vlib_main_t;
 typedef struct { unsigned active; } product_dns_owner_t;
+typedef struct { unsigned active; unsigned long long allocated_bytes; } product_dns_tcp_owner_t;
 typedef struct { unsigned codec_live_bytes, active_operations; } product_dns_resources_t;
 typedef struct {
   unsigned accepting, enabled, generation;
   product_dns_owner_t dns_requests[2];
+  product_dns_tcp_owner_t dns_tcp[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
-static int workers_ready, calls, debt, dns_stops;
+static int workers_ready, calls, debt, dns_stops, tcp_stops;
 static unsigned product_packet_graph_worker_count(void) { return 2; }
 static void product_dns_owner_stop(product_dns_owner_t *owner) {
   assert(owner->active); owner->active=0; ++dns_stops;
+}
+static void product_dns_tcp_stop(product_dns_tcp_owner_t *owner) {
+  assert(owner->active && owner->allocated_bytes);owner->active=0;owner->allocated_bytes=0;++tcp_stops;
 }
 static product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
 #define PREDICT_FALSE(x) (x)
@@ -51,16 +56,23 @@ int main(void) {
    * unavailable here, as in the actual early-exit crash, rather than mocked
    * as valid pools with no packets. */
   product_packet_graph_stop_external(0);
-  assert(calls==0 && dns_stops==0 && !product_packet_graph_main.enabled);
+  assert(calls==0 && dns_stops==0 && tcp_stops==0 && !product_packet_graph_main.enabled);
   vlib_main_t vm={0}; workers_ready=1;
   product_packet_graph_main.accepting=product_packet_graph_main.enabled=1;
   product_packet_graph_main.generation=77;
   product_packet_graph_main.dns_requests[0].active=1;
   product_packet_graph_main.dns_requests[1].active=1;
+  for(unsigned n=0;n<2;++n) {
+    product_packet_graph_main.dns_tcp[n].active=3;
+    product_packet_graph_main.dns_tcp[n].allocated_bytes=192*1024;
+  }
   product_packet_graph_stop_external(&vm);
   assert(calls==8 && !product_packet_graph_main.accepting && !product_packet_graph_main.enabled);
   assert(dns_stops==2 && !product_packet_graph_main.dns_requests[0].active
     && !product_packet_graph_main.dns_requests[1].active);
+  assert(tcp_stops==2 && !product_packet_graph_main.dns_tcp[0].active
+    && !product_packet_graph_main.dns_tcp[1].active && !product_packet_graph_main.dns_tcp[0].allocated_bytes
+    && !product_packet_graph_main.dns_tcp[1].allocated_bytes);
   return 0;
 }
 '''

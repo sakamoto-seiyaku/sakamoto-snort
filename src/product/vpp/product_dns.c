@@ -113,6 +113,17 @@ void product_dns_owner_stop (product_dns_owner_t *owner)
   owner->overflow_until = 0;
 }
 
+uint64_t product_dns_owner_deadline (const product_dns_owner_t *owner)
+{
+  uint64_t next = UINT64_MAX;
+  if (!owner || !owner->accepting) return next;
+  if (owner->overflow_until) next = owner->overflow_until;
+  for (unsigned i = 0; i < PRODUCT_DNS_REQUESTS; ++i)
+    if (owner->requests[i].active && owner->requests[i].deadline < next)
+      next = owner->requests[i].deadline;
+  return next;
+}
+
 unsigned product_dns_owner_active (product_dns_owner_t *owner, uint64_t now)
 {
   if (!owner) return 0;
@@ -163,7 +174,8 @@ product_dns_correlation_t product_dns_remember (product_dns_owner_t *owner,
   uint64_t token, const product_dns_policy_identity_t *policy)
 {
   if (!owner || !query || !identity || !policy || !token || !owner->accepting ||
-      owner->generation != identity->generation || !identity->incarnation ||
+      owner->generation != identity->generation ||
+      (!identity->incarnation && !(query->packet.protocol == 6 && query->message_sequence)) ||
       query->coverage != PRODUCT_DNS_QUERY_COMPLETE || query->packet.direction != 3)
     return PRODUCT_DNS_UNMATCHED;
   unsigned active = product_dns_owner_active (owner, identity->now_us);
@@ -176,10 +188,18 @@ product_dns_correlation_t product_dns_remember (product_dns_owner_t *owner,
           !same_question (&request->query, query) ||
           !same_context (&request->query.packet, &query->packet, 0) ||
           !same_platform_context (&request->query.packet, &query->packet)) continue;
+      /* TCP retransmission is resolved by the byte observer. A subsequent
+       * framed request may legitimately reuse an ID after its answer, while
+       * two simultaneous identical Questions remain ambiguous. UDP keeps its
+       * finite datagram tombstone/retransmission contract. */
+      if (query->packet.protocol == 6 && request->replied)
+        { memset (request, 0, sizeof (*request)); --active; if (!empty) empty = request; continue; }
       request->transport_token = token;
       ++owner->retransmits;
       if (request->retransmits < UINT16_MAX) ++request->retransmits;
-      if (request->replied || request->query.wire_hash != query->wire_hash ||
+      if (request->replied ||
+          (query->packet.protocol == 6 && request->query.message_sequence != query->message_sequence) ||
+          request->query.wire_hash != query->wire_hash ||
           request->policy.generation != policy->generation ||
           request->policy.revision != policy->revision || request->policy.hash != policy->hash ||
           request->policy.winner != policy->winner ||

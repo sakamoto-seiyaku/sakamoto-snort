@@ -66,6 +66,8 @@ schedule (vlib_main_t *vm, expiry_owner_t *owner)
   u64 next = product_flow_runtime_next_deadline (owner->runtime);
   u64 observation_next = product_observation_deadline (vlib_get_worker_index (vm->thread_index));
   if (observation_next < next) next = observation_next;
+  u64 dns_next = product_packet_graph_dns_deadline (vlib_get_worker_index (vm->thread_index));
+  if (dns_next < next) next = dns_next;
   if (next != UINT64_MAX && next < owner->eligible_us)
     next = owner->eligible_us;
   if (owner->scheduled_us == next)
@@ -252,6 +254,7 @@ VLIB_NODE_FN (product_flow_expiry_node)
     }
   u64 now = now_us (vm);
   product_observation_flush_due (vm, now);
+  product_packet_graph_dns_expire (vm, now);
   u64 next = product_flow_runtime_next_deadline (owner->runtime);
   if (now >= owner->eligible_us && next <= now)
     {

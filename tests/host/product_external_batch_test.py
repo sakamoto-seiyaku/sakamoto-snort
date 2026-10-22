@@ -87,6 +87,7 @@ typedef struct { u32 node_index; } vlib_node_runtime_t;
 typedef struct { u32 n_vectors, vectors[VLIB_FRAME_SIZE]; } vlib_frame_t;
 typedef struct { u8 opaque[40], opaque2[56]; } vlib_buffer_t;
 typedef struct { unsigned active; } product_dns_owner_t;
+typedef struct { unsigned active; u64 allocated_bytes; } product_dns_tcp_owner_t;
 typedef struct { u64 codec_live_bytes, active_operations; } product_dns_resources_t;
 typedef struct {
   vlib_main_t *vlib_main;
@@ -98,11 +99,15 @@ typedef struct {
   u32 l4_policy_active_bank, policy_publish_sequence, l4_policy_view_active;
   u32 lifecycle_terminal_intents, lifecycle_settlements, lifecycle_returns;
   product_dns_owner_t dns_requests[PRODUCT_GRAPH_WORKERS];
+  product_dns_tcp_owner_t dns_tcp[PRODUCT_GRAPH_WORKERS];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
-static unsigned dns_stops;
+static unsigned dns_stops, tcp_stops;
 static u32 product_packet_graph_worker_count(void) { return product_packet_graph_main.owner_count; }
 static void product_dns_owner_stop(product_dns_owner_t *owner) { owner->active=0; ++dns_stops; }
+static void product_dns_tcp_stop(product_dns_tcp_owner_t *owner) {
+  owner->active=0; owner->allocated_bytes=0; ++tcp_stops;
+}
 static product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
 #if TEST_BATCH
 static u32 product_packet_batch_stats[4];
@@ -574,10 +579,11 @@ static void startup_and_restart(void) {
   assert(!product_packet_graph_start_external(&vm, 8001, PRODUCT_ADAPTER_OBLIGATION_VPN_TUN));
   assert(memcmp(&live, &product_packet_graph_main, sizeof(live)) == 0);
   const u32 stopping_owners = product_packet_graph_main.owner_count;
-  dns_stops=0;
+  dns_stops=tcp_stops=0;
   product_packet_graph_stop_external(&vm);
   assert(!product_packet_graph_main.enabled && !product_packet_graph_main.accepting);
   assert(dns_stops == stopping_owners);
+  assert(tcp_stops == stopping_owners);
   assert(product_packet_graph_start_external(&vm, 8001, PRODUCT_ADAPTER_OBLIGATION_VPN_TUN));
   assert(product_packet_graph_main.owner_count == 3);
   assert(product_packet_graph_main.generation == 8001);

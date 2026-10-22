@@ -46,6 +46,11 @@ uint64_t product_packet_graph_completion_frame_debt (void);
 /* Control-only under worker barrier: stop new lifecycle work and settle
  * fragments while origin lanes stay open; already-enqueued FlowEnds drain. */
 void product_packet_graph_quiesce (vlib_main_t *vm);
+/* Current owner, synchronous FlowEnd composition; releases only the exact
+ * generation/incarnation's bounded DNS observation copies. */
+void product_packet_graph_dns_flow_end (vlib_main_t *, uint64_t generation, uint64_t incarnation);
+uint64_t product_packet_graph_dns_deadline (unsigned owner);
+void product_packet_graph_dns_expire (vlib_main_t *, uint64_t now_us);
 
 typedef struct
 {

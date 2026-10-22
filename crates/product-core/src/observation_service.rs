@@ -26,7 +26,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 576]);
+    struct RawRecord([u8; 592]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -217,9 +217,9 @@ mod live {
                         let mut dns_records = Vec::new();
                         for channel in 0..health.owners * 2 {
                             for _ in 0..128 {
-                                let mut raw = RawRecord([0; 576]);
+                                let mut raw = RawRecord([0; 592]);
                                 let rv = unsafe {
-                                    product_observation_receive(handle, channel, &mut raw, 576)
+                                    product_observation_receive(handle, channel, &mut raw, 592)
                                 };
                                 if rv == 0 {
                                     break;
@@ -411,6 +411,68 @@ mod live {
         use std::io::{BufRead, BufReader, Write};
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
+
+        #[test]
+        #[ignore = "requires the actual Product C producer executable"]
+        fn native_tcp_dns_frames_and_continuation_survive_sqlite_reopen() {
+            let root = std::env::temp_dir().join(format!("s313-observation-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped())
+                .spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "dns-tcp").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "DNS-TCP 11");
+            let check = |reply: &serde_json::Value| {
+                assert_eq!(reply["storage"], "sqlite");
+                assert_eq!(reply["dns"]["accepted"], 11);
+                assert_eq!(reply["dns"]["rejected"], 0);
+                let rows = reply["dns"]["recent"].as_object().unwrap();
+                assert_eq!(rows.len(), 11);
+                let queries: Vec<_> = rows.values().filter(|r| r["record"]["token"] == 17).collect();
+                assert_eq!(queries.len(), 2, "coalesced frames share a packet token without overwriting");
+                assert!(queries.iter().any(|r| r["record"]["message_sequence"] == 1 && r["record"]["tcp_sequence"] == 101));
+                assert!(queries.iter().any(|r| r["record"]["message_sequence"] == 2 && r["record"]["tcp_sequence"] == 132));
+                let malformed: Vec<_> = rows.values().filter(|r| r["record"]["token"] == 23).collect();
+                assert_eq!(malformed.len(), 2, "coalesced malformed frames keep separate persisted identities");
+                assert!(malformed.iter().any(|r| r["record"]["message_sequence"] == 1 && r["record"]["tcp_sequence"] == 601));
+                assert!(malformed.iter().any(|r| r["record"]["message_sequence"] == 2 && r["record"]["tcp_sequence"] == 606));
+                for row in malformed { assert_eq!(row["record"]["coverage"], 2); }
+                let alias = rows.values().find(|r| r["record"]["token"] == 18 && r["record"]["name_source"] == 1).unwrap();
+                assert_eq!(alias["record"]["name"], "alias.test");
+                let continuation = rows.values().find(|r| r["record"]["token"] == 22).unwrap();
+                let record = &continuation["record"];
+                assert_eq!(record["stage"], 2);
+                assert_eq!(record["direction"], 1);
+                assert_eq!(record["packet_direction"], 3);
+                assert_eq!(record["tcp_continuation"], 1);
+                assert_eq!(record["query_token"], 17);
+                assert_eq!(record["query_policy_revision"], 3);
+                assert_eq!(record["policy_revision"], 9);
+                assert_eq!(record["actual_action"], 2);
+                for row in rows.values() { assert_eq!(row["record"]["protocol"], 6); }
+            };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let snapshot = service.snapshot();
+                if snapshot["persistent"]["dns"]["accepted"] == 11 {
+                    check(&snapshot["persistent"]); break;
+                }
+                assert!(Instant::now() < deadline, "normal consumer did not accept TCP records: {snapshot}");
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(service);
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            check(&restored.query()); drop(restored);
+            std::fs::remove_dir_all(root).unwrap();
+        }
 
         #[test]
         #[ignore = "requires the actual Product C producer executable"]
@@ -942,10 +1004,9 @@ mod live {
             assert_eq!(durable["persistent"]["packets"][0], 640);
             assert_eq!(durable["persistent"]["bytes"][0], 38400);
             assert_eq!(durable["persistent"]["ended"], 1);
-            assert_eq!(
-                durable["persistent"]["minutes"]["1699999980"]["packets"][0],
-                640
-            );
+            let minutes = durable["persistent"]["minutes"].as_object().unwrap();
+            assert_eq!(minutes.len(), 1);
+            assert_eq!(minutes.values().next().unwrap()["packets"][0], 640);
             assert_eq!(durable["persistent"]["coverage"]["incomplete"], true);
             // The one-shot pending-tail deadline commits without another
             // producer notification, then the consumer returns to an idle wait.

@@ -62,7 +62,7 @@ target_compile_options(sakamoto-product-l4-policy-test PRIVATE
 target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
   sakamoto_product_l4_policy)
 
-add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c)
+add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c src/product/vpp/product_dns_tcp.c)
 target_link_libraries(sakamoto_product_dns PUBLIC
   sakamoto_product_l4_policy sakamoto_product_domains PRIVATE sakamoto_dns_wire)
 target_compile_features(sakamoto_product_dns PRIVATE c_std_11)
@@ -75,6 +75,14 @@ add_executable(sakamoto-product-dns-response-test tests/host/product_dns_respons
 target_link_libraries(sakamoto-product-dns-response-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-response-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-response-test COMMAND sakamoto-product-dns-response-test)
+add_executable(sakamoto-product-dns-tcp-test tests/host/product_dns_tcp_test.c)
+target_link_libraries(sakamoto-product-dns-tcp-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-tcp-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-tcp-test COMMAND sakamoto-product-dns-tcp-test)
+add_test(NAME sakamoto-product-dns-tcp-graph-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_tcp_graph_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire>)
 add_test(NAME sakamoto-product-dns-graph-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_graph_test.py")
 add_test(NAME sakamoto-product-vpn-uid-dns-test

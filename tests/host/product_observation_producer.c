@@ -10,6 +10,10 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <time.h>
+
+/* Keep literal relative windows inside the real store retention horizon. */
+static uint64_t activity_base;
 #include <vppinfra/mem.h>
 /* Literal oracle fixture: two independent directions, observe versus enforce,
  * a missing old boundary, a new application's NoMatch tail and duplicate END. */
@@ -17,13 +21,13 @@ static unsigned attribution_fixture (product_observation_transport_t *t) {
   product_observation_record_t r = {
     .length = 456, .version = PRODUCT_OBSERVATION_VERSION, .owner = 0, .slot = 7,
     .generation = 77, .incarnation = 30, .sequence = 1, .first_seen = 100, .last_seen = 101,
-    .packets = {2, 1}, .bytes = {120, 80}, .activity_utc_us = 61000000,
+    .packets = {2, 1}, .bytes = {120, 80}, .activity_utc_us = (activity_base + 1000000),
     .family = 4, .protocol = 17, .address = {10, 1, 2, 3, 10, 4, 5, 6},
     .attribution = {
-      {.segment=1, .activity_utc_us=61000000, .policy_generation=77, .policy_revision=1,
+      {.segment=1, .activity_utc_us=(activity_base + 1000000), .policy_generation=77, .policy_revision=1,
        .policy_hash=101, .winner=65537, .uid=1001, .declared_action=2, .actual_action=1,
        .mode=1, .valid=1, .name="observe request"},
-      {.segment=1, .activity_utc_us=61000000, .policy_generation=77, .policy_revision=1,
+      {.segment=1, .activity_utc_us=(activity_base + 1000000), .policy_generation=77, .policy_revision=1,
        .policy_hash=101, .winner=131073, .uid=1001, .declared_action=1, .actual_action=1,
        .valid=1, .name="reply"}
     },
@@ -33,16 +37,16 @@ static unsigned attribution_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   r.sequence=3; r.last_seen=103; r.packets[0]=4; r.bytes[0]=240;
   r.attribution[0] = (product_observation_attribution_t) {
-    .segment=2, .start_packets=3, .start_bytes=180, .activity_utc_us=61000000,
+    .segment=2, .start_packets=3, .start_bytes=180, .activity_utc_us=(activity_base + 1000000),
     .policy_generation=77, .policy_revision=2, .policy_hash=202, .winner=196609,
     .uid=1001, .declared_action=2, .actual_action=2, .valid=1, .name="enforce request"
   };
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   r.sequence=5; r.last_seen=105; r.packets[0]=7; r.packets[1]=2;
   r.bytes[0]=420; r.bytes[1]=160; r.flags=PRODUCT_OBSERVATION_END;
-  r.activity_utc_us=121000000; r.attribution[1].activity_utc_us=121000000;
+  r.activity_utc_us=(activity_base + 61000000); r.attribution[1].activity_utc_us=(activity_base + 61000000);
   r.attribution[0] = (product_observation_attribution_t) {
-    .segment=3, .start_packets=6, .start_bytes=360, .activity_utc_us=121000000,
+    .segment=3, .start_packets=6, .start_bytes=360, .activity_utc_us=(activity_base + 61000000),
     .policy_generation=77, .policy_revision=3, .policy_hash=303, .uid=1002,
     .declared_action=1, .actual_action=1, .valid=1
   };
@@ -54,9 +58,9 @@ static unsigned blocked_fixture (product_observation_transport_t *t) {
   product_observation_record_t flow = {
     .length = 456, .version = PRODUCT_OBSERVATION_VERSION,
     .owner = 0, .slot = 7, .generation = 77, .incarnation = 1, .sequence = 1,
-    .first_seen = 100, .last_seen = 100, .activity_utc_us = 61000000,
+    .first_seen = 100, .last_seen = 100, .activity_utc_us = (activity_base + 1000000),
     .family = 4, .protocol = 17, .packets = {1, 0}, .bytes = {60, 0},
-    .attribution = {{.segment=1, .activity_utc_us=61000000,
+    .attribution = {{.segment=1, .activity_utc_us=(activity_base + 1000000),
       .policy_generation=77, .policy_revision=1, .policy_hash=100,
       .uid=42, .declared_action=1, .actual_action=1, .valid=1}},
   };
@@ -75,7 +79,7 @@ static unsigned blocked_fixture (product_observation_transport_t *t) {
   blocked.sequence = 3; blocked.last_seen = 102;
   blocked.packets[0] = 2; blocked.bytes[0] = 120;
   blocked.attribution[0] = (product_observation_attribution_t) {
-    .segment=2, .start_packets=1, .start_bytes=60, .activity_utc_us=61000000,
+    .segment=2, .start_packets=1, .start_bytes=60, .activity_utc_us=(activity_base + 1000000),
     .policy_generation=77, .policy_revision=2, .policy_hash=200,
     .winner=131073, .uid=42, .declared_action=2, .actual_action=2,
     .valid=1, .name="second drop" };
@@ -91,7 +95,7 @@ static unsigned protocol_fixture (product_observation_transport_t *t) {
   /* Bits 0 and 5 are stable catalog DNS and supplemental mDNS. The packet
    * producer uses the generated catalog; this transport fixture pins ABI. */
   product_observation_attribution_t a = {
-    .segment=1, .activity_utc_us=61000000, .policy_generation=77,
+    .segment=1, .activity_utc_us=(activity_base + 1000000), .policy_generation=77,
     .policy_revision=1, .policy_hash=88, .winner=65537, .uid=42,
     .declared_action=1, .actual_action=1, .valid=1, .name="same winner"
   };
@@ -99,7 +103,7 @@ static unsigned protocol_fixture (product_observation_transport_t *t) {
     .length=456, .version=PRODUCT_OBSERVATION_VERSION,
     .owner=0, .slot=11, .generation=77, .incarnation=1,
     .sequence=1, .first_seen=1, .last_seen=1,
-    .activity_utc_us=61000000, .family=4, .protocol=17,
+    .activity_utc_us=(activity_base + 1000000), .family=4, .protocol=17,
     .packets={1,1}, .bytes={60,80},
     .address={10,1,2,3,10,4,5,6},
     .attribution={a,a},
@@ -130,9 +134,9 @@ static unsigned protocol_gap_fixture (product_observation_transport_t *t) {
     .length=456, .version=PRODUCT_OBSERVATION_VERSION,
     .owner=0, .slot=12, .generation=77, .incarnation=1,
     .sequence=1, .first_seen=1, .last_seen=1,
-    .activity_utc_us=61000000, .family=4, .protocol=17,
+    .activity_utc_us=(activity_base + 1000000), .family=4, .protocol=17,
     .packets={1,0}, .bytes={60,0}, .address={10,1,2,3,10,4,5,6},
-    .attribution={{.segment=1,.activity_utc_us=61000000,.policy_generation=77,
+    .attribution={{.segment=1,.activity_utc_us=(activity_base + 1000000),.policy_generation=77,
       .policy_revision=1,.policy_hash=88,.winner=65537,.uid=42,
       .declared_action=1,.actual_action=1,.valid=1,.name="same winner",
       .protocol_set=UINT64_C(1),.protocols_available=1}},
@@ -147,10 +151,10 @@ static unsigned protocol_gap_fixture (product_observation_transport_t *t) {
   n += product_observation_publish (t, 0, &r, r.length) == 1;
   return n;
 }
-static unsigned dns_reply_fixture (product_observation_transport_t *t) {
+static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned tcp) {
   product_dns_observation_record_t r = {
     .length=sizeof(r), .version=PRODUCT_OBSERVATION_VERSION, .flags=PRODUCT_OBSERVATION_DNS,
-    .generation=77, .token=17, .incarnation=8, .mono_us=100, .activity_utc_us=1700000000000000ULL,
+    .generation=77, .token=17, .incarnation=8, .mono_us=100, .activity_utc_us=(activity_base + 1000000),
     .policy_generation=77, .policy_revision=3, .policy_hash=123, .winner=310,
     .uid=10123, .network=UINT32_MAX, .slot=3, .id=0x1234, .query_flags=0x0100,
     .qtype=1, .qclass=1, .source_port=40000, .resolver_port=53, .name_length=11,
@@ -160,7 +164,15 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t) {
     .name="example.com", .rule_name="original allow", .network_revision=5, .adapter_profile=1,
     .packet_uid=10123, .packet_availability=9,
   };
+  if (tcp) {
+    r.protocol=6; r.packet_direction=3; r.message_sequence=1; r.tcp_sequence=101;
+  }
   unsigned n = product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  if (tcp) {
+    r.message_sequence=2; r.tcp_sequence=132;
+    n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+    r.message_sequence=1; r.tcp_sequence=501; r.packet_direction=1;
+  }
   r.token=18; r.stage=2; r.direction=1; r.query_flags=0x8180; r.packet_availability=1;
   r.policy_revision=9; r.policy_hash=456; r.winner=312;
   r.query_token=17; r.query_policy_generation=77; r.query_policy_revision=3;
@@ -169,6 +181,7 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t) {
   r.declared_action=r.actual_action=2;
   memset(r.rule_name,0,sizeof(r.rule_name)); memcpy(r.rule_name,"reply deny",10);
   n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  product_dns_observation_record_t continuation = r;
   r.name_index=r.name_source=1; r.name_length=10;
   memset(r.name,0,sizeof(r.name)); memcpy(r.name,"alias.test",10);
   n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
@@ -190,11 +203,23 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t) {
   n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
   r.token=21; r.coverage=5;
   n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  if (tcp) {
+    continuation.token=22; continuation.tcp_continuation=1; continuation.packet_direction=3;
+    n += product_observation_publish(t,0,&continuation,sizeof(continuation)) == 1;
+    /* Two complete malformed frames from one original packet retain separate
+     * message identities, just as the actual Root graph producer does. */
+    r.token=23; r.coverage=2; r.message_sequence=1; r.tcp_sequence=601;
+    n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+    r.message_sequence=2; r.tcp_sequence=606;
+    n += product_observation_publish(t,0,&r,sizeof(r)) == 1;
+  }
   return n;
 }
 
 int main (int argc, char **argv) {
   assert (argc == 2);
+  struct timespec wall; assert (!clock_gettime (CLOCK_REALTIME, &wall));
+  activity_base = ((uint64_t) wall.tv_sec / 60 - 2) * UINT64_C(60000000);
   assert (clib_mem_init (NULL, 4 * 1024 * 1024));
   product_observation_transport_t *t = product_observation_transport_create (77, 1024);
   assert (t);
@@ -223,7 +248,7 @@ int main (int argc, char **argv) {
           .length = length, .version = PRODUCT_OBSERVATION_VERSION, .flags = end ? PRODUCT_OBSERVATION_END : 0,
           .owner = channel / 2, .slot = 3, .uid = 12345, .generation = 77,
           .incarnation = incarnation, .sequence = base + i,
-          .activity_utc_us = 1700000000000000ULL + base + i, .first_seen = 100, .last_seen = 100 + base + i,
+          .activity_utc_us = (activity_base + 1000000) + base + i, .first_seen = 100, .last_seen = 100 + base + i,
           .packets = { base + i, 0 }, .bytes = { (base + i) * 60, 0 },
           .family = length == 456 ? 4 : 6, .protocol = 17,
           .address = { 10, 1, 2, 3, 10, 4, 5, 6 },
@@ -232,8 +257,10 @@ int main (int argc, char **argv) {
         product_observation_account (t, channel / 2, 0, 60);
       }
       printf ("EMITTED %u\n", admitted);
+    } else if (!strncmp (command, "dns-tcp", 7)) {
+      printf ("DNS-TCP %u\n", dns_reply_fixture (t, 1));
     } else if (!strncmp (command, "dns-reply", 9)) {
-      printf ("DNS-REPLY %u\n", dns_reply_fixture (t));
+      printf ("DNS-REPLY %u\n", dns_reply_fixture (t, 0));
     } else if (!strncmp (command, "attribution", 11)) {
       printf ("ATTRIBUTION %u\n", attribution_fixture (t));
     } else if (!strncmp (command, "blocked", 7)) {

@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include "sakamoto_product_limits.h"
 
-#define PRODUCT_OBSERVATION_VERSION 6
+#define PRODUCT_OBSERVATION_VERSION 7
 /* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
 #define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
 #define PRODUCT_OBSERVATION_CHANNELS (2 * PRODUCT_OBSERVATION_OWNERS)
@@ -15,7 +15,7 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 576
+#define PRODUCT_OBSERVATION_MAX_RECORD 592
 
 /* Direction-local provenance; no pointers, source conditions or packet bytes.
  * A segment starts at the counters immediately preceding its first packet. */
@@ -77,8 +77,14 @@ typedef struct {
   uint16_t rcode;
   uint8_t adapter_profile, reserved_extension2;
   uint32_t packet_uid;
+  /* Per-direction framed identity prevents coalesced messages sharing one
+   * packet token from replacing each other in the normal history store.
+   * Continuation uses retained real DNS facts on a later original packet. */
+  uint64_t message_sequence;
+  uint32_t tcp_sequence;
+  uint8_t tcp_continuation, packet_direction, tcp_reserved[2];
 } product_dns_observation_record_t;
-_Static_assert (sizeof (product_dns_observation_record_t) == 576, "DNS observation ABI");
+_Static_assert (sizeof (product_dns_observation_record_t) == 592, "DNS observation ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 
 typedef struct {

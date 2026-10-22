@@ -275,6 +275,7 @@ add_vpp_plugin(product_core
     product_fragment.c
     product_l4_policy.c
     product_dns.c
+    product_dns_tcp.c
     product_rule_config.c
     product_domains.c
     product_domains_memory.c

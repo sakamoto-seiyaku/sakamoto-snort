@@ -280,6 +280,13 @@ uint64_t product_flow_entry_current_incarnation (product_flow_runtime_t *pool,
   const product_owner_assignment_t *assignment, uint64_t generation,
   uint64_t timestamp_us);
 
+/* Synchronous current-owner borrow for a packet feature's read-only preview.
+ * No timer or tracker mutation occurs; the pointer ends before the next owner
+ * mutation. Optional slot is unavailable on failure. */
+const product_flow_entry_t *product_flow_entry_current (product_flow_runtime_t *,
+  const product_owner_assignment_t *, uint64_t generation, uint64_t timestamp_us,
+  uint32_t *slot);
+
 /* Owner-local enrichment of an already admitted incarnation. A policy drop
  * never allocates an entry. A different known UID retires the old flow. */
 int product_flow_entry_enrich_uid (product_flow_runtime_t *pool,

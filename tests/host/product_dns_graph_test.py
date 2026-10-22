@@ -36,6 +36,7 @@ prefix = r'''
 #include <string.h>
 #include "product_packet.h"
 #include "product_dns.h"
+#include "product_dns_tcp.h"
 typedef uint8_t u8;
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -52,6 +53,7 @@ typedef struct {
   unsigned enabled, accepting, adapter_kind;
   product_dns_owner_status_t dns[2];
   product_dns_owner_t dns_requests[2];
+  product_dns_tcp_owner_t dns_tcp[2];
   void *flow_pools[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main = {.generation=77};
@@ -92,6 +94,8 @@ static int product_vpn_tun_return_context(u64 generation, u64 token, u64 *inc, u
 }
 unsigned product_dns_owner_active(product_dns_owner_t *owner, uint64_t now) { assert(owner && now==1000000); return 0; }
 product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
+void product_dns_tcp_expire(product_dns_tcp_owner_t *owner,uint64_t now) {assert(owner && now==1000000);}
+uint64_t product_dns_tcp_deadline(const product_dns_tcp_owner_t *owner) {assert(owner);return UINT64_MAX;}
 static void vlib_cli_output(vlib_main_t *vm, const char *format, ...) {
   assert(vm->thread_index==1);
   if(!strncmp(format,"dns.profile=",12)) {

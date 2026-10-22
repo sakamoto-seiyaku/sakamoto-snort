@@ -206,6 +206,7 @@ deliver_end (void *context, const product_flow_entry_t *entry, u32 slot,
   product_flow_end_owner_t *owner = current_owner (vm);
   if (PREDICT_FALSE (context != owner || entry->linked))
     clib_panic ("FlowEnd delivery before owner unlink");
+  product_packet_graph_dns_flow_end (vm, owner->generation, entry->incarnation);
   u32 bi;
   if (PREDICT_FALSE (vlib_buffer_alloc (vm, &bi, 1) != 1))
     {
