@@ -11,7 +11,7 @@ from unittest.mock import patch
 import s307_vpn_tuning as tuning
 
 
-def campaign(folder, *, fail=False, wifi="Openwrt_5G"):
+def campaign(folder, *, fail=False, wifi="Openwrt_5G", profile=False):
     events, manifests = [], []
     apk, restore = folder / "candidate.apk", folder / "restore.apk"
     apk.write_bytes(b"candidate")
@@ -19,10 +19,13 @@ def campaign(folder, *, fail=False, wifi="Openwrt_5G"):
     prepared = dict(serial="test", uid=12345, peer_host="127.0.0.1", peer_port=41723,
                     threads=4, flows_per_thread=16, udp_fixed_source_port_base=25000,
                     udp_burst_size=1, primary_handoff_credits=48, vpn_capture_batch_size=64,
+                    profiling=True, trace_offcpu=True, profiler_callgraph="dwarf",
                     collector_sha256=tuning.quick.digest(tuning.quick.__file__))
     plan = [dict(label="control", apk=str(apk), credits=32, capture_batch=1),
             dict(label="tcp", apk=str(apk), credits=48, capture_batch=64, case="tcp-fixed"),
             dict(label="native-default", apk=str(apk), credits=32)]
+    if profile:
+        plan[1]["profile"] = "offcpu"
     (folder / "prepared.json").write_text(json.dumps(prepared))
     (folder / "plan.json").write_text(json.dumps(plan))
 
@@ -34,7 +37,7 @@ def campaign(folder, *, fail=False, wifi="Openwrt_5G"):
             return dict(state="stopped", mayBeActive="false")
 
         def command(self, *args, **kwargs):
-            events.append("command:" + " ".join(args))
+            events.append("command:" + " ".join(map(str, args)))
             return f'Wifi is connected to "{wifi}"' if "wifi" in args else ""
 
         def action(self, *args, **kwargs):
@@ -56,7 +59,11 @@ def campaign(folder, *, fail=False, wifi="Openwrt_5G"):
             raise RuntimeError("injected collector failure")
         output = Path(command[command.index("--output") + 1])
         output.mkdir()
-        (output / "result.json").write_text(json.dumps(dict(status="COMPLETE", errors=[])))
+        cases = []
+        if manifests[-1]["profiling"]:
+            (output / "vpn-tcp-fixed").mkdir()
+            cases = [dict(profile="vpn", case="tcp-fixed", perf_remote="/data/test.perf.data")]
+        (output / "result.json").write_text(json.dumps(dict(status="COMPLETE", errors=[], cases=cases)))
         return type("Completed", (), dict(returncode=0))()
 
     argv = ["s307_vpn_tuning.py", "--plan", str(folder / "plan.json"),
@@ -96,4 +103,13 @@ with tempfile.TemporaryDirectory(prefix="s307-campaign-check-") as temporary:
     assert code == 1 and report["errors"][0].startswith("preflight:")
     assert not any(event.startswith("install:") for event in events)
     assert not manifests
+    profiled = root / "profiled"
+    profiled.mkdir()
+    code, events, manifests, report = campaign(profiled, profile=True)
+    assert code == 0
+    assert not manifests[0]["profiling"] and not manifests[0]["trace_offcpu"]
+    assert manifests[1]["profiling"] and manifests[1]["trace_offcpu"]
+    assert manifests[1]["profiler_callgraph"] == "fp"
+    assert not manifests[2]["profiling"] and not manifests[2]["trace_offcpu"]
+    assert any(event.startswith("command:pull /data/test.perf.data") for event in events)
 print("PASS S307 inherited overrides, TCP isolation, partial campaign recovery, retained preflight failure")

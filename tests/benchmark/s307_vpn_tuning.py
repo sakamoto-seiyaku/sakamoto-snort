@@ -14,7 +14,7 @@ from s304_vpn_topology import install, save
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ALLOWED = {"label", "apk", "credits", "rate", "owners", "case", "mechanism", "capture_batch"}
+ALLOWED = {"label", "apk", "credits", "rate", "owners", "case", "mechanism", "capture_batch", "profile"}
 
 
 def cells(plan, prepared):
@@ -32,6 +32,7 @@ def cells(plan, prepared):
                 or cell.get("owners", 2) not in (1, 2, 3)
                 or cell.get("case", "udp-fixed") not in ("udp-fixed", "tcp-fixed")
                 or cell.get("rate", 8000) not in (4000, 8000, 12000, 16000)
+                or cell.get("profile", "none") not in ("none", "fp", "dwarf", "offcpu")
                 or ("capture_batch" in cell and
                     (type(cell["capture_batch"]) is not int or not 1 <= cell["capture_batch"] <= 64))
                 or not Path(cell.get("apk", "")).is_file()):
@@ -99,6 +100,12 @@ def main():
             manifest.pop("vpn_capture_batch_size", None)
             if "capture_batch" in cell:
                 manifest["vpn_capture_batch_size"] = cell["capture_batch"]
+            # Each mechanism arm starts from explicit settings; a prepared
+            # profiler configuration must never leak into a cost control.
+            mode = cell.get("profile", "none")
+            manifest.update(profiling=mode != "none", trace_offcpu=mode == "offcpu",
+                            profiler_callgraph="dwarf" if mode == "dwarf" else "fp",
+                            profiler_mmap_pages=4096, profiler_await_exit=True)
             if case == "tcp-fixed":
                 for key in ("udp_fixed_source_port_base", "udp_offered_rate", "udp_burst_size"):
                     manifest.pop(key, None)
@@ -115,6 +122,13 @@ def main():
                                        result=str(run / "result.json")))
             save(output / "campaign.json", report)
             print(label, result["status"], result.get("errors"), flush=True)
+            if mode != "none":
+                for case_result in result.get("cases", []):
+                    remote = case_result.get("perf_remote")
+                    if remote:
+                        record = run / (case_result["profile"] + "-" + case_result["case"]) / "perf.data"
+                        record.touch()
+                        device.command("pull", remote, record, timeout=30)
             if code or result["status"] != "COMPLETE":
                 report["errors"].append(label + ": collector incomplete; raw attempt retained")
                 break

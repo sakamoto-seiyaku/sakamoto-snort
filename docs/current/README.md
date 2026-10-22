@@ -35,6 +35,12 @@ settings established no whole-path CPU improvement. Defaults remain32 credits
 and scalar capture submission; `product tun capture-batch <1..64>` is an optional
 empty-graph diagnostic independent of the TCP experiment.
 
+The [S308 I/O CPU attribution](../testing/2026-10-22_S308_VPN_IO_CPU_ATTRIBUTION.md)
+locates packet-path topology environment parsing and the distinct UDP
+readiness/publication versus TCP TUN-write kernel costs. A measured parsing
+removal candidate showed no consistent whole-path CPU gain. Product source was
+restored; the report retains exact negative evidence and attribution limits.
+
 ## What exists
 
 The product packet domain is VPP-native C. Root uses native NFQUEUE lanes; the

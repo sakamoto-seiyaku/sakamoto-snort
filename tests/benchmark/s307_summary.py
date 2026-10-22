@@ -19,7 +19,7 @@ def read(path):
     return json.loads(path.read_text())
 
 
-def summarize(path, snapshots, runners):
+def summarize(path, snapshots, runners, *, allow_profile=False):
     campaign = read(path / "campaign.json")
     assert campaign["status"] == "COMPLETE" and not campaign["errors"]
     assert campaign["runner_sha256"] in runners
@@ -52,7 +52,7 @@ def summarize(path, snapshots, runners):
             assert quick.digest(evidence_path(manifest[key + "_binary"], ROOT)) == manifest[key + "_sha256"]
         assert quick.digest(quick.SOURCE) == manifest["source_sha256"]
         assert manifest["client_cpu_mask"] == "10" and manifest["tun_io_cpu_id"] == 3
-        assert not manifest["profiling"]
+        assert allow_profile or not manifest["profiling"]
         assert result["rules_unchanged"] and not result["final_processes"]
         assert result["final_runtime"]["state"] == "stopped"
         assert len(result["cases"]) == 1
@@ -126,6 +126,10 @@ def summarize(path, snapshots, runners):
                    allocated_buffer_stride_bytes=10496 * 2048, pool_data_bytes=10240 * 2048,
                    faults=faults, io_batch_delta=io_delta, hold_delta=holds,
                    raw_result=str(result_path))
+        if allow_profile:
+            row.update(profiling=manifest["profiling"],
+                       profile_mode=run.get("profile", "none"),
+                       cost_eligible=not manifest["profiling"] and not mechanism)
         if case["case"] == "udp-fixed":
             assert manifest["udp_fixed_source_port_base"] == 25000 and manifest["udp_burst_size"] == 1
             assert client["probe_requests"] == client["latency_samples"] + client["timeouts"] + client["cancelled_at_deadline"] + client["errors"] - client["udp_send_errors"]
