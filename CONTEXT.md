@@ -279,7 +279,7 @@ The final DomainPolicy fallback that decides from the app mask and domain mask w
 _Avoid_: default allow, global fallback
 
 **Domain-IP Association**:
-Evidence relating a DNS-learned domain to returned IP addresses within its network/resolver context, with known or unknown application provenance and validity independent of DNS answer-cache TTL. Only one admissible candidate supplies a fallback name for the selected TLS/QUIC/DTLS path or an HTTP/SOCKS request's IP target; multiple candidates remain observation evidence without establishing the actual flow domain or an unknown original DNS caller.
+Evidence relating a DNS-learned domain to returned IP addresses within its network/resolver context, with known or unknown application provenance and validity independent of DNS answer-cache TTL. Only one admissible candidate supplies a fallback name for the selected TLS/QUIC/DTLS path or an HTTP/SOCKS request's IP target; multiple candidates remain observation evidence without establishing the actual flow domain or an unknown original DNS caller. An answer denied delivery by DNS response policy remains observation evidence and does not create or refresh an association eligible for connection fallback; other independently eligible evidence is retained. Association lookup eligibility and an existing connection's retained DNS-derived domain evidence have distinct lifetimes; association age expiry alone does not clear that connection's evidence on the same network.
 _Avoid_: DomainPolicy itself, Basic IPRULES matcher, RDNS, Host cache, direct SNI, guaranteed unique domain attribution
 
 **HTTP Target Domain**:

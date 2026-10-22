@@ -94,6 +94,90 @@ Portmaster 自身流量在主决策有特准，地址答案过滤也跳过 own P
 原转发路径保留No Recognition Hold与实际事实可得性的限制，系统代查原App不明的处理不变。
 此确认不改写上文的源码缺口，也不声明功能已实现或验收。[正式功能记录](../adr/0011-application-dns-filtering-root-and-vpn.md#cname-response-domain-filtering-choice-2026-10-08)
 
+## 2026-10-22：整条规则的逐名匹配补充核对
+
+用户本轮确认“同一条规则的域名条件由同一个名字满足”，随后要求参考 Portmaster
+补全执行细节。本次静态复核沿用上述固定提交；核对的本地源码与该提交无差异，
+同时查看了官方公开源码入口。没有取得可信的新分支 HEAD，因此以下仍是固定版本的
+源码结论，不将网页的不同抓取日期拼成当前版本证明。既有调用链缺口保留原范围。
+
+以上是本日最初核查的版本边界。随后用户要求独立研究，已通过实际联网确认
+`cc164c7df617ecdb41a766edf88f8bf3fd741a85`（10-21提交），并核对33个文件及哈希；
+CNAME相关文件与上述旧pin仍一致。完整处理链的适配、证据与建议见
+[10-22独立适配研究](2026-10-22_PORTMASTER_DNS_ADAPTATION_RESEARCH.md)，不再以最初未取得新HEAD
+解释当前研究状态。
+
+### 可借鉴的执行结构
+
+- `Endpoints.MatchMulti` 将规则放在外层、目标放在内层；当前规则检查所有目标仍无匹配，
+  才进入下一条。这为保留规则顺序提供了简单参考，但它是通用多目标函数，不能据此声称
+  标准 DNS/CNAME 入口就是通过该函数执行。[规则顺序][S6]
+- `EndpointDomain.Matches` 分别检查原域名和每个别名；实际匹配的是一个具体名字。
+  其原名优先返回、别名仅返回拒绝的特殊语义已经在上文列出，不能直接代替 Sakamoto
+  已选的统一整条规则与 Rank。[域名匹配][S5]
+- 名单加载为各名字分别保留出现来源；`ListOccurences` 以具体域名等实体为键，
+  `getDomainLists` 分别查询原名与启用的别名。这种保留命中名字与名单来源的方式可参考。
+  [名单事实][S4]
+- `ResolvedDomain.AddCNAMEs` 从原查询名沿 owner→target 关系追链，而非将答复内所有
+  名字直接视为查询的别名；实现有 50 层上限及部分循环退出条件。可借鉴有界、从原名
+  出发的追链方式，不因此选择同样层数或把其退出条件当作完整循环检测。[链构造][S14]
+
+### 名单语义与我们的区别
+
+`EndpointLists` 将所选名单集合交给 `Entity.MatchLists`；后者遍历已经加载的各实体／
+名单来源，只要出现任一指定来源就返回命中。这是“任一名单命中”，不是通用的
+“同一域名同时属于名单甲与乙”的 AND 表达式。它不能证明跨名字拼合 AND 条件是正确的。
+[名单 endpoint][S12]、[名单事实][S4]
+
+Portmaster 的 endpoint 还会检查其声明的协议与端口；源码没有把一条带端口条件的
+规则简单裁掉端口后当作纯域名规则。其 DNS Connection 又有独立的事实构造方式，
+不能将这种表示直接套给 Sakamoto 的 DNS 流或未来业务连接。[完整 endpoint][S13]、
+[DNS 事实构造][S8]
+
+### 对已确认 Sakamoto 合同的具体应用
+
+下列是依据本次用户确认及现有 ADR 的落地推导，不是 Portmaster 的原样行为：
+
+1. 查询阶段以原 QName 为候选；答复阶段补入与原查询实际相连的 CNAME，保留各自来源。
+2. 在既有 Rank 顺序下，对每个候选名字分别检查同一条完整规则。所有域名条件绑定
+   当前这一个名字；其余条件仍使用所属控制点的真实上下文及可用性。
+3. 不合并不同名字的名单位图来制造 AND 命中；别名也没有独立的拒绝优先级。
+4. 代理在交付完整答复前准备好本次别名和名单事实，再按当前政策判断，缓存答复亦然。
+   原路径只使用实际可得事实，沿既定 No Recognition Hold 与 DROP 处理。
+5. 记录胜出规则、实际命中名字及其查询名／CNAME 来源，复用既有观察通路。
+
+第 4 项也避开上文固定源码的两处静态缺口：别名在检查后才赋值，以及名单清空后
+没有在该分支重新加载。[nameserver 顺序][S3]、[解析后分支][S2]、[名单事实][S4]
+本次没有运行 Portmaster、导入源码、创建实施任务或修改产品代码；正式行为以
+[ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md#same-name-whole-rule-evaluation-choice-2026-10-22)
+和统一规则规格为准。
+
+## 2026-10-22：用户后续选择 PM 优先
+
+用户进一步明确：能参考 PM 的细节以 PM 的逻辑为默认依据，不应让用户扮演专业设计者，
+也不应将对助手临时例子的回答当成必须优于成熟参考的定案。本节记录这一后续指示；
+上节保留核查过程，其“Sakamoto 落地推导”不等于获得逐项照搬或优先于 PM 的依据。
+
+| 细节 | 源码核对与采纳方式 |
+| --- | --- |
+| 查询与答复两个判断时点 | 沿用可参考的查询前检查、取得答案后复查结构；代理在复查前准备实际别名与名单事实，缓存答复同样检查当前政策。[S2][S3] |
+| 同时选用多个过滤名单 | PM 对所选集合使用任一来源命中；按这一常规含义设计。显式写出的“甲 AND 乙”属于另一个操作，不把 AND 自动改成 OR。[S4][S12] |
+| 保留命中名字与名单来源 | 参考逐名查询和按实体保存名单来源的结构，不只保留一个失去来源的最终布尔值。[S4] |
+| 查询名与实际别名链 | 保留原名，从原名追踪相连的别名；采用有界处理，数字预算属于实现合同。[S5][S14] |
+| 规则顺序 | 参考有序匹配；Sakamoto 继续使用既有整条规则 Rank。PM 的 profile/endpoint/过滤列表层次不是自动新增的另一套优先级。[S6][S7] |
+| 别名允许与拒绝的不对称 | PM 的域名 endpoint 对原名可返回允许或拒绝，对别名只返回拒绝；名单 endpoint 则使用自己的名单集合匹配。这是实际差异，不能把某一个分支推广成所有域名条件的语义，或声称与统一 Rank 已经完全等价。[S5][S12] |
+| 通用 AND／OR／NOT 规则 | 所核对的 endpoint/list 表示没有等价的任意多域名谓词表达式。此前“同一名字满足完整 AND”保留为统一规则扩展的明确来源，不冒称 PM 的既有行为。[S12][S13] |
+| 事实准备与名单重载 | 固定源码中的时序／加载缺口是静态发现，不当作应当继承的成熟设计；保留上文证据边界。[S2][S3][S4] |
+
+用户随后进一步澄清：目标是借鉴 PM 已有流程并因地制宜，不追求完全等价；此前通过
+临时场景给出的技术选择可以基于研究重新评估。上表中的差异不是必须保持差异的理由，
+也不能将用户当时的 yes 当作冻结实现的依据。
+
+该指示使 PM 成为可比 DNS 细节的默认设计依据；保留 Root/VPN、UDP/TCP、
+原解析器保留、统一规则等产品目标，继续尊重关联跨应用范围的明确暂缓。对于真正冲突，先给出
+源码证据和适配方案；可沿现有架构处理的内部细节由设计者收敛，不继续逐项询问用户。
+正式选择已同步到 [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md#portmaster-first-dns-detail-policy-2026-10-22)。
+
 [S1]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/profile/config.go#L446-L466
 [S2]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/firewall/dns.go#L105-L229
 [S3]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/nameserver/nameserver.go#L164-L365
@@ -105,3 +189,6 @@ Portmaster 自身流量在主决策有特准，地址答案过滤也跳过 own P
 [S9]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/firewall/dns.go#L230-L305
 [S10]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/firewall/master.go#L30-L342
 [S11]: https://github.com/safing/portmaster/tree/882d900dadb6df91150cf87f0a12706d29172586/service
+[S12]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/profile/endpoints/endpoint-lists.go#L19-L40
+[S13]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/profile/endpoints/endpoint.go#L28-L101
+[S14]: https://github.com/safing/portmaster/blob/13a86a43cc6cee592395fcddc8387178f290f144/service/resolver/ipinfo.go#L55-L75

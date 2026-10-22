@@ -86,6 +86,57 @@ Association provenance, admissibility and the deferred application scope remain
 separate. This records query compatibility and limited fact extraction for both
 Root and VPN, not an implemented parser, proxy or device validation.
 
+### Implementation order choice, 2026-10-22
+
+The user selected an initial end-to-end ordinary-DNS filtering slice shared by
+Root/NFQUEUE and VPN, covering both UDP and TCP while preserving the original
+resolver destination. It includes applicable query/response policy, allowed and
+denied traffic, result observation and clean lifecycle completion under the
+existing attribution, whole-rule and No Recognition Hold constraints.
+
+The optional proxy, answer cache and configured ordinary DNS/DoT/DoH upstream
+work follow that first slice. This is implementation order, not a reduction of
+the selected first-version scope, a UDP-only acceptance boundary or a change to
+the other selected connection-domain requirements. This records the design
+sequence, not implementation or validation evidence.
+
+### Portmaster-first DNS detail policy, 2026-10-22
+
+The user subsequently selected source-verified Portmaster behavior as the default
+reference for comparable DNS matching and filter-list details. Prefer an existing
+applicable design to a new behavior invented through isolated interview examples.
+Earlier answers to such examples are not a reason to disregard a directly
+comparable mature behavior; reconcile the difference against the source and
+the product's actual requirements before specifying the implementation. Routine
+technical adaptation is the designer's responsibility, not another item-by-item
+user interview.
+
+The user clarified that the aim is to reuse an established workflow and adapt
+it to Root/VPN and VPP, not to achieve complete behavioral equivalence with
+Portmaster. Answers to the earlier hypothetical implementation examples are
+revisable design inputs, not frozen requirements that must outrank the reference.
+Review those choices against the problem the mature workflow solves and the
+product's actual requirements; state the concrete adaptation and its reason.
+
+In particular, selecting a collection of DNS filter lists follows Portmaster's
+any-selected-list-match meaning. An explicitly written AND remains AND under
+the unified rule contract; it is not the same operation as selecting several
+filter lists. Portmaster's inspected endpoint/list model does not provide the
+same general multi-domain-predicate boolean expression, so that extension must
+not be presented as a Portmaster rule.
+
+Keep the selected Root/VPN scope, original-resolver behavior and single whole-rule
+Rank while adapting the reference; distinguish those product requirements from
+the interview's revisable technical details. Differences
+such as Portmaster's endpoint/list tiers and domain-alias allow asymmetry require
+an explicit mapping rather than an assertion of equivalent behavior. Static
+fact-readiness/list-loading gaps are limitations to avoid, not desired behavior
+to reproduce. The [independent adaptation research](../reviews/2026-10-22_PORTMASTER_DNS_ADAPTATION_RESEARCH.md)
+checks the current pinned source and maps established workflows to the product;
+the [CNAME comparison](../reviews/2026-10-08_PORTMASTER_CNAME_FILTERING_REFERENCE.md#2026-10-22用户后续选择pm优先)
+retains the narrower investigation and its decision history. Research
+recommendations do not themselves supersede a specific accepted behavior.
+
 ## User-selected upstream behavior
 
 The user confirmed that encrypted resolution is used only after the user
@@ -263,6 +314,24 @@ current-policy-before-cache rule. Exact response/status Interfaces, deadlines
 and bounded retries within configured upstreams remain to be specified; this
 choice does not select a wire refusal code or turn failure into policy DROP.
 
+### Proxy resolution-failure reply choice, 2026-10-22
+
+The user selected an explicit failure result to the requesting App when a
+policy-permitted proxy query exhausts its configured DoT/DoH upstream attempts
+with no valid selected-context cache answer. Return a DNS SERVFAIL response
+after the transaction is determined to have failed, rather than leaving the
+App to discover that failure solely through its own timeout. This supplies the
+wire failure behavior left open by the 2026-10-08 choice above. The subsequent
+[DNS specification](../product/APPLICATION_DNS_SPEC.md) supplies initial bounded
+retry and deadline defaults.
+
+Retain the selected upstream configuration and the prohibition on automatic
+ordinary-DNS fallback. Record an upstream resolution failure, not a policy
+denial, and create no successful address association. Policy denial is separate;
+its later proxy REFUSED adaptation is specified below. This choice applies to the
+product proxy; it does not add generated replies on the original-resolver path
+or establish implementation/validation evidence.
+
 ## Original-resolver and proxy paths
 
 | Path | Root/NFQUEUE | VPN | Shared DNS work |
@@ -271,7 +340,7 @@ choice does not select a wire refusal code or turn failure into policy DROP.
 | User-enabled product proxy | DNS redirection delivers requests and original caller/destination context to the local socket Adapter | Local DNS sessions deliver requests and caller/network context to the shared proxy | The same application checks, plus proxy transactions, context-scoped answer cache, selected ordinary DNS/DoT/DoH upstream and reply handling |
 
 Normal answers permitted by the applicable query/response policy pass through
-unchanged on the original-resolver path. The user selected direct DROP for
+unchanged on the original-resolver path. The 2026-10-08 choice selected direct DROP for
 reliably attributed queries whose applicable policy denies them, on both DNS
 paths. Queries denied with the facts available before resolution are stopped before
 original-path forwarding or proxy answer-cache/upstream processing. The proxy
@@ -282,6 +351,44 @@ the product records the actual DNS policy denial rather than an upstream failure
 or a refusal response it never sent. This selects first-version behavior, not
 existing implementation or acceptance evidence. Available CNAME response facts
 extend the policy input as specified below.
+
+The historical silent-denial behavior above is superseded for the complete-message
+proxy by the 2026-10-22 specification adaptation below; original-path DROP remains.
+
+### Original-path DNS/TCP denial scope choice, 2026-10-22
+
+The user accepted direct packet DROP when an original-resolver DNS/TCP query
+is found to be denied: drop the packet carrying the denied query and block
+subsequent traffic on that TCP connection under the applicable policy. Other
+queries sharing that connection may consequently fail, including an allowed
+query carried in the same packet. Do not selectively remove DNS messages or
+rewrite the TCP byte stream to preserve those queries. Already forwarded bytes
+are not recalled; the existing No Recognition Hold constraint remains.
+
+This selects the original-path delivery consequence without adding a generated
+DNS reply or active TCP reset. Existing current-policy and policy-revision
+re-evaluation requirements continue to apply. On the product proxy path, complete
+message boundaries permit a denied query to be stopped individually without
+dispatch; its reply behavior follows the later adaptation below. This is a behavior decision, not implementation or
+validation evidence.
+
+### Proxy policy-refusal specification adaptation, 2026-10-22
+
+Under the user's Portmaster-first, context-sensitive design direction and
+request to synthesize the formal specification, the
+[application DNS specification](../product/APPLICATION_DNS_SPEC.md) selects
+REFUSED for policy-denied complete-message proxy requests and answers. A denied
+query is stopped before cache lookup, coalescing or upstream dispatch; a denied
+answer is suppressed and replaced only by a policy refusal, without successful
+association admission. Other permitted requests on the proxy TCP session may
+continue independently.
+
+This supersedes the proxy's 2026-10-08 and earlier 2026-10-22 silent-DROP detail,
+not original-path DROP. It adopts timely policy feedback from the reference
+workflow without adopting Portmaster's synthetic block addresses or NXDOMAIN.
+REFUSED is a product adaptation, not Portmaster's unchanged default behavior.
+Upstream resolution failure remains SERVFAIL, reply delivery has its own outcome,
+and no active TCP reset or second rule priority is introduced.
 
 ### CNAME response-domain filtering choice, 2026-10-08
 
@@ -297,8 +404,9 @@ makes them available. On the product proxy path, prepare the CNAME facts and
 match the current rules before delivering the complete answer. A previous
 query-stage allow or another application's earlier decision is not permanent
 permission to deliver that answer. If the resulting policy denies delivery,
-reuse the selected DROP behavior without rewriting the answer or generating a
-refusal/substitute response.
+use the current control-point behavior: original-path DROP, or the proxy's
+subsequently selected REFUSED without delivering the original answer or
+generating substitute addresses.
 
 The original-resolver path uses the response facts actually available at its
 control point to govern subsequent delivery. Preserve No Recognition Hold:
@@ -320,14 +428,57 @@ or endpoint/list priority model. Its [source investigation](../reviews/2026-10-0
 also records fact-readiness/list-loading gaps; neither that source nor this
 choice is evidence of an implemented product feature.
 
-Both paths update Domain-IP Associations from actual observed or resolved
-answers, including valid proxy cache answers, using their available provenance
-and resolution context. System-mediated answers do not acquire an invented
-original application. A query dropped before resolution produces no new successful DNS answer or
-address association. Updates remain bounded; association admissibility retains
-its subsequent specification, with the provisional age choice below.
+Both paths collect actual observed or resolved answers, including valid proxy
+cache answers, with their available provenance and resolution context. Only
+results currently permitted for delivery and admissible in that context may
+create or refresh an executable Domain-IP Association. Denied answers remain
+resolution/policy observations as specified below. System-mediated answers do
+not acquire an invented original application. A query dropped before resolution
+produces no new successful DNS answer or address association. Updates remain
+bounded; detailed context admissibility requires subsequent specification,
+with the provisional age and refresh choices below.
 Shared-address ambiguity follows
 the user's KISS choice below rather than a most-recent-domain selection.
+
+### Same-name whole-rule evaluation choice, 2026-10-22
+
+The user confirmed that one complete rule's domain conditions must be satisfied
+by the same name. Evaluate each available original query name or connected
+CNAME as a distinct candidate, preserving the whole expression and its normal
+availability semantics; then use the existing whole-rule Rank across actual
+matches. Do not union different names' list memberships into one domain input.
+For example, a query name in list A and an alias in list B do not satisfy a
+rule requiring its domain to be in both A and B when neither name is in both.
+This selects DNS fact binding, not a new priority system or implemented matcher.
+
+This is a Sakamoto extension for explicit boolean rules, not a claim that
+Portmaster implements that AND expression. The subsequent Portmaster-first
+choice above governs comparable DNS/list details; ordinary selection of several
+filter lists uses any-match semantics rather than this explicit-AND example.
+
+The concrete reference for the current DomainList condition is Portmaster's
+list endpoint, whose match returns its declared allow or deny action, including
+when a connected alias supplies the list match. Preserve that behavior through
+the existing complete expression and Rank. Do not introduce the separate domain
+endpoint's alias-deny-only behavior based on a list's size or contents: the same
+policy must not change meaning when represented by a one-entry versus multi-entry
+list. The [adaptation research](../reviews/2026-10-22_PORTMASTER_DNS_ADAPTATION_RESEARCH.md#名单别名与统一-rank-的具体映射)
+records the source correspondence and the retained product difference.
+
+### Denied-answer association eligibility choice, 2026-10-22
+
+The user confirmed that an actual answer whose delivery is denied by applicable
+DNS response policy remains resolution and policy observation evidence, but
+does not create or refresh a Domain-IP Association eligible for subsequent
+connection-domain fallback. This includes an answer rejected because of its
+connected CNAME facts. A valid answer obtained from the proxy cache still
+undergoes the current response-policy check before this use.
+
+Other independently eligible association evidence is not deleted by that denial.
+Resolution success, denied delivery and association eligibility remain distinct;
+this choice does not decide the deferred cross-application association scope or
+the proxy answer cache's storage/eviction contract. It is a behavior decision,
+not implementation or validation evidence.
 
 ### Association application scope deferred pending data, 2026-10-08
 
@@ -374,11 +525,58 @@ Historical observations may retain the evidence without extending its
 eligibility for current lookup.
 
 The user explicitly chose this as a temporary value, open to later optimization
-or redesign. Detailed update/refresh behavior, other network/resolver admissibility
-and established-flow fact lifetime remain to be specified; the fixed window
-does not settle those contracts. DNS answer caching continues to follow its own
+or redesign. The refresh source is selected in the 2026-10-22 choice below;
+other update details and network/resolver admissibility remain to be specified.
+The same-network established-connection expiry behavior is selected below.
+DNS answer caching continues to follow its own
 TTL and selected-context rules. The choice is recorded alongside the
 [upstream lifetime investigation](../reviews/2026-10-08_IODE_IP_LEAK_ASSOCIATION_LIFETIME_RESEARCH.md).
+
+### Association refresh source choice, 2026-10-22
+
+The user confirmed that another valid DNS answer permitted for delivery refreshes
+the two-hour eligibility window for the domain/address evidence obtained from
+that result, within its admissible network/resolver context. A valid
+selected-context product answer-cache hit also counts once current response
+policy permits delivery. For example, the same association learned at 09:00
+and obtained again at 10:00 remains eligible until 12:00, subject to the existing
+reset and admissibility constraints.
+
+Connecting to an IP or consulting an association for connection-domain fallback
+does not refresh the window. Policy-denied answers retain the separately selected
+no-create/no-refresh behavior. Changed address-set handling is selected below;
+the deferred cross-application scope remains undecided. This is not
+implementation evidence.
+
+### Changed-answer address retention choice, 2026-10-22
+
+The user confirmed independent age windows for domain/address associations when
+a later valid, delivery-permitted answer returns a different address set in the
+same admissible context. Learning a new address neither immediately removes
+older address associations for that domain nor refreshes evidence absent from
+the new result. For example, an address learned at 09:00 remains eligible until
+11:00; another address first learned at 10:00 remains eligible until 12:00.
+
+This preserves evidence for an App that still uses an earlier returned address.
+Each association remains subject to the existing reset, admissibility and
+bounded-resource constraints. It selects no mandatory retention past resource
+eviction and does not make an IP uniquely identify a domain. This is selected
+behavior, not implementation or validation evidence.
+
+### Established-connection association expiry choice, 2026-10-22
+
+The user confirmed the simple same-network behavior: once an existing connection
+has obtained admissible DNS-derived domain evidence, expiration of the source
+association alone does not clear that connection's retained domain evidence.
+Continue evaluating its current applicable policy using that retained evidence
+and its DNS provenance. This retains a fact, not a previous permission decision;
+the selected precedence of direct protocol-domain facts continues to apply.
+
+A new connection cannot obtain a domain from that expired association. Keeping
+the evidence on the existing connection does not refresh the association or
+make it available to other connections. This selects the effect of age expiry
+on an established connection, without changing existing connection lifecycle,
+context-reset or direct-domain rules. It is not implementation evidence.
 
 ### Network-switch association reset choice, 2026-10-08
 
@@ -393,8 +591,9 @@ resolver-view rules remain separate, and resetting product associations does
 not guarantee that Android or an application performs another visible DNS
 query. System-cache behavior is investigated separately in the
 [Android network-switch research](../reviews/2026-10-08_ANDROID_DNS_CACHE_NETWORK_SWITCH_RESEARCH.md).
-Detailed same-network resolver changes, refresh and established-flow fact
-lifetimes remain to be specified.
+The refresh source and same-network established-connection age-expiry behavior
+are selected above; detailed same-network resolver changes and other update
+and context-lifetime behavior remain to be specified.
 
 ## Connection-domain sources and timing
 
@@ -504,9 +703,11 @@ a new SNI recognition budget.
 This is an accepted design extension, not implementation or acceptance evidence.
 It supersedes the blanket DNS-query/association exclusion in the September rule
 specification for this new scope, while preserving existing SNI semantics and
-whole-rule constraints. DNS fact/record Interfaces, association admissibility and
-lifetime, reply/failure behavior, worker layout and numeric budgets remain for
-subsequent specification. UI and user-interaction planning remain deferred until
+whole-rule constraints. DNS fact/record Interfaces, remaining context-admissibility
+and lifecycle details, remaining reply/failure details, worker layout and numeric
+budgets require subsequent specification. The specific age/refresh, old-address
+and same-network connection-expiry choices above supply current design inputs
+to that work. UI and user-interaction planning remain deferred until
 DNS is complete.
 
 The [Portmaster investigation](../reviews/2026-10-05_LINUX_PORTMASTER_DNS_REFERENCE_RESEARCH.md),
