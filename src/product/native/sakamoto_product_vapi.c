@@ -12,6 +12,7 @@
 #include "sakamoto_product_abi.h"
 #include "sakamoto_product_status.h"
 #include "sakamoto_product_observation.h"
+#include "product_client_heap.h"
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -44,7 +45,22 @@ struct sakamoto_product_session {
   int connected;
   uint32_t policy_mutation_fault_mode;
   pthread_mutex_t mutex;
+  void *caller_heap;
 };
+
+/* The session lock serializes context access, while heap selection keeps
+ * default vectors on their allocation heap even when the caller changes. */
+static int session_lock (sakamoto_product_session_t *session) {
+  if (pthread_mutex_lock (&session->mutex)) return -1;
+  session->caller_heap = product_client_heap_enter ();
+  if (session->caller_heap) return 0;
+  pthread_mutex_unlock (&session->mutex);
+  return -1;
+}
+static void session_unlock (sakamoto_product_session_t *session) {
+  product_client_heap_leave (session->caller_heap);
+  pthread_mutex_unlock (&session->mutex);
+}
 
 typedef struct {
   uint32_t transport_code;
@@ -130,7 +146,7 @@ uint32_t sakamoto_product_session_observation_query (sakamoto_product_session_t 
 {
   if (out) memset (out, 0, sizeof (*out));
   if (!session || !generation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  if (session_lock (session)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   if (!session->connected || generation != session->generation) goto done;
   code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
@@ -146,7 +162,7 @@ uint32_t sakamoto_product_session_observation_query (sakamoto_product_session_t 
     session->connected = 0; memset (out, 0, sizeof (*out)); code = SAKAMOTO_PRODUCT_QUERY_FAILED;
   } else code = call.code;
 done:
-  (void) pthread_mutex_unlock (&session->mutex); return code;
+  (void) session_unlock (session); return code;
 }
 
 typedef struct {
@@ -260,7 +276,7 @@ uint32_t sakamoto_product_session_flow_query (sakamoto_product_session_t *sessio
 {
   if (out) memset (out, 0, sizeof (*out));
   if (!session || !generation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  if (session_lock (session)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   if (!session->connected || generation != session->generation) goto done;
   code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
@@ -281,7 +297,7 @@ uint32_t sakamoto_product_session_flow_query (sakamoto_product_session_t *sessio
     code = SAKAMOTO_PRODUCT_QUERY_FAILED;
   } else code = call.code;
 done:
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -311,7 +327,7 @@ uint32_t sakamoto_product_session_sni_query(sakamoto_product_session_t *session,
 {
   if(out) memset(out,0,sizeof *out);
   if(!session || !generation || !incarnation || !out) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if(pthread_mutex_lock(&session->mutex)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  if(session_lock (session)) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code=SAKAMOTO_PRODUCT_STALE_HANDLE;
   if(!session->connected || generation!=session->generation) goto done;
   code=SAKAMOTO_PRODUCT_API_UNAVAILABLE;
@@ -329,7 +345,7 @@ uint32_t sakamoto_product_session_sni_query(sakamoto_product_session_t *session,
     session->connected=0;memset(out,0,sizeof *out);code=SAKAMOTO_PRODUCT_QUERY_FAILED;
   } else code=call.code;
 done:
-  (void)pthread_mutex_unlock(&session->mutex);return code;
+  (void)session_unlock (session);return code;
 }
 
 typedef struct {
@@ -449,7 +465,7 @@ sakamoto_product_session_rule_config (
       request->graph.group_count > SAKAMOTO_RULE_CONFIG_MAX_GROUPS || request->graph.edge_count > SAKAMOTO_RULE_CONFIG_MAX_EDGES || request->graph.binding_count > SAKAMOTO_RULE_CONFIG_MAX_BINDINGS ||
       request->domains.list_count > SAKAMOTO_DOMAIN_MAX_LISTS || request->domains.entry_count > SAKAMOTO_DOMAIN_MAX_ENTRIES)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
+  if (session_lock (session) != 0) return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   if (!session->connected || session->generation != generation) goto done;
   code = SAKAMOTO_PRODUCT_API_UNAVAILABLE;
@@ -535,7 +551,7 @@ sakamoto_product_session_rule_config (
     : request->operation != SAKAMOTO_RULE_CONFIG_QUERY
       ? SAKAMOTO_PRODUCT_POLICY_OUTCOME_UNKNOWN : SAKAMOTO_PRODUCT_QUERY_FAILED;
 done:
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -562,7 +578,7 @@ sakamoto_product_session_publish_network (
       || snapshot->reserved
       || snapshot->count > SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   if (!session->connected || session->generation != generation) goto done;
@@ -597,7 +613,7 @@ sakamoto_product_session_publish_network (
   if (rv != VAPI_OK || !call.called) session->connected = 0;
   code = rv == VAPI_OK && call.called ? call.code : SAKAMOTO_PRODUCT_INTERNAL_ERROR;
 done:
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -637,7 +653,7 @@ sakamoto_product_session_stop_root (sakamoto_product_session_t *session,
   if (out_stopped) *out_stopped = 0;
   if (!session || !generation || !out_stopped)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   if (!session->connected || generation != session->generation) goto done;
@@ -662,7 +678,7 @@ sakamoto_product_session_stop_root (sakamoto_product_session_t *session,
   code = rv == VAPI_OK && call.called ? call.code : SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   if (code == SAKAMOTO_PRODUCT_OK) *out_stopped = call.stopped;
 done:
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -1335,8 +1351,8 @@ sakamoto_product_api_version (void)
   return SAKAMOTO_PRODUCT_API_VERSION;
 }
 
-uint32_t
-sakamoto_product_session_connect (sakamoto_product_bytes_t api_socket,
+static uint32_t
+session_connect_on_heap (sakamoto_product_bytes_t api_socket,
                                    uint64_t expected_generation,
                                    sakamoto_product_session_t **out_session,
                                    sakamoto_product_status_t *out_status)
@@ -1434,6 +1450,26 @@ sakamoto_product_session_connect (sakamoto_product_bytes_t api_socket,
 }
 
 uint32_t
+sakamoto_product_session_connect (sakamoto_product_bytes_t api_socket,
+                                   uint64_t expected_generation,
+                                   sakamoto_product_session_t **out_session,
+                                   sakamoto_product_status_t *out_status)
+{
+  void *caller_heap = product_client_heap_enter ();
+  if (!caller_heap) {
+    if (out_session) *out_session = NULL;
+    sakamoto_product_status_reset (out_status, expected_generation);
+    sakamoto_product_status_error (out_status, SAKAMOTO_PRODUCT_ALLOCATION_FAILED,
+                                   "cannot initialize native client heap");
+    return SAKAMOTO_PRODUCT_ALLOCATION_FAILED;
+  }
+  uint32_t code = session_connect_on_heap (api_socket, expected_generation,
+                                          out_session, out_status);
+  product_client_heap_leave (caller_heap);
+  return code;
+}
+
+uint32_t
 sakamoto_product_session_query (sakamoto_product_session_t *session,
                                  uint64_t expected_generation,
                                  sakamoto_product_status_t *out_status)
@@ -1448,7 +1484,7 @@ sakamoto_product_session_query (sakamoto_product_session_t *session,
         "session and non-zero generation are required");
       return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
     }
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     {
       sakamoto_product_status_error (out_status,
                                      SAKAMOTO_PRODUCT_INTERNAL_ERROR,
@@ -1475,7 +1511,7 @@ sakamoto_product_session_query (sakamoto_product_session_t *session,
           code = SAKAMOTO_PRODUCT_STALE_HANDLE;
         }
     }
-  pthread_mutex_unlock (&session->mutex);
+  session_unlock (session);
   return code;
 }
 
@@ -1495,7 +1531,7 @@ sakamoto_product_session_apply_policy (
         "session, snapshot and non-zero generation are required");
       return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
     }
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     {
       sakamoto_product_status_error (out_status,
                                      SAKAMOTO_PRODUCT_INTERNAL_ERROR,
@@ -1522,7 +1558,7 @@ sakamoto_product_session_apply_policy (
           code = SAKAMOTO_PRODUCT_STALE_HANDLE;
         }
     }
-  pthread_mutex_unlock (&session->mutex);
+  session_unlock (session);
   return code;
 }
 
@@ -1550,7 +1586,7 @@ sakamoto_product_session_apply_policy_bundle (
         "policy bundle ABI, identity, or bounded counts are invalid");
       return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
     }
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     {
       sakamoto_product_status_error (out_status,
                                      SAKAMOTO_PRODUCT_INTERNAL_ERROR,
@@ -1684,7 +1720,7 @@ sakamoto_product_session_apply_policy_bundle (
         }
     }
 policy_bundle_apply_done:
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -1699,14 +1735,14 @@ sakamoto_product_session_set_policy_mutation_fault (
           && fault_mode
                != SAKAMOTO_PRODUCT_POLICY_MUTATION_FAULT_PRE_SUBMIT_NOT_SENT))
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   uint32_t code = SAKAMOTO_PRODUCT_OK;
   if (!session->connected || expected_generation != session->generation)
     code = SAKAMOTO_PRODUCT_STALE_HANDLE;
   else
     session->policy_mutation_fault_mode = fault_mode;
-  (void) pthread_mutex_unlock (&session->mutex);
+  (void) session_unlock (session);
   return code;
 }
 
@@ -1715,7 +1751,7 @@ sakamoto_product_session_disconnect (sakamoto_product_session_t *session)
 {
   if (session == NULL)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
-  if (pthread_mutex_lock (&session->mutex) != 0)
+  if (session_lock (session) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
   vapi_error_e rv = VAPI_OK;
   if (session->context != NULL)
@@ -1725,7 +1761,7 @@ sakamoto_product_session_disconnect (sakamoto_product_session_t *session)
       vapi_ctx_free (session->context);
       session->context = NULL;
     }
-  pthread_mutex_unlock (&session->mutex);
+  session_unlock (session);
   return rv == VAPI_OK ? SAKAMOTO_PRODUCT_OK
                        : SAKAMOTO_PRODUCT_DISCONNECT_FAILED;
 }

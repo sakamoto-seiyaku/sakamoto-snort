@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "sakamoto_product_observation.h"
+#include "product_client_heap.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -100,6 +101,7 @@ static void attach (product_observation_transport_t *t) {
 }
 void product_observation_transport_destroy (product_observation_transport_t *t) {
   if (!t) return;
+  void *caller_heap = t->consumer ? product_client_heap_enter () : NULL;
   for (unsigned i = 0; i < t->attached; i++) {
     t->queue[i].q.evtfd = -1;
     svm_msg_q_cleanup (&t->queue[i]);
@@ -112,6 +114,7 @@ void product_observation_transport_destroy (product_observation_transport_t *t) 
   /* Close the connection last: server may now declare consumer detached. */
   if (t->socket >= 0) close (t->socket);
   free (t);
+  if (caller_heap) product_client_heap_leave (caller_heap);
 }
 product_observation_transport_t *product_observation_transport_create_for_owners (
   uint64_t generation, uint32_t flow_capacity, uint32_t owner_count) {
@@ -293,19 +296,34 @@ fail:
   return -1;
 }
 
-/* Only the Rust ingestion thread uses VPP allocations in its process. */
-static pthread_once_t consumer_heap_once = PTHREAD_ONCE_INIT;
-static void *consumer_heap;
-static void init_consumer_heap (void) { consumer_heap = clib_mem_init (NULL, 1024 * 1024); }
+/* VAPI and observation share libvppinfra. Bootstrap once before either client
+ * can allocate; clib_mem_init replaces the process main heap and must never be
+ * called as a private consumer initializer. Existing VPP producer processes
+ * already own their main heap and do not use this consumer bootstrap. */
+static pthread_once_t client_heap_once = PTHREAD_ONCE_INIT;
+static void *client_heap;
+static void init_client_heap (void) {
+  client_heap = clib_mem_main.main_heap;
+  if (!client_heap) client_heap = clib_mem_init (NULL, 32U * 1024U * 1024U);
+}
+void *product_client_heap_enter (void) {
+  pthread_once (&client_heap_once, init_client_heap);
+  if (!client_heap) return NULL;
+  void *caller_heap = clib_mem_get_heap ();
+  clib_mem_set_heap (client_heap);
+  return caller_heap;
+}
+void product_client_heap_leave (void *caller_heap) {
+  clib_mem_set_heap (caller_heap);
+}
 product_observation_transport_t *product_observation_connect_for_owners (
   const char *path, uint64_t generation, uint32_t owner_count) {
   if (!path || !owner_count || owner_count > PRODUCT_OBSERVATION_OWNERS
       || strlen (path) >= sizeof (((struct sockaddr_un *) 0)->sun_path)) return NULL;
-  pthread_once (&consumer_heap_once, init_consumer_heap);
-  if (!consumer_heap) return NULL;
-  clib_mem_set_heap (consumer_heap);
+  void *caller_heap = product_client_heap_enter ();
+  if (!caller_heap) return NULL;
   product_observation_transport_t *t = allocate_handle ();
-  if (!t) return NULL;
+  if (!t) { product_client_heap_leave (caller_heap); return NULL; }
   t->channels = owner_count * 2;
   t->consumer = 1;
   if (!allocate_descriptors (t)) goto fail;
@@ -366,9 +384,11 @@ product_observation_transport_t *product_observation_connect_for_owners (
   t->interrupt = eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK);
   if (t->interrupt < 0) goto fail;
   attach (t);
+  product_client_heap_leave (caller_heap);
   return t;
 fail:
   product_observation_transport_destroy (t);
+  product_client_heap_leave (caller_heap);
   return NULL;
 }
 

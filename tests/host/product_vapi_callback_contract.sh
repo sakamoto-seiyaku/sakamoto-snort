@@ -450,6 +450,11 @@ cat > "$stub_dir/vapi_stub.c" <<'EOF'
 #include <stdlib.h>
 #include <string.h>
 
+/* This callback-only seam has no VPP allocator. The actual co-located
+ * VAPI/observation/fresh-thread heap seam is product_client_heap_test.py. */
+void *product_client_heap_enter (void) { return (void *) 1; }
+void product_client_heap_leave (void *caller_heap) { (void) caller_heap; }
+
 int sakamoto_test_request_available = 1;
 int sakamoto_test_reply_available = 1;
 int sakamoto_test_policy_apply_available = 1;
