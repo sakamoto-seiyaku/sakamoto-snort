@@ -8,11 +8,16 @@ def name(value):
                     for label in value.rstrip('.').split('.') if label) + b'\0'
 
 
-def question(identifier, value='qname.test', qtype=1, *, edns=False):
+def question(identifier, value='qname.test', qtype=1, *, edns=False, padding=0):
+    assert 0 <= padding <= 2048
+    edns = edns or bool(padding)
     header = struct.pack('!6H', identifier, 0x0110 if edns else 0x0100, 1, 0, 0, int(edns))
     wire = header + name(value) + struct.pack('!HH', qtype, 1)
     if edns:
-        wire += b'\0' + struct.pack('!HHIH', 41, 1232, 0x8000, 7) + struct.pack('!HH', 65001, 3) + b'\0\xffZ'
+        options = struct.pack('!HH', 65001, 3) + b'\0\xffZ'
+        if padding:
+            options += struct.pack('!HH', 65002, padding) + bytes(padding)
+        wire += b'\0' + struct.pack('!HHIH', 41, 1232, 0x8000, len(options)) + options
     return wire
 
 

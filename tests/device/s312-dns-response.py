@@ -154,7 +154,10 @@ class Device:
             self.adb('shell', 'uiautomator', 'dump', '/sdcard/s312-ui.xml')
             xml = self.adb('shell', 'cat', '/sdcard/s312-ui.xml')
             self.save(f'{label}-{attempt}.xml', xml)
-            nodes = [n for n in ET.fromstring(xml).iter('node')
+            tree=ET.fromstring(xml)
+            validate=getattr(self,'validate_tap_ui',None)
+            if validate:validate(f'{label}-{attempt}',tree,text)
+            nodes = [n for n in tree.iter('node')
                      if n.get('text') == text and n.get('enabled') == 'true']
             if len(nodes) == 1:
                 bounds = list(map(int, re.findall(r'\d+', nodes[0].get('bounds'))))
@@ -357,7 +360,8 @@ class Qualification:
                  winner=0, qtype=1, aliases=1, coverage=1, chain_status=0,
                  edns=False, public=False, hot=False):
         d = self.d
-        source = 49000 + len(self.result['cases']) + (1000 if d.profile == 'vpn' else 0)
+        source = (d.reserve_source_port(label) if hasattr(d, 'reserve_source_port') else
+                  49000 + len(self.result['cases']) + (1000 if d.profile == 'vpn' else 0))
         warm_name = 'example.com' if public else ('qname.test' if d.profile == 'vpn' else 'allowed.test')
         names = [(warm_name, 1), ('example.com' if public else 'qname.test', qtype),
                  ('example.com' if public else 'allowed.test', 65000 if not public else 28)]

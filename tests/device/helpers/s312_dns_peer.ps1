@@ -18,7 +18,7 @@ try {
         $clients += $socket
         $receivers += $socket.BeginReceive($null, $null)
     }
-    @{kind='ready'; addresses=$Addresses; protocol='explicit independent wire fixtures'; pending_limit=2048} | ConvertTo-Json -Compress
+    @{kind='ready'; process_id=$PID; addresses=$Addresses; protocol='explicit independent wire fixtures'; pending_limit=2048} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
     $deadline = [DateTime]::UtcNow.AddMinutes(15)
     while (!(Test-Path -LiteralPath $StopPath) -and [DateTime]::UtcNow -lt $deadline) {
         $stamp = (Get-Item -LiteralPath $PlanPath).LastWriteTimeUtc.Ticks
@@ -38,9 +38,9 @@ try {
             $row = @{kind='received'; received_utc=[DateTime]::UtcNow.ToString('o');
                      peer=@($remote.Address.ToString(),$remote.Port);
                      resolver=@($local.Address.ToString(),$local.Port); request_hex=$key}
-            $row | ConvertTo-Json -Compress
+            $row | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
             if (!$responses.ContainsKey($key) -or $waiting.Count -ge 2048) {
-                @{kind='unplanned_or_capacity'; request_hex=$key} | ConvertTo-Json -Compress
+                @{kind='unplanned_or_capacity'; request_hex=$key} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
                 continue
             }
             $entry = $responses[$key]
@@ -51,7 +51,7 @@ try {
             $item = $waiting[$n]
             if ($item.entry.gate -and !(Test-Path -LiteralPath $item.entry.gate)) {
                 if ([DateTime]::UtcNow -lt $item.deadline) { continue }
-                @{kind='gate_timeout'; request_hex=$item.row.request_hex} | ConvertTo-Json -Compress
+                @{kind='gate_timeout'; request_hex=$item.row.request_hex} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
                 $waiting.RemoveAt($n); continue
             }
             $reply = FromHex $item.entry.reply_hex
@@ -59,12 +59,12 @@ try {
             $row = $item.row.Clone()
             $row.kind='exchange'; $row.reply_hex=$item.entry.reply_hex
             $row.sent_bytes=$sent; $row.sent_utc=[DateTime]::UtcNow.ToString('o')
-            $row | ConvertTo-Json -Compress
+            $row | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
             $waiting.RemoveAt($n)
         }
         Start-Sleep -Milliseconds 2
     }
 } finally {
     foreach ($client in $clients) { $client.Close() }
-    @{kind='stopped'; pending=$waiting.Count} | ConvertTo-Json -Compress
+    @{kind='stopped'; pending=$waiting.Count} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
 }

@@ -34,9 +34,6 @@ def main():
                "-L" + str(library), "-Wl,-rpath," + str(library),
                "-Wl,-rpath-link," + str(library), "-lvapiclient", "-lvlibmemoryclient",
                "-lvlibapi", "-lsvm", "-lvppinfra", "-lpthread", "-lm", "-lrt", "-o", str(executable)]
-    heap_source = REPO / "src/product/native/product_client_heap.c"
-    if heap_source.exists():
-        command.insert(command.index("-L" + str(library)), str(heap_source))
     (output / "compile-command.json").write_text(json.dumps(command, indent=2))
     with (output / "compile.log").open("w") as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)

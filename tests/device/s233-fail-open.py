@@ -130,34 +130,45 @@ class Target:
     def read(self, path):
         return self.run('cat '+shlex.quote(str(path))).stdout
 
-    def cli(self, runtime, commands):
+    def cli(self, runtime, commands, *, timeout=30, capture_output=None):
         if not self.pixel:
             return ''.join(self.run(shlex.join([str(self.args.vppctl), '-s', runtime+'/cli.sock', c])).stdout for c in commands)
         marker = 'S233_DONE_'+str(time.time_ns())
-        command = 'exec toybox nc -U -w 15 '+shlex.quote(runtime+'/cli.sock')
-        process = subprocess.Popen([str(ROOT/'dev/adb'), '-s', SERIAL, 'shell', '-T', 'su', '-c', shlex.quote(command)],
-                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        data = b''
+        launched = marker.replace('DONE', 'CLI_STARTED')
+        command = 'echo '+launched+':$$; exec toybox nc -U -w 15 '+shlex.quote(runtime+'/cli.sock')
+        started = time.monotonic_ns()
+        events = []
+        def event(stage, **fields):
+            events.append(dict(stage=stage, elapsed_ns=time.monotonic_ns()-started, **fields))
+        process, selector = None, None
+        data, sent, failure = b'', False, None
         try:
+            process = subprocess.Popen([str(ROOT/'dev/adb'), '-s', SERIAL, 'shell', '-T', 'su', '-c', shlex.quote(command)],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            event('local_process_started', pid=process.pid)
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ)
             # VPP's Telnet negotiation can discard input sent before its
-            # first prompt. The no-hooks timing regression reproduces this
-            # with immediate input and passes with prompt-before-command.
-            sent = False
-            end = time.monotonic()+30
+            # first prompt. Keep prompt-before-command and the existing budget.
+            end = time.monotonic()+timeout
             while time.monotonic() < end:
                 if not sent and b'vpp# ' in data:
+                    event('prompt_observed')
                     process.stdin.write(('\n'+'\n'.join(['set terminal pager off', *commands, 'echo '+marker])+'\n').encode())
                     process.stdin.flush()
                     sent = True
+                    event('commands_sent')
                 if not selector.select(1):
                     continue
                 chunk = os.read(process.stdout.fileno(), 65536)
                 if not chunk:
+                    event('stdout_eof', returncode=process.poll())
                     break
+                if not data: event('first_stdout', bytes=len(chunk))
                 data += chunk
+                event('stdout_read', bytes=len(chunk))
                 if b'\n'+marker.encode()+b'\n' in data.replace(b'\r', b''):
+                    event('completion_marker_observed')
                     break
             else:
                 raise RuntimeError('CLI timed out '+data.decode(errors='replace')[-1000:])
@@ -165,13 +176,40 @@ class Target:
             process.stdin.write(b'quit\n')
             process.stdin.flush()
             remainder, _ = process.communicate(timeout=5)
+            data += remainder
             assert process.returncode == 0
-            return (data+remainder).decode(errors='replace').replace('\r', '')
+            return data.decode(errors='replace').replace('\r', '')
+        except BaseException as error:
+            failure = repr(error)
+            raise
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=5)
-            selector.close()
+            event('before_local_cleanup', returncode=process.poll() if process else None, commands_sent=sent)
+            try:
+                if process and process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+            finally:
+                if selector: selector.close()
+                event('local_cleanup_finished', returncode=process.returncode if process else None)
+                # Lightweight callers can construct Target without args; only
+                # an explicit capture sink enables the new retained receipts.
+                if capture_output is not None:
+                    capture = Path(capture_output)/'cli-captures'
+                    capture.mkdir(exist_ok=True)
+                    (capture/(marker+'.stdout')).write_bytes(data)
+                    remote_pid = re.search(re.escape(launched.encode())+rb':(\d+)', data)
+                    override = os.environ.get('SAKAMOTO_ADB')
+                    (capture/(marker+'.json')).write_text(json.dumps(dict(
+                        runtime=runtime, commands=commands, timeout_seconds=timeout,
+                        local_pid=process.pid if process else None,
+                        local_returncode=process.returncode if process else None,
+                        remote_pid=int(remote_pid[1]) if remote_pid else None,
+                        wrapper_sha256=digest(ROOT/'dev/adb'),
+                        adb_override=override, adb_override_sha256=digest(override) if override else None,
+                        remote_launch_observed=launched.encode() in data,
+                        prompt_observed=b'vpp# ' in data, commands_sent=sent,
+                        completion_marker_observed=b'\n'+marker.encode()+b'\n' in data.replace(b'\r',b''),
+                        error=failure, events=events),indent=2)+'\n')
 
     def spawn(self, argv, logfile, environment=None):
         if self.pixel:

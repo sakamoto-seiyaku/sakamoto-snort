@@ -9,7 +9,8 @@ policy/configuration/observation behavior; they do not extend implementation cla
 Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md) defines shared Root/VPN application DNS query and subsequent-connection control.
 [S310 Root](../testing/2026-10-22_S310_ROOT_UDP_DNS.md) and [S311 VPN](../testing/2026-10-22_S311_VPN_UDP_DNS.md) qualify controlled original-path UDP53 query filtering and normal observations.
 [S312](../testing/2026-10-22_S312_UDP_DNS_RESPONSES.md) adds bounded UDP reply correlation, connected CNAME rules and normal reply observations; its report keeps artifact and device qualification scopes explicit.
-[S313](../testing/2026-10-23_S313_ROOT_TCP_DNS.md) adds bounded Root TCP DNS framing and QName/CNAME policy, with scoped N1/N3 dual-stack wire, per-message SQLite and clean stops; its R2/R3 artifact qualifications remain separate. VPN TCP DNS, replacement, association consumption and KSU/libnetd integration remain unestablished.
+[S313](../testing/2026-10-23_S313_ROOT_TCP_DNS.md) adds bounded Root TCP DNS framing and QName/CNAME policy; its R2/R3 artifact qualifications remain separate.
+[S314](../testing/2026-10-23_S314_VPN_TCP_DNS.md) connects VPN Direct TCP to the shared core and qualifies 104 current R5 groups across Root/VPN, UDP/TCP, IPv4/IPv6 and N1/N3, with normal SQLite and clean stops. Root active-socket capture and one incomplete public attempt remain explicit limits. Replacement, association consumption and KSU/libnetd integration remain unestablished.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP

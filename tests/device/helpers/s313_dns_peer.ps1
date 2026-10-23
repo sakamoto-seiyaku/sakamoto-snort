@@ -32,12 +32,12 @@ function CloseConnection($connection, [string]$reason) {
         # the fixture obligation, never a claim that zero bytes reached wire.
         @{kind='cancelled'; connection=$connection.id; request=$item.row.request;
           request_hex=$item.row.request_hex; reason=$reason;
-          completed_write_bytes=$item.written; partial_write_unknown=$item.write_failed} | ConvertTo-Json -Compress
+          completed_write_bytes=$item.written; partial_write_unknown=$item.write_failed} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
         $script:waiting.RemoveAt($index)
         $script:stats.cancelled++
     }
     @{kind='connection_closed'; connection=$connection.id;
-      buffered=$connection.bytes.Count; reason=$reason} | ConvertTo-Json -Compress
+      buffered=$connection.bytes.Count; reason=$reason} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
 }
 try {
     foreach ($address in $Addresses) {
@@ -47,7 +47,7 @@ try {
         $listeners += $listener
     }
     @{kind='ready'; addresses=$Addresses; protocol='independent ordinary TCP DNS peer';
-      connection_limit=32; pending_limit=4096; process_id=$PID} | ConvertTo-Json -Compress
+      connection_limit=32; pending_limit=4096; process_id=$PID} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
     $deadline = [DateTime]::UtcNow.AddMinutes(20)
     while (!(Test-Path -LiteralPath $StopPath) -and [DateTime]::UtcNow -lt $deadline) {
         $stamp = (Get-Item -LiteralPath $PlanPath).LastWriteTimeUtc.Ticks
@@ -69,7 +69,7 @@ try {
                     next_request=0; closed=$false; input_closed=$false}
                 $connections.Add($connection)
                 @{kind='connected'; connection=$nextConnection; peer=$client.Client.RemoteEndPoint.ToString();
-                  resolver=$client.Client.LocalEndPoint.ToString()} | ConvertTo-Json -Compress
+                  resolver=$client.Client.LocalEndPoint.ToString()} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
             }
         }
         foreach ($connection in $connections) {
@@ -106,7 +106,7 @@ try {
                     received_utc=[DateTime]::UtcNow.ToString('o');
                     peer=@($remote.Address.ToString(),$remote.Port); resolver=@($local.Address.ToString(),$local.Port);
                     request_hex=$key}
-                $row | ConvertTo-Json -Compress
+                $row | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
                 if (!$responses.ContainsKey($key) -or $waiting.Count -ge 4096) { throw 'unplanned request or capacity' }
                 $waiting.Add(@{connection=$connection; row=$row; entry=$responses[$key];
                     deadline=[DateTime]::UtcNow.AddSeconds(90); written=0; write_failed=$false})
@@ -159,7 +159,7 @@ try {
             $row = $item.row.Clone(); $row.kind='exchange'; $row.reply_hex=$item.entry.reply_hex
             $row.frame_copies=$copies
             $row.sent_bytes=$framed.Length; $row.sent_utc=[DateTime]::UtcNow.ToString('o')
-            $row | ConvertTo-Json -Compress
+            $row | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
             $waiting.RemoveAt($n); $stats.exchanged++
         }
         foreach ($connection in $connections) {
@@ -183,7 +183,7 @@ try {
     @{kind='stopped'; pending=$waiting.Count; connections=$connections.Count;
       pending_before_close=$pendingBefore; connections_before_close=$connectionsBefore;
       received=$stats.received; exchanged=$stats.exchanged; cancelled=$stats.cancelled;
-      closed=$stats.closed} | ConvertTo-Json -Compress
+      closed=$stats.closed} | ConvertTo-Json -Compress | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
     if ($waiting.Count -ne 0 -or $stats.received -ne $stats.exchanged+$stats.cancelled) {
         throw 'peer obligation conservation'
     }
