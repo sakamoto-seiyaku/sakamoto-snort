@@ -6,6 +6,7 @@ The Product functions and record producer are extracted unchanged at test time.
 """
 from pathlib import Path
 import argparse
+import os
 import re
 import subprocess
 import tempfile
@@ -34,6 +35,7 @@ def typedef(name):
 prefix = r"""
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "product_dns_tcp.h"
 #include "product_flow_entry.h"
@@ -318,6 +320,106 @@ static void vpn_direct_queries_share_framing_and_per_message_policy(void)
   assert(records[0].caller==PRODUCT_DNS_CALLER_PLATFORM_APP && records[0].message_sequence==1);
  }
 }
+static void vpn_split_unknown_caller_keeps_current_packet_uid_for_generic_policy(void)
+{
+ unsigned failures=0;
+ for(unsigned family=4;family<=6;family+=2)
+  for(unsigned current_known=0;current_known<2;++current_known)
+   for(unsigned post=0;post<2;++post) {
+  reset(family);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+  lease.platform.uid=current_known?UINT32_MAX:2000;
+  lease.platform.availability=current_known?0:PRODUCT_PLATFORM_UID_KNOWN;
+  anchor();
+  product_l4_policy_rule_t rules[]={rule(314,2,0),rule(315,2,0)};
+  rules[0].uid=rules[1].uid=2000;rules[1].priority=1;rules[1].expression_length=0;
+  if(post) {
+   const uint8_t expression[]={PRODUCT_EXPRESSION_APPLICATION_PROTOCOL,0xed,3,0,0};
+   memcpy(rules[1].expression,expression,sizeof(expression));rules[1].expression_length=sizeof(expression);
+   fresh_protocols=UINT64_C(1)<<4;
+  }
+  assert(!product_l4_policy_compile(&bank.view,rules,2));
+  product_dns_tcp_graph_t context=packet(101,frame,1,0x18);
+  assert(!context.complete && context.pending_valid);
+  lease.platform.uid=current_known?2000:UINT32_MAX;
+  lease.platform.availability=current_known?PRODUCT_PLATFORM_UID_KNOWN:0;
+  context=packet(102,frame+1,sizeof(frame)-1,0x18);
+  assert(context.complete && record_count==1);
+  if(context.match.actual_action!=(current_known?2:0) || context.match.rule_id!=(current_known?315:0)) {
+   fprintf(stderr,"split UID family=%u current_known=%u post=%u actual_action=%u winner=%llu expected_action=%u\n",
+    family,current_known,post,context.match.actual_action,(unsigned long long)context.match.rule_id,current_known?2:0);
+   ++failures;
+  }
+  assert(records[0].caller==PRODUCT_DNS_CALLER_UNKNOWN && !records[0].domain_available);
+  assert(records[0].uid==(current_known?UINT32_MAX:2000)); // first-byte identity is immutable
+  assert(records[0].packet_uid==(current_known?2000:UINT32_MAX));
+ }
+ assert(!failures);
+}
+static void retained_unknown_question_rechecks_current_uid_without_rewriting_admission(void)
+{
+ reset(4);lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+ lease.platform.uid=UINT32_MAX;lease.platform.availability=0;anchor();
+ product_l4_policy_rule_t generic=rule(315,2,0);generic.uid=2000;generic.expression_length=0;
+ assert(!product_l4_policy_compile(&bank.view,&generic,1));
+ product_dns_tcp_graph_t context=packet(101,frame,sizeof(frame),0x18);
+ assert(context.complete && record_count==1 && records[0].actual_action==1);
+ lease.platform.uid=2000;lease.platform.availability=PRODUCT_PLATFORM_UID_KNOWN;
+ ++snapshot.identity.revision;
+ context=packet(132,frame,1,0x18);
+ assert(!context.complete && context.pending_valid && record_count==1);
+ product_l4_policy_packet_t current;product_packet_graph_l4_packet_projection(&lease,&current);
+ product_l4_policy_match_result_t actual;
+ assert(!product_l4_policy_match_position(&bank.view,&current,PRODUCT_L4_POLICY_POSITION_ALL,&actual));
+ assert(actual.rule_id==315 && actual.actual_action==2);
+ lease.platform.uid=UINT32_MAX;lease.platform.availability=0;++snapshot.identity.revision;
+ context=packet(132,frame,1,0x18);
+ assert(!context.complete && record_count==2 && records[1].actual_action==1);
+ assert(records[1].tcp_continuation && records[1].packet_uid==UINT32_MAX && !records[1].winner);
+ assert(records[0].actual_action==1 && !records[0].winner && records[0].policy_revision==3);
+}
+static void retained_query_generic_output_rule_cannot_drop_a_current_input_packet(void)
+{
+ reset(4);anchor();
+ product_dns_tcp_graph_t context=packet(101,frame,sizeof(frame),0x18);
+ assert(context.complete && record_count==1 && records[0].actual_action==1);
+ product_l4_policy_rule_t generic=rule(315,2,0);
+ generic.expression_length=0;generic.direction=PRODUCT_L4_POLICY_DIRECTION_OUTPUT;
+ assert(!product_l4_policy_compile(&bank.view,&generic,1));++snapshot.identity.revision;
+ lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+ lease.facts.source_port=53;lease.facts.destination_port=40000;
+ uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+ memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+ memcpy(lease.facts.destination_address,address,16);
+ packet(500,NULL,0,0x12);
+ context=packet(501,frame,1,0x18);
+ product_l4_policy_packet_t current;product_packet_graph_l4_packet_projection(&lease,&current);
+ product_l4_policy_match_result_t actual;
+ assert(!product_l4_policy_match_position(&bank.view,&current,PRODUCT_L4_POLICY_POSITION_ALL,&actual));
+ assert(!actual.evaluation && !context.complete && context.pending_valid);
+ if(record_count!=1 || records[0].actual_action!=1 || records[0].policy_revision!=3) for(unsigned n=0;n<record_count;++n)
+  fprintf(stderr,"retained generic normal n=%u action=%u winner=%llu continuation=%u revision=%llu\n",
+   n,records[n].actual_action,(unsigned long long)records[n].winner,records[n].tcp_continuation,(unsigned long long)records[n].policy_revision);
+ assert(record_count==1 && records[0].actual_action==1 && records[0].policy_revision==3);
+}
+static void retained_mixed_dns_or_packet_rule_keeps_its_whole_rule_restriction(void)
+{
+ reset(4);lease.platform.uid=2000;lease.platform.availability=PRODUCT_PLATFORM_UID_KNOWN;anchor();
+ product_l4_policy_rule_t mixed=rule(316,2,0);mixed.uid=2000;
+ const uint8_t expression[]={PRODUCT_EXPRESSION_DOMAIN_LIST,0,PRODUCT_STATIC_DIRECTION,3,PRODUCT_STATIC_OR};
+ memcpy(mixed.expression,expression,sizeof(expression));mixed.expression_length=sizeof(expression);
+ assert(!product_l4_policy_compile(&bank.view,&mixed,1));
+ product_dns_tcp_graph_t context=packet(101,frame,sizeof(frame),0x18);
+ assert(context.complete && context.match.rule_id==316 && context.match.actual_action==2);
+ assert(records[0].caller==PRODUCT_DNS_CALLER_UNKNOWN && !records[0].domain_available);
+ lease.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+ lease.facts.source_port=53;lease.facts.destination_port=40000;
+ uint8_t address[16];memcpy(address,lease.facts.source_address,16);
+ memcpy(lease.facts.source_address,lease.facts.destination_address,16);
+ memcpy(lease.facts.destination_address,address,16);
+ packet(500,NULL,0,0x12);context=packet(501,frame,1,0x18);
+ assert(context.complete && context.match.rule_id==316 && context.match.actual_action==2);
+ assert(record_count==2 && records[1].tcp_continuation && records[1].winner==316);
+}
 static void vpn_direct_binding_preserves_original_query_and_actual_return_context(void)
 {
  for(unsigned family=4;family<=6;family+=2) {
@@ -521,18 +623,30 @@ static void every_coalesced_malformed_frame_keeps_its_own_normal_identity(void)
 }
 int main(void)
 {
+ const char *selected=getenv("SAKAMOTO_TCP_GRAPH_CASE");
+ if(selected && !strcmp(selected,"uid")) {
+  vpn_split_unknown_caller_keeps_current_packet_uid_for_generic_policy();goto cleanup;
+ }
+ if(selected && !strcmp(selected,"retained-generic")) {
+  retained_query_generic_output_rule_cannot_drop_a_current_input_packet();goto cleanup;
+ }
  stale_direct_returns_cannot_change_current_framing_or_reopen_a_closed_flow();
  prebroker_synack_anchors_only_the_exact_selected_tcp_session();
  invalid_prebroker_handshakes_cannot_anchor_current_reverse_bytes();
  return_stamp_survives_an_unavailable_current_flow();
  vpn_direct_binding_preserves_original_query_and_actual_return_context();
  vpn_direct_queries_share_framing_and_per_message_policy();
+ vpn_split_unknown_caller_keeps_current_packet_uid_for_generic_policy();
+ retained_unknown_question_rechecks_current_uid_without_rewriting_admission();
+ retained_query_generic_output_rule_cannot_drop_a_current_input_packet();
+ retained_mixed_dns_or_packet_rule_keeps_its_whole_rule_restriction();
  every_coalesced_malformed_frame_keeps_its_own_normal_identity();
  fresh_post_facts_and_rank_advance_flow_once_for_coalesced_frames();
  pre_drop_skips_flow_and_incomplete_bytes_keep_the_normal_final_decision();
  current_flow_retirement_cannot_reuse_or_free_an_active_byte_borrow();
  insufficient_coverage_keeps_actual_root_records_and_generic_verdict();
  injected_packets_do_not_acquire_original_path_framing();
+cleanup:
  for(unsigned n=0;n<2;++n) {product_dns_tcp_stop(&product_packet_graph_main.dns_tcp[n]);product_dns_owner_stop(&product_packet_graph_main.dns_requests[n]);}
  product_domains_destroy(bank.domains);
  puts("Root/VPN TCP graph PRE/Flow/POST, Direct lineage, coalesced identity, coverage and retirement: PASS");
@@ -541,7 +655,13 @@ int main(void)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
+parser.add_argument('--case', choices=('all','uid','retained-generic'), default='all')
 args = parser.parse_args()
+policy_cache=Path(args.libraries[1]).resolve().parent/'CMakeCache.txt'
+batch=re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$',policy_cache.read_text(),re.M)
+assert batch, 'The linked policy library must have its actual CMake configuration'
+defines=['-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1']if batch[1]=='ON'else[]
+print('TCP graph policy ABI: ROOT_BATCH_EXPERIMENT='+batch[1]+' case='+args.case,flush=True)
 with tempfile.TemporaryDirectory(prefix='sakamoto-dns-tcp-graph-') as tmp:
     source, binary = Path(tmp) / 'test.c', Path(tmp) / 'test'
     source.write_text(prefix
@@ -555,8 +675,9 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-dns-tcp-graph-') as tmp:
         + function('product_packet_graph_dns_tcp_flow_facts', 'static int')
         + function('product_packet_graph_dns_tcp_record', 'static void')
         + function('product_packet_graph_dns_tcp_prepare', 'static void') + suffix)
-    subprocess.run(['cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror',
+    subprocess.run(['cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror', *defines,
         '-I'+str(ROOT / 'src/product/vpp'), '-I'+str(ROOT / 'src/product/include'),
         str(source), str(ROOT / 'src/product/vpp/product_flow_tcp.c'),
         *args.libraries, '-lm', '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True, timeout=15)
+    subprocess.run([str(binary)], check=True, timeout=15,
+        env=dict(os.environ,SAKAMOTO_TCP_GRAPH_CASE=args.case))

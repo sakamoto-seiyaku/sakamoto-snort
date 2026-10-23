@@ -246,11 +246,18 @@ static void current_names(const product_dns_tcp_input_t *input,product_dns_tcp_e
 static void match_position(const product_dns_tcp_input_t *input,product_dns_tcp_event_t *event,
   product_l4_policy_position_t position)
 {
+  product_l4_policy_packet_t packet=event->facts.question.packet;
+  /* First-byte caller evidence is immutable. An Unknown caller does not
+   * freeze the ordinary packet UID used by independently applicable rules:
+   * an asynchronous lookup can qualify this completing packet without
+   * qualifying the original DNS caller or rewriting the retained question. */
+  if(event->facts.question.caller==PRODUCT_DNS_CALLER_UNKNOWN)
+    {packet.uid=input->context.packet.uid;packet.uid_known=input->context.packet.uid_known;}
   if(event->stage==1)
-    event->status=product_l4_policy_match_position(input->view,&event->facts.question.packet,
+    event->status=product_l4_policy_match_position(input->view,&packet,
       position,&event->match);
   else
-    event->status=product_dns_response_match(input->view,&event->facts.question.packet,&event->facts,
+    event->status=product_dns_response_match(input->view,&packet,&event->facts,
       position,&event->match);
 }
 static void match_event(const product_dns_tcp_input_t *input,product_dns_tcp_flow_t *flow,
@@ -299,6 +306,15 @@ static int recheck(product_dns_tcp_flow_t *flow,product_dns_owner_t *requests,co
       event.facts.question.tcp_continuation=1;
       product_dns_identity_t identity=input->identity;
       current_names(input,&event);match_event(input,flow,&event,&identity);
+      int restriction=policy_rejection(input,&event);
+      if(!flow->retired && !event.status &&
+          event.match.actual_action==PRODUCT_L4_POLICY_ACTION_DROP && !restriction)
+        {
+          /* A retained question/answer is not this packet's generic tuple or
+           * direction. Do not publish its pure-generic winner as a new DNS
+           * rejection or replace the current packet's ordinary policy seam. */
+          flow->blocked=0;continue;
+        }
       if(event.stage==1 && !event.status && !flow->retired &&
           event.match.actual_action!=PRODUCT_L4_POLICY_ACTION_DROP &&
           event.facts.correlation==PRODUCT_DNS_CORRELATION_NONE)
@@ -314,7 +330,7 @@ static int recheck(product_dns_tcp_flow_t *flow,product_dns_owner_t *requests,co
         }
       observer(context,&event);
       if(flow->retired || event.status) return 1;
-      if(policy_rejection(input,&event))
+      if(restriction)
         {flow->blocked=n+1;flow->checked=input->policy;return 1;}
       flow->blocked=0;
     }

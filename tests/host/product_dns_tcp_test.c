@@ -248,6 +248,47 @@ static void complete_frames_use_this_packets_post_facts_and_whole_rule_rank(void
   assert(last_event.facts.question.packet.ct_state==2);
   product_domains_destroy(domains);
 }
+static void unknown_caller_split_queries_and_answers_use_current_generic_uid(void)
+{
+  for(unsigned response=0;response<2;++response)
+    for(unsigned current_known=0;current_known<2;++current_known)
+      {
+        reset();input.context.caller=PRODUCT_DNS_CALLER_UNKNOWN;
+        input.context.packet.uid=UINT32_MAX;input.context.packet.uid_known=0;
+        product_l4_policy_rule_t rules[2]={
+          {.uid=2000,.rule_id=313,.reason_id=313,.action=2,.network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,
+           .source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX,
+           .expression_length=2,.expression={PRODUCT_EXPRESSION_DOMAIN_LIST,0}},
+          {.uid=2000,.rule_id=314,.reason_id=314,.priority=1,.action=2,.network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,
+           .source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX}};
+        assert(!product_l4_policy_compile(&view,rules,2));
+        send(100,NULL,0,2);
+        uint8_t wire[128];const uint8_t *bytes=frame;size_t size=sizeof(frame);unsigned sequence=101;
+        if(response)
+          {
+            send(101,frame,sizeof(frame),0x18);assert(complete==1 && !rejected);
+            reverse_direction();send(500,NULL,0,0x12);
+            size=reply_wire(wire);bytes=wire;sequence=501;
+          }
+        input.context.packet.uid=current_known?UINT32_MAX:2000;
+        input.context.packet.uid_known=!current_known;
+        send(sequence,bytes,8,0x18);
+        input.context.packet.uid=current_known?2000:UINT32_MAX;
+        input.context.packet.uid_known=current_known;
+        send(sequence+8,bytes+8,size-8,0x18);
+        assert(last_event.stage==(response?2:1));
+        assert(last_event.facts.question.caller==PRODUCT_DNS_CALLER_UNKNOWN);
+        assert(!last_event.facts.question.packet.domain_available);
+        assert(last_event.facts.question.packet.uid==(current_known?UINT32_MAX:2000));
+        assert(last_event.match.actual_action==(current_known?2:0));
+        assert(last_event.match.rule_id==(current_known?314:0));
+        if(response)
+          {
+            assert(last_event.facts.correlation==PRODUCT_DNS_CORRELATED);
+            assert(last_event.facts.query_uid==UINT32_MAX && !last_event.facts.query_uid_known);
+          }
+      }
+}
 static void a_released_rejected_query_correlates_its_later_alias_answer(void)
 {
   reset();
@@ -504,6 +545,7 @@ int main(void)
   tcp_id_reuse_after_an_answer_is_a_new_request();
   gaps_conflicts_midstream_limits_expiry_and_late_events_are_truthful();
   complete_frames_use_this_packets_post_facts_and_whole_rule_rank();
+  unknown_caller_split_queries_and_answers_use_current_generic_uid();
   a_released_rejected_query_correlates_its_later_alias_answer();
   every_split_boundary_preserves_bidirectional_framing();
   repeated_inflight_id_is_ambiguous_without_becoming_original_app();
