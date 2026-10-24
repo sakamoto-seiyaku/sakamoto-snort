@@ -563,6 +563,7 @@ product_packet_graph_quiesce (vlib_main_t *vm)
 {
   product_flow_end_quiesce (vm);
   clib_atomic_store_rel_n (&product_packet_graph_main.accepting, 0);
+  product_root_dns_adapter_quiesce (vm);
   product_fragment_main.accepting = 0;
   if (product_fragment_main.initialized)
     for (u32 i = 1; i <= product_packet_graph_worker_count (); i++) {

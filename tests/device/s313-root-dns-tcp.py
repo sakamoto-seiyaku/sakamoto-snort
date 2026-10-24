@@ -22,8 +22,9 @@ fixtures, digest, props, PKG, SERIAL = support.fixtures, support.digest, support
 
 
 class Peer(support.Peer):
-    def __init__(self, addresses, out, helper=None):
+    def __init__(self, addresses, out, helper=None, deadline=None):
         self.out, self.rows, self.messages, self.responses = out, [], [], {}
+        self.deadline = deadline
         self.lock, self.ready = threading.Lock(), threading.Event()
         self.plan, self.stop_path = out / 'peer-plan.json', out / 'peer.stop'
         self.publish()
@@ -47,11 +48,17 @@ class Peer(support.Peer):
                 while not self.ready.is_set() and time.monotonic()<deadline:
                     time.sleep(.05)
                 if self.ready.is_set(): return
-                self.process.wait(timeout=15)
-            except BaseException:
-                self.cleanup_failed_start(attempt)
-                raise
-            self.thread.join(timeout=2)
+                self.process.wait(timeout=self.budget_timeout(15))
+            except BaseException as error:
+                try:self.cleanup_failed_start(attempt)
+                except BaseException as cleanup:
+                    error.add_note('peer constructor cleanup retained HOLD: '+repr(cleanup))
+                    (self.out/f'peer-failed-{attempt}-unresolved.json').write_text(json.dumps(dict(
+                        status='HOLD',primary_error=repr(error),cleanup_error=repr(cleanup),
+                        local_pid=self.process.pid,local_returncode=self.process.poll(),
+                        reader_alive=self.thread.is_alive()),indent=2)+'\n')
+                raise error
+            self.thread.join(timeout=self.budget_timeout(2))
             raw=(out/'peer.log').read_text()
             self.cleanup_failed_start(attempt)
             if self.messages or self.process.returncode==0 or 'UtilAcceptVsock' not in raw:
@@ -66,7 +73,7 @@ class Peer(support.Peer):
             try:
                 check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
                     '-NoProfile','-NonInteractive','-EncodedCommand',encoded],cwd='/mnt/c',
-                    capture_output=True,text=True,errors='replace',timeout=20)
+                    capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
                 (self.out/f'{label}-{attempt}.txt').write_text(check.stdout+check.stderr)
                 if check.returncode==0: return json.loads(check.stdout)
             except subprocess.TimeoutExpired as error:
@@ -79,9 +86,9 @@ class Peer(support.Peer):
         # Constructor owns the remote process even before the caller can assign
         # this object. Stop cooperatively first; PID alone is never kill authority.
         self.stop_path.touch()
-        try: self.process.wait(timeout=15)
+        try: self.process.wait(timeout=self.budget_timeout(15))
         except subprocess.TimeoutExpired: pass
-        self.thread.join(timeout=2)
+        self.thread.join(timeout=self.budget_timeout(2))
         selector=("Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'powershell.exe' "
             "-and $_.CommandLine.EndsWith('"+self.encoded+"')}")
         command=("@{process_ids=@("+selector+" | Select-Object -ExpandProperty ProcessId); "
@@ -97,14 +104,14 @@ class Peer(support.Peer):
             encoded=base64.b64encode(mutation.encode('utf-16le')).decode()
             check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
                 '-NoProfile','-NonInteractive','-EncodedCommand',encoded],cwd='/mnt/c',
-                capture_output=True,text=True,errors='replace',timeout=20)
+                capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
             (self.out/f'peer-failed-{attempt}-terminate.txt').write_text(check.stdout+check.stderr)
         after=self.remote_read(f'peer-failed-{attempt}-after',command)
         owned=set(remote['process_ids']) | {row['process_id'] for row in self.messages if row.get('kind')=='ready'}
         assert not after['process_ids'] and not any(row['OwningProcess'] in owned for row in after['tcp']+after['udp']),after
         if self.process.poll() is None:
-            self.process.terminate(); self.process.wait(timeout=5)
-        self.thread.join(timeout=2)
+            self.process.terminate(); self.process.wait(timeout=self.budget_timeout(5))
+        self.thread.join(timeout=self.budget_timeout(2))
         assert not self.thread.is_alive(), 'old peer reader remains; no launch retry is safe'
         (self.out/f'peer-failed-{attempt}-cleanup.json').write_text(json.dumps(dict(before=remote,after=after,
             launcher_exit=self.process.returncode),indent=2)+'\n')
@@ -139,7 +146,7 @@ class Peer(support.Peer):
         for attempt in range(3):
             check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
                 '-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()],
-                cwd='/mnt/c',capture_output=True,text=True,errors='replace',timeout=20)
+                cwd='/mnt/c',capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
             (self.out/f'peer-remote-after-{attempt}.txt').write_text(check.stdout+check.stderr)
             if check.returncode==0: break
         assert check.returncode==0, 'actual peer endpoint inspection failed'
@@ -155,7 +162,7 @@ class Device(support.Device):
     def __init__(self, args):
         super().__init__(args)
         self.adb_trace = None
-        if os.environ.get('SAKAMOTO_ADB_TRACE') == '1':
+        if getattr(args, 'trace', False) or os.environ.get('SAKAMOTO_ADB_TRACE') == '1':
             path = ROOT / 'tests/device/helpers/s314_adb_trace.py'
             spec = importlib.util.spec_from_file_location('s314_adb_trace', path)
             module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
@@ -163,7 +170,19 @@ class Device(support.Device):
 
     def close_trace(self):
         if self.adb_trace:
-            self.adb_trace.close()
+            deadline=getattr(self,'capture_deadline',None)
+            # Incremental retirement leaves only active obligations here; this
+            # finite close phase is also used by S313/S314 callers without a
+            # matrix-wide capture deadline.
+            budget=deadline-time.monotonic() if deadline else 30
+            self.adb_trace.close(budget)
+
+    def budget_timeout(self, maximum):
+        deadline=getattr(self,'capture_deadline',None)
+        if deadline is None:return maximum
+        remaining=deadline-time.monotonic()
+        assert remaining>0,'lifecycle phase budget exhausted'
+        return min(maximum,remaining)
 
     def reserve_source_port(self, label):
         # A deliberately dropped TCP connection can leave an orphaned kernel
@@ -279,7 +298,7 @@ class Device(support.Device):
             assert remaining>10,'capture budget reserves CLI cleanup and App release'
             timeout=min(10,remaining-10)
         return self.save(label+'.txt',self.target.cli(self.base+'runtime',list(commands),
-            timeout=timeout,capture_output=self.out))
+            timeout=timeout,capture_output=self.out,deadline=deadline))
 
     def start(self, owners):
         self.owners, self.active = owners, True
@@ -300,15 +319,21 @@ class Device(support.Device):
     def verify_ui_state(self, label):
         power=self.save(label+'-power.txt',self.adb('shell','dumpsys','power'))
         policy=self.save(label+'-keyguard.txt',self.adb('shell','dumpsys','window','policy'))
-        windows=self.save(label+'-focus.txt',self.adb('shell','dumpsys','window','displays'))
         assert re.search(r'(?m)^\s*mWakefulness=Awake\s*$',power),'device is not awake'
         assert re.search(r'(?m)^\s*showing=false\s*$',policy),'keyguard is still showing'
+        self.verify_ui_focus(label)
+
+    def verify_ui_focus(self, label):
+        windows=self.save(label+'-focus.txt',self.adb('shell','dumpsys','window','displays'))
         focus=[line for line in windows.splitlines()if line.strip().startswith('mCurrentFocus=')]
         assert len(focus)==1 and PKG in focus[0]and 'DebugControlActivity'in focus[0],('own debug UI is not focused',focus)
 
     def foreground_ui(self, label):
         previous=getattr(self,'capture_deadline',None)
-        self.capture_deadline=min(previous or float('inf'),time.monotonic()+10)
+        # One bounded UI-state read can consume most of the ordinary ten-second
+        # transport window. Leave room for the existing retry loop without
+        # relaxing the per-command or enclosing matrix deadline.
+        self.capture_deadline=min(previous or float('inf'),time.monotonic()+30)
         try:
             self.save(label+'-wake.txt',self.adb('shell','input','keyevent','224'))
             self.save(label+'-dismiss.txt',self.adb('shell','wm','dismiss-keyguard'))
@@ -318,7 +343,7 @@ class Device(support.Device):
                 try:
                     self.verify_ui_state(label+f'-ready-{attempt}')
                     break
-                except AssertionError:
+                except (AssertionError, subprocess.TimeoutExpired):
                     if self.capture_deadline-time.monotonic()<=.2:raise
                     time.sleep(.1);attempt+=1
         finally:self.capture_deadline=previous
@@ -438,12 +463,17 @@ class Device(support.Device):
 
     def observation_matching(self,label,predicate,timeout=5):
         attempts=[];deadline=time.monotonic()+timeout
-        while True:
-            capture=label+'-capture-'+str(len(attempts))
-            observed=self.observation(capture)
-            attempts.append(capture+'-observation.json')
-            if predicate(observed): break
-            assert time.monotonic()<deadline,'normal decision did not arrive before bounded capture deadline'
+        previous=getattr(self,'capture_deadline',None)
+        if previous is not None:self.capture_deadline=min(previous,deadline)
+        try:
+            while True:
+                capture=label+'-capture-'+str(len(attempts))
+                observed=self.observation(capture)
+                attempts.append(capture+'-observation.json')
+                if predicate(observed): break
+                assert time.monotonic()<deadline,'normal decision did not arrive before bounded capture deadline'
+        finally:
+            if previous is not None:self.capture_deadline=previous
         # query_fresh acknowledges a real API query, not that asynchronous
         # producer export has caught up. Retain each result and copy the first
         # qualifying snapshot verbatim; never merge synthetic recent rows.

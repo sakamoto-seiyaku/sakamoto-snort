@@ -81,6 +81,7 @@ completion_flag = qualified_flag + "\n" + matched_flag
 assert fragment_at < terminal.index(qualified_flag), "fragment fanout must precede ordinary qualification"
 metadata_flag = statement(node, "metadata.reserved_bits =")
 completion = "".join(function(ADAPTER, name, result) for name, result in (
+    ("product_root_nfqueue_dns_query_candidate", "static int"),
     ("product_root_nfqueue_record_verdict_attempt", "static void"),
     ("product_root_nfqueue_return_receive", "static void"),
     ("product_root_nfqueue_pending_find", "static product_root_nfqueue_pending_t *"),
@@ -120,6 +121,8 @@ prefix = r'''
 #include "product_packet_graph.h"
 #include "product_dns.h"
 #include "product_dns_tcp.h"
+#include "product_dns_route.h"
+#include "product_root_dns_admission.h"
 #include "product_flow_entry.h"
 #include "product_observation.h"
 #include "product_root_receive_pool.h"
@@ -160,6 +163,7 @@ private_types = "".join(typedef(GRAPH, name) for name in (
     "product_packet_batch_stats_t", "product_dns_tcp_graph_t"))
 private_types += anonymous_enum(GRAPH, "PRODUCT_META_ADMITTED") + graph_type
 private_types += "".join(typedef(ADAPTER, name) for name in (
+    "product_root_buffer_platform_metadata_t",
     "product_root_nfqueue_fault_mode_t", "product_root_nfqueue_pending_t",
     "product_root_nfqueue_lane_t", "product_root_nfqueue_main_t",
     "product_root_verdict_work_t"))
@@ -168,6 +172,16 @@ private_types += anonymous_enum(ADAPTER, "PRODUCT_VERDICT_SUCCEEDED")
 hooks = r'''
 static product_packet_graph_main_t product_packet_graph_main;
 static product_root_nfqueue_main_t product_root_nfqueue_main;
+/* This fixture's UDP443/completion cases never activate DNS replacement. */
+static void product_root_dns_adapter_admission_observe(vlib_main_t *vm,u64 token,
+ const product_platform_packet_facts_t *platform,
+ const product_root_dns_admission_facts_t *facts,u8 coverage,u8 delivery) {
+  (void)vm;(void)token;(void)platform;(void)facts;(void)coverage;(void)delivery;assert(0);
+}
+void product_observation_basic(vlib_main_t *vm,unsigned outcome,u32 bytes) {
+  (void)vm;(void)outcome;(void)bytes;assert(0);
+}
+static void product_root_dns_adapter_changed(void) {}
 static product_packet_batch_stats_t product_packet_batch_stats[PRODUCT_GRAPH_WORKERS + 1];
 static char retired_domain_marker;
 static atomic_uint retired_destroyed, wait_seen, writer_done, wait_enabled;
@@ -203,6 +217,15 @@ snapshot_code = snapshot_functions + "\n#undef __atomic_fetch_add\n"
 
 stubs = r'''
 static unsigned tcp_fixture_mode;
+static int root_dns_intercept(vlib_main_t *vm,u32 index,product_packet_lease_t *lease,
+  const product_policy_snapshot_t *snapshot,const product_flow_entry_observation_t *flow) {
+  (void)vm;(void)index;(void)flow;assert(!snapshot->bank->dns.enabled);
+  assert(lease->facts.protocol!=17 || lease->facts.destination_port!=53);return 0;
+}
+static void root_dns_return_policy(vlib_main_t *vm,u32 index,const product_packet_lease_t *lease,
+  const product_packet_graph_policy_evaluation_t *evaluation) {
+  (void)vm;(void)index;(void)evaluation;assert(lease->platform.provenance!=PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN);
+}
 /* This pre-existing batch/window fixture uses UDP443 only. DNS message and
  * Adapter behavior are qualified through their public seams separately. */
 static product_packet_result_t product_packet_graph_dns_prepare(vlib_main_t *vm,u32 index,
@@ -351,6 +374,7 @@ void product_observation_blocked(vlib_main_t *vm,const product_owner_assignment_
 }
 static u32 *vlib_frame_vector_args(vlib_frame_t *f) { return f->vectors; }
 static vlib_buffer_t *vlib_get_buffer(vlib_main_t *vm,u32 index) { (void)vm; return &buffers[index]; }
+#define vlib_buffer_get_current(buffer) ((buffer)->data)
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
 static void vlib_get_buffers(vlib_main_t *vm,u32 *indices,vlib_buffer_t **out,u32 count) {
   for(u32 i=0;i<count;++i) out[i]=vlib_get_buffer(vm,indices[i]);
@@ -501,6 +525,9 @@ static void complete_fixture(product_packet_graph_policy_evaluation_t evaluation
     .kind=PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,.origin_worker=0},.producer_thread=1,
     .terminal_intent=lease.terminal_intent==PRODUCT_PACKET_INTENT_NONE?PRODUCT_PACKET_INTENT_PASS_ADAPTER:lease.terminal_intent,
     .runtime_drop_reason=lease.runtime_drop_reason,.processing_bypass_reason=lease.processing_bypass_reason};
+  product_root_buffer_platform_metadata_t platform={.obligation=completion.obligation,.platform=lease.platform};
+  assert(!(platform.platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE));
+  memcpy(buffers[buffer_index].opaque,&platform,sizeof(platform));
   product_buffer_metadata_t metadata={.fragment_bundle_count=fragment_count,.reserved_bits=14};
   project_metadata(&metadata,result,evaluation);
   assert((metadata.reserved_bits & ~3U)==12);
@@ -672,13 +699,18 @@ vlib_stub = r'''
 #ifndef POLICY_TEST_VLIB_STUB_H
 #define POLICY_TEST_VLIB_STUB_H
 #include <stdint.h>
+#include "product_packet_completion.h"
 typedef uint8_t u8; typedef uint16_t u16; typedef int16_t i16;
 typedef uint32_t u32; typedef uint64_t u64; typedef unsigned long uword;
 #define VLIB_FRAME_SIZE 256
 typedef struct { u32 thread_index; } vlib_main_t;
 typedef struct { u32 node_index; } vlib_node_runtime_t;
 typedef struct { u32 n_vectors, vectors[VLIB_FRAME_SIZE]; } vlib_frame_t;
-typedef struct { u32 index; } vlib_buffer_t;
+typedef struct {
+ u32 index;
+ u8 data[64],opaque[sizeof(product_adapter_obligation_t)+sizeof(product_platform_packet_facts_t)];
+ u16 current_length;
+} vlib_buffer_t;
 #endif
 '''
 

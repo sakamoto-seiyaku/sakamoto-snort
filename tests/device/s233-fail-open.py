@@ -130,7 +130,7 @@ class Target:
     def read(self, path):
         return self.run('cat '+shlex.quote(str(path))).stdout
 
-    def cli(self, runtime, commands, *, timeout=30, capture_output=None):
+    def cli(self, runtime, commands, *, timeout=30, capture_output=None, deadline=None):
         if not self.pixel:
             return ''.join(self.run(shlex.join([str(self.args.vppctl), '-s', runtime+'/cli.sock', c])).stdout for c in commands)
         marker = 'S233_DONE_'+str(time.time_ns())
@@ -142,6 +142,8 @@ class Target:
             events.append(dict(stage=stage, elapsed_ns=time.monotonic_ns()-started, **fields))
         process, selector = None, None
         data, sent, failure = b'', False, None
+        end = min(time.monotonic()+timeout,deadline) if deadline else time.monotonic()+timeout
+        reap_end = deadline or end
         try:
             process = subprocess.Popen([str(ROOT/'dev/adb'), '-s', SERIAL, 'shell', '-T', 'su', '-c', shlex.quote(command)],
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -150,7 +152,6 @@ class Target:
             selector.register(process.stdout, selectors.EVENT_READ)
             # VPP's Telnet negotiation can discard input sent before its
             # first prompt. Keep prompt-before-command and the existing budget.
-            end = time.monotonic()+timeout
             while time.monotonic() < end:
                 if not sent and b'vpp# ' in data:
                     event('prompt_observed')
@@ -158,7 +159,7 @@ class Target:
                     process.stdin.flush()
                     sent = True
                     event('commands_sent')
-                if not selector.select(1):
+                if not selector.select(min(1,max(0,end-time.monotonic()))):
                     continue
                 chunk = os.read(process.stdout.fileno(), 65536)
                 if not chunk:
@@ -175,7 +176,7 @@ class Target:
             assert b'\n'+marker.encode()+b'\n' in data.replace(b'\r', b''), 'incomplete CLI response'
             process.stdin.write(b'quit\n')
             process.stdin.flush()
-            remainder, _ = process.communicate(timeout=5)
+            remainder, _ = process.communicate(timeout=min(5,max(0,reap_end-time.monotonic())))
             data += remainder
             assert process.returncode == 0
             return data.decode(errors='replace').replace('\r', '')
@@ -186,8 +187,26 @@ class Target:
             event('before_local_cleanup', returncode=process.poll() if process else None, commands_sent=sent)
             try:
                 if process and process.poll() is None:
+                    def retain_child():
+                        if not hasattr(self,'children'): self.children={}
+                        self.children.setdefault(process.pid,process)
+                    def release_child():
+                        if hasattr(self,'children'): self.children.pop(process.pid,None)
+                    retain_child()
                     process.terminate()
-                    process.wait(timeout=5)
+                    remaining=reap_end-time.monotonic()
+                    if remaining>0:
+                        try:process.wait(timeout=min(5,remaining))
+                        except BaseException:
+                            if process.poll() is None: retain_child()
+                            raise
+                    if process.poll() is None:
+                        retain_child()
+                        raise RuntimeError('CLI child remains owned after reap budget expiry')
+                    release_child()
+            except BaseException as cleanup:
+                if failure is None: raise
+                failure += '; cleanup='+repr(cleanup)
             finally:
                 if selector: selector.close()
                 event('local_cleanup_finished', returncode=process.returncode if process else None)

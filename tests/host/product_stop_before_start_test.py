@@ -28,7 +28,7 @@ typedef struct {
   product_dns_tcp_owner_t dns_tcp[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
-static int workers_ready, calls, debt, dns_stops, tcp_stops;
+static int workers_ready, calls, debt, dns_stops, tcp_stops, dns_adapter_stops;
 static unsigned product_packet_graph_worker_count(void) { return 2; }
 static void product_dns_owner_stop(product_dns_owner_t *owner) {
   assert(owner->active); owner->active=0; ++dns_stops;
@@ -41,6 +41,9 @@ static product_dns_resources_t product_dns_resources(void) { return (product_dns
 #define clib_atomic_store_rel_n(p,v) (*(p)=(v))
 static void product_flow_end_quiesce(vlib_main_t *vm) {
   assert(vm && workers_ready); ++calls;
+}
+static void product_root_dns_adapter_stop(vlib_main_t *vm) {
+  assert(vm && workers_ready); ++dns_adapter_stops;
 }
 static void product_observation_quiesce(void) { ++calls; }
 static void product_fragment_abort(void) { ++calls; }
@@ -57,6 +60,7 @@ int main(void) {
    * as valid pools with no packets. */
   product_packet_graph_stop_external(0);
   assert(calls==0 && dns_stops==0 && tcp_stops==0 && !product_packet_graph_main.enabled);
+  assert(dns_adapter_stops==0);
   vlib_main_t vm={0}; workers_ready=1;
   product_packet_graph_main.accepting=product_packet_graph_main.enabled=1;
   product_packet_graph_main.generation=77;
@@ -68,6 +72,7 @@ int main(void) {
   }
   product_packet_graph_stop_external(&vm);
   assert(calls==8 && !product_packet_graph_main.accepting && !product_packet_graph_main.enabled);
+  assert(dns_adapter_stops==1);
   assert(dns_stops==2 && !product_packet_graph_main.dns_requests[0].active
     && !product_packet_graph_main.dns_requests[1].active);
   assert(tcp_stops==2 && !product_packet_graph_main.dns_tcp[0].active

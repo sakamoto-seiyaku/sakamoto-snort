@@ -23,6 +23,7 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
   memset (out, 0, sizeof (*out));
   if (!context) return;
   out->packet = context->packet;
+  out->udp_capacity = 512;
   out->caller = context->caller == PRODUCT_DNS_CALLER_PLATFORM_APP &&
     context->packet.uid_known && context->packet.uid != UINT32_MAX
       ? PRODUCT_DNS_CALLER_PLATFORM_APP : PRODUCT_DNS_CALLER_UNKNOWN;
@@ -63,7 +64,19 @@ void product_dns_inspect_query (const uint8_t *wire, size_t length,
           if (!out->name_length)
             { out->name[0] = '.'; out->name[1] = 0; out->name_length = 1; }
           out->coverage = PRODUCT_DNS_QUERY_COMPLETE;
-          if (out->caller == PRODUCT_DNS_CALLER_PLATFORM_APP && context->domains_available)
+          for (size_t i = 0; i < ares_dns_record_rr_cnt (record, ARES_SECTION_ADDITIONAL); ++i)
+            {
+              const ares_dns_rr_t *rr = ares_dns_record_rr_get_const (record, ARES_SECTION_ADDITIONAL, i);
+              if (ares_dns_rr_get_type (rr) != ARES_REC_TYPE_OPT) continue;
+              if (out->edns_present)
+                { out->coverage = PRODUCT_DNS_MALFORMED; break; }
+              out->edns_present = 1;
+              out->udp_capacity = ares_dns_rr_get_u16 (rr, ARES_RR_OPT_UDP_SIZE);
+              if (out->udp_capacity < 512) out->udp_capacity = 512;
+              out->edns_flags = ares_dns_rr_get_u16 (rr, ARES_RR_OPT_FLAGS);
+            }
+          if (out->coverage == PRODUCT_DNS_QUERY_COMPLETE &&
+              out->caller == PRODUCT_DNS_CALLER_PLATFORM_APP && context->domains_available)
             {
               out->packet.domain_available = !product_domains_lookup_dns (
                 context->domains, (const uint8_t *) out->name, out->name_length,
@@ -169,6 +182,44 @@ static int same_question (const product_dns_query_t *a, const product_dns_query_
     same_name (a->name, b->name);
 }
 
+void product_dns_generated_return (product_dns_owner_t *owner,
+  const product_dns_query_t *query, uint64_t now)
+{
+  if (!owner || !owner->accepting || !query || query->packet.protocol != 17 ||
+      query->coverage != PRODUCT_DNS_QUERY_COMPLETE) return;
+  unsigned active = product_dns_owner_active (owner, now);
+  product_dns_request_t *slot = NULL;
+  for (unsigned i = 0; i < PRODUCT_DNS_REQUESTS; ++i)
+    {
+      product_dns_request_t *r = &owner->requests[i];
+      if (!r->active) { if (!slot) slot = r; continue; }
+      if (same_question (&r->query, query) && same_context (&r->query.packet, &query->packet, 0))
+        { if (!r->ambiguous) ++owner->ambiguous; r->ambiguous = 1; slot = r; }
+    }
+  if (!slot)
+    { ++owner->capacity; owner->overflow_until = now + PRODUCT_DNS_REQUEST_US; return; }
+  int empty = !slot->active;
+  *slot = (product_dns_request_t) {.query = *query,
+    .identity = {.generation = owner->generation, .profile = 1},
+    .deadline = now + PRODUCT_DNS_REQUEST_US, .active = 1, .ambiguous = 1, .generated_return = 1};
+  slot->query.caller = PRODUCT_DNS_CALLER_UNKNOWN;
+  slot->query.packet.uid = UINT32_MAX; slot->query.packet.uid_known = 0;
+  slot->query.packet.domain_available = 0; slot->query.packet.domain_lists = 0;
+  if (empty && owner->high_water < active + 1) owner->high_water = active + 1;
+}
+
+static int generated_return_match (const product_dns_owner_t *owner,
+  const product_dns_query_t *query, int reverse)
+{
+  for (unsigned i = 0; i < PRODUCT_DNS_REQUESTS; ++i)
+    {
+      const product_dns_request_t *r = &owner->requests[i];
+      if (r->active && r->generated_return && same_question (&r->query, query) &&
+          same_context (&r->query.packet, &query->packet, reverse)) return 1;
+    }
+  return 0;
+}
+
 product_dns_correlation_t product_dns_remember (product_dns_owner_t *owner,
   const product_dns_query_t *query, const product_dns_identity_t *identity,
   uint64_t token, const product_dns_policy_identity_t *policy)
@@ -179,6 +230,7 @@ product_dns_correlation_t product_dns_remember (product_dns_owner_t *owner,
       query->coverage != PRODUCT_DNS_QUERY_COMPLETE || query->packet.direction != 3)
     return PRODUCT_DNS_UNMATCHED;
   unsigned active = product_dns_owner_active (owner, identity->now_us);
+  if (generated_return_match (owner, query, 0)) return PRODUCT_DNS_AMBIGUOUS;
   product_dns_request_t *empty = NULL;
   for (unsigned i = 0; i < PRODUCT_DNS_REQUESTS; ++i)
     {
@@ -307,13 +359,12 @@ static void prepare_chain (ares_dns_record_t *record, product_dns_response_t *ou
     }
 }
 
-void product_dns_inspect_response (const uint8_t *wire, size_t length,
-  const product_dns_context_t *context, const product_dns_identity_t *identity,
-  product_dns_owner_t *owner, product_dns_response_t *out)
+static void inspect_response_message (const uint8_t *wire, size_t length,
+  const product_dns_context_t *context, product_dns_response_t *out)
 {
   if (!out) return;
   memset (out, 0, sizeof (*out));
-  if (!context || !identity) return;
+  if (!context) return;
   out->question.packet = context->packet;
   out->question.packet.domain_source = PRODUCT_POLICY_DOMAIN_DNS_QNAME;
   out->question.packet.domain_available = 0;
@@ -357,9 +408,45 @@ void product_dns_inspect_response (const uint8_t *wire, size_t length,
   size_t unreleased = 0;
   out->question.codec_peak_bytes = product_cares_memory_end (&unreleased);
   if (unreleased) out->question.coverage = PRODUCT_DNS_MALFORMED;
+}
+
+static void response_names (const product_dns_context_t *context, product_dns_response_t *out)
+{
+  /* Prepare every candidate from the same current protected snapshot before
+   * evaluating any complete rule. Unknown callers keep name facts unavailable. */
+  if (out->correlation == PRODUCT_DNS_CORRELATED &&
+      out->question.caller == PRODUCT_DNS_CALLER_PLATFORM_APP &&
+      out->question.coverage == PRODUCT_DNS_QUERY_COMPLETE && context->domains_available)
+    for (unsigned i = 0; i < out->name_count; ++i)
+      out->names[i].available = !product_domains_lookup_dns (context->domains,
+        (const uint8_t *) out->names[i].name, out->names[i].length, &out->names[i].lists);
+}
+
+void product_dns_inspect_answer (const uint8_t *wire, size_t length,
+  const product_dns_context_t *context, const product_dns_query_t *query,
+  product_dns_response_t *out)
+{
+  inspect_response_message (wire, length, context, out);
+  if (!context || !query || !out || !out->question.name_length ||
+      !same_question (query, &out->question)) return;
+  out->correlation = PRODUCT_DNS_CORRELATED;
+  out->query_uid = query->packet.uid; out->query_uid_known = query->packet.uid_known;
+  out->question.caller = query->caller;
+  out->matched_requests = 1;
+  response_names (context, out);
+}
+
+void product_dns_inspect_response (const uint8_t *wire, size_t length,
+  const product_dns_context_t *context, const product_dns_identity_t *identity,
+  product_dns_owner_t *owner, product_dns_response_t *out)
+{
+  inspect_response_message (wire, length, context, out);
+  if (!out || !context || !identity) return;
   if (!owner || !owner->accepting || identity->generation != owner->generation ||
       context->packet.direction != 1 || !identity->incarnation || !out->question.name_length) return;
   (void) product_dns_owner_active (owner, identity->now_us);
+  if (generated_return_match (owner, &out->question, 1))
+    { out->correlation = PRODUCT_DNS_AMBIGUOUS; return; }
   if (owner->overflow_until)
     { out->correlation = PRODUCT_DNS_REQUEST_CAPACITY; return; }
   for (unsigned i = 0; i < PRODUCT_DNS_REQUESTS; ++i)
@@ -393,15 +480,7 @@ void product_dns_inspect_response (const uint8_t *wire, size_t length,
       break;
     }
   if (out->correlation != PRODUCT_DNS_CORRELATED) ++owner->unmatched;
-  /* No candidate is evaluated until the complete connected name set and all
-   * current-snapshot memberships have been prepared. Incomplete coverage never
-   * becomes a confident negative or a cross-name membership union. */
-  if (out->correlation == PRODUCT_DNS_CORRELATED &&
-      out->question.caller == PRODUCT_DNS_CALLER_PLATFORM_APP &&
-      out->question.coverage == PRODUCT_DNS_QUERY_COMPLETE && context->domains_available)
-    for (unsigned i = 0; i < out->name_count; ++i)
-      out->names[i].available = !product_domains_lookup_dns (context->domains,
-        (const uint8_t *) out->names[i].name, out->names[i].length, &out->names[i].lists);
+  response_names (context, out);
 }
 
 product_l4_policy_status_t product_dns_response_match (

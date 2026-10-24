@@ -299,6 +299,11 @@ public class DebugControlActivity extends Activity {
                     intent.getLongExtra("expectedSavedRevision", 0L));
             handled = true;
         }
+        if (debuggable && intent.hasExtra("dnsUpstream")) {
+            backend.completeRuleConfig(this, 4, intent.getLongExtra("expectedSavedRevision", 0L),
+                    intent.getStringExtra("dnsUpstream"));
+            handled = true;
+        }
         if (debuggable && intent.hasExtra("observationNonce")) {
             backend.observationQuery(this, intent.getStringExtra("observationNonce"),
                     intent.getIntExtra("observationOperation", 0),
@@ -745,6 +750,9 @@ public class DebugControlActivity extends Activity {
 
     private View buildUi() {
         ScrollView scroller = new ScrollView(this);
+        // Diagnostic readbacks can outlast the device's inactivity timeout.
+        // Keep controls interactive only while this window is visible.
+        scroller.setKeepScreenOn(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int padding = dp(16);
@@ -842,6 +850,10 @@ public class DebugControlActivity extends Activity {
         Button queryAll = new Button(this); queryAll.setText("Query all rules"); queryAll.setAllCaps(false);
         queryAll.setOnClickListener(view -> submitCompleteRules(0)); completeButtons.addView(queryAll, weighted());
         root.addView(completeButtons, fillWrap());
+        Button dnsUpstream = new Button(this); dnsUpstream.setText("Set Root DNS upstream"); dnsUpstream.setAllCaps(false);
+        dnsUpstream.setOnClickListener(view -> submitCompleteRules(4)); root.addView(dnsUpstream, fillWrap());
+        TextView dnsHint = new TextView(this); dnsHint.setText("DNS setting: udp <numeric IP> [port], or off. Default: original resolver.");
+        root.addView(dnsHint, fillWrap());
         completeRuleView = new TextView(this); root.addView(completeRuleView, fillWrap());
 
         Button historyQuery = new Button(this);

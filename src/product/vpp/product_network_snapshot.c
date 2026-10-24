@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_network_snapshot.h"
+#include "product_root_dns_adapter.h"
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +98,7 @@ publish_snapshot (
   vlib_worker_thread_barrier_sync (vm);
   product_network_snapshot = *snapshot;
   vlib_worker_thread_barrier_release (vm);
+  product_root_dns_adapter_changed ();
   fprintf (stderr, "s232 event=snapshot_publish generation=%llu revision=%llu event_elapsed_ns=%llu count=%u\n",
     (unsigned long long) generation, (unsigned long long) snapshot->revision,
     (unsigned long long) snapshot->event_elapsed_ns, snapshot->count);

@@ -8,7 +8,7 @@ mod rule_config;
 mod rule_import;
 mod history;
 pub use rule_config::{
-    ConfigRule, DirectRule, DomainEntry, Domains, RuleConfigRequest, RuleConfigStatus,
+    ConfigRule, DirectRule, DnsConfig, DomainEntry, Domains, RuleConfigRequest, RuleConfigStatus,
     MAX_CONFIG_RULES,
 };
 pub use rule_import::{export_rule_config, prepare_rule_import};
@@ -290,7 +290,7 @@ pub struct ProductStatus {
     pub product_graph_tun_io_worker_index: u32,
 }
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 #[repr(C)]
 pub struct ProductNetworkSnapshot {

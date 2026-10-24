@@ -130,6 +130,12 @@ static int product_packet_graph_flow_pools_reset(product_packet_graph_main_t *g)
 static void product_policy_domains_clear(product_packet_graph_main_t *g) { (void)g; }
 static void product_packet_graph_flow_pools_abort(product_packet_graph_main_t *g) { (void)g; }
 static int product_core_policy_start(u64 generation) { assert(generation); return 1; }
+/* This scheduling fixture supplies no DNS socket implementation. */
+static int product_root_dns_adapter_start(vlib_main_t *vm,u64 generation,unsigned owners) {
+  assert(vm && generation && owners);return 1;
+}
+static void product_root_dns_adapter_stop(vlib_main_t *vm) {assert(vm);}
+static void product_root_dns_adapter_changed(void) {}
 static void product_flow_end_quiesce(vlib_main_t *vm) { assert(vm); }
 static void product_observation_quiesce(void) {}
 static u64 product_packet_graph_buffer_debt(void) { return product_packet_graph_main.lifecycle_buffers; }
@@ -214,7 +220,7 @@ static void vlib_buffer_enqueue_to_single_next(vlib_main_t *,
 dependencies = "\n".join(function(source, name) for name in (
     "product_metadata_load", "product_metadata_store",
     "product_packet_graph_set_platform_facts",
-    "product_packet_graph_origin_valid", "product_packet_graph_start_external",
+    "product_packet_graph_origin_valid", "product_packet_graph_root_dns_return_valid", "product_packet_graph_start_external",
     "product_packet_graph_stop_external"))
 production = "\n".join(function(source, name) for name in (
     "product_packet_graph_submit_external_batch_internal",
@@ -677,6 +683,36 @@ static void native_return_frames(void) {
 }
 #endif
 
+static void root_dns_return_identity(void) {
+  vlib_main_t vm={.thread_index=3};
+  for(unsigned scenario=0;scenario<9;++scenario) {
+    reset();product_packet_graph_external_item_t item=root_item(7,0);
+    item.platform.provenance=PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN;
+    item.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+    item.obligation.kind=PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY;
+    item.obligation.origin_lane=0;item.obligation.packet_id=1;
+    if(scenario==1)item.platform.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+    if(scenario==2)item.platform.direction=PRODUCT_PACKET_DIRECTION_OUTPUT;
+    if(scenario==3)item.obligation.kind=PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE;
+    if(scenario==4)item.obligation.queue_generation--;
+    if(scenario==5)item.obligation.origin_worker=1;
+    if(scenario==6)item.obligation.origin_lane=1;
+    if(scenario==7)item.obligation.packet_id=0;
+    if(scenario==8)item.obligation.packet_id=129;
+    const u8 mask[]={(u8)(scenario==0)};expect(&item,1,mask,0);
+    assert(product_packet_graph_submit_external(&vm,item.buffer_index,&item.platform,&item.obligation)==mask[0]);
+    assert(publications==mask[0]&&gets==EXPECTED_GETS*mask[0]);
+  }
+  reset();product_packet_graph_external_item_t items[2]={root_item(7,0),root_item(8,0)};
+  for(unsigned i=0;i<2;++i){items[i].platform.provenance=PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN;
+    items[i].platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;items[i].obligation.kind=PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY;
+    items[i].obligation.origin_lane=0;items[i].obligation.packet_id=1;}
+  items[0].obligation.queue_generation--;const u8 mask[]={0,1};u8 accepted[2];expect(items,2,mask,accepted);
+  assert(product_packet_graph_submit_external_batch(&vm,items,2,accepted)==1);
+  assert(!memcmp(mask,accepted,2)&&publications==1&&gets==1);
+  puts("PASS Root DNS scalar/batch reverse return identity, stale generation, provenance, direction, owner/lane and bounded reply-slot rejection");
+}
+
 static void single_wrapper(void) {
   vlib_main_t vm = {.thread_index = 3};
   const u8 one[] = {1};
@@ -721,6 +757,7 @@ int main(void) {
   rejected_and_empty();
   frame_bound();
   vpn_return();
+  root_dns_return_identity();
   single_wrapper();
   printf("PASS actual origin + external batch + %s single: N=1/3 Root/VPN snapshot, owner return/I/O rejection, no packet getenv, invalid/inactive/stale rejection, nonprefix indexes/metadata, debt-before-put; no synchronous free/policy/completion\n", TEST_BATCH ? "ON" : "OFF");
   return 0;

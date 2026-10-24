@@ -63,6 +63,27 @@ public final class RuleConfiguration {
     private static final int COMPLETE_REPLY_HEADER_WORDS = 13;
     private static final int SOURCE_WORD = 18, DESTINATION_WORD = 22;
 
+    /** Explicit numeric ordinary upstream; the existing VPP source transaction
+     * remains the only saved setting. No hostname or bootstrap lookup occurs. */
+    public static long[] dnsWire(String text) {
+        if (text == null) throw new IllegalArgumentException("DNS upstream required");
+        long[] wire = new long[8]; wire[0] = -3;
+        String[] fields = text.trim().split("\\s+");
+        if (fields.length == 1 && fields[0].equals("off")) return wire;
+        if ((fields.length != 2 && fields.length != 3) || !fields[0].equals("udp"))
+            throw new IllegalArgumentException("use udp <numeric IP> [port], or off");
+        byte[] address = new byte[16];
+        if (fields[1].contains(":")) { wire[2]=6; address=ipv6(fields[1]); }
+        else {
+            wire[2]=4; int value=ipv4(fields[1]);
+            for (int i=0;i<4;++i) address[i]=(byte)(value >>> (24-i*8));
+        }
+        wire[1]=1; wire[3]=fields.length == 3 ? unsigned32(fields[2]) : 53;
+        if (wire[3]==0 || wire[3]>65535) throw new IllegalArgumentException("invalid DNS port");
+        for (int i=0;i<16;++i) wire[4+i/4]|=(address[i]&255L)<<(24-(i%4)*8);
+        return wire;
+    }
+
     /** Request-only numeric text. No hostname lookup and no second saved model. */
     public static long[] completeWire(String text) {
         if (text == null) throw new IllegalArgumentException("complete rules required");
@@ -211,6 +232,7 @@ public final class RuleConfiguration {
         public final int groupCount, edgeCount, bindingCount;
         public final int domainListCount, domainEntryCount;
         private final long[] values;
+        private final int dnsAt;
         public CompleteStatus(long[] reply) {
             if (reply == null || reply.length < COMPLETE_REPLY_HEADER_WORDS) throw new IllegalArgumentException("invalid complete reply");
             count = (int) reply[9]; activeCount = (int) reply[10];
@@ -228,12 +250,15 @@ public final class RuleConfiguration {
             groupCount = (int) groups; edgeCount = (int) edges; bindingCount = (int) bindings;
             int domainAt = graph ? graphAt + 3 + (int)groups + 3*(int)edges + 5*(int)bindings : graphAt;
             long lists = 0, entries = 0;
+            int sourceEnd = domainAt;
             if (reply.length != domainAt) {
                 if (reply.length < domainAt + 2) throw new IllegalArgumentException("invalid domain reply");
                 lists = reply[domainAt]; entries = reply[domainAt+1];
                 if (lists < 0 || lists > 64 || entries < 0 || entries > 256 ||
-                    reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries)
+                    (reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries &&
+                     reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries + 16))
                     throw new IllegalArgumentException("invalid domain reply size");
+                sourceEnd=domainAt+2+DOMAIN_ENTRY_WORDS*(int)entries;
                 for (int i = 0; i < entries; ++i) {
                     int at = domainAt + 2 + i*DOMAIN_ENTRY_WORDS;
                     if (reply[at] < 0 || reply[at] >= lists || reply[at+1] < 0 || reply[at+1] > 1 ||
@@ -241,6 +266,15 @@ public final class RuleConfiguration {
                     for (int j = 3; j < DOMAIN_ENTRY_WORDS; ++j)
                         if (reply[at+j] < 0 || reply[at+j] > 0xffffffffL) throw new IllegalArgumentException("invalid name word");
                 }
+            }
+            dnsAt=reply.length == sourceEnd+16 ? sourceEnd : -1;
+            if (dnsAt>=0) for (int i=0;i<2;++i) {
+                int at=dnsAt+i*8;
+                for (int j=0;j<8;++j)
+                    if (reply[at+j]<0 || reply[at+j]>0xffffffffL) throw new IllegalArgumentException("invalid DNS status word");
+                if (reply[at]>1 || (reply[at+1]!=0 && reply[at+1]!=4 && reply[at+1]!=6)
+                        || reply[at+2]>65535 || reply[at+3]!=0)
+                    throw new IllegalArgumentException("invalid DNS status");
             }
             domainListCount = (int)lists; domainEntryCount = (int)entries;
             values = reply.clone(); transportCode = reply[0]; generation = reply[1];
@@ -293,6 +327,16 @@ public final class RuleConfiguration {
                 for (int j = 0; j < values[at+2]; ++j)
                     out.append((char)((values[at+3+j/4] >> (24-(j%4)*8)) & 255));
                 out.append('\n'); at += DOMAIN_ENTRY_WORDS;
+            }
+            String[] dnsNames={"dns", "dns.active"};
+            for (int i=0;i<2;++i) {
+                int offset=dnsAt<0 ? -1 : dnsAt+i*8;
+                out.append(dnsNames[i]).append(".enabled=").append(offset<0 ? 0 : values[offset]).append('\n');
+                out.append(dnsNames[i]).append(".family=").append(offset<0 ? 0 : values[offset+1]).append('\n');
+                out.append(dnsNames[i]).append(".port=").append(offset<0 ? 0 : values[offset+2]).append('\n');
+                out.append(dnsNames[i]).append(".address=");
+                for (int j=0;j<4;++j) out.append(String.format(java.util.Locale.ROOT,"%08x",offset<0 ? 0 : values[offset+4+j]));
+                out.append('\n');
             }
             return out.toString();
         }

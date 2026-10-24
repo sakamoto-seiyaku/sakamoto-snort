@@ -35,6 +35,9 @@ prefix=r'''
 #include <sys/un.h>
 #include "product_packet_completion.h"
 #include "product_root_receive_pool.h"
+#include "product_dns.h"
+#include "product_root_dns_admission.h"
+#include "sakamoto_product_observation.h"
 typedef uint8_t u8;typedef uint16_t u16;typedef uint32_t u32;
 typedef uint64_t u64;typedef unsigned long uword;
 typedef struct {u32 thread_index;} vlib_main_t;
@@ -42,6 +45,7 @@ typedef struct {u32 thread_index;} vlib_main_t;
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES PRODUCT_ROOT_COMPLETION_MAX_LANES
 #define SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS 1
 #define clib_memset memset
+#define clib_memcpy_fast memcpy
 #define ASSERT assert
 #define clib_atomic_fetch_add_relax(p,n) __atomic_fetch_add(p,n,__ATOMIC_RELAXED)
 #define clib_atomic_fetch_sub_relax(p,n) __atomic_fetch_sub(p,n,__ATOMIC_RELAXED)
@@ -51,7 +55,8 @@ static u32 vlib_get_worker_index(u32 t){return t-1;}
 static u32 product_packet_graph_worker_count(void){return 2;}
 static u32 product_packet_graph_trace_limit(void){return 0;}
 '''
-names=(('product_root_nfqueue_fault_mode_t','enum'),('product_root_nfqueue_pending_t','struct'),
+names=(('product_root_buffer_platform_metadata_t','struct'),
+       ('product_root_nfqueue_fault_mode_t','enum'),('product_root_nfqueue_pending_t','struct'),
        ('product_root_nfqueue_lane_t','struct'),('product_root_nfqueue_main_t','struct'),
        ('product_root_verdict_work_t','struct'))
 types=''.join(declaration(name,kind) for name,kind in names)
@@ -59,6 +64,25 @@ outcome_start=source.index('enum\n{\n  PRODUCT_VERDICT_SUCCEEDED')
 outcomes=source[outcome_start:source.index('};',outcome_start)+2]+'\n'
 dependencies=r'''
 static product_root_nfqueue_main_t product_root_nfqueue_main;
+/* These loan-identity cases have no replacement-active packet. Keep the real
+ * completion overlay/classifier available and fail if DNS observation is used. */
+typedef struct {
+ u8 data[64],opaque[sizeof(product_root_buffer_platform_metadata_t)];
+ u16 current_length;
+} vlib_buffer_t;
+static vlib_buffer_t pending_fixture_buffers[4096];
+static vlib_buffer_t *vlib_get_buffer(vlib_main_t *vm,u32 index){
+ assert(vm && index<4096);return &pending_fixture_buffers[index];
+}
+#define vlib_buffer_get_current(buffer) ((buffer)->data)
+static void product_root_dns_adapter_admission_observe(vlib_main_t *vm,u64 token,
+ const product_platform_packet_facts_t *platform,
+ const product_root_dns_admission_facts_t *facts,u8 coverage,u8 delivery){
+ (void)vm;(void)token;(void)platform;(void)facts;(void)coverage;(void)delivery;assert(0);
+}
+static void product_observation_basic(vlib_main_t *vm,unsigned outcome,u32 bytes){
+ (void)vm;(void)outcome;(void)bytes;assert(0);
+}
 static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lane,u32 slot,u32 buffer){
  assert(product_root_receive_pool_return(&lane->receive_pool,lane->generation,(u16)slot,buffer));
 }
@@ -66,13 +90,15 @@ static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lan
 helpers=''
 for name in ('product_root_nfqueue_pending_find','product_root_nfqueue_pending_deactivate'):
     if re.search(r'(?m)^'+name+r'\s*\(',source):helpers+=function(name)
-helpers+=''.join(function(name) for name in ('product_root_nfqueue_reserve',
+helpers+=''.join(function(name) for name in ('product_root_nfqueue_dns_query_candidate',
+              'product_root_nfqueue_reserve',
               'product_root_nfqueue_record_verdict_attempt','product_root_nfqueue_prepare_completion',
               'product_root_nfqueue_finish_completion'))
 suffix=r'''
 static vlib_main_t vm={1};
 static void reset(void){
  memset(&product_root_nfqueue_main,0,sizeof(product_root_nfqueue_main));
+ memset(pending_fixture_buffers,0,sizeof(pending_fixture_buffers));
  product_root_nfqueue_main.generation=42;product_root_nfqueue_main.lane_count=1;
  product_root_nfqueue_lane_t *lane=&product_root_nfqueue_main.lanes[0];
  lane->generation=42;lane->socket_ready=1;lane->fd=27;lane->queue_id=176;
@@ -162,7 +188,8 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-root-pending-') as folder:
     path=Path(folder);fixture=path/'fixture.c';exe=path/'fixture'
     fixture.write_text(prefix+types+outcomes+dependencies+helpers+suffix)
     subprocess.run([os.environ.get('CC','cc'),'-std=gnu11','-Wall','-Wextra','-Werror','-O1','-g',
-                    '-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-pie','-no-pie','-I',str(PRODUCT),str(fixture),'-o',str(exe)],check=True)
+                    '-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-pie','-no-pie',
+                    '-I',str(PRODUCT),'-I',str(ROOT/'src/product/include'),str(fixture),'-o',str(exe)],check=True)
     # The runner uses ptrace; this fixture allocates no heap. Keep ASan/UBSan
     # bounds checks while avoiding LeakSanitizer's unsupported process walk.
     subprocess.run([str(exe)],check=True,timeout=5,

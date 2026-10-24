@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _POSIX_C_SOURCE 200809L
 #include "product_rule_config.h"
+#include "product_dns_route.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@
 #include <unistd.h>
 
 #define SOURCE_BYTES                                                                               \
-    (36 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
+    (68 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
      4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
      20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS + 8 + 268 * SAKAMOTO_DOMAIN_MAX_ENTRIES + \
      sizeof(sakamoto_product_config_metadata_t))
@@ -59,7 +60,7 @@ static uint64_t get(const uint8_t **at, unsigned width) {
             F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE06", 8);
+    memcpy(at, "SKRULE07", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -117,6 +118,9 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
             memcpy(at, entries[i].source, 128); at += 128;
         }
     }
+    const sakamoto_product_dns_config_t *dns = &config->state.dns;
+    put(&at,dns->enabled,4); put(&at,dns->family,4); put(&at,dns->port,4); put(&at,dns->reserved,4);
+    memcpy(at,dns->address,16); at+=16;
     return (size_t)(at - bytes);
 }
 static void project(sakamoto_product_rule_config_status_t *s) {
@@ -402,7 +406,8 @@ static uint32_t validate_domains(sakamoto_product_rule_config_status_t *state) {
     return 0;
 }
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    int v6 = length >= 8 && !memcmp(bytes, "SKRULE06", 8);
+    int v7 = length >= 8 && !memcmp(bytes, "SKRULE07", 8);
+    int v6 = v7 || (length >= 8 && !memcmp(bytes, "SKRULE06", 8));
     int v5 = v6 || (length >= 8 && !memcmp(bytes, "SKRULE05", 8));
     int v4 = v5 || (length >= 8 && !memcmp(bytes, "SKRULE04", 8));
     int v3 = v4 || (length >= 8 && !memcmp(bytes, "SKRULE03", 8));
@@ -496,7 +501,7 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
     if (domain_error) return domain_error;
     if (v6) {
         size_t metadata_bytes = 192U * (c->state.count + c->state.domains.list_count);
-        if ((size_t)(bytes + length - at) != metadata_bytes) return SAKAMOTO_RULE_CONFIG_INVALID;
+        if ((size_t)(bytes + length - at) != metadata_bytes + (v7 ? 32U : 0U)) return SAKAMOTO_RULE_CONFIG_INVALID;
         for (unsigned kind = 0; kind < 2; ++kind) {
             unsigned count = kind ? c->state.domains.list_count : c->state.count;
             sakamoto_product_source_metadata_t *entries = kind ?
@@ -507,6 +512,12 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
             }
         }
         if (!valid_metadata(&c->state)) return SAKAMOTO_RULE_CONFIG_INVALID;
+    }
+    if (v7) {
+        c->state.dns.enabled=get(&at,4); c->state.dns.family=get(&at,4);
+        c->state.dns.port=get(&at,4); c->state.dns.reserved=get(&at,4);
+        memcpy(c->state.dns.address,at,16); at+=16;
+        if (!product_dns_route_valid(&c->state.dns)) return SAKAMOTO_RULE_CONFIG_INVALID;
     }
     if (at != bytes + length)
         return SAKAMOTO_RULE_CONFIG_INVALID;
@@ -755,12 +766,13 @@ uint32_t product_rule_config_activate(product_rule_config_t *c,
     }
     if (!hash)
         hash = 1;
-    result = publish(opaque, c->state.saved_revision, hash, effective, effective_count, domains)
+    result = publish(opaque, c->state.saved_revision, hash, effective, effective_count, domains, &c->state.dns)
                  ? SAKAMOTO_RULE_CONFIG_PUBLISH
                  : 0;
     if (!result) {
         domains = NULL; /* Complete snapshot now owns the tree. */
         c->state.active_revision = c->state.saved_revision;
+        c->state.active_dns = c->state.dns;
         c->state.active_count = effective_count;
         memset(c->state.active_versions, 0, sizeof(c->state.active_versions));
         for (unsigned i = 0; i < effective_count; ++i)
@@ -832,12 +844,16 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
         request->reserved || request->count > SAKAMOTO_RULE_CONFIG_MAX_RULES ||
         (request->operation != SAKAMOTO_RULE_CONFIG_REPLACE &&
          request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL &&
-         request->operation != SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE))
+         request->operation != SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE &&
+         request->operation != SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM))
         return SAKAMOTO_RULE_CONFIG_INVALID;
     static const sakamoto_product_config_metadata_t empty_metadata = {0};
     if (request->operation != SAKAMOTO_RULE_CONFIG_REPLACE_ALL &&
         memcmp(&request->metadata, &empty_metadata, sizeof empty_metadata))
         return SAKAMOTO_RULE_CONFIG_INVALID;
+    static const sakamoto_product_dns_config_t empty_dns = {0};
+    if (request->operation != SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM &&
+        memcmp(&request->dns,&empty_dns,sizeof empty_dns)) return SAKAMOTO_RULE_CONFIG_INVALID;
     c->state.error_index = UINT32_MAX;
     if (request->expected_saved_revision != c->state.saved_revision)
         return SAKAMOTO_RULE_CONFIG_CONFLICT;
@@ -850,7 +866,15 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     memset(&next->state.domains, 0, sizeof(next->state.domains));
     memset(&next->state.metadata, 0, sizeof(next->state.metadata));
     uint32_t result = SAKAMOTO_RULE_CONFIG_INVALID;
-    if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
+    if (request->operation == SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM) {
+        static const sakamoto_product_config_rule_t empty_rule = {0};
+        if (!product_dns_route_valid(&request->dns) || request->count ||
+            request->graph.group_count || request->graph.edge_count || request->graph.binding_count ||
+            request->domains.list_count || request->domains.entry_count ||
+            memcmp(&request->rule,&empty_rule,sizeof empty_rule)) goto done;
+        *next = *c;
+        next->state.dns = request->dns;
+    } else if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE) {
         const sakamoto_product_config_rule_t *r = &request->rule;
         if (request->domains.list_count || request->domains.entry_count ||
             c->state.domains.list_count || c->state.domains.entry_count ||
@@ -950,6 +974,7 @@ uint32_t product_rule_config_replace(product_rule_config_t *c,
     next->state.error_index = UINT32_MAX;
     int unchanged =
         next->state.count == c->state.count &&
+        !memcmp(&next->state.dns, &c->state.dns, sizeof(next->state.dns)) &&
         !memcmp(&next->state.metadata, &c->state.metadata, sizeof(next->state.metadata)) &&
         !memcmp(&next->state.domains, &c->state.domains, sizeof(next->state.domains)) &&
         next->state.graph.group_count == c->state.graph.group_count &&

@@ -352,7 +352,7 @@ impl FlowRecord {
         };
         if length != 448 + address_bytes
             || data.len() < length
-            || !matches!(data[2], 5 | 6 | 7)
+            || !matches!(data[2], 5 | 6 | 7 | 8)
             || data[3] & !15 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]

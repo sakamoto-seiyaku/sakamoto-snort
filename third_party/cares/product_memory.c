@@ -62,6 +62,13 @@ void ares_free (void *pointer)
   free (allocation);
 }
 
+/* The public wire encoder returns this scoped allocation. Keep its matching
+ * public release operation inside the same bounded, owner-local allocator. */
+void ares_free_string (void *pointer)
+{
+  ares_free (pointer);
+}
+
 void *ares_realloc (void *pointer, size_t bytes)
 {
   if (!pointer) return ares_malloc (bytes);

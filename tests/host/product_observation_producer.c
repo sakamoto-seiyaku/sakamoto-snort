@@ -217,6 +217,21 @@ static unsigned dns_reply_fixture (product_observation_transport_t *t, unsigned 
   return n;
 }
 
+/* Frames emitted by the source-linked actual Root Adapter, not reconstructed
+ * by this transport fixture. Preserve every identity byte through the channel. */
+static unsigned dns_proxy_records (product_observation_transport_t *t, const char *path) {
+  FILE *input = fopen(path, "rb"); assert(input);
+  product_dns_observation_record_t record;
+  unsigned count = 0;
+  while (fread(&record, sizeof(record), 1, input) == 1) {
+    assert(record.length == sizeof(record) && record.version == PRODUCT_OBSERVATION_VERSION
+      && record.flags == PRODUCT_OBSERVATION_DNS && record.generation == 77);
+    count += product_observation_publish(t, 0, &record, sizeof(record)) == 1;
+  }
+  assert(feof(input) && !ferror(input)); assert(!fclose(input));
+  return count;
+}
+
 int main (int argc, char **argv) {
   assert (argc == 2);
   struct timespec wall; assert (!clock_gettime (CLOCK_REALTIME, &wall));
@@ -237,11 +252,14 @@ int main (int argc, char **argv) {
   assert (!result);
   product_observation_connected (t, 1);
   puts ("CONNECTED"); fflush (stdout);
-  char command[128];
+  char command[1024];
   while (fgets (command, sizeof (command), stdin)) {
     unsigned channel, count, length, end;
     unsigned long long base, incarnation;
-    if (sscanf (command, "emit %u %u %u %llu %llu %u", &channel, &count, &length,
+    if (!strncmp(command, "dns-proxy ", 10)) {
+      command[strcspn(command, "\r\n")] = 0;
+      printf("DNS-PROXY %u\n", dns_proxy_records(t, command + 10));
+    } else if (sscanf (command, "emit %u %u %u %llu %llu %u", &channel, &count, &length,
                 &base, &incarnation, &end) == 6) {
       unsigned admitted = 0;
       for (unsigned i = 0; i < count; i++) {

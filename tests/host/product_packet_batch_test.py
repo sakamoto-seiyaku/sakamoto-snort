@@ -242,6 +242,16 @@ static int product_vpn_tun_complete_from_graph(vlib_main_t *, u32,
   const product_packet_completion_frame_t *);
 static void product_vpn_tun_return_freed(vlib_main_t *, u32,
   const product_packet_completion_frame_t *);
+/* Existing batch fixtures use NFQ/TUN carriers; Root DNS return behavior has
+ * its complete source-linked Adapter fixture and native device acceptance. */
+static void product_root_dns_reply_complete(vlib_main_t *vm,u32 index,
+  const product_packet_completion_frame_t *completion) {
+  (void)vm;(void)index;(void)completion;assert(!"unexpected Root DNS fixture carrier");
+}
+static void product_root_dns_reply_freed(vlib_main_t *vm,u32 index,
+  const product_packet_completion_frame_t *completion) {
+  (void)vm;(void)index;(void)completion;assert(!"unexpected Root DNS fixture carrier");
+}
 static void product_root_nfqueue_prefetch_completion(vlib_main_t *main,
   const product_packet_completion_frame_t *item) {
   assert(main && item);

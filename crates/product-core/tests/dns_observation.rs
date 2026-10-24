@@ -26,6 +26,21 @@ fn query(token: u64, caller: u8, action: u8) -> DnsRecord {
     }
 }
 
+fn admission_resource(token: u64, delivery: u8) -> DnsRecord {
+    DnsRecord {
+        generation: 77, owner: 0, token, mono_us: token,
+        activity_utc_us: 60_000_000 + token, uid: u32::MAX,
+        network: u32::MAX, slot: u32::MAX, id: 0x1234,
+        query_flags: 0x0100, source_port: 40000, resolver_port: 53,
+        family: 4, protocol: 17, direction: 3, coverage: 5,
+        stage: 3, delivery, source_address: [192,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0],
+        resolver_address: [192,0,2,53,0,0,0,0,0,0,0,0,0,0,0,0],
+        query_token: token, route_revision: 3, proxy_result: 6,
+        adapter_profile: 1, packet_uid: u32::MAX, proxy_flags: 9,
+        ..Default::default()
+    }
+}
+
 #[test]
 fn dns_decisions_share_sqlite_and_survive_reopen() {
     let root = test_root("store");
@@ -54,6 +69,34 @@ fn dns_decisions_share_sqlite_and_survive_reopen() {
     drop(store);
     let store = ObservationStore::open(&path).unwrap();
     check(store.query());
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn admission_resource_failure_is_durable_and_not_a_policy_refusal() {
+    let root = test_root("admission-resource");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();
+    store.consume_dns(&[admission_resource(31, 6), admission_resource(32, 7)],
+        61_000_000).unwrap();
+    store.close().unwrap();
+    drop(store);
+    let store = ObservationStore::open(&path).unwrap();
+    let reply = store.query();
+    assert_eq!(reply["dns"]["accepted"], 2);
+    let rows = reply["dns"]["recent"].as_object().unwrap();
+    for row in rows.values() {
+        let record = &row["record"];
+        assert_eq!(record["proxy_result"], 6);
+        assert_eq!(record["proxy_flags"], 9);
+        assert_eq!(record["request_attempt"], 0);
+        assert_eq!(record["winner"], 0);
+        assert_eq!(record["reply_rcode"], 0);
+        assert!(matches!(record["delivery"].as_u64(), Some(6 | 7)));
+    }
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }

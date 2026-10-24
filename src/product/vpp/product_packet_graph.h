@@ -7,6 +7,7 @@
 #include "product_packet_completion.h"
 #include "product_l4_policy.h"
 #include "product_domains.h"
+#include "sakamoto_product_rule_config.h"
 
 #include <stdint.h>
 #include "sakamoto_product_sni.h"
@@ -263,6 +264,7 @@ typedef struct
   /* Ownership transfers only on successful complete publication. */
   product_domains_t *domains;
   uint32_t l4_rule_count;
+  sakamoto_product_dns_config_t dns;
 } product_packet_graph_policy_bundle_t;
 
 /* Adapter kind selects startup resource defaults, never packet/flow ownership. */

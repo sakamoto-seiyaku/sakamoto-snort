@@ -58,9 +58,21 @@ prefix = r'''
 #include <sys/un.h>
 #include "product_packet_completion.h"
 #include "product_packet_batch.h"
+#include "product_dns.h"
+#include "sakamoto_product_observation.h"
+#include "product_root_dns_admission.h"
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32;
 typedef uint64_t u64; typedef unsigned long uword;
 typedef struct { u32 thread_index; } vlib_main_t;
+typedef struct {
+  product_adapter_obligation_t obligation;
+  product_platform_packet_facts_t platform;
+} product_buffer_platform_metadata_t;
+typedef product_buffer_platform_metadata_t product_root_buffer_platform_metadata_t;
+typedef struct {
+  u8 data[2048], opaque[sizeof(product_buffer_platform_metadata_t)], opaque2[56];
+  int16_t current_data; u16 current_length;
+} vlib_buffer_t;
 #include "product_root_receive_pool.h"
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES PRODUCT_ROOT_COMPLETION_MAX_LANES
 #define PRODUCT_ROOT_NFQUEUE_PENDING_CAPACITY PRODUCT_ROOT_COMPLETION_CAPACITY
@@ -77,6 +89,24 @@ static u32 vlib_get_worker_thread_index(u32 w) { return w+1; }
 static u32 vlib_get_worker_index(u32 t) { return t-1; }
 static u32 product_packet_graph_worker_count(void) { return 2; }
 static u32 product_packet_graph_trace_limit(void) { return 0; }
+static vlib_buffer_t buffers[PRODUCT_PACKET_BATCH_SIZE + 1];
+static int replacement_active;
+static u32 admission_observations;
+static void product_root_dns_adapter_admission_observe(vlib_main_t *v,u64 token,
+ const product_platform_packet_facts_t *platform,
+ const product_root_dns_admission_facts_t *facts,u8 coverage,u8 delivery) {
+ assert(v && token && platform && facts && facts->resolver_port==53);
+ assert(coverage==PRODUCT_DNS_CAPACITY || coverage==PRODUCT_DNS_COPY_GAP);
+ assert(delivery==PRODUCT_DNS_DELIVERY_RESOURCE_DROP || delivery==PRODUCT_DNS_DELIVERY_WRITE_FAILED || delivery==PRODUCT_DNS_DELIVERY_OUTCOME_UNKNOWN);
+ admission_observations++;
+}
+static void product_observation_basic(vlib_main_t *v,unsigned outcome,u32 bytes) {
+ (void)v;(void)outcome;(void)bytes;assert(0); /* no fragment emitter in this fixture */
+}
+static vlib_buffer_t *vlib_get_buffer(vlib_main_t *v,u32 i) {
+  assert(v && i < PRODUCT_PACKET_BATCH_SIZE + 1); return &buffers[i];
+}
+#define vlib_buffer_get_current(b) ((b)->data + (b)->current_data)
 '''
 
 types = "".join(declaration(name, kind) for name, kind in (
@@ -179,15 +209,45 @@ static int fixture_sendmmsg(int fd,struct mmsghdr *messages,unsigned int count,i
 
 helpers = "\n".join(function(name) for name in (
     "product_root_nfqueue_pending_find", "product_root_nfqueue_pending_deactivate",
+    "product_root_nfqueue_dns_query_candidate",
     "product_nfnl_type", "product_nfnl_addattr", "product_nfnl_send",
     "product_nfnl_fill_header", "product_nfqueue_fill_verdict",
     "product_nfqueue_send_verdict", "product_root_nfqueue_record_verdict_attempt",
+    "product_root_nfqueue_send_counted_verdict",
     "product_root_nfqueue_prepare_completion", "product_root_nfqueue_finish_completion",
     "product_root_nfqueue_complete_from_graph", "product_root_nfqueue_send_verdict_window",
     "product_root_nfqueue_complete_batch_from_graph", "product_root_nfqueue_consume_control"))
 
 suffix = r'''
 static vlib_main_t vm={1};
+static void packet(u32 i,u16 destination,int response) {
+  memset(&buffers[i],0,sizeof(buffers[i]));buffers[i].data[0]=0x45;
+  buffers[i].data[2]=0;buffers[i].data[3]=48;buffers[i].data[8]=64;
+  buffers[i].data[9]=IPPROTO_UDP;buffers[i].data[20]=0x9c;buffers[i].data[21]=0x40;
+  buffers[i].data[22]=destination>>8;buffers[i].data[23]=destination;
+  buffers[i].data[24]=0;buffers[i].data[25]=28;buffers[i].data[28]=0x12;
+  buffers[i].data[29]=0x34;buffers[i].data[30]=response?0x81:0x01;
+  buffers[i].current_length=48;
+  product_buffer_platform_metadata_t platform={
+    .platform={.direction=PRODUCT_PACKET_DIRECTION_OUTPUT,
+      .provenance=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE,
+      .reserved=replacement_active?PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE:0}};
+  memcpy(buffers[i].opaque,&platform,sizeof(platform));
+}
+static void packet6long(u32 i,int active) {
+  memset(&buffers[i],0,sizeof(buffers[i]));buffers[i].data[0]=0x60;
+  buffers[i].data[4]=1;buffers[i].data[5]=28;buffers[i].data[6]=0;buffers[i].data[7]=64;
+  buffers[i].data[40]=17;buffers[i].data[41]=32;
+  buffers[i].data[304]=0x9c;buffers[i].data[305]=0x40;
+  buffers[i].data[306]=0;buffers[i].data[307]=53;buffers[i].data[308]=0;buffers[i].data[309]=20;
+  buffers[i].data[312]=0x12;buffers[i].data[313]=0x34;buffers[i].data[314]=1;
+  buffers[i].current_length=324;
+  product_buffer_platform_metadata_t platform={
+    .platform={.direction=PRODUCT_PACKET_DIRECTION_OUTPUT,
+      .provenance=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE,
+      .reserved=active?PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE:0}};
+  memcpy(buffers[i].opaque,&platform,sizeof(platform));
+}
 static void reset(u32 n) {
   memset(&product_root_nfqueue_main,0,sizeof(product_root_nfqueue_main));
   memset(attempts,0,sizeof(attempts)); memset(returns,0,sizeof(returns));
@@ -196,6 +256,8 @@ static void reset(u32 n) {
   memset(datagram_messages,0,sizeof(datagram_messages));
   sendto_calls=sendmmsg_calls=datagram_count=0; write_fault_errno=EFAULT;
   partial_id=fail_id=unknown_write_id=wrong_length_id=-1;
+  replacement_active=0;
+  admission_observations=0;
   product_root_nfqueue_main.generation=42; product_root_nfqueue_main.lane_count=4;
   for (u32 l=0;l<4;l++) {
     product_root_nfqueue_lane_t *lane=&product_root_nfqueue_main.lanes[l];
@@ -203,6 +265,7 @@ static void reset(u32 n) {
     lane->fd=lane->queue_id=176+l; lane->socket_ready=1;
   }
   for (u32 i=0;i<n;i++) {
+    packet(i,443,0);
     indices[i]=i;
     completions[i]=(product_packet_completion_frame_t){
       .obligation={.token=100+i,.queue_generation=42,.packet_id=i,
@@ -232,6 +295,28 @@ static void run(u32 n) {
   assert(product_root_nfqueue_main.verdict_attempts==n);
   assert(product_root_nfqueue_main.internal_settlements==n);
   assert(product_root_nfqueue_main.buffer_returns==n);
+}
+static void pre_core_verdict_results(void) {
+  reset(0);
+  product_root_nfqueue_lane_t *lane=&product_root_nfqueue_main.lanes[0];
+  assert(product_root_nfqueue_send_counted_verdict(
+    &product_root_nfqueue_main,lane,7,NF_DROP)==PRODUCT_VERDICT_SUCCEEDED);
+  assert(product_root_nfqueue_main.verdict_succeeded==1);
+  assert(!product_root_nfqueue_main.verdict_failed && attempts[7]==1);
+
+  reset(0); lane=&product_root_nfqueue_main.lanes[0]; wrong_length_id=7;
+  assert(product_root_nfqueue_send_counted_verdict(
+    &product_root_nfqueue_main,lane,7,NF_DROP)==PRODUCT_VERDICT_OUTCOME_UNKNOWN);
+  assert(product_root_nfqueue_main.verdict_failed==1);
+  assert(product_root_nfqueue_main.verdict_outcome_unknown==1);
+  assert(!product_root_nfqueue_main.verdict_succeeded);
+
+  reset(0); lane=&product_root_nfqueue_main.lanes[0]; fail_id=7;
+  assert(product_root_nfqueue_send_counted_verdict(
+    &product_root_nfqueue_main,lane,7,NF_DROP)==PRODUCT_VERDICT_FAILED_DEFINITE);
+  assert(product_root_nfqueue_main.verdict_failed==1);
+  assert(product_root_nfqueue_main.verdict_failed_definite==1);
+  assert(!product_root_nfqueue_main.verdict_succeeded);
 }
 static void successful_windows(void) {
   const u32 lengths[]={0,1,2,7,15,16,17,47,48,49,63,64};
@@ -367,6 +452,29 @@ static void partitions_and_settlement(void) {
   assert(product_root_nfqueue_main.lanes[0].policy_qualified_succeeded==3);
   assert(product_root_nfqueue_main.lanes[0].policy_qualified_matched_allow_succeeded==2);
   assert(product_root_nfqueue_main.lanes[0].policy_qualified_matched_drop_succeeded==1);
+  reset(4); replacement_active=1; packet(1,53,0);
+  completions[1].terminal_intent=PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  completions[1].processing_bypass_reason=PRODUCT_PACKET_BYPASS_REASSEMBLY_RESOURCE;
+  run(4); assert(verdicts[1]==NF_DROP);
+  assert(product_root_nfqueue_main.lanes[0].ingress_dns_drop_attempts==1);
+  assert(admission_observations==1);
+  reset(4); replacement_active=1; packet(1,53,0); replacement_active=0;
+  completions[1].terminal_intent=PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  completions[1].processing_bypass_reason=PRODUCT_PACKET_BYPASS_FLOW_CAPACITY;
+  run(4); assert(verdicts[1]==NF_DROP);
+  assert(admission_observations==1);
+  reset(4); packet(1,53,0); replacement_active=1;
+  completions[1].terminal_intent=PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  completions[1].processing_bypass_reason=PRODUCT_PACKET_BYPASS_FLOW_CAPACITY;
+  run(4); assert(verdicts[1]==NF_ACCEPT);
+  assert(!admission_observations);
+  reset(4); packet6long(1,1); completions[1].terminal_intent=PRODUCT_PACKET_INTENT_PASS_ADAPTER;
+  run(4); assert(verdicts[1]==NF_DROP);
+  assert(admission_observations==1);
+  reset(4); replacement_active=1; packet(1,53,1);
+  completions[1].terminal_intent=PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
+  completions[1].processing_bypass_reason=PRODUCT_PACKET_BYPASS_PRIMARY_CREDIT_EXHAUSTED;
+  run(4); assert(verdicts[1]==NF_ACCEPT);
   reset(1); completions[0].terminal_intent=PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS;
   product_root_nfqueue_complete_batch_from_graph(&vm,indices,completions,1,returned);
   assert(!returned[0] && !calls && !attempts[0] && !returns[0]);
@@ -565,6 +673,7 @@ static void diagnostic_guard_expiry(void) {
   }
 }
 int main(void) {
+  pre_core_verdict_results();
   successful_windows(); sendmmsg_boundaries(); sendto_results(); partitions_and_settlement();
   full_window_boundaries();
   control_envelopes();

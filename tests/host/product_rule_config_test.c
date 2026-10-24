@@ -74,14 +74,17 @@ typedef struct {
     uint64_t revision;
     unsigned publications;
     int reject;
+    sakamoto_product_dns_config_t dns;
 } runtime_t;
 
 static uint32_t publish(void *opaque, uint64_t revision, uint64_t hash,
-                        const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains) {
+                        const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains,
+                        const sakamoto_product_dns_config_t *dns) {
     runtime_t *runtime = opaque;
     assert(hash != 0);
     if (runtime->reject)
         return 1;
+    runtime->dns = *dns;
     assert(product_l4_policy_compile(&runtime->view, rule, count) == PRODUCT_L4_POLICY_STATUS_OK);
     product_domains_destroy(runtime->domains);
     runtime->domains = domains;
@@ -1228,7 +1231,53 @@ static void imported_metadata_roundtrip_and_identity(void) {
     free(status); free(request); unlink(path); rmdir(directory);
 }
 
+static void dns_upstream_uses_saved_and_active_configuration(void) {
+    char directory[] = "/tmp/product-dns-config-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path,sizeof(path),"%s/rules.conf",directory);
+    product_rule_config_t *config=product_rule_config_open(path);
+    static runtime_t runtime;
+    assert(config && !product_rule_config_activate(config,publish,&runtime));
+    static sakamoto_product_rule_config_request_t request;
+    static sakamoto_product_rule_config_status_t status;
+    request=(sakamoto_product_rule_config_request_t){.schema=1,.operation=4,.expected_saved_revision=1,
+        .dns={.enabled=1,.family=4,.port=53,.address={198,51,100,53}}};
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==2 && status.active_revision==2 && runtime.dns.enabled);
+    assert(!memcmp(&status.dns,&request.dns,sizeof(request.dns)));
+    assert(!memcmp(&status.active_dns,&request.dns,sizeof(request.dns)));
+    product_rule_config_close(config);
+    config=product_rule_config_open(path);
+    product_rule_config_query(config,&status);
+    assert(!status.save_error && status.saved_revision==2 && !status.active_revision);
+    assert(!memcmp(&status.dns,&request.dns,sizeof(request.dns)));
+    assert(!product_rule_config_activate(config,publish,&runtime));
+    request.expected_saved_revision=2; request.dns.address[0]=224;
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==2 && status.active_dns.address[0]==198);
+    request.dns=(sakamoto_product_dns_config_t){.enabled=1,.family=6,.port=53,.address={0x20,1,0xdb,8}};
+    request.dns.address[15]=53; runtime.reject=1;
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_PUBLISH);
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==3 && status.active_revision==2 && status.dns.family==6 && status.active_dns.family==4);
+    runtime.reject=0; assert(!product_rule_config_activate(config,publish,&runtime));
+    request=(sakamoto_product_rule_config_request_t){.schema=1,.operation=2,.expected_saved_revision=3};
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_query(config,&status);
+    assert(status.dns.enabled && status.active_dns.family==6);
+    request=(sakamoto_product_rule_config_request_t){.schema=1,.operation=4,.expected_saved_revision=status.saved_revision};
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_query(config,&status);
+    assert(!status.dns.enabled && !status.active_dns.enabled);
+    product_rule_config_close(config);
+    product_domains_destroy(runtime.domains); runtime.domains=NULL;
+    unlink(path); rmdir(directory);
+}
+
 int main(void) {
+    dns_upstream_uses_saved_and_active_configuration();
     imported_metadata_roundtrip_and_identity();
     domain_saved_active_failure_retry();
     large_plan_save_failure();

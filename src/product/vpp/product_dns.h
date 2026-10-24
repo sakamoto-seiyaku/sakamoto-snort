@@ -45,7 +45,8 @@ typedef struct {
   product_l4_policy_packet_t packet;
   uint32_t codec_peak_bytes;
   uint16_t id, flags, qtype, qclass, name_length;
-  uint8_t coverage, caller;
+  uint16_t udp_capacity, edns_flags;
+  uint8_t coverage, caller, edns_present;
   char name[256];
   uint64_t wire_hash, message_sequence; /* nonzero only for a framed TCP message */
   uint32_t tcp_sequence;
@@ -73,7 +74,7 @@ typedef struct {
   uint64_t token, transport_token, deadline;
   uint32_t bound_context;
   uint16_t retransmits, requests;
-  uint8_t active, replied, ambiguous, bound_context_known;
+  uint8_t active, replied, ambiguous, bound_context_known, generated_return;
 } product_dns_request_t;
 typedef struct {
   uint64_t generation, overflow_until;
@@ -98,7 +99,7 @@ typedef struct {
   product_dns_name_t names[PRODUCT_DNS_NAMES];
 } product_dns_response_t;
 _Static_assert(sizeof(product_dns_owner_t) + sizeof(product_dns_response_t) +
-  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 592U <= PRODUCT_DNS_WORK_BYTES,
+  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 704U <= PRODUCT_DNS_WORK_BYTES,
   "DNS retained state and synchronous wire/observation work fit the owner budget");
 
 /* Owner-local original-path observations. No datagram, codec borrow or policy
@@ -106,6 +107,10 @@ _Static_assert(sizeof(product_dns_owner_t) + sizeof(product_dns_response_t) +
  * the finite request window. Caller evidence is never enriched retrospectively. */
 void product_dns_owner_start (product_dns_owner_t *, uint64_t generation);
 void product_dns_owner_stop (product_dns_owner_t *);
+/* A raw generated return loses native provenance on kernel recapture. Keep an
+ * anonymous, finite UDP tombstone so exact later tuple/Question reuse cannot
+ * attach another original request's caller to that indistinguishable wire. */
+void product_dns_generated_return (product_dns_owner_t *, const product_dns_query_t *, uint64_t now_us);
 uint64_t product_dns_owner_deadline (const product_dns_owner_t *);
 unsigned product_dns_owner_active (product_dns_owner_t *, uint64_t now_us);
 product_dns_correlation_t product_dns_remember (product_dns_owner_t *,
@@ -119,6 +124,11 @@ void product_dns_transport_bound (product_dns_owner_t *, uint64_t generation,
 void product_dns_inspect_response (const uint8_t *, size_t,
   const product_dns_context_t *, const product_dns_identity_t *,
   product_dns_owner_t *, product_dns_response_t *);
+/* A proxy transport already supplies one exact live request identity. The
+ * complete answer still has to match its ID and full Question; this does not
+ * consult or guess from the original-path correspondence table. */
+void product_dns_inspect_answer (const uint8_t *, size_t,
+  const product_dns_context_t *, const product_dns_query_t *, product_dns_response_t *);
 product_l4_policy_status_t product_dns_response_match (
   const product_l4_policy_view_t *, const product_l4_policy_packet_t *,
   const product_dns_response_t *, product_l4_policy_position_t,

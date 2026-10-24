@@ -140,6 +140,7 @@ static int product_root_nfqueue_parse_packet(u8 *data,u32 length,product_root_nf
  p->identity_present=p->uid_present=1;p->uid=12632;p->hook=NF_INET_LOCAL_OUT;p->ip_family=4;p->protocol=IPPROTO_UDP;
  p->payload=data+32;p->payload_length=32;return 1;
 }
+static int product_root_dns_adapter_enabled(void){return 0;}
 static void product_root_nfqueue_accept_unadmitted(product_root_nfqueue_main_t *nm,product_root_nfqueue_lane_t *lane,u8 *data,u32 length,const char *cause){assert(nm && lane && data && length && cause);lane->ingress_accepts++;}
 static void product_diagnostic_write_hex(FILE *stream,const u8 *data,u32 length){(void)stream;(void)data;(void)length;}
 '''
@@ -153,7 +154,8 @@ static u32 product_packet_graph_submit_external_batch(vlib_main_t *v,const produ
 }
 '''
 production = ''.join(function(name) for name in (
-    'product_root_input_batch_flush', 'product_root_nfqueue_read_dispatch',
+    'product_root_input_batch_flush', 'product_root_nfqueue_capture_complete',
+    'product_root_nfqueue_read_dispatch',
     'product_root_nfqueue_read_ready', 'product_root_nfqueue_read_rcvbuf',
     'product_root_nfqueue_apply_io_tuning'))
 suffix = r'''

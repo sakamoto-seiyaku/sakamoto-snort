@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include "sakamoto_product_limits.h"
 
-#define PRODUCT_OBSERVATION_VERSION 7
+#define PRODUCT_OBSERVATION_VERSION 8
 /* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
 #define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
 #define PRODUCT_OBSERVATION_CHANNELS (2 * PRODUCT_OBSERVATION_OWNERS)
@@ -15,7 +15,17 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 592
+#define PRODUCT_OBSERVATION_MAX_RECORD 704
+#define PRODUCT_DNS_PROXY_RECORD 1U
+#define PRODUCT_DNS_PROXY_TRUNCATED 2U
+#define PRODUCT_DNS_PROXY_UPSTREAM_ANSWER 4U
+#define PRODUCT_DNS_PROXY_ADMISSION_RESOURCE 8U
+enum {
+  PRODUCT_DNS_DELIVERY_UNKNOWN, PRODUCT_DNS_DELIVERY_GRAPH_ACCEPTED,
+  PRODUCT_DNS_DELIVERY_KERNEL_ACCEPTED, PRODUCT_DNS_DELIVERY_POLICY_DROP,
+  PRODUCT_DNS_DELIVERY_WRITE_FAILED, PRODUCT_DNS_DELIVERY_ADMISSION_FAILED,
+  PRODUCT_DNS_DELIVERY_RESOURCE_DROP, PRODUCT_DNS_DELIVERY_OUTCOME_UNKNOWN,
+};
 
 /* Direction-local provenance; no pointers, source conditions or packet bytes.
  * A segment starts at the counters immediately preceding its first packet. */
@@ -83,9 +93,20 @@ typedef struct {
   uint64_t message_sequence;
   uint32_t tcp_sequence;
   uint8_t tcp_continuation, packet_direction, tcp_reserved[2];
+  uint64_t route_revision, request_attempt, upstream_session;
+  uint8_t upstream_address[16];
+  uint16_t upstream_port;
+  uint8_t upstream_family, upstream_transport, proxy_result, proxy_reserved;
+  uint16_t reply_rcode, client_udp_capacity, reply_capacity;
+  uint32_t output_bytes, proxy_flags, proxy_reserved2;
+  uint64_t return_token;
+  uint64_t return_policy_generation, return_policy_revision, return_policy_hash, return_winner;
+  uint8_t return_declared_action, return_actual_action, return_mode, return_provenance;
+  uint32_t return_packet_uid;
 } product_dns_observation_record_t;
-_Static_assert (sizeof (product_dns_observation_record_t) == 592, "DNS observation ABI");
+_Static_assert (sizeof (product_dns_observation_record_t) == 704, "DNS observation ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, return_token) == 656, "DNS return identity ABI");
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;

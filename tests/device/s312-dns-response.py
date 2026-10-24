@@ -38,8 +38,9 @@ def winpath(path):
 
 class Peer:
     """Owned, bounded, independent Windows UDP53 wire peer; no Product codec."""
-    def __init__(self, addresses, out):
+    def __init__(self, addresses, out, deadline=None):
         self.out, self.rows, self.messages, self.responses = out, [], [], {}
+        self.deadline = deadline
         self.lock, self.ready = threading.Lock(), threading.Event()
         self.plan = out / 'peer-plan.json'
         self.stop_path = out / 'peer.stop'
@@ -56,7 +57,7 @@ class Peer:
             stderr=subprocess.STDOUT, text=True, errors='replace')
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
-        if not self.ready.wait(12):
+        if not self.ready.wait(self.budget_timeout(12)):
             self.close()
             raise RuntimeError('independent CNAME peer did not bind; inspect peer.log')
 
@@ -64,6 +65,12 @@ class Peer:
         temp = self.out / 'peer-plan.tmp'
         temp.write_text(json.dumps({'responses': list(self.responses.values())}))
         temp.replace(self.plan)
+
+    def budget_timeout(self, maximum):
+        if self.deadline is None:return maximum
+        remaining=self.deadline-time.monotonic()
+        assert remaining>0,'peer lifecycle budget exhausted'
+        return min(maximum,remaining)
 
     def register(self, request, reply, gate=None):
         self.responses[request.hex()] = dict(request_hex=request.hex(), reply_hex=reply.hex(),
@@ -90,8 +97,8 @@ class Peer:
 
     def close(self):
         self.stop_path.touch()
-        self.process.wait(timeout=15)
-        self.thread.join(timeout=2)
+        self.process.wait(timeout=self.budget_timeout(15))
+        self.thread.join(timeout=self.budget_timeout(2))
         assert self.process.returncode == 0, 'independent peer exited unsuccessfully'
         assert any(r.get('kind') == 'stopped' for r in self.messages), 'peer stop acknowledgement absent'
 
@@ -136,18 +143,23 @@ class Device:
 
     def wait(self, label, path, predicate, timeout=30, json_value=False):
         end = time.monotonic() + timeout
+        previous=getattr(self,'capture_deadline',None)
+        if previous is not None:self.capture_deadline=min(previous,end)
         value = {}
-        while time.monotonic() < end:
-            text = self.app(path)
-            try: value = json.loads(text) if json_value else props(text)
-            except json.JSONDecodeError: value = {}
-            if predicate(value):
-                self.save(label + ('.json' if json_value else '.properties'), text)
-                return value
-            if value.get('errorCode') == 'root_authorization_required':
-                raise RuntimeError('KernelSU Superuser grant requires verification/restoration')
-            time.sleep(.1)
-        raise RuntimeError(f'{label} deadline: {value}')
+        try:
+            while time.monotonic() < end:
+                text = self.app(path)
+                try: value = json.loads(text) if json_value else props(text)
+                except json.JSONDecodeError: value = {}
+                if predicate(value):
+                    self.save(label + ('.json' if json_value else '.properties'), text)
+                    return value
+                if value.get('errorCode') == 'root_authorization_required':
+                    raise RuntimeError('KernelSU Superuser grant requires verification/restoration')
+                time.sleep(.1)
+            raise RuntimeError(f'{label} deadline: {value}')
+        finally:
+            if previous is not None:self.capture_deadline=previous
 
     def tap(self, label, text, *, click=True):
         for attempt in range(8):
@@ -206,17 +218,31 @@ class Device:
             self.reader = subprocess.Popen([str(ROOT / 'dev/adb'), '-s', SERIAL, 'exec-out',
                 'run-as', PKG, 'timeout', '20', 'tail', '-n', '+1', '-f',
                 f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'], stdout=log, stderr=errors)
-            for _ in range(30):
-                if path.stat().st_size: break
-                time.sleep(.1)
-            else: raise RuntimeError('bounded normal-stop reader did not open the current log')
-            self.save(label + '-stop.txt', self.action('--ez', 'runtimeStop', 'true'))
-            self.wait(label + '-stopped', 'files/runtime-state/snapshot.properties',
-                lambda c: c.get('state') == 'stopped' and c.get('mayBeActive') == 'false')
-            self.active = False
-            self.reader.wait(timeout=25)
-            assert self.reader.returncode in (0, 124, 143)
-            self.reader = None
+            try:
+                for _ in range(30):
+                    if path.stat().st_size: break
+                    time.sleep(.1)
+                else: raise RuntimeError('bounded normal-stop reader did not open the current log')
+                self.save(label + '-stop.txt', self.action('--ez', 'runtimeStop', 'true'))
+                self.wait(label + '-stopped', 'files/runtime-state/snapshot.properties',
+                    lambda c: c.get('state') == 'stopped' and c.get('mayBeActive') == 'false')
+                self.active = False
+                self.reader.wait(timeout=getattr(self,'budget_timeout',lambda value:value)(25))
+                assert self.reader.returncode in (0, 124, 143)
+            finally:
+                reader = self.reader
+                settlement = dict(status='PASS', local_reader_started=reader is not None)
+                if reader is not None:
+                    try:
+                        if reader.poll() is None:
+                            reader.wait(timeout=getattr(self,'budget_timeout',lambda value:value)(20))
+                            settlement['natural_tail_wait'] = True
+                        settlement['returncode'] = reader.returncode
+                    except BaseException as error:
+                        settlement.update(status='HOLD', cleanup_error=repr(error), remote_completion='unknown')
+                    if reader.poll() is not None:
+                        self.reader = None
+                self.save(label + '-stop-reader-settlement.json', json.dumps(settlement, indent=2)+'\n')
         raw = path.read_text()
         for owner in range(self.owners):
             assert f'dns event=stop generation={self.generation} owner={owner} requests=0 codec_live_bytes=0 active_operations=0' in raw

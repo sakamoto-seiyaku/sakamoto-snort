@@ -508,7 +508,12 @@ void product_dns_tcp_process(product_dns_tcp_owner_t *owner,product_dns_owner_t 
        * completion, but cannot establish or mutate a framing incarnation. */
       if(input->identity.profile==2 && input->context.packet.direction==1)
         {if(input->length) coverage(input,PRODUCT_DNS_TCP_MIDSTREAM,observer,context);return;}
-      if(empty==PRODUCT_DNS_TCP_FLOWS || !(flow=calloc(1,sizeof(*flow))))
+      uint64_t scratch=sizeof(product_dns_owner_t)+sizeof(product_dns_tcp_owner_t)+
+        PRODUCT_DNS_CODEC_BYTES+PRODUCT_DNS_MESSAGE_MAX+2U*sizeof(product_dns_tcp_event_t);
+      if(empty==PRODUCT_DNS_TCP_FLOWS || owner->external_bytes>PRODUCT_DNS_WORK_BYTES-scratch ||
+          owner->allocated_bytes>PRODUCT_DNS_WORK_BYTES-scratch-owner->external_bytes ||
+          sizeof(*flow)>PRODUCT_DNS_WORK_BYTES-scratch-owner->external_bytes-owner->allocated_bytes ||
+          !(flow=calloc(1,sizeof(*flow))))
         {++owner->capacity;if(input->length) coverage(input,PRODUCT_DNS_CAPACITY,observer,context);return;}
       flow->context=input->context;flow->context.domains=NULL;
       flow->identity=input->identity;owner->flows[empty]=flow;

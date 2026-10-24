@@ -22,7 +22,8 @@ typedef struct product_rule_config product_rule_config_t;
 uint32_t product_rule_config_compile_peak_bytes (void);
 typedef uint32_t (*product_rule_config_publish_t) (
   void *, uint64_t revision, uint64_t hash,
-  const product_l4_policy_rule_t *, uint32_t count, product_domains_t *domains);
+  const product_l4_policy_rule_t *, uint32_t count, product_domains_t *domains,
+  const sakamoto_product_dns_config_t *dns);
 
 product_rule_config_t *product_rule_config_open (const char *path);
 void product_rule_config_close (product_rule_config_t *);

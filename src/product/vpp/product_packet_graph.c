@@ -26,6 +26,10 @@
 #include "product_vpn_uid_resolver.h"
 #include "product_dns.h"
 #include "product_dns_tcp.h"
+#include "product_dns_proxy.h"
+#include "product_dns_route.h"
+#include "product_root_dns_adapter.h"
+#include "product_root_dns_io.h"
 #include "product_network_snapshot.h"
 #include "product_runtime_topology.h"
 #include "product_diagnostic_hex.h"
@@ -233,6 +237,8 @@ typedef struct
    * worker is still evaluating the previous active bank. */
   product_l4_policy_view_t view;
   product_domains_t *domains;
+  sakamoto_product_dns_config_t dns;
+  u64 dns_revision;
   u64 generation;
   u64 revision;
   u64 snapshot_hash;
@@ -607,7 +613,10 @@ static int
 product_packet_graph_origin_valid (const product_packet_graph_main_t *graph,
                                    const product_adapter_obligation_t *obligation)
 {
-  if (!graph || !obligation || obligation->kind != graph->adapter_kind
+  int dns_return = graph && obligation && graph->adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
+    obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY &&
+    obligation->origin_lane == obligation->origin_worker && obligation->packet_id && obligation->packet_id <= 128;
+  if (!graph || !obligation || (obligation->kind != graph->adapter_kind && !dns_return)
       || !graph->owner_count || graph->owner_count > PRODUCT_GRAPH_WORKERS)
     return 0;
   /* start_external validates and snapshots the immutable generation topology
@@ -1002,6 +1011,7 @@ product_packet_evidence_source (const product_packet_lease_t *lease)
     case PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED: return "GRAPH_INJECTED";
     case PRODUCT_PACKET_PROVENANCE_VPN_TUN: return "TUN_CAPTURED";
     case PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN: return "FLOW_STACK_RETURN";
+    case PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN: return "ROOT_DNS_RETURN";
     case PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE: return "NFQ_CAPTURED";
     default: return "UNKNOWN";
     }
@@ -2308,10 +2318,26 @@ VLIB_NODE_FN (product_packet_terminal_node)
       /* Count the final logical IP packet once, including primary-handoff
        * bypasses, before fragment fanout or return to the originating adapter. */
       if (lease.facts.ip_family == 4 || lease.facts.ip_family == 6)
-        product_observation_basic (vm,
-          lease.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME
-            ? (lease.runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4 ? 1 : 2) : 0,
-          lease.facts.packet_length);
+        {
+          int dns_admission_failure =
+            (lease.terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER
+             || lease.terminal_intent ==
+                  PRODUCT_PACKET_INTENT_PROCESSING_CAPACITY_BYPASS)
+            && lease.platform.provenance ==
+                 PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE
+            && lease.platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT
+            && (lease.platform.reserved &
+                  PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE)
+            && product_root_dns_admission_query (
+                 vlib_buffer_get_current (buffer), buffer->current_length, 0);
+          product_observation_basic (vm,
+            dns_admission_failure ? 2 :
+              lease.terminal_intent == PRODUCT_PACKET_INTENT_DROP_RUNTIME &&
+                  lease.runtime_drop_reason != PRODUCT_PACKET_DROP_DNS_TAKEOVER
+                ? (lease.runtime_drop_reason == PRODUCT_PACKET_DROP_POLICY_L4 ? 1 : 2)
+                : 0,
+            lease.facts.packet_length);
+        }
       product_metadata_store (buffer, &metadata);
       product_add_trace (vm, node, buffer, PRODUCT_TRACE_TERMINAL,
                          metadata.origin_obligation_id);
@@ -2497,6 +2523,8 @@ product_origin_reclaim_flush (vlib_main_t *vm, product_origin_reclaim_t *batch)
       const product_packet_completion_frame_t *completion = &batch->completion[i];
       if (batch->valid_tun[i])
         product_vpn_tun_return_freed (vm, batch->indices[i], completion);
+      if (completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY)
+        product_root_dns_reply_freed (vm, batch->indices[i], completion);
       settlements += !(completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE);
     }
   /* Root loans were returned by their identity operation; only other carriers
@@ -2513,7 +2541,8 @@ product_origin_reclaim_flush (vlib_main_t *vm, product_origin_reclaim_t *batch)
         fprintf (stderr, "s203 event=buffer_free source=%s thread=%u buffer=%u obligation=%llu buffer_debt=%u obligation_debt=%u completion_frames=%u\n",
           (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ? "COMPLETION_REPLAY" :
           completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED ? "GRAPH_INJECTED" :
-          completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? "TUN_CAPTURED" : "NFQ_CAPTURED",
+          completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? "TUN_CAPTURED" :
+          completion->obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY ? "ROOT_DNS_RETURN" : "NFQ_CAPTURED",
           vm->thread_index, batch->indices[i], (unsigned long long) completion->obligation.token,
           clib_atomic_load_acq_n (&graph->lifecycle_buffers),
           clib_atomic_load_acq_n (&graph->lifecycle_obligations),
@@ -2558,7 +2587,8 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
       const char *source = (completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE)
         ? "COMPLETION_REPLAY" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED
         ? "GRAPH_INJECTED" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
-        ? "TUN_CAPTURED" : "NFQ_CAPTURED";
+        ? "TUN_CAPTURED" : completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY
+        ? "ROOT_DNS_RETURN" : "NFQ_CAPTURED";
       if (completion.flags & PRODUCT_COMPLETION_TRACE)
         fprintf (stderr, "s204 event=completion_consume source=%s node=%u thread=%u buffer=%u token=%llu generation=%llu packet=%u lane=%u producer_thread=%u intent=%u mono_ns=%llu\n",
           source, node->node_index, vm->thread_index, bi,
@@ -2585,6 +2615,9 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
         case PRODUCT_ADAPTER_OBLIGATION_VPN_TUN:
           valid_tun_completion = product_vpn_tun_complete_from_graph (vm, bi, &completion);
           break;
+        case PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY:
+          product_root_dns_reply_complete (vm, bi, &completion);
+          break;
         default:
           break; /* GRAPH_INJECTED owns no native adapter operation. */
         }
@@ -2601,6 +2634,8 @@ VLIB_NODE_FN (product_packet_origin_completion_node)
         vlib_buffer_free (vm, &bi, 1);
       if (valid_tun_completion)
         product_vpn_tun_return_freed(vm, bi, &completion);
+      if (completion.obligation.kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY)
+        product_root_dns_reply_freed(vm, bi, &completion);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_buffers, 1);
       clib_atomic_fetch_sub_relax (&graph->lifecycle_completion_frames, 1);
       if (!(completion.flags & PRODUCT_COMPLETION_REPLAY_PROBE))
@@ -2739,6 +2774,9 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
 #endif
       return 0;
     }
+  if (adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
+      !product_root_dns_adapter_start (vm, generation, graph->owner_count))
+    { product_packet_graph_flow_pools_abort (graph); return 0; }
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[0], __ATOMIC_SEQ_CST) == 0);
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[1], __ATOMIC_SEQ_CST) == 0);
   product_policy_domains_clear (graph);
@@ -2752,6 +2790,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
   if (!product_core_policy_start (generation))
     {
       product_packet_graph_flow_pools_abort (graph);
+      product_root_dns_adapter_stop (vm);
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
       product_fragment_abort ();
 #endif
@@ -2759,6 +2798,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
     }
   clib_atomic_store_rel_n (&graph->enabled, 1);
   clib_atomic_store_rel_n (&graph->accepting, 1);
+  product_root_dns_adapter_changed ();
   return 1;
 }
 
@@ -2769,6 +2809,7 @@ product_packet_graph_stop_external (vlib_main_t *vm)
   if (!vm) return;
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   product_flow_end_quiesce (vm);
+  product_root_dns_adapter_stop (vm);
   product_observation_quiesce ();
   if (PREDICT_FALSE (product_packet_graph_buffer_debt ()))
     clib_panic ("cannot stop graph with live packet/FlowEnd buffers");
@@ -3974,7 +4015,7 @@ product_packet_graph_publish_policy_bundle (
       || (bundle->gate_entry_count != 0 && bundle->gate_entries == 0)
       || bundle->gate_entry_count > PRODUCT_PACKET_GRAPH_GATE_TABLE_MAX_ENTRIES
       || (bundle->l4_rule_count != 0 && bundle->l4_rules == 0)
-      || bundle->l4_rule_count > PRODUCT_L4_POLICY_MAX_RULES)
+      || bundle->l4_rule_count > PRODUCT_L4_POLICY_MAX_RULES || !product_dns_route_valid (&bundle->dns))
     return PRODUCT_PACKET_INVALID_ARGUMENT;
   if (bundle->generation != graph->generation)
     return PRODUCT_PACKET_INVALID_ARGUMENT;
@@ -4021,6 +4062,10 @@ product_packet_graph_publish_policy_bundle (
   bank = &graph->l4_policy_banks[inactive_bank];
   product_domains_destroy (bank->domains);
   bank->domains = bundle->domains;
+  bank->dns = bundle->dns;
+  bank->dns_revision = !graph->l4_policy_banks[active_bank].dns_revision ||
+      memcmp (&bundle->dns, &graph->l4_policy_banks[active_bank].dns, sizeof (bundle->dns))
+    ? bundle->revision : graph->l4_policy_banks[active_bank].dns_revision;
   bank->view = *compiled_view;
   bank->generation = bundle->generation;
   bank->revision = bundle->revision;
@@ -4117,6 +4162,7 @@ product_packet_graph_publish_policy_bundle (
       (unsigned long long) publish_begin_ns, (unsigned long long) product_packet_event_clock_ns ());
 #endif
   product_packet_graph_policy_writer_unlock (graph);
+  product_root_dns_adapter_changed ();
   return PRODUCT_PACKET_OK;
 }
 
@@ -4672,6 +4718,8 @@ typedef struct {
   int complete, flow_observed, pending_valid;
 } product_dns_tcp_graph_t;
 
+#include "product_root_dns_adapter.inc"
+
 static int
 product_packet_graph_dns_tcp_flow_facts (void *opaque, product_l4_policy_packet_t *packet,
   product_dns_identity_t *identity)
@@ -4806,6 +4854,7 @@ product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
     .sequence = lease->facts.tcp_sequence, .flags = lease->facts.tcp_flags,
     .flow_facts = product_packet_graph_dns_tcp_flow_facts, .flow_context = context,
   };
+  product_packet_graph_main.dns_tcp[owner].external_bytes = root_dns_tcp_other_bytes (owner);
   product_dns_tcp_process (&product_packet_graph_main.dns_tcp[owner],
     &product_packet_graph_main.dns_requests[owner], &input, product_packet_graph_dns_tcp_record, context);
 }
@@ -4816,6 +4865,9 @@ product_packet_graph_dns_flow_end (vlib_main_t *vm, uint64_t generation, uint64_
   if (!vm || !vm->thread_index || vm->thread_index > product_packet_graph_worker_count ()) return;
   product_dns_tcp_end (&product_packet_graph_main.dns_tcp[vlib_get_worker_index (vm->thread_index)],
     generation, incarnation);
+  unsigned owner = vlib_get_worker_index (vm->thread_index);
+  if (owner < root_dns_owner_count)
+    product_dns_proxy_end (root_dns_owners[owner].proxy, generation, incarnation, root_dns_now (vm));
 }
 
 uint64_t
@@ -4824,7 +4876,9 @@ product_packet_graph_dns_deadline (unsigned owner)
   if (owner >= product_packet_graph_worker_count ()) return UINT64_MAX;
   uint64_t request = product_dns_owner_deadline (&product_packet_graph_main.dns_requests[owner]);
   uint64_t tcp = product_dns_tcp_deadline (&product_packet_graph_main.dns_tcp[owner]);
-  return request < tcp ? request : tcp;
+  uint64_t proxy = product_root_dns_adapter_deadline (owner);
+  uint64_t next = request < tcp ? request : tcp;
+  return proxy < next ? proxy : next;
 }
 
 void
@@ -4834,6 +4888,7 @@ product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
   unsigned owner = vlib_get_worker_index (vm->thread_index);
   (void) product_dns_owner_active (&product_packet_graph_main.dns_requests[owner], now_us);
   product_dns_tcp_expire (&product_packet_graph_main.dns_tcp[owner], now_us);
+  product_root_dns_adapter_expire (vm, now_us);
 }
 
 static product_packet_result_t
@@ -4945,7 +5000,8 @@ product_packet_graph_policy_on_owner (
         }
       product_dns_tcp_bind (&graph->dns_tcp[owner], &graph->dns_requests[owner], &context, &identity);
     }
-  if (result == PRODUCT_PACKET_OK && dns_observed)
+  if (result == PRODUCT_PACKET_OK && dns_observed &&
+      !root_dns_intercept (vm, buffer_index, lease, &snapshot, &observation))
     {
       product_dns_correlation_t correlation = PRODUCT_DNS_CORRELATION_NONE;
       if (!evaluation->terminal_preserved && evaluation->verdict == PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT &&
@@ -5022,6 +5078,7 @@ product_packet_graph_policy_on_owner (
   }
 #endif
   product_flow_expiry_changed (vm);
+  if (result == PRODUCT_PACKET_OK) root_dns_return_policy (vm, buffer_index, lease, evaluation);
   u32 published_sequence = __atomic_load_n (&graph->policy_publish_sequence, __ATOMIC_SEQ_CST);
 #ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
   evaluation->policy_qualified = evaluation->policy_qualified &&
@@ -5060,6 +5117,18 @@ product_packet_graph_policy_on_owner (
   return result;
 }
 
+static int product_packet_graph_root_dns_return_valid (vlib_main_t *vm,
+  const product_platform_packet_facts_t *platform, const product_adapter_obligation_t *obligation)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  return vm && platform && obligation && vm->thread_index &&
+    obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY &&
+    platform->provenance == PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN &&
+    platform->direction == PRODUCT_PACKET_DIRECTION_INPUT &&
+    product_packet_graph_origin_valid (graph, obligation) &&
+    obligation->origin_worker == vlib_get_worker_index (vm->thread_index);
+}
+
 static u32
 product_packet_graph_submit_external_batch_internal (
   vlib_main_t *vm, const product_packet_graph_external_item_t *items,
@@ -5085,13 +5154,17 @@ product_packet_graph_submit_external_batch_internal (
         vlib_get_worker_index (vm->thread_index) < graph->owner_count &&
         obligation->packet_id == vlib_get_worker_index (vm->thread_index) + 1 &&
         obligation->packet_id <= graph->owner_count;
+      int dns_return = product_packet_graph_root_dns_return_valid (vm, platform, obligation);
       if (!vm || !product_packet_graph_origin_valid (graph, obligation) ||
+          ((platform->provenance == PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN ||
+             obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY) && !dns_return) ||
           (platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return) ||
           (!vpn_return && vm->thread_index !=
             vlib_get_worker_thread_index (obligation->origin_worker)) ||
           !obligation->token || obligation->queue_generation != graph->generation ||
           (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
-           obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN) ||
+           obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN &&
+           obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY) ||
           !clib_atomic_load_acq_n (&graph->enabled) ||
           !clib_atomic_load_acq_n (&graph->accepting))
         continue;
@@ -5185,13 +5258,17 @@ product_packet_graph_submit_external (vlib_main_t *vm, u32 buffer_index,
     vlib_get_worker_index (vm->thread_index) < graph->owner_count &&
     obligation->packet_id == vlib_get_worker_index(vm->thread_index) + 1 &&
     obligation->packet_id <= graph->owner_count;
+  int dns_return = product_packet_graph_root_dns_return_valid (vm, platform, obligation);
   if (!vm || !product_packet_graph_origin_valid (graph, obligation)
+      || (((platform && platform->provenance == PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN) ||
+          (obligation && obligation->kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY)) && !dns_return)
       || (platform && platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN && !vpn_return)
       || (!vpn_return &&
           vm->thread_index != vlib_get_worker_thread_index (obligation->origin_worker))
       || !origin_obligation_id || obligation->queue_generation != graph->generation
       || (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE
-          && obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN)
+          && obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN
+          && obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY)
       || !clib_atomic_load_acq_n (&graph->enabled)
       || !clib_atomic_load_acq_n (&graph->accepting)) {
     fprintf(stderr, "s203 event=submit_reject thread=%u tls=%u obligation=%llu enabled=%u accepting=%u kind=%u\n",

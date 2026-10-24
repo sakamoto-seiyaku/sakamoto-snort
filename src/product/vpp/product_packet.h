@@ -77,6 +77,9 @@ typedef enum
   PRODUCT_PACKET_DROP_REASSEMBLY_STOP,
   PRODUCT_PACKET_DROP_REASSEMBLY_INTERNAL,
   PRODUCT_PACKET_DROP_REASSEMBLY_NO_RETURN,
+  /* Original UDP datagram consumed by explicitly enabled DNS replacement;
+   * the separately owned reply has its own policy and completion outcome. */
+  PRODUCT_PACKET_DROP_DNS_TAKEOVER,
 } product_packet_runtime_drop_reason_t;
 
 typedef enum
@@ -93,6 +96,7 @@ typedef enum
   PRODUCT_PACKET_PROVENANCE_VPN_TUN,
   PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN,
   PRODUCT_PACKET_PROVENANCE_GRAPH_INJECTED,
+  PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN,
 } product_packet_provenance_t;
 
 enum
@@ -102,6 +106,13 @@ enum
   PRODUCT_PLATFORM_CONTEXT_KNOWN = 1 << 2,
   /* Explicit original DNS App evidence, distinct from a known socket UID. */
   PRODUCT_PLATFORM_DNS_APP_RELIABLE = 1 << 3,
+};
+
+enum
+{
+  /* Root replacement state frozen at the NFQUEUE capture event. This is an
+   * admission fact only, never App/domain/policy authority or observation. */
+  PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE = 1 << 0,
 };
 
 typedef struct
@@ -121,6 +132,7 @@ typedef enum
   PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE,
   PRODUCT_ADAPTER_OBLIGATION_GRAPH_INJECTED,
   PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,
+  PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY,
 } product_adapter_obligation_kind_t;
 
 /* Graph nodes carry this value opaquely. Only the adapter decodes it. */

@@ -371,6 +371,12 @@ rule_config_reply (vapi_ctx_t context, void *opaque, vapi_error_e rv,
   else
     {
       sakamoto_product_rule_config_status_t *s = call->status;
+      s->dns.enabled = reply->dns.enabled; s->dns.family = reply->dns.family;
+      s->dns.port = reply->dns.port; s->dns.reserved = reply->dns.reserved;
+      memcpy (s->dns.address, reply->dns.address, sizeof s->dns.address);
+      s->active_dns.enabled = reply->active_dns.enabled; s->active_dns.family = reply->active_dns.family;
+      s->active_dns.port = reply->active_dns.port; s->active_dns.reserved = reply->active_dns.reserved;
+      memcpy (s->active_dns.address, reply->active_dns.address, sizeof s->active_dns.address);
       s->generation = reply->generation;
       s->saved_revision = reply->saved_revision;
       s->active_revision = reply->active_revision;
@@ -530,6 +536,9 @@ sakamoto_product_session_rule_config (
     message->payload.graph.bindings[i].mode = request->graph.bindings[i].mode;
   }
   message->payload.domains.list_count = request->domains.list_count;
+  message->payload.dns.enabled = request->dns.enabled; message->payload.dns.family = request->dns.family;
+  message->payload.dns.port = request->dns.port; message->payload.dns.reserved = request->dns.reserved;
+  memcpy (message->payload.dns.address, request->dns.address, sizeof request->dns.address);
   _Static_assert(sizeof request->metadata == sizeof message->payload.metadata, "metadata wire layout");
   memcpy (&message->payload.metadata, &request->metadata, sizeof request->metadata);
   message->payload.domains.entry_count = request->domains.entry_count;

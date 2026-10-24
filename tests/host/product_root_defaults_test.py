@@ -176,6 +176,12 @@ static int product_packet_graph_flow_pools_reset(product_packet_graph_main_t *g)
 static void product_packet_graph_flow_pools_abort(product_packet_graph_main_t *g){assert(g);calls++;}
 static void product_policy_domains_clear(product_packet_graph_main_t *g){assert(g);calls++;}
 static int product_core_policy_start(u64 gen){assert(gen);calls++;return policy_ready;}
+/* Root DNS lifetime is a controlled dependency of this startup/default seam. */
+static int product_root_dns_adapter_start(vlib_main_t *vm,u64 gen,unsigned owners){
+ assert(vm && gen==product_packet_graph_main.generation && owners==product_packet_graph_main.owner_count);return 1;
+}
+static void product_root_dns_adapter_stop(vlib_main_t *vm){assert(vm);}
+static void product_root_dns_adapter_changed(void){}
 '''
 graph_prefix = '#define TEST_PRODUCTION_HANDOFF_CREDITS ' + re.search(r'^#define PRODUCT_GRAPH_HANDOFF_CREDITS (\d+)$', graph_source, re.M).group(1) + '\n' + graph_prefix
 graph_code=graph_prefix+''.join(graph_function(name) for name in ('product_packet_graph_default_handoff_credits','product_capacity_configure_empty','product_handoff_credit_reserve','product_handoff_credit_release','product_capacity_cli','product_packet_graph_handoff_credits','product_packet_graph_start_external'))+r'''

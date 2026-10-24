@@ -1102,7 +1102,7 @@ public final class RuntimeService extends VpnService {
                         "product ABI does not match device ABI");
                 return;
             }
-            if (productAbiVersion != 3 || productApiVersion != 1) {
+            if (productAbiVersion != 4 || productApiVersion != 1) {
                 failWithoutRuntime("product_protocol_mismatch",
                         "product manifest ABI/API versions are unsupported");
                 return;
@@ -5208,7 +5208,7 @@ public final class RuntimeService extends VpnService {
             writeBestEffortEvidenceFile(path, "error=management_unavailable\n"); return;
         }
         try {
-            if (rules == null || (operation != 0 && operation != 2 && operation != 3))
+            if (rules == null || (operation != 0 && operation != 2 && operation != 3 && operation != 4))
                 throw new IllegalArgumentException("invalid complete request");
             RuleConfiguration.CompleteStatus config = session.completeRuleConfig(operation, expectedSaved, rules);
             RuntimeControlNative.Status packet = session.query();
@@ -6006,6 +6006,18 @@ public final class RuntimeService extends VpnService {
             String inputChain, String uid, String range) {
         StringBuilder commands = new StringBuilder(tool + " -w -t mangle -N "
                 + outputChain + "; " + tool + " -w -t mangle -N " + inputChain + "; ");
+        // Ordinary UDP DNS reaches the same owner graph for every captured
+        // caller. Product-created upstream sockets carry only this scoped
+        // capture mark; generated returns still enter ordinary INPUT policy.
+        String dnsMatch = " -p udp --dport 53 -m mark ! --mark 0x40000000/0x40000000";
+        commands.append(tool).append(" -w -t mangle -A ").append(outputChain).append(dnsMatch)
+                .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+        commands.append(tool).append(" -w -t mangle -A ").append(outputChain)
+                .append(" -p udp --dport 53 -j RETURN; ");
+        commands.append(tool).append(" -w -t mangle -C ").append(outputChain).append(dnsMatch)
+                .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+        commands.append(tool).append(" -w -t mangle -C ").append(outputChain)
+                .append(" -p udp --dport 53 -j RETURN; ");
         String icmp = "ip6tables".equals(tool) ? "ipv6-icmp" : "icmp";
         String typeOption = "ip6tables".equals(tool) ? " --icmpv6-type " : " --icmp-type ";
         for (String protocol : new String[] {"udp", "tcp", icmp}) {

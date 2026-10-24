@@ -270,7 +270,7 @@ public final class RuntimeControlBackend {
     }
 
     public void completeRuleConfig(Context context, int operation, long expectedSaved, String text) {
-        long[] rules = RuleConfiguration.completeWire(text);
+        long[] rules = operation == 4 ? RuleConfiguration.dnsWire(text) : RuleConfiguration.completeWire(text);
         context.startService(new Intent(context, RuntimeService.class)
                 .setAction(RuntimeControlProtocol.ACTION_COMPLETE_RULE_CONFIG)
                 .putExtra(RuntimeControlProtocol.EXTRA_PROTOCOL_VERSION, RuntimeControlProtocol.VERSION)

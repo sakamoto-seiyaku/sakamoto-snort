@@ -331,11 +331,11 @@ vapi_error_e vapi_product_core_sni_query(vapi_ctx_t,vapi_msg_product_core_sni_qu
 #include "sakamoto_product_rule_config.h"
 typedef struct {
   struct { uint64_t generation; uint32_t schema, operation; uint64_t expected_saved_revision;
-    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; } payload;
+    sakamoto_product_config_rule_t rule; uint32_t count, reserved; sakamoto_product_direct_rule_t rules[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; sakamoto_product_dns_config_t dns; } payload;
 } vapi_msg_product_core_rule_config;
 typedef struct { int32_t retval; uint64_t generation, saved_revision, active_revision,
   saved_rule_version, active_rule_version; uint32_t result, save_error, compile_error;
-  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; } vapi_payload_product_core_rule_config_reply;
+  sakamoto_product_config_rule_t rule; uint32_t count, active_count, error_index, compiler_status; sakamoto_product_direct_rule_t rules[256]; uint64_t active_versions[256]; sakamoto_product_rule_graph_t graph; sakamoto_product_domains_t domains; sakamoto_product_config_metadata_t metadata; sakamoto_product_dns_config_t dns, active_dns; } vapi_payload_product_core_rule_config_reply;
 typedef vapi_error_e (*vapi_product_core_rule_config_callback_t)(vapi_ctx_t, void *,
   vapi_error_e, bool, vapi_payload_product_core_rule_config_reply *);
 extern vapi_msg_id_t vapi_msg_id_product_core_rule_config;
@@ -613,7 +613,9 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
   if (mode == 6) return VAPI_EINVAL;
   if (message->payload.schema != 1 || (message->payload.operation != 1 && message->payload.operation != 2)
       || message->payload.expected_saved_revision != 8 || message->payload.rule.uid != 12345
-      || message->payload.rule.source_address[0] != 127) abort();
+      || message->payload.rule.source_address[0] != 127 || message->payload.dns.enabled != 1
+      || message->payload.dns.family != 6 || message->payload.dns.port != 53053
+      || message->payload.dns.address[0] != 0x20 || message->payload.dns.address[15] != 53) abort();
   if (message->payload.operation == 2 && (message->payload.count != 2
       || message->payload.rules[1].version != UINT64_C(0xfedcba9876540002)
       || message->payload.rules[1].network_context != 3 || message->payload.rules[1].ifindex != 7
@@ -638,6 +640,8 @@ vapi_error_e vapi_product_core_rule_config(vapi_ctx_t context, vapi_msg_product_
   reply.graph = message->payload.graph;
   reply.domains = message->payload.domains;
   reply.metadata = message->payload.metadata;
+  reply.dns = message->payload.dns;
+  if (mode != 4) reply.active_dns = message->payload.dns;
   reply.count = message->payload.count;
   reply.active_count = message->payload.count;
   memcpy (reply.rules, message->payload.rules, sizeof (reply.rules));
@@ -1256,7 +1260,8 @@ main (void)
       .schema = 1, .operation = operation, .expected_saved_revision = 8,
       .rule = {.present = 1, .uid = 12345, .protocol = 17, .direction = 3, .action = 2,
         .source_port = 32000, .destination_port = 40608, .source_address = {127,0,0,1},
-        .destination_address = {127,0,0,2}}
+        .destination_address = {127,0,0,2}},
+      .dns = {.enabled=1,.family=6,.port=53053,.address={0x20,1,0xd,0xb8,0,0,0,0,0,0,0,0,0,0,0,53}}
     };
     if (operation == 2) {
       request.graph = (sakamoto_product_rule_graph_t){.group_count=1,.groups={10},.edge_count=1,.edges={{10,1,1}},.binding_count=1,.bindings={{7,12345,2,10,1}}};
@@ -1283,6 +1288,9 @@ main (void)
     if (!code && (config.saved_revision != 9 || config.active_revision != (mode == 4 ? 8U : 9U)
         || config.saved_rule_version != UINT64_C(0xfedcba9876540002)
         || config.result != (mode == 4 ? 4U : 0U) || config.rule.uid != 12345)) return 1;
+    if (!code && (memcmp(&config.dns,&request.dns,sizeof config.dns)
+        || config.active_dns.enabled != (mode == 4 ? 0U : 1U)
+        || (mode != 4 && memcmp(&config.active_dns,&request.dns,sizeof config.active_dns)))) return 1;
     if (!code && operation == 2 && (config.count != 2 || config.active_count != 2
         || config.rules[1].version != UINT64_C(0xfedcba9876540002)
         || config.rules[1].network_context != 3 || config.rules[1].ifindex != 7

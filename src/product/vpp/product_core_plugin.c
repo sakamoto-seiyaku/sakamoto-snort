@@ -87,12 +87,13 @@ extern vlib_node_registration_t product_core_start_adapters_node;
 
 static uint32_t
 product_core_publish_source (void *opaque, uint64_t revision, uint64_t hash,
-                             const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains)
+                             const product_l4_policy_rule_t *rule, uint32_t count, product_domains_t *domains,
+                             const sakamoto_product_dns_config_t *dns)
 {
   product_core_main_t *pcm = opaque;
   product_packet_graph_policy_bundle_t bundle = {
     .generation = pcm->generation, .revision = revision, .snapshot_hash = hash,
-    .l4_rules = rule, .l4_rule_count = count, .domains = domains
+    .l4_rules = rule, .l4_rule_count = count, .domains = domains, .dns = *dns
   };
   if (product_packet_graph_apply_policy_bundle (&bundle) != PRODUCT_PACKET_OK)
     return SAKAMOTO_RULE_CONFIG_PUBLISH;
@@ -803,6 +804,9 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
   sakamoto_product_rule_config_request_t *request = &scratch->request;
   sakamoto_product_rule_config_status_t *status = &scratch->status;
   request->schema = ntohl (mp->schema);
+  request->dns.enabled = ntohl (mp->dns.enabled); request->dns.family = ntohl (mp->dns.family);
+  request->dns.port = ntohl (mp->dns.port); request->dns.reserved = ntohl (mp->dns.reserved);
+  memcpy (request->dns.address, mp->dns.address, sizeof request->dns.address);
   request->operation = ntohl (mp->operation);
   request->expected_saved_revision = clib_net_to_host_u64 (mp->expected_saved_revision);
 #define FROM_RULE(field) request->rule.field = ntohl (mp->rule.field)
@@ -873,7 +877,7 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
   else if (product_source_config)
     {
       if (request->operation == SAKAMOTO_RULE_CONFIG_QUERY) result = 0;
-      else if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE || request->operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL || request->operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE)
+      else if (request->operation == SAKAMOTO_RULE_CONFIG_REPLACE || request->operation == SAKAMOTO_RULE_CONFIG_REPLACE_ALL || request->operation == SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE || request->operation == SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM)
         result = product_rule_config_replace (product_source_config, request,
                                               product_core_publish_source, pcm);
       else result = SAKAMOTO_RULE_CONFIG_INVALID;
@@ -884,6 +888,12 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
     vlib_process_signal_event (pcm->vlib_main,
                                product_core_start_adapters_node.index, 1, 0);
   REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
+    rmp->dns.enabled = htonl (status->dns.enabled); rmp->dns.family = htonl (status->dns.family);
+    rmp->dns.port = htonl (status->dns.port); rmp->dns.reserved = htonl (status->dns.reserved);
+    memcpy (rmp->dns.address, status->dns.address, sizeof status->dns.address);
+    rmp->active_dns.enabled = htonl (status->active_dns.enabled); rmp->active_dns.family = htonl (status->active_dns.family);
+    rmp->active_dns.port = htonl (status->active_dns.port); rmp->active_dns.reserved = htonl (status->active_dns.reserved);
+    memcpy (rmp->active_dns.address, status->active_dns.address, sizeof status->active_dns.address);
     rmp->retval = htonl (rv);
     rmp->generation = clib_host_to_net_u64 (pcm->generation);
     rmp->saved_revision = clib_host_to_net_u64 (status->saved_revision);

@@ -26,7 +26,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 592]);
+    struct RawRecord([u8; 704]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -217,9 +217,9 @@ mod live {
                         let mut dns_records = Vec::new();
                         for channel in 0..health.owners * 2 {
                             for _ in 0..128 {
-                                let mut raw = RawRecord([0; 592]);
+                                let mut raw = RawRecord([0; 704]);
                                 let rv = unsafe {
-                                    product_observation_receive(handle, channel, &mut raw, 592)
+                                    product_observation_receive(handle, channel, &mut raw, 704)
                                 };
                                 if rv == 0 {
                                     break;
@@ -411,6 +411,79 @@ mod live {
         use std::io::{BufRead, BufReader, Write};
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
+
+        #[test]
+        #[ignore = "requires actual source-linked Root Adapter records and Product C transport producer"]
+        fn native_root_dns_proxy_identity_and_delivery_survive_sqlite_reopen() {
+            let root = std::env::temp_dir().join(format!("s315-observation-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let records = std::env::var("SAKAMOTO_DNS_PROXY_RECORDS").unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped())
+                .spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "dns-proxy {records}").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "DNS-PROXY 31");
+            let check = |reply: &serde_json::Value| {
+                assert_eq!(reply["storage"], "sqlite");
+                assert_eq!(reply["dns"]["accepted"], 31);
+                assert_eq!(reply["dns"]["rejected"], 0);
+                let rows = reply["dns"]["recent"].as_object().unwrap();
+                assert_eq!(rows.len(), 31, "no query/response/return identity may overwrite another");
+                for row in rows.values() {
+                    let record = &row["record"];
+                    assert_eq!(record["uid"], 10123);
+                    assert_eq!(record["resolver_port"], 53);
+                    assert_eq!(record["upstream_address"][0], 198);
+                    assert_eq!(record["upstream_port"], 53);
+                    assert_eq!(record["adapter_profile"], 1);
+                    assert_ne!(record["request_attempt"], 0);
+                    assert_ne!(record["proxy_flags"].as_u64().unwrap() & 1, 0);
+                }
+                for family in [4, 6] {
+                    let delivered = rows.values().find(|r| r["record"]["family"] == family
+                        && r["record"]["stage"] == 4 && r["record"]["reply_rcode"] == 3).unwrap();
+                    let record = &delivered["record"];
+                    assert_eq!(record["id"], 0x1234);
+                    assert_eq!(record["rcode"], 3, "actual upstream NXDOMAIN is separate from local error source");
+                    assert_eq!(record["delivery"], 2);
+                    assert_eq!(record["return_provenance"], 5);
+                    assert_eq!(record["return_policy_revision"], 7);
+                    assert_ne!(record["return_token"], 0);
+                    assert_eq!(record["query_policy_revision"], 3);
+                    assert!(rows.values().any(|r| r["record"]["family"] == family
+                        && r["record"]["stage"] == 4 && r["record"]["caller"] == 0
+                        && r["record"]["delivery"] == 3 && r["record"]["return_winner"] == 999));
+                    assert!(rows.values().any(|r| r["record"]["family"] == family
+                        && r["record"]["stage"] == 4 && r["record"]["delivery"] == 4));
+                }
+                let changed = rows.values().find(|r| r["record"]["stage"] == 4
+                    && r["record"]["winner"] == 316).unwrap();
+                assert_eq!(changed["record"]["query_policy_revision"], 3);
+                assert_eq!(changed["record"]["policy_revision"], 5);
+                assert_eq!(changed["record"]["reply_rcode"], 5);
+            };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let snapshot = service.snapshot();
+                if snapshot["persistent"]["dns"]["accepted"] == 31 {
+                    check(&snapshot["persistent"]); break;
+                }
+                assert!(Instant::now() < deadline, "Root proxy records were not accepted: {snapshot}");
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(service);
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            check(&restored.query()); drop(restored);
+            std::fs::remove_dir_all(root).unwrap();
+        }
 
         #[test]
         #[ignore = "requires the actual Product C producer executable"]

@@ -67,7 +67,7 @@ class AdbTrace:
         self.output, self.adb = Path(output), list(adb)
         self.nonce = 's314-control-' + str(time.monotonic_ns())
         self.remote = remote_parent + '/' + self.nonce
-        self.items, self.created, self.closed = [], False, False
+        self.items, self.retired, self.unreaped, self.created, self.closed, self.next_number = [], [], {}, False, False, 1
         self.output.joinpath('source-s314_adb_trace.py').write_bytes(Path(__file__).read_bytes())
 
     @staticmethod
@@ -80,7 +80,18 @@ class AdbTrace:
         # program. Do not infer ownership of arbitrary background shell jobs.
         return command[1:3] == ('sh', '-c') and len(command) == 4 and 'am start -n ' in command[3] and '--es completeRuleText ' in command[3]
 
+    def budget_timeout(self, maximum):
+        timeout=maximum
+        for name in ('close_deadline','operation_deadline'):
+            deadline=getattr(self,name,None)
+            if deadline is not None:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise TimeoutError('trace '+name.removesuffix('_deadline')+' budget exhausted')
+                timeout=min(timeout,remaining)
+        return timeout
+
     def execute(self, original, wire, timeout, check=True, kind='traced-control'):
+        timeout=self.budget_timeout(timeout)
         started, monotonic = time.time_ns(), time.monotonic_ns()
         process, failure, stdout, stderr = None, None, b'', b''
         cleanup_error = None
@@ -97,14 +108,14 @@ class AdbTrace:
                     if process.poll() is None:
                         process.kill()
                     try:
-                        stdout, stderr = process.communicate(timeout=2)
+                        stdout, stderr = process.communicate(timeout=self.budget_timeout(2))
                     except BaseException as drain:
                         if isinstance(drain, subprocess.TimeoutExpired):
                             stdout, stderr = drain.output or stdout, drain.stderr or stderr
                         for pipe in (process.stdout, process.stderr):
                             if pipe:
                                 pipe.close()
-                        process.wait(timeout=2)
+                        process.wait(timeout=self.budget_timeout(2))
                 except BaseException as error:
                     cleanup_error = repr(error)
             record = dict(started_ns=started, completed_ns=time.time_ns(), started_monotonic_ns=monotonic,
@@ -125,6 +136,8 @@ class AdbTrace:
                 record['local_cleanup_error'] = cleanup_error
             with (self.output / 'operations.jsonl').open('a') as stream:
                 stream.write(json.dumps(record) + '\n')
+            if process is not None and not record['local_reaped']:
+                self.unreaped[process.pid]=process
             if failure:
                 failure.s314_operation = record
         if failure:
@@ -137,27 +150,52 @@ class AdbTrace:
             raise RuntimeError((stdout + stderr).decode(errors='replace'))
         return stdout, stderr, process.returncode, record
 
-    def collect(self, item):
-        for suffix in ('meta', 'out'):
-            name = item['label'] + '-remote-' + suffix
-            command = ['exec-out', 'cat', item['remote_stem'] + '.' + suffix]
-            try:
-                stdout, stderr, code, record = self.execute(command, command, 5, check=False, kind='trace-witness-read')
-                self.output.joinpath(name + '.stdout').write_bytes(stdout)
-                self.output.joinpath(name + '.stderr').write_bytes(stderr)
-                item['remote_' + suffix] = dict(code=code, text=stdout.decode(errors='replace'))
-            except Exception as error:
-                item['remote_' + suffix] = dict(read_error=repr(error))
-        item['witness'] = witness(item)
+    def collect(self, item, deadline=None):
+        previous=getattr(self,'operation_deadline',None)
+        if deadline is not None:self.operation_deadline=deadline
+        try:
+            for suffix in ('meta', 'out'):
+                name = item['label'] + '-remote-' + suffix
+                command = ['exec-out', 'cat', item['remote_stem'] + '.' + suffix]
+                try:
+                    stdout, stderr, code, record = self.execute(command, command, 5, check=False, kind='trace-witness-read')
+                    self.output.joinpath(name + '.stdout').write_bytes(stdout)
+                    self.output.joinpath(name + '.stderr').write_bytes(stderr)
+                    item['remote_' + suffix] = dict(code=code, text=stdout.decode(errors='replace'))
+                except Exception as error:
+                    item['remote_' + suffix] = dict(read_error=repr(error))
+            item['witness'] = witness(item)
+        finally:
+            if previous is None:self.__dict__.pop('operation_deadline',None)
+            else:self.operation_deadline=previous
+
+    def retire_completed(self, deadline):
+        for item in list(self.items):
+            if item.get('outcome') == 'completed':
+                for attempt in range(3):
+                    if 'witness' not in item or item['witness']['gaps']:
+                        self.collect(item, deadline)
+                    if not item['witness']['gaps']: break
+                    if deadline is None or deadline-time.monotonic()<=.1: break
+                    time.sleep(.1)
+            if item.get('witness',{}).get('gaps') == []:
+                item['retired_ns']=time.time_ns(); self.items.remove(item); self.retired.append(item)
+            elif item.get('outcome') == 'completed':
+                raise RuntimeError('completed trace obligation remains unproved: '+item['label'])
 
     def run(self, command, deadline, check=True):
+        # Drain completed prior witnesses before issuing another mutation. This
+        # makes final close bounded by the last operation rather than the full
+        # matrix history, while preserving every remote receipt.
+        self.retire_completed(deadline)
+        assert not self.items, 'an unresolved trace obligation blocks a later control mutation'
         if not self.created:
             remaining = deadline-time.monotonic() if deadline else 5
             assert remaining > 0, 'end-to-end capture budget exhausted'
             self.created = True  # An ambiguous mkdir still requires cleanup.
             create = ['exec-out', 'mkdir', self.remote]
             self.execute(create, create, min(5, remaining), kind='trace-owned-directory')
-        number, original = len(self.items)+1, list(map(str, command))
+        number, original = self.next_number, list(map(str, command)); self.next_number += 1
         stem = self.remote + '/op-' + str(number)
         program = ' '.join(original[1:])
         child = f'while [ ! -f {stem}.gate ]; do sleep 0.01; done; exec sh -c {shlex.quote(program)}'
@@ -174,15 +212,26 @@ class AdbTrace:
                   f'printf "end\\n" >> {stem}.meta; '
                   f'cat /proc/uptime >> {stem}.meta; printf "exit\\n%s\\n" "$code" >> {stem}.meta; cat {stem}.out; exit "$code"')
         wire = ['shell', 'sh', '-c', shlex.quote(script)]
-        timeout = min(10, deadline-time.monotonic()) if deadline else 60
+        # Large, already-bounded debug control payloads (for example a padded
+        # DNS packet encoded as hex) can take more than ten seconds to cross
+        # the Android shell service even though `am start` remains a single
+        # foreground control operation. Keep ordinary controls on the tighter
+        # bound while allowing these large commands enough time to return their
+        # completion witness; the caller's end-to-end deadline still wins.
+        command_bytes = sum(len(part.encode()) for part in original)
+        command_limit = 30 if command_bytes > 4096 else 10
+        timeout = min(command_limit, deadline-time.monotonic()) if deadline else 60
         assert timeout > 0, 'end-to-end capture budget exhausted'
         item = dict(label='adb-trace-' + str(number), original_argv=original, remote_stem=stem)
         self.items.append(item)
         try:
             stdout, stderr, code, record = self.execute(original, wire, timeout, check=False)
             item.update(outcome='completed', host_operation=record)
-            prefix = ('__S314_BEGIN_' + str(number) + '__\n').encode()
-            assert stdout.startswith(prefix), 'trace preamble missing; exact output cannot be established'
+            marker = ('__S314_BEGIN_' + str(number) + '__').encode()
+            prefixes = (marker + b'\n', marker + b'\r\n')
+            prefix = next((candidate for candidate in prefixes
+                           if stdout.startswith(candidate)), None)
+            assert prefix is not None, 'trace preamble missing; exact output cannot be established'
             value = (stdout[len(prefix):] + stderr).decode(errors='replace').replace('\r', '')
             if check and code:
                 raise RuntimeError(value)
@@ -198,7 +247,8 @@ class AdbTrace:
     def save(self, status, **extra):
         self.output.joinpath('adb-trace.json').write_text(json.dumps(dict(status=status, nonce=self.nonce,
             remote_directory=self.remote, helper_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            operations=self.items, **extra), indent=2) + '\n')
+            active_operations=self.items, retired_operations=self.retired,
+            unreaped_local_pids=sorted(self.unreaped), operations=self.retired+self.items, **extra), indent=2) + '\n')
 
     def live_identity(self, pid):
         script = (f'if [ ! -d /proc/{pid} ]; then echo ABSENT; else cat /proc/{pid}/stat && '
@@ -215,10 +265,18 @@ class AdbTrace:
         return {int(parts[0]): (int(parts[1]), ' '.join(parts[3:])) for line in stdout.decode(errors='replace').splitlines()
                 if len(parts := line.split()) >= 4 and parts[0].isdigit()}
 
-    def close(self):
+    def close(self, budget=None):
         if self.closed or not self.created:
             return
+        if budget is not None:
+            assert budget>0, 'trace close requires a positive remaining cleanup budget'
+            self.close_deadline=time.monotonic()+budget
         try:
+            for pid, process in list(self.unreaped.items()):
+                if process.poll() is None: process.kill()
+                process.wait(timeout=self.budget_timeout(2))
+                assert process.poll() is not None, 'owned local trace client remains'
+                del self.unreaped[pid]
             for item in self.items:
                 self.collect(item)
             rows, known = self.process_rows('adb-trace-processes-before'), {}
@@ -268,3 +326,5 @@ class AdbTrace:
         except BaseException as error:
             self.save('HOLD', cleanup_error=repr(error))
             raise
+        finally:
+            self.__dict__.pop('close_deadline',None)

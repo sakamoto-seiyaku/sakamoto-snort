@@ -10,6 +10,7 @@
 #define SAKAMOTO_RULE_CONFIG_REPLACE UINT32_C(1)
 #define SAKAMOTO_RULE_CONFIG_REPLACE_ALL UINT32_C(2)
 #define SAKAMOTO_RULE_CONFIG_NETWORK_DISABLE UINT32_C(3)
+#define SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM UINT32_C(4)
 #define SAKAMOTO_RULE_CONFIG_MAX_RULES 256
 #define SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES 4096
 
@@ -95,6 +96,13 @@ typedef struct {
     sakamoto_product_source_metadata_t lists[SAKAMOTO_DOMAIN_MAX_LISTS];
 } sakamoto_product_config_metadata_t;
 
+/* Explicit ordinary upstream selection. Disabled replacement defaults to all
+ * zero; a previously selected numeric endpoint may also remain while off. */
+typedef struct {
+    uint32_t enabled, family, port, reserved;
+    uint8_t address[16];
+} sakamoto_product_dns_config_t;
+
 typedef struct {
     uint32_t schema;
     uint32_t operation;
@@ -105,6 +113,7 @@ typedef struct {
     sakamoto_product_rule_graph_t graph;
     sakamoto_product_domains_t domains;
     sakamoto_product_config_metadata_t metadata;
+    sakamoto_product_dns_config_t dns;
 } sakamoto_product_rule_config_request_t;
 
 typedef struct {
@@ -124,6 +133,7 @@ typedef struct {
     sakamoto_product_rule_graph_t graph;
     sakamoto_product_domains_t domains;
     sakamoto_product_config_metadata_t metadata;
+    sakamoto_product_dns_config_t dns, active_dns;
 } sakamoto_product_rule_config_status_t;
 
 #endif

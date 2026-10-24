@@ -199,6 +199,27 @@ fn main() {
         };
         match command.as_str() {
             "rule-query" if remaining.is_empty() => {}
+            "rule-dns" if remaining.len() == 2 || remaining.len() == 3 => {
+                request.operation = 4;
+                request.expected_saved_revision = number(0);
+                if remaining[1] != "off" {
+                    let address: std::net::IpAddr = remaining[1].parse().unwrap_or_else(|_| usage());
+                    request.dns.enabled = 1;
+                    request.dns.port = if remaining.len() == 3 {
+                        u32::try_from(number(2)).unwrap_or_else(|_| usage())
+                    } else { 53 };
+                    match address {
+                        std::net::IpAddr::V4(ip) => {
+                            request.dns.family = 4;
+                            request.dns.address[..4].copy_from_slice(&ip.octets());
+                        }
+                        std::net::IpAddr::V6(ip) => {
+                            request.dns.family = 6;
+                            request.dns.address = ip.octets();
+                        }
+                    }
+                } else if remaining.len() != 2 { usage() }
+            }
             "rule-replace-all" | "rule-network-disable" if remaining.len() == 2 => {
                 request.operation = if command == "rule-network-disable" {
                     3
@@ -258,6 +279,15 @@ fn main() {
                     "config.domain_list_count={}\nconfig.domain_entry_count={}",
                     s.domains.list_count, s.domains.entry_count
                 );
+                for (name, dns) in [("dns", s.dns), ("dns.active", s.active_dns)] {
+                    let address = if dns.family == 4 {
+                        std::net::Ipv4Addr::new(dns.address[0], dns.address[1], dns.address[2], dns.address[3]).to_string()
+                    } else if dns.family == 6 {
+                        std::net::Ipv6Addr::from(dns.address).to_string()
+                    } else { "unselected".into() };
+                    println!("config.{name}.enabled={}\nconfig.{name}.family={}\nconfig.{name}.port={}\nconfig.{name}.address={address}",
+                        dns.enabled, dns.family, dns.port);
+                }
                 for (i, entry) in s.domains.entries[..s.domains.entry_count as usize]
                     .iter()
                     .enumerate()

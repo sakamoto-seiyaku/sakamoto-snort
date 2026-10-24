@@ -296,10 +296,13 @@ final class ProtocolFactsProbe {
     private static void dnsQueries(JSONObject plan, JSONObject result,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         org.json.JSONArray queries = plan.getJSONArray("dnsQueries");
-        int timeout = plan.optInt("dnsTimeoutMs", 1000);
+        int timeout = plan.has("dnsProxyTimeoutMs")
+                ? plan.getInt("dnsProxyTimeoutMs") : plan.optInt("dnsTimeoutMs", 1000);
         int delay = plan.optInt("dnsQueryDelayMs", 0);
+        int initialDelay = plan.optInt("dnsInitialDelayMs", 0);
         if (queries.length() < 1 || queries.length() > 64 || port != 53
-                || timeout < 100 || timeout > 3000 || delay < 0 || delay > 1000)
+                || timeout < 100 || timeout > (plan.has("dnsProxyTimeoutMs") ? 12000 : 3000)
+                || delay < 0 || delay > 1000 || initialDelay < 0 || initialDelay > 3000)
             throw new IllegalArgumentException("bounded ordinary DNS probe");
         org.json.JSONArray exchanges = new org.json.JSONArray();
         result.put("dnsExchanges", exchanges);
@@ -308,7 +311,49 @@ final class ProtocolFactsProbe {
             socket.connect(endpoint, port); socket.setSoTimeout(timeout);
             result.put("local", socket.getLocalSocketAddress().toString());
             result.put("resolver", socket.getRemoteSocketAddress().toString());
+            // Stage the ordinary UI before the first actual DNS datagram.
+            // Product's query deadline starts on that datagram, unchanged.
+            if (initialDelay != 0) Thread.sleep(initialDelay);
             byte[] received = new byte[8193];
+            if (plan.optBoolean("dnsPipeline")) {
+                byte[][] requests = new byte[queries.length()][];
+                boolean[] answered = new boolean[queries.length()];
+                for (int i = 0; i < requests.length; ++i) {
+                    requests[i] = hex(queries.getString(i));
+                    if (requests[i].length < 2 || requests[i].length > 4096)
+                        throw new IllegalArgumentException("bounded pipelined DNS identity");
+                    for (int j = 0; j < i; ++j)
+                        if (requests[i][0] == requests[j][0] && requests[i][1] == requests[j][1])
+                            throw new IllegalArgumentException("unique pipelined DNS IDs required");
+                    exchanges.put(new JSONObject().put("sentHex", toHex(requests[i])));
+                    socket.send(new DatagramPacket(requests[i], requests[i].length));
+                }
+                // One bounded receive window for the entire ordinary App
+                // batch; match real reply IDs instead of assuming arrival order.
+                long deadline = SystemClock.elapsedRealtime() + timeout;
+                int remaining = requests.length, unmatched = 0;
+                while (remaining != 0 && SystemClock.elapsedRealtime() < deadline) {
+                    socket.setSoTimeout((int) Math.max(1, deadline - SystemClock.elapsedRealtime()));
+                    DatagramPacket reply = new DatagramPacket(received, received.length);
+                    try { socket.receive(reply); }
+                    catch (SocketTimeoutException finished) { break; }
+                    if (reply.getLength() > 8192) throw new IllegalStateException("DNS probe reply size");
+                    int index = -1;
+                    if (reply.getLength() >= 2)
+                        for (int i = 0; i < requests.length; ++i)
+                            if (received[0] == requests[i][0] && received[1] == requests[i][1]) index = i;
+                    if (index < 0 || answered[index]) {
+                        if (++unmatched > 128) throw new IllegalStateException("DNS probe unmatched reply limit");
+                        continue;
+                    }
+                    answered[index] = true; --remaining;
+                    exchanges.getJSONObject(index).put("replyHex", toHex(Arrays.copyOf(received, reply.getLength())));
+                }
+                for (int i = 0; i < requests.length; ++i)
+                    if (!answered[i]) exchanges.getJSONObject(i).put("timedOut", true);
+                result.put("pipelineReceived", requests.length - remaining).put("pipelineUnmatched", unmatched);
+                return;
+            }
             for (int i = 0; i < queries.length(); ++i) {
                 if (i != 0 && delay != 0) Thread.sleep(delay);
                 byte[] request = hex(queries.getString(i));

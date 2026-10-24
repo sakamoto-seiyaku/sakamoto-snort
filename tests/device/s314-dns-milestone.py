@@ -424,7 +424,7 @@ def main():
         result['completed_ns'] = time.time_ns()
         (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(dict(status=result['status'], cases=len(result['cases']))))
+    return 0 if result['status'].startswith('PASS') else 1
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__': raise SystemExit(main())

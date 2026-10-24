@@ -15,7 +15,11 @@
 
 #include "product_packet_graph.h"
 #include "product_packet_batch.h"
+#include "product_dns.h"
 #include "product_runtime_topology.h"
+#include "product_root_dns_adapter.h"
+#include "product_root_dns_admission.h"
+#include "product_observation.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -81,6 +85,16 @@ typedef struct
   u32 payload_length;
 } product_root_nfqueue_packet_t;
 
+typedef struct
+{
+  product_adapter_obligation_t obligation;
+  product_platform_packet_facts_t platform;
+} product_root_buffer_platform_metadata_t;
+
+_Static_assert (sizeof (product_root_buffer_platform_metadata_t)
+                  == sizeof (((vlib_buffer_t *) 0)->opaque),
+                "Root completion platform overlay");
+
 /* Bounded adapter ledger only: no packet or platform facts. It remembers
  * completed identities until the slot is reused, preventing non-last replay. */
 typedef struct
@@ -122,7 +136,7 @@ typedef struct
   product_root_receive_pool_t receive_pool;
   u32 receive_allocated;
   u64 reserve_accepts, reserve_losses, identity_losses;
-  u64 receive_datagrams, receive_returns, ingress_accepts;
+  u64 receive_datagrams, receive_returns, ingress_accepts, ingress_dns_drop_attempts;
   u64 pending_collisions, pending_full_rejections, pending_duplicate_rejections;
   u64 ingress_normal_exhausted, ingress_envelope_rejected;
   u64 ingress_completion_rejected, ingress_graph_rejected;
@@ -562,6 +576,17 @@ product_root_nfqueue_reserve (product_root_nfqueue_main_t *nm,
   return pending;
 }
 
+static u64
+product_root_nfqueue_next_observation_token (product_root_nfqueue_lane_t *lane)
+{
+  if (!lane || lane->next_obligation_token >=
+      (UINT64_MAX - PRODUCT_ROOT_NFQUEUE_MAX_LANES) /
+        PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+    return 0;
+  return (++lane->next_obligation_token * PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+    + lane->lane_index;
+}
+
 static u16
 product_nfnl_type (u16 message_type)
 {
@@ -608,7 +633,7 @@ product_nfnl_send (int fd, const struct nlmsghdr *nlh, int flags)
       product_root_nfqueue_last_errno = errno == 0 ? EIO : errno;
       return 0;
     }
-  return 1;
+  return sent == (ssize_t) nlh->nlmsg_len;
 }
 
 static void
@@ -818,7 +843,14 @@ product_root_nfqueue_record_verdict_attempt (
 #endif
 }
 
-static int
+enum
+{
+  PRODUCT_VERDICT_SUCCEEDED,
+  PRODUCT_VERDICT_FAILED_DEFINITE,
+  PRODUCT_VERDICT_OUTCOME_UNKNOWN,
+};
+
+static u32
 product_root_nfqueue_send_counted_verdict (
   product_root_nfqueue_main_t *nm, product_root_nfqueue_lane_t *lane,
   u32 packet_id, u32 verdict)
@@ -829,12 +861,17 @@ product_root_nfqueue_send_counted_verdict (
     {
       lane->verdict_succeeded++;
       clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1);
-      return 1;
+      return PRODUCT_VERDICT_SUCCEEDED;
     }
   lane->verdict_failed++;
   clib_atomic_fetch_add_relax (&nm->verdict_failed, 1);
-  clib_atomic_fetch_add_relax (&nm->verdict_failed_definite, 1);
-  return 0;
+  u32 outcome = product_root_nfqueue_last_send_result < 0
+    ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
+  if (outcome == PRODUCT_VERDICT_FAILED_DEFINITE)
+    clib_atomic_fetch_add_relax (&nm->verdict_failed_definite, 1);
+  else
+    clib_atomic_fetch_add_relax (&nm->verdict_outcome_unknown, 1);
+  return outcome;
 }
 
 static int
@@ -947,6 +984,13 @@ product_root_nfqueue_parse_packet (u8 *data, u32 length,
   return 0;
 }
 
+static int
+product_root_nfqueue_capture_complete (const product_root_nfqueue_packet_t *packet)
+{
+  return packet && (!packet->captured_length_present
+    || packet->captured_length <= packet->payload_length);
+}
+
 static void
 product_root_nfqueue_return_receive (product_root_nfqueue_lane_t *lane,
                                      u16 slot, u32 buffer_index)
@@ -966,6 +1010,129 @@ product_root_nfqueue_packet_id_seen (const u32 *packet_ids, u32 packet_count,
     if (packet_ids[index] == packet_id)
       return 1;
   return 0;
+}
+
+/* Classify only an ordinary outbound UDP query candidate. A visible QR=1 is
+ * not takeover traffic. If the receive prefix ends before the DNS flags, the
+ * destination port is sufficient to conservatively prevent a possible query
+ * from escaping to the original resolver. This helper never claims a valid
+ * DNS message or a policy result. */
+static int
+product_root_nfqueue_dns_query_candidate (const u8 *data, u32 length)
+{
+  return product_root_dns_admission_query (data, length, 0);
+}
+
+static int
+product_root_nfqueue_unadmitted_dns_query (const u8 *data, u32 length,
+  u32 message_length, product_root_dns_admission_facts_t *facts,
+  product_platform_packet_facts_t *platform)
+{
+  if (!product_root_dns_adapter_enabled ()
+      || message_length < NLMSG_LENGTH (sizeof (struct nfgenmsg)))
+    return 0;
+  const struct nlmsghdr *nlh = (const struct nlmsghdr *) data;
+  const struct nfgenmsg *nfgen = (const struct nfgenmsg *) NLMSG_DATA (nlh);
+  u32 visible = clib_min (message_length, length);
+  u32 offset = NLMSG_LENGTH (sizeof (*nfgen));
+  u8 hook = 0;
+  int hook_present = 0;
+  u32 uid = 0, outdev = 0;
+  int uid_present = 0, outdev_present = 0;
+  u32 captured_length = 0;
+  int captured_length_present = 0;
+  const u8 *payload = 0;
+  u32 payload_visible = 0;
+  int payload_incomplete = 0;
+  while (offset + NFA_LENGTH (0) <= visible)
+    {
+      const struct nfattr *attr = (const struct nfattr *) (data + offset);
+      u32 declared = attr->nfa_len;
+      u32 available = visible - offset;
+      if (declared < NFA_LENGTH (0))
+        break;
+      u32 value_visible = available > NFA_LENGTH (0)
+        ? available - NFA_LENGTH (0) : 0;
+      u32 declared_value = declared - NFA_LENGTH (0);
+      value_visible = clib_min (value_visible, declared_value);
+      if (NFA_TYPE (attr) == NFQA_PACKET_HDR
+          && value_visible >= sizeof (struct nfqnl_msg_packet_hdr))
+        {
+          const struct nfqnl_msg_packet_hdr *header =
+            (const struct nfqnl_msg_packet_hdr *) NFA_DATA (attr);
+          hook = header->hook;
+          hook_present = 1;
+        }
+      else if (NFA_TYPE (attr) == NFQA_PAYLOAD && value_visible)
+        {
+          payload = (const u8 *) NFA_DATA (attr);
+          payload_visible = value_visible;
+          payload_incomplete = value_visible < declared_value;
+        }
+      else if (NFA_TYPE (attr) == NFQA_UID && value_visible >= sizeof (u32))
+        {
+          clib_memcpy_fast (&uid, NFA_DATA (attr), sizeof (uid));
+          uid = ntohl (uid);
+          uid_present = 1;
+        }
+      else if (NFA_TYPE (attr) == NFQA_IFINDEX_OUTDEV
+               && value_visible >= sizeof (u32))
+        {
+          clib_memcpy_fast (&outdev, NFA_DATA (attr), sizeof (outdev));
+          outdev = ntohl (outdev);
+          outdev_present = outdev && outdev <= INT32_MAX;
+        }
+      else if (NFA_TYPE (attr) == NFQA_CAP_LEN
+               && value_visible >= sizeof (u32))
+        {
+          clib_memcpy_fast (&captured_length, NFA_DATA (attr), sizeof (u32));
+          captured_length = ntohl (captured_length);
+          captured_length_present = 1;
+        }
+      u32 step = NFA_ALIGN (declared);
+      if (!step || step > available)
+        break;
+      offset += step;
+    }
+  if (!hook_present || hook != NF_INET_LOCAL_OUT || !payload)
+    return 0;
+  product_root_dns_admission_classification_t classification =
+    product_root_dns_admission_classify (payload, payload_visible, facts);
+  int physically_incomplete = payload_incomplete || message_length > length
+    || (captured_length_present && captured_length > payload_visible);
+  if (classification != PRODUCT_ROOT_DNS_ADMISSION_QUERY
+      && !(classification == PRODUCT_ROOT_DNS_ADMISSION_INCOMPLETE
+           && physically_incomplete))
+    return 0;
+  if (platform)
+    {
+      *platform = (product_platform_packet_facts_t) {
+        .uid = uid_present ? uid : 0,
+        .linux_ifindex = outdev_present ? outdev : 0,
+        .availability = (uid_present ? PRODUCT_PLATFORM_UID_KNOWN : 0) |
+          (outdev_present ? PRODUCT_PLATFORM_IFINDEX_KNOWN : 0),
+        .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
+        .provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE,
+        .reserved = PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE,
+      };
+#ifdef __ANDROID__
+      if (uid_present && uid % 100000U >= 10000U && uid % 100000U <= 19999U)
+        platform->availability |= PRODUCT_PLATFORM_DNS_APP_RELIABLE;
+#endif
+      if (outdev_present)
+        {
+          const sakamoto_product_network_snapshot_t *network =
+            product_network_snapshot_current ();
+          for (u32 i = 0; i < network->count; ++i)
+            if (network->entries[i].linux_ifindex == outdev)
+              {
+                platform->network_context_id = network->entries[i].context;
+                platform->availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
+                break;
+              }
+        }
+    }
+  return 1;
 }
 
 /* Pre-admission return on the origin worker, using the already materialized
@@ -1021,21 +1188,49 @@ product_root_nfqueue_accept_unadmitted (product_root_nfqueue_main_t *nm,
       if (accepted_count == ARRAY_LEN (accepted_ids))
         break;
       accepted_ids[accepted_count++] = packet_id;
-      clib_atomic_fetch_add_relax (&nm->graph_submit_fail_opens, 1);
-      lane->ingress_accepts++;
+      product_root_dns_admission_facts_t admission = {0};
+      product_platform_packet_facts_t admission_platform = {0};
+      u32 verdict = product_root_nfqueue_unadmitted_dns_query (
+        (const u8 *) nlh, visible, nlh->nlmsg_len, &admission,
+        &admission_platform)
+          ? NF_DROP : NF_ACCEPT;
+      if (verdict == NF_ACCEPT)
+        {
+          clib_atomic_fetch_add_relax (&nm->graph_submit_fail_opens, 1);
+          lane->ingress_accepts++;
+        }
+      else
+        lane->ingress_dns_drop_attempts++;
       if (strcmp (reason, "normal_exhausted") == 0) lane->ingress_normal_exhausted++;
       else if (strcmp (reason, "unadmitted_envelope") == 0) lane->ingress_envelope_rejected++;
       else if (strcmp (reason, "completion_capacity") == 0) lane->ingress_completion_rejected++;
       else if (strcmp (reason, "graph_submit_rejected") == 0) lane->ingress_graph_rejected++;
-      int success = product_root_nfqueue_send_counted_verdict (
-        nm, lane, packet_id, NF_ACCEPT);
-      if (lane->ingress_accepts <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
+      u32 outcome = product_root_nfqueue_send_counted_verdict (
+        nm, lane, packet_id, verdict);
+      if (verdict == NF_DROP)
+        {
+          u64 token = product_root_nfqueue_next_observation_token (lane);
+          if (token && admission.resolver_port == 53)
+            product_root_dns_adapter_admission_observe (
+              vlib_get_main (), token, &admission_platform, &admission,
+              strcmp (reason, "unadmitted_envelope") == 0
+                ? PRODUCT_DNS_COPY_GAP : PRODUCT_DNS_CAPACITY,
+              outcome == PRODUCT_VERDICT_SUCCEEDED
+                ? PRODUCT_DNS_DELIVERY_RESOURCE_DROP
+                : outcome == PRODUCT_VERDICT_OUTCOME_UNKNOWN
+                  ? PRODUCT_DNS_DELIVERY_OUTCOME_UNKNOWN
+                  : PRODUCT_DNS_DELIVERY_WRITE_FAILED);
+          product_observation_basic (vlib_get_main (), 2,
+            admission.packet_length);
+        }
+      if (lane->ingress_accepts + lane->ingress_dns_drop_attempts
+            <= product_packet_graph_trace_limit () / PRODUCT_ROOT_NFQUEUE_MAX_LANES)
         {
           flockfile (stderr);
           fprintf (stderr, "s233 event=ingress_verdict source=NFQ_CAPTURED generation=%llu thread=%u lane=%u queue=%u packet=%u reason=%s verdict=%u syscall_success=%u bytes=%u raw=",
             (unsigned long long) lane->generation, vlib_get_thread_index (),
-            lane->lane_index, lane->queue_id, packet_id, reason, NF_ACCEPT,
-            success, length);
+            lane->lane_index, lane->queue_id, packet_id, reason, verdict,
+            outcome == PRODUCT_VERDICT_SUCCEEDED, length);
           for (u32 i = 0; i < length; ++i)
             fprintf (stderr, "%02x", data[i]);
           fprintf (stderr, "\n");
@@ -1074,15 +1269,8 @@ typedef struct
   product_root_nfqueue_lane_t *lane;
   product_root_nfqueue_pending_t *pending;
   u32 buffer_index, verdict;
-  int send_flags, capacity_bypass;
+  int send_flags, capacity_bypass, dns_admission_drop;
 } product_root_verdict_work_t;
-
-enum
-{
-  PRODUCT_VERDICT_SUCCEEDED,
-  PRODUCT_VERDICT_FAILED_DEFINITE,
-  PRODUCT_VERDICT_OUTCOME_UNKNOWN,
-};
 
 static int
 product_root_nfqueue_prepare_completion (
@@ -1139,6 +1327,26 @@ product_root_nfqueue_prepare_completion (
           && !capacity_bypass))
     { rejection = "stale_carrier_or_intent"; goto stale; }
 
+  int dns_admission_drop = 0;
+  if (capacity_bypass
+      || completion->terminal_intent == PRODUCT_PACKET_INTENT_PASS_ADAPTER)
+    {
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      product_root_buffer_platform_metadata_t platform;
+      clib_memcpy_fast (&platform, buffer->opaque, sizeof (platform));
+      if ((platform.platform.reserved
+             & PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE)
+          && platform.platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE
+          && platform.platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT
+          && product_root_nfqueue_dns_query_candidate (
+            vlib_buffer_get_current (buffer), buffer->current_length))
+        {
+          verdict = NF_DROP;
+          dns_admission_drop = 1;
+          lane->ingress_dns_drop_attempts++;
+        }
+    }
+
   /* Commit identity consumption before the one native operation attempt. */
   product_root_nfqueue_pending_deactivate (nm, lane, pending);
   pending->completion = *completion;
@@ -1172,6 +1380,7 @@ product_root_nfqueue_prepare_completion (
   *work = (product_root_verdict_work_t) {
     .vm = vm, .lane = lane, .pending = pending, .buffer_index = buffer_index,
     .verdict = verdict, .send_flags = send_flags, .capacity_bypass = capacity_bypass,
+    .dns_admission_drop = dns_admission_drop,
   };
   return 1;
 
@@ -1201,11 +1410,13 @@ product_root_nfqueue_finish_completion (product_root_verdict_work_t *work,
   u32 lane_index = obligation->origin_lane, packet_id = obligation->packet_id;
   u32 buffer_index = work->buffer_index, verdict = work->verdict;
   int send_flags = work->send_flags, capacity_bypass = work->capacity_bypass;
+  int dns_admission_drop = work->dns_admission_drop;
   if (outcome == PRODUCT_VERDICT_SUCCEEDED)
     {
       lane->verdict_succeeded++; clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1);
 #ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
-      if ((completion->flags & PRODUCT_COMPLETION_POLICY_QUALIFIED) && !capacity_bypass &&
+      if ((completion->flags & PRODUCT_COMPLETION_POLICY_QUALIFIED)
+          && !capacity_bypass && !dns_admission_drop &&
           !(completion->flags & PRODUCT_COMPLETION_FRAGMENT_MEMBER))
         {
           __atomic_fetch_add (&lane->policy_qualified_succeeded, 1, __ATOMIC_RELAXED);
@@ -1235,6 +1446,29 @@ product_root_nfqueue_finish_completion (product_root_verdict_work_t *work,
       lane_index, lane->fd, lane->queue_id, packet_id,
       (unsigned long long) obligation->token, verdict, send_flags,
       (long long) result, error, outcome);
+  if (dns_admission_drop)
+    {
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      product_root_buffer_platform_metadata_t platform;
+      product_root_dns_admission_facts_t admission;
+      clib_memcpy_fast (&platform, buffer->opaque, sizeof (platform));
+      if (product_root_dns_admission_query (
+            vlib_buffer_get_current (buffer), buffer->current_length,
+            &admission))
+        {
+          u8 delivery = outcome == PRODUCT_VERDICT_SUCCEEDED
+            ? PRODUCT_DNS_DELIVERY_RESOURCE_DROP
+            : outcome == PRODUCT_VERDICT_OUTCOME_UNKNOWN
+              ? PRODUCT_DNS_DELIVERY_OUTCOME_UNKNOWN
+              : PRODUCT_DNS_DELIVERY_WRITE_FAILED;
+          product_root_dns_adapter_admission_observe (vm, obligation->token,
+            &platform.platform, &admission,
+            capacity_bypass ? PRODUCT_DNS_CAPACITY : PRODUCT_DNS_COPY_GAP,
+            delivery);
+          if (completion->flags & PRODUCT_COMPLETION_FRAGMENT_MEMBER)
+            product_observation_basic (vm, 2, admission.packet_length);
+        }
+    }
   product_root_nfqueue_return_receive (lane, pending->receive_slot, buffer_index);
 }
 
@@ -1248,8 +1482,11 @@ product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
   work.lane->graph_sendto_calls++;
   int success = product_nfqueue_send_verdict (work.lane->fd, work.lane->queue_id,
     completion->obligation.packet_id, work.verdict, work.send_flags);
+  u32 outcome = success ? PRODUCT_VERDICT_SUCCEEDED
+    : product_root_nfqueue_last_send_result < 0
+      ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
   product_root_nfqueue_finish_completion (&work,
-    success ? PRODUCT_VERDICT_SUCCEEDED : PRODUCT_VERDICT_FAILED_DEFINITE,
+    outcome,
     product_root_nfqueue_last_send_result, product_root_nfqueue_last_errno);
   return 1;
 }
@@ -1654,7 +1891,8 @@ product_root_nfqueue_read_dispatch (clib_file_t *file)
         && NFNL_MSG_TYPE (nlh->nlmsg_type) == NFQNL_MSG_PACKET
         && ntohs (((struct nfgenmsg *) NLMSG_DATA (nlh))->res_id) == lane->queue_id;
       if (reserve_buffer || !single_packet || received > (ssize_t) data_size
-          || !product_root_nfqueue_parse_packet (base, visible, &packet))
+          || !product_root_nfqueue_parse_packet (base, visible, &packet)
+          || !product_root_nfqueue_capture_complete (&packet))
         {
           u64 attempts_before = lane->ingress_accepts;
           product_root_nfqueue_accept_unadmitted (nm, lane, base, visible,
@@ -1729,6 +1967,8 @@ product_root_nfqueue_read_dispatch (clib_file_t *file)
       platform.direction = packet.hook == NF_INET_LOCAL_OUT
         ? PRODUCT_PACKET_DIRECTION_OUTPUT : packet.hook == NF_INET_LOCAL_IN
         ? PRODUCT_PACKET_DIRECTION_INPUT : PRODUCT_PACKET_DIRECTION_UNKNOWN;
+      if (product_root_dns_adapter_enabled ())
+        platform.reserved |= PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE;
 #ifdef __ANDROID__
       /* NFQA_UID identifies the actual outgoing socket owner. Android normal
        * App IDs (including another user/profile) identify that direct App.
@@ -2468,7 +2708,8 @@ product_root_nfqueue_adapter_available (void)
          && nm->lane_count > 0 && nm->lane_count <= PRODUCT_ROOT_NFQUEUE_MAX_LANES
          && __atomic_load_n (&nm->ready_lane_mask, __ATOMIC_ACQUIRE)
               == (1U << nm->lane_count) - 1
-         && nm->hook_ready && !__atomic_load_n (&nm->fault_latched, __ATOMIC_ACQUIRE);
+         && nm->hook_ready && !__atomic_load_n (&nm->fault_latched, __ATOMIC_ACQUIRE)
+         && product_root_dns_adapter_ready ();
 }
 
 uint32_t
@@ -2883,7 +3124,7 @@ product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
       vlib_cli_output (vm, "root.capacity generation=%llu lane=%u normal_capacity=%u pending_capacity=%u pending_high_water=%u loan_high_water=%u",
         (unsigned long long) lane->generation, i, lane->receive_pool.normal_capacity,
         lane->receive_pool.normal_capacity, lane->pending_high_water, lane->loan_high_water);
-      vlib_cli_output (vm, "root.receive generation=%llu lane=%u family=%u queue=%u flags=%u maxlen=%u allocated=%u normal_free=%u reserve_free=%u loans=%u withheld=%u paused=%u identity_fault=%u datagrams=%llu returns=%llu ingress_accepts=%llu reserve_accepts=%llu reserve_losses=%llu identity_losses=%llu pending_collisions=%llu pending_full=%llu pending_duplicate_ids=%llu ingress_normal=%llu ingress_envelope=%llu ingress_completion=%llu ingress_graph=%llu",
+      vlib_cli_output (vm, "root.receive generation=%llu lane=%u family=%u queue=%u flags=%u maxlen=%u allocated=%u normal_free=%u reserve_free=%u loans=%u withheld=%u paused=%u identity_fault=%u datagrams=%llu returns=%llu ingress_accepts=%llu ingress_dns_drop_attempts=%llu reserve_accepts=%llu reserve_losses=%llu identity_losses=%llu pending_collisions=%llu pending_full=%llu pending_duplicate_ids=%llu ingress_normal=%llu ingress_envelope=%llu ingress_completion=%llu ingress_graph=%llu",
         (unsigned long long) lane->generation, i, lane->ip_family, lane->queue_id,
         lane->queue_flags, lane->queue_maxlen, lane->receive_allocated,
         lane->receive_pool.normal_free, lane->receive_pool.reserve_free,
@@ -2891,6 +3132,7 @@ product_root_receive_status_cli (vlib_main_t *vm, unformat_input_t *input,
         lane->identity_fault, (unsigned long long) lane->receive_datagrams,
         (unsigned long long) lane->receive_returns,
         (unsigned long long) lane->ingress_accepts,
+        (unsigned long long) lane->ingress_dns_drop_attempts,
         (unsigned long long) lane->reserve_accepts,
         (unsigned long long) lane->reserve_losses,
         (unsigned long long) lane->identity_losses,

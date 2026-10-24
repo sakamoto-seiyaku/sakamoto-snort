@@ -62,7 +62,8 @@ target_compile_options(sakamoto-product-l4-policy-test PRIVATE
 target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
   sakamoto_product_l4_policy)
 
-add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c src/product/vpp/product_dns_tcp.c)
+add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c src/product/vpp/product_dns_tcp.c
+  src/product/vpp/product_dns_proxy.c)
 target_link_libraries(sakamoto_product_dns PUBLIC
   sakamoto_product_l4_policy sakamoto_product_domains PRIVATE sakamoto_dns_wire)
 target_compile_features(sakamoto_product_dns PRIVATE c_std_11)
@@ -79,6 +80,29 @@ add_executable(sakamoto-product-dns-tcp-test tests/host/product_dns_tcp_test.c)
 target_link_libraries(sakamoto-product-dns-tcp-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-tcp-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-tcp-test COMMAND sakamoto-product-dns-tcp-test)
+add_executable(sakamoto-product-dns-proxy-test tests/host/product_dns_proxy_test.c)
+target_link_libraries(sakamoto-product-dns-proxy-test PRIVATE sakamoto_product_dns sakamoto_dns_wire)
+target_compile_options(sakamoto-product-dns-proxy-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-proxy-test COMMAND sakamoto-product-dns-proxy-test)
+add_executable(sakamoto-product-root-dns-io-test tests/host/product_root_dns_io_test.c
+  src/product/vpp/product_root_dns_io.c)
+target_link_libraries(sakamoto-product-root-dns-io-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-root-dns-io-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-root-dns-io-test COMMAND sakamoto-product-root-dns-io-test)
+add_test(NAME sakamoto-product-root-dns-adapter-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire>)
+add_test(NAME sakamoto-product-root-dns-generation-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case generation)
+foreach(dns_transition_case crossover reverse-crossover)
+  add_test(NAME "sakamoto-product-root-dns-${dns_transition_case}-test"
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+      $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+      $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case "${dns_transition_case}")
+endforeach()
 add_test(NAME sakamoto-product-dns-tcp-graph-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_tcp_graph_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
@@ -286,6 +310,12 @@ add_test(NAME sakamoto-product-root-pending-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_pending_test.py")
 add_test(NAME product_root_io
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_io_test.py")
+add_test(NAME product_root_dns_admission
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_admission_test.py")
+add_test(NAME product_root_dns_reassembly_admission
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_reassembly_admission_test.py")
+add_test(NAME product_root_dns_receiver
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_receiver_test.py")
 add_test(NAME product_root_capacity
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_capacity_test.py")
 add_test(NAME sakamoto-product-root-defaults-test

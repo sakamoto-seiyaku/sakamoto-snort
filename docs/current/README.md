@@ -10,7 +10,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 [S310 Root](../testing/2026-10-22_S310_ROOT_UDP_DNS.md) and [S311 VPN](../testing/2026-10-22_S311_VPN_UDP_DNS.md) qualify controlled original-path UDP53 query filtering and normal observations.
 [S312](../testing/2026-10-22_S312_UDP_DNS_RESPONSES.md) adds bounded UDP reply correlation, connected CNAME rules and normal reply observations; its report keeps artifact and device qualification scopes explicit.
 [S313](../testing/2026-10-23_S313_ROOT_TCP_DNS.md) adds bounded Root TCP DNS framing and QName/CNAME policy; its R2/R3 artifact qualifications remain separate.
-[S314](../testing/2026-10-23_S314_VPN_TCP_DNS.md) connects VPN Direct TCP to the shared core and qualifies 104 current R5 groups across Root/VPN, UDP/TCP, IPv4/IPv6 and N1/N3, with normal SQLite and clean stops. Root active-socket capture and one incomplete public attempt remain explicit limits. Replacement, association consumption and KSU/libnetd integration remain unestablished.
+[S314](../testing/2026-10-23_S314_VPN_TCP_DNS.md) connects VPN Direct TCP to the shared core and qualifies 104 current R5 groups across Root/VPN, UDP/TCP, IPv4/IPv6 and N1/N3, with normal SQLite and clean stops. Root active-socket capture and one incomplete public attempt remain explicit limits. Its scope excludes replacement, association consumption and KSU/libnetd integration.
+[S315](../testing/2026-10-24_S315_ROOT_UDP_DNS_REPLACEMENT.md) adds explicitly configured Root UDP53 replacement with ordinary dual-stack upstreams, same-resolver TC→TCP, current query/response policy and bounded resources. Its 35 composed N1/N3 groups have independent normal SQLite and native-zero cleanup; failed attempts, unexplained earlier peer loss and bounded stop-history gaps remain explicit. Original APK/all4861 members are restored with BOTH2727. VPN/TCP-client replacement, cache, encrypted upstreams, association consumption and KSU/libnetd integration remain unestablished.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
@@ -95,5 +96,4 @@ That identity describes the frozen Product sources, not every later docs/test co
 | Intended product | [Product docs](../product/README.md) |
 
 Use the [documentation map](../README.md) for older reasoning and measurements.
-Repository organization preserves large modules' behavior and ownership; see
-[KISS code organization](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md) for the private-module refactor and its fresh regression.
+See [KISS code organization](../maintenance/2026-09-13_KISS_CODE_ORGANIZATION.md) for source organization and regression evidence.

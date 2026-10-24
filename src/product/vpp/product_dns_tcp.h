@@ -9,6 +9,7 @@
 typedef struct product_dns_tcp_flow product_dns_tcp_flow_t;
 typedef struct {
   uint64_t generation, allocated_bytes, high_water_bytes;
+  uint64_t external_bytes; /* other DNS work on this same owner */
   uint64_t messages, duplicates, conflicts, gaps, midstream, capacity, expired;
   uint32_t active, high_water;
   uint8_t accepting;

@@ -91,6 +91,9 @@ static vlib_buffer_t *vlib_get_buffer(vlib_main_t *v,u32 index) {assert(v==&vm &
 static void *vlib_buffer_get_current(vlib_buffer_t *b) {return b->bytes;}
 static struct {u64 revision;} network={5};
 static __typeof__(network) *product_network_snapshot_current(void) {return &network;}
+/* Original TCP fixture has no proxy owner; full Root work accounting is
+ * exercised by product_root_dns_adapter_test.c. */
+static u64 root_dns_tcp_other_bytes(unsigned owner) {assert(owner<2);return 0;}
 uint64_t product_flow_entry_current_incarnation(product_flow_runtime_t *pool,
  const product_owner_assignment_t *assignment,uint64_t generation,uint64_t now)
 {(void)assignment;(void)now;assert(pool==(void*)&pool_marker && generation==77);return flow_present?entry.incarnation:0;}
@@ -212,7 +215,7 @@ static void fresh_post_facts_and_rank_advance_flow_once_for_coalesced_frames(voi
   assert(records[0].protocol==6 && records[0].winner==313 && records[0].message_sequence==1);
   assert(records[0].tcp_sequence==101 && records[0].packet_direction==3);
   assert(records[0].family==family && records[0].caller==1 && records[0].domain_available);
-  assert(records[0].length==592 && records[0].version==7);
+  assert(records[0].length==704 && records[0].version==8);
  }
  reset(4);anchor();product_l4_policy_rule_t allow=rule(314,1,0);
  assert(!product_l4_policy_compile(&bank.view,&allow,1));

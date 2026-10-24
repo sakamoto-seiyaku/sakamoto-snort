@@ -5,6 +5,20 @@ public final class RuleConfigurationTest {
         if (!condition) throw new AssertionError();
     }
     public static void main(String[] args) {
+        long[] dns=RuleConfiguration.dnsWire("udp 192.0.2.53");
+        require(dns.length==8 && dns[0]==-3 && dns[1]==1 && dns[2]==4 && dns[3]==53 && dns[4]==0xc0000235L);
+        long[] dns6=RuleConfiguration.dnsWire("udp 2001:db8::53 5353");
+        require(dns6[2]==6 && dns6[3]==5353 && dns6[4]==0x20010db8L && dns6[7]==0x53);
+        require(RuleConfiguration.dnsWire("off")[1]==0);
+        for(String invalid:new String[]{"udp resolver.test", "udp 127.1", "udp ::1 0", "udp ::1 65536", "doh https://example.test"}) {
+            try { RuleConfiguration.dnsWire(invalid); throw new AssertionError(invalid); }
+            catch(IllegalArgumentException expected) {}
+        }
+        long[] dnsReply=new long[13+3+2+16];
+        dnsReply[18]=1;dnsReply[19]=4;dnsReply[20]=53;dnsReply[22]=0xc0000235L;
+        String dnsProperties=new RuleConfiguration.CompleteStatus(dnsReply).properties();
+        require(dnsProperties.contains("dns.enabled=1\ndns.family=4\ndns.port=53\ndns.address=c0000235000000000000000000000000\n"));
+        require(dnsProperties.contains("dns.active.enabled=0\n"));
         RuleConfiguration.Rule rule = RuleConfiguration.udp(1012632, "127.0.0.1", "192.168.4.22", 32000, 40608, 2);
         require(rule.uid == 1012632 && rule.sourceAddress == 0x7f000001 && rule.destinationAddress == 0xc0a80416);
         for (String invalid : new String[]{"127.1", "127.0.0.256", "0127.0.0.1", "example.test"}) {

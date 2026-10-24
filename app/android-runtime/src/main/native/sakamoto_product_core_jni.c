@@ -155,7 +155,18 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         jlong marker;
         (*env)->GetLongArrayRegion(env, fields, 0, 1, &marker);
         if ((*env)->ExceptionCheck(env)) return NULL;
-        if (marker == -1 || marker == -2) {
+        if (marker == -3) {
+            jlong values[8];
+            if (operation != SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM || length != 8) return NULL;
+            (*env)->GetLongArrayRegion(env, fields, 0, 8, values);
+            if ((*env)->ExceptionCheck(env)) return NULL;
+            for (unsigned i=1;i<8;++i)
+                if (values[i]<0 || (uint64_t)values[i]>UINT32_MAX) return NULL;
+            request.dns.enabled=values[1]; request.dns.family=values[2]; request.dns.port=values[3];
+            for (unsigned i=0;i<16;++i)
+                request.dns.address[i]=(uint64_t)values[4+i/4]>>(24-(i%4)*8);
+            valid=1; rule_count=0;
+        } else if (marker == -1 || marker == -2) {
             jlong header[7] = {0};
             jsize header_words = marker == -2 ? 7 : 5;
             if (length < header_words) return NULL;
@@ -208,7 +219,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         }
     }
     if (handle && generation > 0 && valid && rule_count <= SAKAMOTO_RULE_CONFIG_MAX_RULES &&
-        (operation == 0 || operation == 2 || operation == 3)) {
+        (operation == 0 || operation == 2 || operation == 3 || operation == 4)) {
         request.count = rule_count;
         for (unsigned i = 0; i < request.count; ++i) {
             jlong values[COMPLETE_RULE_WORDS];
@@ -273,7 +284,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         (*env)->NewLongArray(env, COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count +
                                       status.active_count + 3 + status.graph.group_count +
                                       3*status.graph.edge_count + 5*status.graph.binding_count +
-                                      2 + DOMAIN_ENTRY_WORDS*status.domains.entry_count);
+                                      2 + DOMAIN_ENTRY_WORDS*status.domains.entry_count + 16);
     if (!result)
         return NULL;
     (*env)->SetLongArrayRegion(env, result, 0, COMPLETE_REPLY_HEADER_WORDS, header);
@@ -339,6 +350,12 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         for (unsigned j = 0; j < SAKAMOTO_DOMAIN_NAME_BYTES; ++j)
             values[3+j/4] |= (jlong)entry->name[j] << (24-(j%4)*8);
         (*env)->SetLongArrayRegion(env, result, at, DOMAIN_ENTRY_WORDS, values); at += DOMAIN_ENTRY_WORDS;
+    }
+    const sakamoto_product_dns_config_t *dns[2]={&status.dns,&status.active_dns};
+    for (unsigned i=0;i<2;++i) {
+        jlong values[8]={dns[i]->enabled,dns[i]->family,dns[i]->port,dns[i]->reserved};
+        for (unsigned j=0;j<16;++j) values[4+j/4]|=(jlong)dns[i]->address[j]<<(24-(j%4)*8);
+        (*env)->SetLongArrayRegion(env,result,at,8,values); at+=8;
     }
     return result;
 }

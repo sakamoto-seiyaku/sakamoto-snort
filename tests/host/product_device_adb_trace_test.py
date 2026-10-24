@@ -97,6 +97,68 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
             self.client.run(('shell', 'sh', '-c', shlex.quote('printf ready')), time.monotonic() + .8)
         self.assertLessEqual(observed[0], .8)
 
+    def test_close_budget_clamps_every_followup_transport(self):
+        self.client.close_deadline=time.monotonic()-.01
+        with self.assertRaises(TimeoutError):
+            self.client.execute(['exec-out','true'],['exec-out','true'],5)
+
+    def test_close_failure_is_not_reported_as_success(self):
+        self.client.created=True
+        with patch.object(self.client,'process_rows',side_effect=RuntimeError('simulated close failure')):
+            with self.assertRaisesRegex(RuntimeError,'simulated close failure'):
+                self.client.close(budget=1)
+        receipt=json.loads((self.path/'adb-trace.json').read_text())
+        self.assertEqual(receipt['status'],'HOLD')
+
+    def test_next_control_drains_the_prior_completed_witness(self):
+        self.client.run(('shell','sh','-c',shlex.quote('printf first')),None)
+        self.assertNotIn('witness',self.client.items[0])
+        self.client.run(('shell','sh','-c',shlex.quote('printf second')),None)
+        self.assertEqual(self.client.retired[0]['witness']['gaps'],[])
+
+    def test_gapped_active_witness_fences_later_control_independent_of_retired_history(self):
+        self.client.retired=[dict(label='retired-'+str(index)) for index in range(400)]
+        self.client.items=[dict(label='active-gap',outcome='completed',witness=dict(gaps=['exit']))]
+        with patch.object(self.client,'collect',side_effect=lambda item,_: item.update(witness=dict(gaps=['exit']))):
+            with self.assertRaisesRegex(RuntimeError,'active-gap'):
+                self.client.run(('shell','sh','-c',shlex.quote('printf blocked')),None)
+        self.assertEqual(len(self.client.retired),400)
+
+    def test_close_reaps_a_retained_local_child_with_its_budget(self):
+        class Child:
+            pid=17
+            def __init__(self): self.returncode=None; self.killed=False
+            def poll(self): return self.returncode
+            def kill(self): self.killed=True; self.returncode=-9
+            def wait(self, timeout): self.timeout=timeout; return self.returncode
+        child=Child(); self.client.created=True; self.client.unreaped={child.pid:child}
+        with patch.object(self.client,'process_rows',side_effect=RuntimeError('stop after local reap')):
+            with self.assertRaisesRegex(RuntimeError,'stop after local reap'):
+                self.client.close(budget=1)
+        self.assertTrue(child.killed); self.assertLessEqual(child.timeout,1)
+
+    def test_close_reaps_a_real_retained_local_child(self):
+        child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        self.client.created=True; self.client.unreaped={child.pid:child}
+        with patch.object(self.client,'process_rows',side_effect=RuntimeError('stop after local reap')):
+            with self.assertRaisesRegex(RuntimeError,'stop after local reap'):
+                self.client.close(budget=1)
+        self.assertIsNotNone(child.poll())
+
+    def test_large_control_payload_gets_bounded_transport_headroom(self):
+        real = self.client.execute
+        observed = []
+        def bounded(original, wire, timeout, **options):
+            observed.append((options.get('kind', 'traced-control'), timeout))
+            return real(original, wire, timeout, **options)
+        command = ('shell', 'am', 'start', '--es', 'payload', 'x' * 5000)
+        with patch.object(self.client, 'execute', side_effect=bounded):
+            self.client.run(command, time.monotonic() + 40, check=False)
+        traced, = [timeout for kind, timeout in observed if kind == 'traced-control']
+        self.assertGreater(traced, 10)
+        self.assertLessEqual(traced, 30)
+
     def test_missing_exit_or_identity_is_an_explicit_gap(self):
         self.client.run(('shell', 'sh', '-c', shlex.quote('printf ready')), None)
         self.client.collect(self.client.items[0])
