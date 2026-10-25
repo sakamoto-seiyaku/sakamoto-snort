@@ -341,6 +341,7 @@ static int prepare_request (const product_dns_proxy_input_t *input, const uint8_
   event.client_capacity = event.query.udp_capacity < PRODUCT_DNS_PROXY_REPLY_BYTES
     ? event.query.udp_capacity : PRODUCT_DNS_PROXY_REPLY_BYTES;
   if (event.client_capacity < 512) event.client_capacity = 512;
+  if (input->context.packet.protocol == 6) event.client_capacity = PRODUCT_DNS_MESSAGE_MAX;
   if (wire && length >= 4 && (event.query.flags & 0x8000)) return 0;
   if (!wire || length < 2)
     {

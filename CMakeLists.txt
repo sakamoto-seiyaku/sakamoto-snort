@@ -90,6 +90,19 @@ add_executable(sakamoto-product-root-dns-io-test tests/host/product_root_dns_io_
 target_link_libraries(sakamoto-product-root-dns-io-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-root-dns-io-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-root-dns-io-test COMMAND sakamoto-product-root-dns-io-test)
+add_executable(sakamoto-product-root-dns-tcp-io-test tests/host/product_root_dns_tcp_io_test.c
+  src/product/vpp/product_root_dns_tcp_io.c)
+target_link_libraries(sakamoto-product-root-dns-tcp-io-test PRIVATE sakamoto_product_dns)
+target_compile_definitions(sakamoto-product-root-dns-tcp-io-test PRIVATE _GNU_SOURCE)
+target_compile_options(sakamoto-product-root-dns-tcp-io-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-root-dns-tcp-io-test COMMAND sakamoto-product-root-dns-tcp-io-test)
+add_test(NAME sakamoto-product-root-dns-tcp-partial-fin-test COMMAND sakamoto-product-root-dns-tcp-io-test 1)
+add_test(NAME sakamoto-product-root-dns-tcp-backpressure-test COMMAND sakamoto-product-root-dns-tcp-io-test 2)
+add_test(NAME sakamoto-product-root-dns-tcp-watch-failure-test COMMAND sakamoto-product-root-dns-tcp-io-test 3)
+add_test(NAME sakamoto-product-root-dns-tcp-fin-rst-test COMMAND sakamoto-product-root-dns-tcp-io-test 5)
+add_test(NAME sakamoto-product-root-dns-tcp-resume-test COMMAND sakamoto-product-root-dns-tcp-io-test 6)
+add_test(NAME sakamoto-product-root-dns-tcp-resource-bounds-test COMMAND sakamoto-product-root-dns-tcp-io-test 7)
+add_test(NAME sakamoto-product-root-dns-tcp-pending-bounds-test COMMAND sakamoto-product-root-dns-tcp-io-test 8)
 add_test(NAME sakamoto-product-dns-authorization-test COMMAND sakamoto-product-root-dns-io-test authorization)
 add_test(NAME sakamoto-product-dns-idle-authorization-test COMMAND sakamoto-product-root-dns-io-test idle-authorization)
 add_test(NAME sakamoto-dns-wire-observation-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/dns_wire_observation_test.py")
@@ -100,6 +113,14 @@ add_test(NAME sakamoto-product-root-dns-adapter-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
     $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire>)
+add_test(NAME sakamoto-product-root-dns-tcp-adapter-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case tcp-proxy)
+add_test(NAME sakamoto-product-root-dns-tcp-unknown-caller-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case tcp-unknown)
 add_test(NAME sakamoto-product-vpn-dns-authority-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>

@@ -1,4 +1,4 @@
-param([string[]]$Addresses, [string]$StopPath, [string]$PlanPath)
+param([string[]]$Addresses, [string]$StopPath, [string]$PlanPath, [int[]]$Ports = @(53,53053))
 $ErrorActionPreference = 'Stop'
 $listeners = @()
 $udp = @()
@@ -83,7 +83,7 @@ function Admit($wire, $remote, $local, [string]$protocol, $connection, $socket) 
 }
 try {
     foreach ($address in $Addresses) {
-        foreach ($port in @(53,53053)) {
+        foreach ($port in $Ports) {
             $local=[Net.IPEndPoint]::new([Net.IPAddress]::Parse($address),$port)
             $listener=[Net.Sockets.TcpListener]::new($local)
             $listener.Server.ExclusiveAddressUse=$true
@@ -94,7 +94,7 @@ try {
             $socket.Client.Bind($local); $udp+=$socket
         }
     }
-    Emit @{kind='ready'; addresses=$Addresses; ports=@(53,53053); protocol='independent UDP and TCP DNS peer';
+    Emit @{kind='ready'; addresses=$Addresses; ports=$Ports; protocol='independent UDP and TCP DNS peer';
         connection_limit=32; pending_limit=1024; process_id=$PID; relative_clock='Stopwatch';
         udp_receive_buffers=@($udp | ForEach-Object { @{resolver=$_.Client.LocalEndPoint.ToString(); bytes=$_.Client.ReceiveBufferSize} })}
     $deadline=(MonotonicMs)+1200000

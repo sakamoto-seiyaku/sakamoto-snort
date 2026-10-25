@@ -66,8 +66,8 @@ class ProductPlatformBoundaryTest(unittest.TestCase):
             install,
             "selected != RuntimeProfile.ROOT",
             "Integer.toString(getApplicationInfo().uid)",
-            'productRootFamilyHooks("iptables", outputChain, inputChain, uid, "176:177")',
-            'productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179")',
+            'productRootFamilyHooks("iptables", outputChain, inputChain, uid, "176:177", activeWorkerPlacement.ownerCount)',
+            'productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179", activeWorkerPlacement.ownerCount)',
         )
         hooks = body(service, "productRootFamilyHooks")
         self.require(hooks, '"udp", "tcp", icmp', '"echo-request", "echo-reply"',

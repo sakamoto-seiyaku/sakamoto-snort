@@ -24,7 +24,9 @@ typedef struct
   uint8_t processing_bypass_reason;
   /* Zero = no admission; otherwise Product Flow Stack input result + 1. */
   uint8_t flow_stack_result;
-  uint8_t reserved;
+  /* Zero, or the canonical owner+1 for an already-qualified Root TCP packet.
+   * The origin lane combines its original mark in the one ACCEPT operation. */
+  uint8_t root_dns_redirect_owner;
 } product_packet_completion_frame_t;
 
 enum

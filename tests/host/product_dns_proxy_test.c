@@ -11,7 +11,7 @@ static const uint8_t question[] = {
   7,'e','x','a','m','p','l','e',3,'c','o','m',0,0,1,0,1,
 };
 static unsigned sends, replies;
-static uint8_t received[PRODUCT_DNS_PROXY_REPLY_BYTES];
+static uint8_t received[PRODUCT_DNS_MESSAGE_MAX];
 static size_t received_length;
 static product_dns_proxy_event_t completed;
 static product_dns_proxy_key_t sent_key;
@@ -233,6 +233,19 @@ static void udp_tc_continues_same_request_and_respects_client_capacity (void)
   product_dns_proxy_answer (proxy,&first,PRODUCT_DNS_PROXY_UDP,answer,sizeof (answer),400);
   assert (replies==before_replies+2 && received_length==sizeof (answer) && !completed.truncated);
   assert (completed.client_capacity==1232 && !memcmp (received+2,answer+2,sizeof (answer)-2));
+  /* A client retries its legal UDP TC reply on TCP. Its TCP capacity is
+   * independent of its absent EDNS UDP advertisement, and the complete answer
+   * must retain the original ID and every unknown-RR byte. */
+  ++input.token; input.context.packet.protocol=6; input.identity.transport_session=317;
+  snapshot.context=input.context;
+  assert (product_dns_proxy_submit (proxy,&input,wire,sizeof (wire),&snapshot));
+  first=sent_key; memcpy(answer,sent,sizeof(question));
+  answer[2]=0x81; answer[3]=0x80; answer[7]=1; answer[11]=0;
+  current_snapshot=snapshot;
+  product_dns_proxy_answer(proxy,&first,PRODUCT_DNS_PROXY_UDP,answer,sizeof(answer),500);
+  assert (replies==before_replies+3 && received_length==sizeof(answer));
+  assert (!completed.truncated && completed.client_capacity==65535);
+  assert (received[0]==0x12 && received[1]==0x34 && !memcmp(received+2,answer+2,sizeof(answer)-2));
   product_dns_proxy_close (proxy);
 }
 

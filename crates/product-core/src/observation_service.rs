@@ -496,6 +496,62 @@ mod live {
         }
 
         #[test]
+        #[ignore = "requires source-linked Root TCP Adapter records and Product C transport producer"]
+        fn native_root_tcp_proxy_identity_and_view_failure_survive_sqlite_reopen() {
+            let root = std::env::temp_dir().join(format!("s317-observation-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let records = std::env::var("SAKAMOTO_DNS_TCP_PROXY_RECORDS").unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            writeln!(input, "dns-proxy {records}").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "DNS-PROXY 24");
+            let check = |reply: &serde_json::Value| {
+                assert_eq!(reply["storage"], "sqlite");
+                assert_eq!(reply["dns"]["accepted"], 24);
+                assert_eq!(reply["dns"]["rejected"], 0);
+                let rows = reply["dns"]["recent"].as_object().unwrap();
+                assert_eq!(rows.len(), 24, "each TCP query, resolution and delivery must retain its identity");
+                for family in [4, 6] {
+                    let delivered: Vec<_> = rows.values().filter(|r| r["record"]["family"] == family
+                        && r["record"]["stage"] == 4).map(|r| &r["record"]).collect();
+                    assert_eq!(delivered.len(), 4);
+                    for record in &delivered {
+                        assert_eq!(record["protocol"], 6);
+                        assert_eq!(record["uid"], 10123);
+                        assert_eq!(record["caller"], 1);
+                        assert_eq!(record["packet_uid"], u32::MAX);
+                        assert_eq!(record["packet_availability"], 0);
+                        assert_eq!(record["message_sequence"], record["token"]);
+                        assert_eq!(record["reply_capacity"], 65535);
+                        assert_eq!(record["delivery"], 2);
+                        assert_eq!(record["return_provenance"], 0, "socket delivery is not a fabricated VPP return");
+                        assert_eq!(record["return_policy_revision"], 0);
+                    }
+                    assert!(delivered.iter().any(|r| r["reply_rcode"] == 5 && r["winner"] == 317));
+                    assert!(delivered.iter().any(|r| r["reply_rcode"] == 2 && r["proxy_result"] == 9));
+                    assert!(delivered.iter().any(|r| r["reply_rcode"] == 0 && r["upstream_port"] == 53053));
+                }
+            };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let snapshot = service.snapshot();
+                if snapshot["persistent"]["dns"]["accepted"] == 24 { check(&snapshot["persistent"]); break; }
+                assert!(Instant::now() < deadline, "Root TCP proxy records were not committed: {snapshot}");
+                thread::sleep(Duration::from_millis(10));
+            }
+            drop(service);
+            writeln!(input, "quit").unwrap(); input.flush().unwrap(); assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap(); check(&restored.query());
+            drop(restored); std::fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
         #[ignore = "requires the actual Product C producer executable"]
         fn native_tcp_dns_frames_and_continuation_survive_sqlite_reopen() {
             check_native_tcp_dns_frames("dns-tcp", 1);

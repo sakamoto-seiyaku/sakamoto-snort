@@ -9,6 +9,7 @@ sendmmsg failures preserve its successful prefix and uncertain boundary. Packed
 failures apply to the whole datagram and must never trigger a verdict retry.
 """
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import hashlib
 import os
 import re
@@ -70,6 +71,7 @@ typedef struct {
 } product_buffer_platform_metadata_t;
 typedef product_buffer_platform_metadata_t product_root_buffer_platform_metadata_t;
 typedef struct {
+  u32 flow_id_prefix[2],flow_id;
   u8 data[2048], opaque[sizeof(product_buffer_platform_metadata_t)], opaque2[56];
   int16_t current_data; u16 current_length;
 } vlib_buffer_t;
@@ -128,11 +130,12 @@ static int sendto_calls, sendmmsg_calls, write_fault_errno=EFAULT;
 static int fail_id=-1, unknown_write_id=-1, wrong_length_id=-1;
 static u32 sent_order[256], sent_count;
 static u32 call_messages[64], datagram_messages[64], datagram_count;
+static u32 expected_marks[256],wire_lengths[256];
 /* One guard element catches writes beyond the selected 64-packet window. */
 #define FIXTURE_WINDOW 64U
 static product_packet_completion_frame_t completions[FIXTURE_WINDOW + 1];
 static u32 indices[FIXTURE_WINDOW + 1];
-_Static_assert(sizeof(product_nfqueue_verdict_request_t)==32,"verdict request wire size");
+_Static_assert(sizeof(product_nfqueue_verdict_request_t)==40,"verdict capacity includes optional MARK attribute");
 _Static_assert(_Alignof(product_nfqueue_verdict_request_t)>=NLMSG_ALIGNTO,"aligned requests");
 static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lane,
   u32 slot, u32 index) {
@@ -142,7 +145,7 @@ static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lan
 static u32 decode(int fd, const void *bytes, size_t length) {
   const struct nlmsghdr *nlh=bytes;
   assert((uintptr_t)bytes % NLMSG_ALIGNTO == 0);
-  assert(length == 32 && length == nlh->nlmsg_len);
+  assert((length == 32 || length == 40) && length == nlh->nlmsg_len);
   assert(nlh->nlmsg_flags == NLM_F_REQUEST && !nlh->nlmsg_pid);
   assert(nlh->nlmsg_type == ((NFNL_SUBSYS_QUEUE<<8) | NFQNL_MSG_VERDICT));
   const struct nfgenmsg *gen=NLMSG_DATA(nlh);
@@ -154,6 +157,19 @@ static u32 decode(int fd, const void *bytes, size_t length) {
   u32 id=ntohl(hdr->id);
   assert(nlh->nlmsg_seq == id);
   assert(id < 256 && !returns[id] && !attempts[id]++);
+  wire_lengths[id]=length;
+  if(length != (expected_marks[id] ? 40U : 32U))
+    fprintf(stderr,"mark wire mismatch mode=%u id=%u length=%zu expected_mark=%08x verdict=%u\n",
+      SAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE,id,length,expected_marks[id],ntohl(hdr->verdict));
+  assert(length == (expected_marks[id] ? 40U : 32U));
+  const struct nfattr *next=(const void*)((const char*)attr+NFA_ALIGN(attr->nfa_len));
+  if(expected_marks[id]) {
+    assert(NFA_TYPE(next)==NFQA_MARK && next->nfa_len==8);
+    u32 network_mark;memcpy(&network_mark,NFA_DATA(next),sizeof(network_mark));
+    assert(ntohl(network_mark)==expected_marks[id]);
+    next=(const void*)((const char*)next+NFA_ALIGN(next->nfa_len));
+  }
+  assert((const char*)next==(const char*)bytes+length);
   verdicts[id]=ntohl(hdr->verdict);
   sent_order[sent_count++]=id;
   return id;
@@ -166,17 +182,17 @@ static void destination(const struct sockaddr *address,socklen_t length) {
 static ssize_t fixture_sendto(int fd,const void *bytes,size_t length,int flags,
   const struct sockaddr *address,socklen_t address_length) {
   destination(address,address_length);
-  assert(length && length <= PRODUCT_PACKET_BATCH_SIZE*32 && length%32==0);
+  assert(length && length <= PRODUCT_PACKET_BATCH_SIZE*40 && length%NLMSG_ALIGNTO==0);
   int remaining=(int)length, failed=0, bad_write=0, short_write=0;
-  u32 count=0;
+  u32 count=0,decoded_bytes=0;
   for (const struct nlmsghdr *nlh=bytes; NLMSG_OK(nlh,remaining);
        nlh=NLMSG_NEXT(nlh,remaining)) {
-    u32 id=decode(fd,nlh,nlh->nlmsg_len); count++;
+    u32 id=decode(fd,nlh,nlh->nlmsg_len); count++;decoded_bytes+=nlh->nlmsg_len;
     failed |= (int)id==fail_id;
     bad_write |= (int)id==unknown_write_id;
     short_write |= (int)id==wrong_length_id;
   }
-  assert(remaining==0 && count==length/32 && calls<64 && datagram_count<64);
+  assert(remaining==0 && count && decoded_bytes==length && calls<64 && datagram_count<64);
   call_messages[calls++]=count; sendto_calls++;
   datagram_messages[datagram_count++]=count;
   if (failed || flags) { errno=EOPNOTSUPP; return -1; }
@@ -251,7 +267,8 @@ static void packet6long(u32 i,int active) {
 static void reset(u32 n) {
   memset(&product_root_nfqueue_main,0,sizeof(product_root_nfqueue_main));
   memset(attempts,0,sizeof(attempts)); memset(returns,0,sizeof(returns));
-  memset(verdicts,0,sizeof(verdicts)); calls=sent_count=0;
+  memset(verdicts,0,sizeof(verdicts)); memset(expected_marks,0,sizeof(expected_marks));
+  memset(wire_lengths,0,sizeof(wire_lengths));calls=sent_count=0;
   memset(call_messages,0,sizeof(call_messages));
   memset(datagram_messages,0,sizeof(datagram_messages));
   sendto_calls=sendmmsg_calls=datagram_count=0; write_fault_errno=EFAULT;
@@ -672,7 +689,59 @@ static void diagnostic_guard_expiry(void) {
     assert(!product_root_nfqueue_main.internal_settlements && !product_root_nfqueue_main.buffer_returns);
   }
 }
+static void tcp_redirect(u32 i,unsigned family,u32 original) {
+  memset(&buffers[i],0,sizeof(buffers[i]));u32 at=family==4?20:48;
+  buffers[i].data[0]=family==4?0x45:0x60;
+  if(family==4) {buffers[i].data[3]=40;buffers[i].data[9]=6;}
+  else {buffers[i].data[5]=28;buffers[i].data[6]=60;buffers[i].data[40]=6;}
+  buffers[i].data[at]=0x9c;buffers[i].data[at+1]=0x40;
+  buffers[i].data[at+3]=53;buffers[i].data[at+13]=2;buffers[i].current_length=at+20;
+  product_root_dns_capture_mark(&buffers[i],original);
+  product_buffer_platform_metadata_t platform={.platform={
+    .direction=PRODUCT_PACKET_DIRECTION_OUTPUT,.provenance=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE,
+    .reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID|
+      (1U<<PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT)}};
+  memcpy(buffers[i].opaque,&platform,sizeof(platform));
+  completions[i].terminal_intent=PRODUCT_PACKET_INTENT_PASS_ADAPTER;
+  completions[i].root_dns_redirect_owner=1;
+}
+static void transparent_tcp_marks(void) {
+  reset(8);
+  const u32 original[]={0,0x1007b,0x8001007b,0x1007b|(1U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT)};
+  for(u32 i=0;i<8;i+=2) {
+    tcp_redirect(i,i&2?6:4,original[i/2]);
+    expected_marks[i]=original[i/2]|(1U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT);
+  }
+  run(8);
+  for(u32 i=0;i<8;++i)assert(wire_lengths[i]==(i%2?32U:40U));
+  /* POLICY_QUALIFIED is statistics, not redirect authority. A canonical
+   * origin/owner/mark-qualified frame with flags0 remains a marked ACCEPT. */
+  reset(1);tcp_redirect(0,4,0x8001007b);completions[0].flags=0;
+  expected_marks[0]=0x8001007b|(1U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT);run(1);
+  assert(verdicts[0]==NF_ACCEPT && wire_lengths[0]==40);
+  assert(!product_root_nfqueue_main.lanes[0].policy_qualified_matched_allow_succeeded);
+  for(unsigned bad=0;bad<8;++bad) {
+    reset(1);tcp_redirect(0,4,0x1007b);
+    product_buffer_platform_metadata_t platform;memcpy(&platform,buffers[0].opaque,sizeof(platform));
+    if(bad==0)product_root_dns_capture_mark(&buffers[0],0x1007b|(2U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT));
+    if(bad==1)platform.platform.direction=PRODUCT_PACKET_DIRECTION_INPUT;
+    if(bad==2)platform.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+    if(bad==3)platform.platform.reserved&=~PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+    if(bad==4)completions[0].producer_thread=2;
+    if(bad==5)completions[0].root_dns_redirect_owner=2;
+    if(bad==6)buffers[0].data[23]=54;
+    if(bad==7) {
+      platform.platform.reserved=(platform.platform.reserved&~PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK)|
+        (3U<<PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT);
+      completions[0].root_dns_redirect_owner=3;
+    }
+    memcpy(buffers[0].opaque,&platform,sizeof(platform));run(1);
+    assert(verdicts[0]==NF_DROP && wire_lengths[0]==32 && !expected_marks[0]);
+  }
+}
+
 int main(void) {
+  transparent_tcp_marks();
   pre_core_verdict_results();
   successful_windows(); sendmmsg_boundaries(); sendto_results(); partitions_and_settlement();
   full_window_boundaries();
@@ -686,7 +755,7 @@ resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 with tempfile.TemporaryDirectory(prefix="sakamoto-verdict-batch-") as folder:
     path = Path(folder)
     fixture = path / "fixture.c"
-    fixture.write_text(prefix + mode_config + types + outcomes + dependencies + helpers + suffix)
+    fixture.write_text(prefix + mark_fixture() + mode_config + types + outcomes + dependencies + helpers + suffix)
     for mode in (None, 1, 2, 3):
         mode_flags = ([] if mode is None else [f"-DSAKAMOTO_PRODUCT_ROOT_VERDICT_BATCH_MODE={mode}"])
         subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g",

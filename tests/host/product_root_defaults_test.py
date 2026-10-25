@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='root-defaults-') as folder:
                        base['graph'] + base['production'] + seams + production + main)
     subprocess.run([os.environ.get('CC','cc'),'-std=gnu11','-O1','-g','-Wall','-Wextra','-Werror',
                     '-Wno-unused-parameter','-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-pie','-no-pie',
-                    '-I',str(ROOT/'src/product/vpp'),str(fixture),'-o',str(path/'test')],check=True)
+                    '-I',str(ROOT/'src/product/vpp'),'-I',str(ROOT/'src/product/include'),str(fixture),'-o',str(path/'test')],check=True)
     subprocess.run([str(path/'test')],check=True,timeout=15,
                    env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0:handle_segv=0'})
 

@@ -388,14 +388,23 @@ final class ProtocolFactsProbe {
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         org.json.JSONArray queries = plan.getJSONArray("dnsTcpQueries");
         int repeat = plan.optInt("dnsTcpRepeat", 1);
-        int timeout = plan.optInt("dnsTimeoutMs", 1000);
+        int timeout = plan.has("dnsProxyTimeoutMs")
+                ? plan.getInt("dnsProxyTimeoutMs") : plan.optInt("dnsTimeoutMs", 1000);
         int delay = plan.optInt("dnsQueryDelayMs", 0);
         int writeDelay = plan.optInt("dnsTcpWriteDelayMs", 0);
+        int readDelay = plan.optInt("dnsTcpReadDelayMs", 0);
+        int receiveBuffer = plan.optInt("dnsTcpReceiveBuffer", 0);
+        boolean halfClose = plan.optBoolean("dnsTcpShutdownOutput");
+        boolean partialFin = plan.optBoolean("dnsTcpPartialFin");
+        boolean reset = plan.optBoolean("dnsTcpResetAfterWrite");
         boolean pipeline = plan.optBoolean("dnsTcpPipeline");
         org.json.JSONArray sizes = plan.optJSONArray("dnsTcpWriteSizes");
         if (queries.length() < 1 || queries.length() > 4096 || repeat < 1 || repeat > 4096
                 || queries.length() * repeat > 4096 || port != 53
-                || timeout < 100 || timeout > 3000 || delay < 0 || delay > 1000
+                || timeout < 100 || timeout > (plan.has("dnsProxyTimeoutMs") ? 12000 : 3000)
+                || delay < 0 || delay > 1000 || readDelay < 0 || readDelay > 10000
+                || (receiveBuffer != 0 && (receiveBuffer < 1024 || receiveBuffer > 65536))
+                || (partialFin && !halfClose) || ((halfClose || reset) && !pipeline)
                 || writeDelay < 0 || writeDelay > 1000 || (sizes != null && sizes.length() > 32))
             throw new IllegalArgumentException("bounded ordinary TCP DNS probe");
         byte[][] frames = new byte[queries.length() * repeat][];
@@ -413,6 +422,7 @@ final class ProtocolFactsProbe {
         }
         try (Socket socket = new Socket()) {
             socket.setReuseAddress(true); socket.setTcpNoDelay(true);
+            if (receiveBuffer != 0) socket.setReceiveBufferSize(receiveBuffer);
             socket.bind(new InetSocketAddress(local, source));
             socket.connect(new InetSocketAddress(endpoint, port), timeout); socket.setSoTimeout(timeout);
             result.put("local", socket.getLocalSocketAddress().toString());
@@ -434,14 +444,17 @@ final class ProtocolFactsProbe {
                     socket.getOutputStream().write(bytes, at, count); socket.getOutputStream().flush(); at += count;
                     if (at < bytes.length && writeDelay != 0) Thread.sleep(writeDelay);
                 }
+                if (partialFin) socket.getOutputStream().write(0);
+                if (halfClose) { socket.shutdownOutput(); result.put("outputShutdown", true); }
                 if (plan.optBoolean("dnsTcpGate")) gate(app, nonce, result, "dns_tcp_written");
+                if (reset) { socket.setSoLinger(true, 0); result.put("resetAfterWrite", true); return; }
+                if (readDelay != 0) Thread.sleep(readDelay);
                 for (int i = start; i < end; ++i) {
                     long remaining = deadline - SystemClock.elapsedRealtime();
                     if (remaining <= 0) { result.put("deadlineReached", true); break; }
                     socket.setSoTimeout((int) Math.min(timeout, remaining));
                     try {
                         int length = received.readUnsignedShort();
-                        if (length > 8192) throw new IllegalStateException("TCP DNS probe reply size");
                         byte[] reply = new byte[length]; received.readFully(reply);
                         exchanges.getJSONObject(i).put("replyHex", toHex(reply));
                     } catch (SocketTimeoutException expected) {

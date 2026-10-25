@@ -95,10 +95,10 @@ int main (int argc,char **argv)
   int tcp=socket(AF_INET,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
   assert(udp>=0 && tcp>=0);
   struct sockaddr_in resolver={.sin_family=AF_INET,.sin_addr={.s_addr=htonl(INADDR_LOOPBACK)}};
-  assert(!bind(udp,(struct sockaddr*)&resolver,sizeof(resolver)));
+  assert(!bind(tcp,(struct sockaddr*)&resolver,sizeof(resolver)));
   socklen_t resolver_length=sizeof(resolver);
-  assert(!getsockname(udp,(struct sockaddr*)&resolver,&resolver_length));
-  assert(!bind(tcp,(struct sockaddr*)&resolver,sizeof(resolver)) && !listen(tcp,16));
+  assert(!getsockname(tcp,(struct sockaddr*)&resolver,&resolver_length));
+  assert(!listen(tcp,16) && !bind(udp,(struct sockaddr*)&resolver,sizeof(resolver)));
   product_dns_proxy_route_t route={.enabled=1,.family=4,.port=ntohs(resolver.sin_port),.address={127,0,0,1}};
   product_root_dns_io_callbacks_t callbacks={.watch=watch,.answer=answer,.failed=failed};
   uint64_t sequence=0;

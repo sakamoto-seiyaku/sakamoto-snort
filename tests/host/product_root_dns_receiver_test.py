@@ -8,6 +8,7 @@ unchanged.
 """
 
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import os
 import re
 import resource
@@ -66,6 +67,7 @@ typedef struct {u32 thread_index;} vlib_main_t;
 typedef struct {u32 file_descriptor,polling_thread_index;uword private_data;} clib_file_t;
 typedef int clib_error_t;
 typedef struct {
+  u32 flow_id_prefix[2],flow_id;
  u8 data[2048],opaque[40],opaque2[56];u32 ref_count,flags,template,trace_handle;
  u32 total_length_not_including_first_buffer,buffer_pool_index;i16 current_data;u16 current_length;
 } vlib_buffer_t;
@@ -258,7 +260,7 @@ with tempfile.TemporaryDirectory(prefix="product-root-dns-receiver-") as temp:
     path = Path(temp)
     source = path / "test.c"
     binary = path / "test"
-    source.write_text(prefix + types + deps + production + suffix)
+    source.write_text(prefix + mark_fixture() + types + deps + production + suffix)
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie",

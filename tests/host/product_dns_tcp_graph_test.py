@@ -5,6 +5,7 @@ This is a Host semantic/integration seam, not NFQUEUE, Android caller or wire pr
 The Product functions and record producer are extracted unchanged at test time.
 """
 from pathlib import Path
+from product_root_dns_mark_fixture import tcp_selected_fixture
 import argparse
 import os
 import re
@@ -38,6 +39,7 @@ prefix = r"""
 #include <stdlib.h>
 #include <string.h>
 #include "product_dns_tcp.h"
+#include "product_dns_proxy.h"
 #include "product_flow_entry.h"
 #include "sakamoto_product_observation.h"
 typedef uint8_t u8;
@@ -67,7 +69,7 @@ typedef struct {
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
 typedef struct {
- u64 generation;product_domains_t *domains;product_l4_policy_view_t view;
+ u64 generation;product_domains_t *domains;product_l4_policy_view_t view;product_dns_proxy_route_t dns;
 } bank_t;
 static bank_t bank;
 typedef struct {
@@ -667,7 +669,7 @@ defines=['-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1']if batch[1]=='ON'else[]
 print('TCP graph policy ABI: ROOT_BATCH_EXPERIMENT='+batch[1]+' case='+args.case,flush=True)
 with tempfile.TemporaryDirectory(prefix='sakamoto-dns-tcp-graph-') as tmp:
     source, binary = Path(tmp) / 'test.c', Path(tmp) / 'test'
-    source.write_text(prefix
+    source.write_text(prefix + tcp_selected_fixture()
         + function('product_packet_graph_l4_direction_from_platform', 'static void')
         + function('product_packet_graph_l4_packet_projection', 'static void')
         + function('product_packet_graph_dns_identity', 'static product_dns_identity_t')

@@ -2402,6 +2402,10 @@ VLIB_NODE_FN (product_packet_terminal_node)
         .terminal_intent = lease.terminal_intent,
         .runtime_drop_reason = lease.runtime_drop_reason,
         .processing_bypass_reason = lease.processing_bypass_reason,
+        .root_dns_redirect_owner = lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+          (lease.platform.reserved & PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID)
+            ? (lease.platform.reserved & PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK) >>
+              PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT : 0,
         .flags = (metadata.state_bits & PRODUCT_META_TRACE) ? PRODUCT_COMPLETION_TRACE : 0,
       };
 #ifdef SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS
@@ -4800,6 +4804,7 @@ product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
   product_dns_tcp_graph_t *context)
 {
   clib_memset (context, 0, sizeof (*context));
+  if (root_dns_tcp_selected (lease, snapshot)) return;
   if ((lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
        lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
        lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN) ||
@@ -4983,7 +4988,9 @@ product_packet_graph_policy_on_owner (
   if (result == PRODUCT_PACKET_OK && !post_flow && !tcp.flow_observed
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
-  if (result == PRODUCT_PACKET_OK && observation.entry &&
+  int root_tcp = result == PRODUCT_PACKET_OK &&
+    root_dns_tcp_capture (vm, buffer_index, lease, &snapshot, &observation);
+  if (result == PRODUCT_PACKET_OK && !root_tcp && observation.entry &&
       lease->facts.protocol == 6 &&
       (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
        lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN))

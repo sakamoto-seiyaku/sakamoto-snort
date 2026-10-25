@@ -8,6 +8,7 @@ product_nfqueue_verdict_batch_test.py.
 """
 
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import os
 import re
 import subprocess
@@ -56,6 +57,7 @@ typedef uint32_t u32; typedef uint64_t u64; typedef unsigned long uword;
 typedef struct {u32 thread_index;} vlib_main_t;
 typedef struct {u32 node_index;} vlib_node_runtime_t;
 typedef struct {
+  u32 flow_id_prefix[2],flow_id;
   u8 data[2048], opaque[40], opaque2[56];
   u32 ref_count, flags, next_buffer; i16 current_data; u16 current_length;
 } vlib_buffer_t;
@@ -157,7 +159,8 @@ static void product_root_dns_adapter_admission_observe(vlib_main_t *v,u64 token,
 static void product_observation_basic(vlib_main_t *v,unsigned outcome,u32 bytes) {
  assert(v && outcome==2 && bytes);basic_failures++;
 }
-static int product_nfqueue_send_verdict(int fd,u32 queue,u32 packet,u32 verdict,int flags) {
+static int product_nfqueue_send_verdict(int fd,u32 queue,u32 packet,u32 verdict,int flags,int set_mark,u32 mark) {
+  assert(!set_mark && !mark);
   assert(fd==27 && queue==176 && packet<2 && !flags && !verdicts[packet]);
   verdicts[packet]=verdict+1;verdict_count++;product_root_nfqueue_last_send_result=32;
   product_root_nfqueue_last_errno=0;return 1;
@@ -265,7 +268,7 @@ with tempfile.TemporaryDirectory(prefix="product-root-dns-reassembly-") as temp:
     path = Path(temp)
     source = path / "test.c"
     binary = path / "test"
-    source.write_text(prefix + fragment_types + adapter_types + outcomes + dependencies
+    source.write_text(prefix + mark_fixture() + fragment_types + adapter_types + outcomes + dependencies
                       + fragment_production + adapter_production + suffix)
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

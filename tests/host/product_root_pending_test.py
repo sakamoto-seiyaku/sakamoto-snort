@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import re
 import resource
 import subprocess
@@ -67,6 +68,7 @@ static product_root_nfqueue_main_t product_root_nfqueue_main;
 /* These loan-identity cases have no replacement-active packet. Keep the real
  * completion overlay/classifier available and fail if DNS observation is used. */
 typedef struct {
+ u32 flow_id_prefix[2],flow_id;
  u8 data[64],opaque[sizeof(product_root_buffer_platform_metadata_t)];
  u16 current_length;
 } vlib_buffer_t;
@@ -87,6 +89,7 @@ static void product_root_nfqueue_return_receive(product_root_nfqueue_lane_t *lan
  assert(product_root_receive_pool_return(&lane->receive_pool,lane->generation,(u16)slot,buffer));
 }
 '''
+dependencies+=mark_fixture()
 helpers=''
 for name in ('product_root_nfqueue_pending_find','product_root_nfqueue_pending_deactivate'):
     if re.search(r'(?m)^'+name+r'\s*\(',source):helpers+=function(name)

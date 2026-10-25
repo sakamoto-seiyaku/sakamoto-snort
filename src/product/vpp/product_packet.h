@@ -113,6 +113,12 @@ enum
   /* Root replacement state frozen at the NFQUEUE capture event. This is an
    * admission fact only, never App/domain/policy authority or observation. */
   PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE = 1 << 0,
+  /* Bits1..6 carry a selected Root TCP redirect owner+1 as an Adapter
+   * terminal-operation parameter. Bit7 qualifies the original mark carrier;
+   * only native unfragmented TCP53 capture sets it. Neither is a policy fact. */
+  PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT = 1,
+  PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK = 0x7e,
+  PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID = 0x80,
 };
 
 typedef struct

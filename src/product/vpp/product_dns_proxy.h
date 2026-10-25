@@ -42,6 +42,10 @@ typedef struct {
   product_dns_identity_t identity;
   uint64_t token, route_revision;
   uint32_t slot;
+  /* Actual latest capture at message admission, distinct from a session
+   * caller proven by its original SYN. Never used as policy enrichment. */
+  uint32_t capture_uid;
+  uint8_t capture_availability, capture_present;
 } product_dns_proxy_input_t;
 
 /* A current, synchronously protected policy borrow. The Adapter supplies the

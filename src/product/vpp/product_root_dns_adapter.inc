@@ -9,8 +9,17 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vlib/file.h>
+#include "product_root_dns_tcp_mark.h"
 
 #define ROOT_DNS_REPLIES 128U
+#define ROOT_DNS_WATCHES (PRODUCT_DNS_PROXY_SOCKETS + PRODUCT_ROOT_DNS_TCP_CLIENTS + 2U)
+#define ROOT_DNS_TCP_BINDINGS 128U
+typedef struct {
+  product_dns_proxy_input_t input;
+  uint64_t deadline, session;
+  uint32_t syn_sequence;
+  uint8_t active;
+} root_dns_tcp_binding_t;
 typedef struct {
   product_adapter_obligation_t obligation;
   product_dns_observation_record_t record;
@@ -42,9 +51,12 @@ typedef struct {
   product_dns_proxy_route_t route;
   product_dns_proxy_t *proxy;
   product_root_dns_io_t *io;
+  product_root_dns_tcp_io_t *tcp_io;
+  root_dns_tcp_binding_t tcp_bindings[ROOT_DNS_TCP_BINDINGS];
+  u64 tcp_admission_failed, tcp_identity_rejected;
   const product_l4_policy_view_t *event_view;
   u64 event_revision;
-  root_dns_watch_t watches[PRODUCT_DNS_PROXY_SOCKETS];
+  root_dns_watch_t watches[ROOT_DNS_WATCHES];
   root_dns_reply_t reply[ROOT_DNS_REPLIES];
 } root_dns_owner_t;
 static root_dns_owner_t root_dns_owners[PRODUCT_GRAPH_WORKERS];
@@ -62,7 +74,7 @@ static void root_dns_publish_ready (root_dns_owner_t *owner)
   /* Android's current initial network is revision zero until platform capture
    * starts. Current-view equality is checked by root_dns_owner_current. */
   int prepared = !owner->stopping && owner->route_revision &&
-    (!owner->route.enabled || (owner->proxy && owner->io &&
+    (!owner->route.enabled || (owner->proxy && owner->io && (owner->profile==2 || product_root_dns_tcp_io_status(owner->tcp_io).accepting) &&
       (io.udp_state == PRODUCT_ROOT_DNS_UDP_AUTHORIZED || io.udp_state == PRODUCT_ROOT_DNS_UDP_IDLE)));
   __atomic_store_n (&owner->ready, prepared, __ATOMIC_RELEASE);
 }
@@ -107,6 +119,7 @@ static u64 root_dns_other_bytes (root_dns_owner_t *owner)
   return sizeof (*owner) + sizeof (product_dns_owner_t) + sizeof (product_dns_tcp_owner_t) +
     product_packet_graph_main.dns_tcp[owner->owner].allocated_bytes + product_root_dns_io_reservation () +
     (owner->profile == 2 ? product_vpn_flow_stack_driver_dns_reservation (owner->owner) : 0) +
+    (owner->profile==1 ? PRODUCT_ROOT_DNS_TCP_WORK_BYTES : 0) +
     ROOT_DNS_REPLIES * (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (owner->vm));
 }
 
@@ -114,6 +127,7 @@ static u64 root_dns_tcp_other_bytes (unsigned owner)
 {
   if (owner >= root_dns_owner_count) return 0;
   return sizeof (root_dns_owner_t) +
+    (root_dns_owners[owner].profile==1 ? PRODUCT_ROOT_DNS_TCP_WORK_BYTES : 0) +
     (root_dns_owners[owner].profile == 2 ? product_vpn_flow_stack_driver_dns_reservation (owner) : 0) +
     ROOT_DNS_REPLIES *
     (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (root_dns_owners[owner].vm)) +
@@ -155,7 +169,7 @@ static int root_dns_watch (void *opaque, int fd, unsigned events, uint64_t cooki
 {
   root_dns_owner_t *owner = opaque;
   root_dns_watch_t *watch = NULL;
-  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+  for (unsigned i = 0; i < ROOT_DNS_WATCHES; ++i)
     if (owner->watches[i].fd == fd) { watch = &owner->watches[i]; break; }
   if (!events)
     {
@@ -170,7 +184,7 @@ static int root_dns_watch (void *opaque, int fd, unsigned events, uint64_t cooki
       return 1;
     }
   if (!watch)
-    for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+    for (unsigned i = 0; i < ROOT_DNS_WATCHES; ++i)
       if (owner->watches[i].fd < 0) { watch = &owner->watches[i]; break; }
   if (!watch) return 0;
   if (watch->fd >= 0)
@@ -185,13 +199,15 @@ static int root_dns_watch (void *opaque, int fd, unsigned events, uint64_t cooki
     .private_data = ((u64) owner->owner << 42) | cookie,
     .read_function = root_dns_file_read, .write_function = root_dns_file_write,
     .error_function = root_dns_file_error, .dont_close = 1,
-    .flags = (events & PRODUCT_ROOT_DNS_WRITE) ? UNIX_FILE_DATA_AVAILABLE_TO_WRITE : 0,
+    .flags = ((events & PRODUCT_ROOT_DNS_WRITE) ? UNIX_FILE_DATA_AVAILABLE_TO_WRITE : 0) |
+      ((events & PRODUCT_ROOT_DNS_TCP_EDGE) ? UNIX_FILE_EVENT_EDGE_TRIGGERED : 0),
     .description = format (0, "product-root-dns-%u-%llu%c", owner->owner,
       (unsigned long long) cookie, 0),
   };
   watch->fd = fd; watch->cookie = cookie;
   watch->file = clib_file_add (&file_main, &file);
-  return watch->file != ~0U;
+  if(watch->file == ~0U) { *watch=(root_dns_watch_t){.fd=-1,.file=~0}; return 0; }
+  return 1;
 }
 
 static int root_dns_send (void *opaque, const product_dns_proxy_key_t *key, unsigned transport,
@@ -239,6 +255,7 @@ static int root_dns_policy_acquire (void *opaque, const product_dns_proxy_input_
   if (entry && entry->linked && entry->policy_generation == input->identity.generation &&
       entry->incarnation == input->identity.incarnation)
     {
+      if (packet->protocol == 17) {
       product_udp_state_t state = entry->protocol_state.udp;
       product_packet_facts_t facts = {.l3_status = PRODUCT_PACKET_L3_COMPLETE,
         .l4_status = PRODUCT_PACKET_L4_COMPLETE, .ip_family = packet->family, .protocol = 17};
@@ -247,6 +264,15 @@ static int root_dns_policy_acquire (void *opaque, const product_dns_proxy_input_
       product_tracker_result_t tracker = product_udp_update (&state, &facts, direction);
       packet->ct_state = tracker.facts.state; packet->ct_state_known = 1;
       packet->flow_direction = tracker.facts.direction; packet->flow_direction_known = 1;
+      } else {
+        /* The message retains the last actual owner-observed TCP facts; do
+         * not reinterpret TCP storage as a UDP tracker or synthesize a packet. */
+        packet->ct_state = input->context.packet.ct_state;
+        packet->ct_state_known = input->context.packet.ct_state_known;
+        packet->flow_direction = input->context.packet.flow_direction == PRODUCT_FLOW_DIRECTION_ORIG
+          ? PRODUCT_FLOW_DIRECTION_REPLY : PRODUCT_FLOW_DIRECTION_ORIG;
+        packet->flow_direction_known = input->context.packet.flow_direction_known;
+      }
       packet->protocol_set = entry->lpi.protocols; packet->protocol_set_known = entry->lpi.available;
       packet->sni_result = entry->sni.result;
     }
@@ -278,7 +304,7 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .codec_peak_bytes = query->codec_peak_bytes, .id = query->id, .query_flags = query->flags,
     .qtype = query->qtype, .qclass = query->qclass,
     .source_port = packet->source_port, .resolver_port = packet->destination_port,
-    .name_length = query->name_length, .family = packet->family, .protocol = 17,
+    .name_length = query->name_length, .family = packet->family, .protocol = packet->protocol,
     .direction = event->stage == 2 ? 1 : 3,
     .availability = (packet->uid_known ? PRODUCT_PLATFORM_UID_KNOWN : 0) |
       (packet->network_context_known ? PRODUCT_PLATFORM_CONTEXT_KNOWN : 0) |
@@ -287,7 +313,7 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .caller = query->caller, .coverage = query->coverage,
     .declared_action = matched ? event->match.action : actual, .actual_action = actual,
     .mode = matched ? event->match.mode : 0, .domain_available = query->packet.domain_available,
-    .stage = event->stage, .delivery = event->delivery == 1 ? PRODUCT_DNS_DELIVERY_GRAPH_ACCEPTED :
+    .stage = event->stage, .delivery = event->delivery == 1 ? (packet->protocol==6 ? PRODUCT_DNS_DELIVERY_SOCKET_QUEUED : PRODUCT_DNS_DELIVERY_GRAPH_ACCEPTED) :
       event->delivery == 2 ? PRODUCT_DNS_DELIVERY_ADMISSION_FAILED : 0,
     .network_revision = event->key.network_revision, .query_incarnation = event->key.incarnation,
     .query_token = event->stage == 1 ? 0 : event->input.token,
@@ -296,7 +322,7 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .query_policy_hash = event->stage == 1 ? 0 : event->query_policy.hash,
     .query_winner = event->stage == 1 ? 0 : event->query_policy.winner,
     .domain_lists = query->packet.domain_lists, .adapter_profile = owner->profile,
-    .packet_uid = packet->uid_known ? packet->uid : UINT32_MAX,
+    .packet_uid = event->input.capture_present ? event->input.capture_uid : packet->uid_known ? packet->uid : UINT32_MAX,
     .route_revision = event->key.route_revision, .request_attempt = event->key.attempt,
     .upstream_session = owner->current_upstream_session,
     .transport_session = event->input.identity.transport_session,
@@ -309,7 +335,8 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
       (event->response ? PRODUCT_DNS_PROXY_UPSTREAM_ANSWER : 0),
     .return_token = event->delivery == 1 && event->output_bytes ? owner->last_reply_token : 0,
   };
-  record.packet_availability = record.availability;
+  record.packet_availability = event->input.capture_present ? event->input.capture_availability : record.availability;
+  if (packet->protocol == 6) record.message_sequence = event->input.token;
   memcpy (record.source_address, packet->source_address, 16);
   memcpy (record.resolver_address, packet->destination_address, 16);
   memcpy (record.upstream_address, event->route.address, 16);
@@ -413,6 +440,33 @@ static int root_dns_reply (void *opaque, const product_dns_proxy_event_t *event,
 {
   root_dns_owner_t *owner = opaque; owner->last_reply_token = 0;
   if (owner->stopping || !product_packet_graph_accepting ()) return 0;
+  if (owner->profile == 1 && event->input.context.packet.protocol == 6) {
+    unsigned slot;
+    for (slot=0; slot<ROOT_DNS_REPLIES && owner->reply[slot].state; ++slot) ;
+    if (slot==ROOT_DNS_REPLIES) { ++owner->reply_rejected; return 0; }
+    root_dns_reply_t *reply=&owner->reply[slot]; memset(reply,0,sizeof(*reply));
+    reply->record=root_dns_record(owner,event);
+    reply->record.query_token=event->input.token;
+    reply->record.output_bytes=length;
+    reply->record.query_flags=length>=4 ? ((u16)message[2]<<8)|message[3] : 0;
+    reply->record.query_policy_generation=event->query_policy.generation;
+    reply->record.query_policy_revision=event->query_policy.revision;
+    reply->record.query_policy_hash=event->query_policy.hash;
+    reply->record.query_winner=event->query_policy.winner;
+    reply->record.return_token=event->input.token;
+    /* Native socket write and subsequent kernel/NFQ INPUT policy are separate
+     * facts. No VPP-generated-packet or return-policy identity is fabricated. */
+    reply->record.return_packet_uid=geteuid();
+    reply->state=4; ++owner->replies;
+    if (!product_root_dns_tcp_io_reply(owner->tcp_io,event->input.identity.transport_session,
+          event->input.token,message,length,root_dns_now(owner->vm))) {
+      if (reply->state==4) { reply->state=0; --owner->replies; }
+      ++owner->reply_rejected; return 0;
+    }
+    owner->last_reply_token=event->input.token; ++owner->reply_admitted;
+    if(owner->replies>owner->high_water_replies)owner->high_water_replies=owner->replies;
+    return 1;
+  }
   if (owner->profile == 2) {
     unsigned slot;
     for (slot = 0; slot < ROOT_DNS_REPLIES &&
@@ -517,6 +571,81 @@ static int root_dns_authorize (void *opaque, int fd, uint64_t cookie)
   owner->vpn_bindings[slot].cookie = cookie; return 0;
 }
 
+static int root_dns_tcp_accepted(void *opaque,u64 session,const product_root_dns_tcp_endpoint_t *endpoint)
+{
+  root_dns_owner_t *owner=opaque; u64 now=root_dns_now(owner->vm);
+  if(owner->stopping || !endpoint->saved_syn || endpoint->resolver_port!=53)return 0;
+  root_dns_tcp_binding_t *found=NULL;
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i) {
+    root_dns_tcp_binding_t *binding=&owner->tcp_bindings[i];
+    const product_l4_policy_packet_t *packet=&binding->input.context.packet;
+    if(!binding->active || binding->session || binding->deadline<=now ||
+        binding->input.identity.generation!=owner->generation ||
+        binding->input.identity.network_revision!=owner->network_revision ||
+        binding->input.route_revision!=owner->route_revision ||
+        binding->syn_sequence!=endpoint->syn_sequence || packet->family!=endpoint->family ||
+        packet->source_port!=endpoint->source_port || packet->destination_port!=endpoint->resolver_port ||
+        memcmp(packet->source_address,endpoint->source_address,16) ||
+        memcmp(packet->destination_address,endpoint->resolver_address,16))continue;
+    if(found) { ++owner->tcp_identity_rejected; return 0; }
+    found=binding;
+  }
+  if(!found) { ++owner->tcp_identity_rejected; return 0; }
+  found->session=session; found->input.identity.transport_session=session;
+  found->deadline=UINT64_MAX; return 1;
+}
+static void root_dns_tcp_query(void *opaque,u64 session,u64 token,const u8 *wire,size_t length,u64 now)
+{
+  root_dns_owner_t *owner=opaque; root_dns_tcp_binding_t *binding=NULL;
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i)
+    if(owner->tcp_bindings[i].active && owner->tcp_bindings[i].session==session)
+      { binding=&owner->tcp_bindings[i]; break; }
+  if(!binding || !owner->proxy || owner->stopping)return;
+  product_dns_proxy_input_t input=binding->input;
+  input.token=token; input.identity.now_us=now;
+  input.identity.network_revision=owner->network_revision;input.route_revision=owner->route_revision;
+  product_policy_snapshot_t snapshot;
+  product_policy_snapshot_acquire(&product_packet_graph_main,&snapshot);
+  product_dns_proxy_snapshot_t current={.context=input.context,.view=&snapshot.bank->view,
+    .identity={snapshot.identity.generation,snapshot.identity.revision,snapshot.identity.snapshot_hash,0},
+    .network_revision=product_network_snapshot_current()->revision,.route_revision=snapshot.bank->dns_revision};
+  current.context.domains=snapshot.bank->domains;
+  current.context.domains_available=snapshot.bank->generation==owner->generation;
+  owner->event_view=current.view; owner->event_revision=current.identity.revision;
+  if(current.network_revision==input.identity.network_revision && current.route_revision==input.route_revision && snapshot.bank->dns.enabled)
+    product_dns_proxy_submit(owner->proxy,&input,wire,length,&current);
+  else product_dns_proxy_unavailable(&input,wire,length,&current,&owner->route,
+    &root_dns_proxy_callbacks,owner,PRODUCT_DNS_PROXY_VIEW_CHANGED);
+  owner->event_view=NULL; owner->event_revision=0;
+  product_policy_snapshot_release(&product_packet_graph_main,&snapshot);
+}
+static void root_dns_tcp_delivered(void *opaque,u64 token,int success)
+{
+  root_dns_owner_t *owner=opaque;
+  for(unsigned i=0;i<ROOT_DNS_REPLIES;++i) {
+    root_dns_reply_t *reply=&owner->reply[i];
+    if(reply->state!=4 || reply->record.token!=token)continue;
+    reply->record.stage=4; reply->record.direction=reply->record.packet_direction=1;
+    reply->record.delivery=success?PRODUCT_DNS_DELIVERY_KERNEL_ACCEPTED:PRODUCT_DNS_DELIVERY_WRITE_FAILED;
+    product_observation_dns(owner->vm,&reply->record);
+    reply->state=0; --owner->replies; ++owner->returned;
+    if(success)++owner->kernel_accepted;else ++owner->write_failed;
+    return;
+  }
+}
+static void root_dns_tcp_ended(void *opaque,u64 session,u64 now)
+{
+  root_dns_owner_t *owner=opaque;
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i)
+    if(owner->tcp_bindings[i].active && owner->tcp_bindings[i].session==session)
+      memset(&owner->tcp_bindings[i],0,sizeof(owner->tcp_bindings[i]));
+  product_dns_proxy_session_end(owner->proxy,owner->generation,session,now);
+}
+static const product_root_dns_tcp_callbacks_t root_dns_tcp_callbacks={
+  .watch=root_dns_watch,.accepted=root_dns_tcp_accepted,.query=root_dns_tcp_query,
+  .delivered=root_dns_tcp_delivered,.ended=root_dns_tcp_ended,
+};
+
 static void root_dns_sync (root_dns_owner_t *owner, u64 now)
 {
   if (owner->stopping || !product_packet_graph_enabled ()) return;
@@ -525,9 +654,15 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
   if (!root_dns_configuration (&route, &revision)) return;
   u64 network = product_network_snapshot_current ()->revision;
   int changed = owner->route_revision != revision || owner->network_revision != network;
-  if (!changed && owner->proxy) {
-    root_dns_publish_ready (owner);
-    return;
+  if (!changed && (owner->proxy || !route.enabled)) {
+    if(owner->profile==1 && route.enabled && !owner->tcp_io)
+      owner->tcp_io=product_root_dns_tcp_io_open(owner->generation,
+        PRODUCT_ROOT_DNS_TCP_LISTEN_BASE+owner->owner,&owner->socket_sequence,
+        &root_dns_tcp_callbacks,owner,now);
+    if(owner->profile==1 && route.enabled && owner->tcp_io &&
+        !product_root_dns_tcp_io_status(owner->tcp_io).accepting)
+      product_root_dns_tcp_io_resume(owner->tcp_io,now);
+    root_dns_publish_ready (owner);return;
   }
   if (!changed && owner->retry_at > now) return;
   __atomic_store_n (&owner->ready, 0, __ATOMIC_RELEASE);
@@ -536,6 +671,7 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
       product_dns_proxy_advance (owner->proxy, now, network, revision);
       product_dns_proxy_close (owner->proxy); owner->proxy = NULL;
     }
+  if(!route.enabled)product_root_dns_tcp_io_quiesce(owner->tcp_io,now);
   product_root_dns_io_close (owner->io); owner->io = NULL;
   owner->route = route;
   __atomic_store_n (&owner->route_revision, revision, __ATOMIC_RELEASE);
@@ -551,9 +687,15 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
     owner->io = product_root_dns_io_open (owner->generation, &route, owner->profile == 2 ? 0 : PRODUCT_ROOT_DNS_SOCKET_MARK,
       &owner->socket_sequence, &io_callbacks, owner, now);
   if (owner->io) owner->proxy = product_dns_proxy_open (owner->generation, &route, &root_dns_proxy_callbacks, owner);
-  if (!owner->proxy)
+  if(owner->proxy && owner->profile==1 && !owner->tcp_io)
+    owner->tcp_io=product_root_dns_tcp_io_open(owner->generation,
+      PRODUCT_ROOT_DNS_TCP_LISTEN_BASE+owner->owner,&owner->socket_sequence,
+      &root_dns_tcp_callbacks,owner,now);
+  if(owner->profile==1 && owner->tcp_io && !product_root_dns_tcp_io_status(owner->tcp_io).accepting)
+    product_root_dns_tcp_io_resume(owner->tcp_io,now);
+  if (!owner->proxy || (owner->profile==1 && !owner->tcp_io))
     {
-      owner->last_error = errno; product_root_dns_io_close (owner->io); owner->io = NULL;
+      owner->last_error = errno; product_dns_proxy_close(owner->proxy); owner->proxy=NULL; product_root_dns_io_close (owner->io); owner->io = NULL;
       root_dns_close_raw (owner); owner->retry_at = now + UINT64_C(5000000); return;
     }
   product_dns_proxy_other_bytes (owner->proxy, root_dns_other_bytes (owner));
@@ -573,6 +715,9 @@ static clib_error_t *root_dns_file_dispatch (clib_file_t *file, unsigned events)
       vm->thread_index != vlib_get_thread_index ()) { ++owner->stale; return NULL; }
   u64 now = root_dns_now (vm); root_dns_sync (owner, now);
   if (owner->stopping) return NULL;
+  if(product_root_dns_tcp_io_ready(owner->tcp_io,owner->generation,cookie,fd,events,now)) {
+    product_root_dns_adapter_expire(vm,now); product_flow_expiry_changed(vm); return NULL;
+  }
   owner->current_upstream_session = cookie;
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
     if (owner->vpn_bindings[i].cookie == cookie) owner->current_binding = owner->vpn_bindings[i];
@@ -602,7 +747,7 @@ int product_root_dns_adapter_start (vlib_main_t *vm, uint64_t generation, unsign
       owner->vm = vlib_get_main_by_index (vlib_get_worker_thread_index (i));
       owner->generation = generation; owner->owner = i; owner->raw4 = owner->raw6 = -1;
       owner->profile = product_packet_graph_main.adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? 2 : 1;
-      for (unsigned j = 0; j < PRODUCT_DNS_PROXY_SOCKETS; ++j)
+      for (unsigned j = 0; j < ROOT_DNS_WATCHES; ++j)
         owner->watches[j] = (root_dns_watch_t) {.fd = -1, .file = ~0};
     }
   root_dns_owner_count = count; return 1;
@@ -655,7 +800,7 @@ void product_root_dns_adapter_admission_observe (vlib_main_t *vm, u64 token,
       ? platform->linux_ifindex : 0,
     .id = facts->id, .query_flags = facts->query_flags,
     .source_port = facts->source_port, .resolver_port = facts->resolver_port,
-    .family = facts->family, .protocol = 17,
+    .family = facts->family, .protocol = facts->protocol==6?6:17,
     .direction = PRODUCT_PACKET_DIRECTION_OUTPUT,
     .availability = platform->availability &
       (PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_IFINDEX_KNOWN |
@@ -692,6 +837,8 @@ void product_root_dns_adapter_quiesce (vlib_main_t *vm)
         "dns.proxy event=quiesce generation=%llu owner=%u active_before=%u cancelled_now=%llu\n",
         (unsigned long long) owner->generation, i, before.active,
         (unsigned long long) (after.cancelled - before.cancelled));
+      product_root_dns_tcp_io_close(owner->tcp_io,root_dns_now(owner->vm)); owner->tcp_io=NULL;
+      memset(owner->tcp_bindings,0,sizeof(owner->tcp_bindings));
       product_root_dns_io_close (owner->io); owner->io = NULL;
       root_dns_close_raw (owner);
     }
@@ -715,6 +862,10 @@ uint64_t product_root_dns_adapter_deadline (unsigned index)
   if (index >= root_dns_owner_count || root_dns_owners[index].stopping) return UINT64_MAX;
   root_dns_owner_t *owner = &root_dns_owners[index];
   u64 next = product_dns_proxy_deadline (owner->proxy), io = product_root_dns_io_deadline (owner->io);
+  u64 tcp=product_root_dns_tcp_io_deadline(owner->tcp_io); if(tcp<next)next=tcp;
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i)
+    if(owner->tcp_bindings[i].active && !owner->tcp_bindings[i].session && owner->tcp_bindings[i].deadline<next)
+      next=owner->tcp_bindings[i].deadline;
   if (io < next) next = io;
   if (owner->retry_at && owner->retry_at < next) next = owner->retry_at;
   if (!owner->replies && owner->raw_idle && owner->raw_idle < next) next = owner->raw_idle;
@@ -749,6 +900,14 @@ void product_root_dns_adapter_expire (vlib_main_t *vm, uint64_t now)
       product_dns_proxy_advance (owner->proxy, now, owner->network_revision, owner->route_revision);
     }
   product_root_dns_io_expire (owner->io, now);
+  product_root_dns_tcp_io_expire(owner->tcp_io,now);
+  product_root_dns_tcp_status_t tcp_status=product_root_dns_tcp_io_status(owner->tcp_io);
+  if(owner->tcp_io && !tcp_status.accepting && !tcp_status.clients) {
+    product_root_dns_tcp_io_close(owner->tcp_io,now);owner->tcp_io=NULL;
+  }
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i)
+    if(owner->tcp_bindings[i].active && !owner->tcp_bindings[i].session && owner->tcp_bindings[i].deadline<=now)
+      memset(&owner->tcp_bindings[i],0,sizeof(owner->tcp_bindings[i]));
   if (owner->raw_idle && owner->raw_idle <= now) root_dns_close_raw (owner);
   root_dns_publish_ready (owner);
 }
@@ -839,6 +998,121 @@ static int root_dns_intercept (vlib_main_t *vm, u32 buffer_index, product_packet
         }
     }
   return intercepted;
+}
+
+/* The original TCP observer must not turn a single proxied QName refusal
+ * into whole-stream DROP. Generic packet policy still runs on every packet. */
+static int root_dns_tcp_selected(const product_packet_lease_t *lease,
+  const product_policy_snapshot_t *snapshot)
+{
+  return lease->platform.provenance==PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+    snapshot->bank->dns.enabled && lease->facts.protocol==6 &&
+    ((lease->platform.direction==PRODUCT_PACKET_DIRECTION_OUTPUT && lease->facts.destination_port==53) ||
+     (lease->platform.direction==PRODUCT_PACKET_DIRECTION_INPUT && lease->facts.source_port==53));
+}
+static int root_dns_tcp_same_tuple(const root_dns_tcp_binding_t *binding,
+  const product_packet_lease_t *lease)
+{
+  const product_l4_policy_packet_t *packet=&binding->input.context.packet;
+  return binding->active && packet->family==lease->facts.ip_family &&
+    packet->source_port==lease->facts.source_port && packet->destination_port==lease->facts.destination_port &&
+    !memcmp(packet->source_address,lease->facts.source_address+(packet->family==4?12:0),packet->family==4?4:16) &&
+    !memcmp(packet->destination_address,lease->facts.destination_address+(packet->family==4?12:0),packet->family==4?4:16);
+}
+static int root_dns_tcp_capture(vlib_main_t *vm,u32 buffer_index,product_packet_lease_t *lease,
+  const product_policy_snapshot_t *snapshot,const product_flow_entry_observation_t *flow)
+{
+  if(lease->platform.provenance!=PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+      lease->platform.direction!=PRODUCT_PACKET_DIRECTION_OUTPUT || lease->facts.protocol!=6 || lease->facts.destination_port!=53)return 0;
+  int taken=flow->entry && flow->entry->root_dns_tcp_taken;
+  if(!snapshot->bank->dns.enabled && !taken &&
+      !(lease->platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE))return 0;
+  if(lease->terminal_intent!=PRODUCT_PACKET_INTENT_NONE)return 1;
+  unsigned index=vlib_get_worker_index(vm->thread_index);
+  if(index>=root_dns_owner_count)return 0;
+  root_dns_owner_t *owner=&root_dns_owners[index]; u64 now=root_dns_now(vm);
+  root_dns_sync(owner,now);
+  vlib_buffer_t *buffer=vlib_get_buffer(vm,buffer_index);
+  int syn=(lease->facts.tcp_flags&0x17)==2;
+  root_dns_tcp_binding_t *binding=NULL,*free_binding=NULL;
+  if(!(lease->platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID) ||
+      !product_root_dns_tcp_packet_bytes(vlib_buffer_get_current(buffer),buffer->current_length))goto unavailable;
+  u32 original_mark=product_root_dns_original_mark(buffer)&PRODUCT_ROOT_DNS_TCP_MARK_MASK;
+  if(original_mark && (!taken || original_mark!=((index+1)<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT)))goto unavailable;
+  if(taken && !snapshot->bank->dns.enabled) {
+    lease->platform.reserved|=(index+1)<<PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT;
+    product_packet_graph_set_platform_facts(buffer,&lease->platform,owner->generation);return 1;
+  }
+  if(lease->facts.l4_status!=PRODUCT_PACKET_L4_COMPLETE || !lease->assignment.valid ||
+      !lease->policy_owner_ready || owner->stopping || !owner->tcp_io ||
+      !product_root_dns_tcp_io_status(owner->tcp_io).accepting || !owner->proxy ||
+      !flow->entry || owner->route_revision!=snapshot->bank->dns_revision ||
+      owner->network_revision!=product_network_snapshot_current()->revision)goto unavailable;
+  for(unsigned i=0;i<ROOT_DNS_TCP_BINDINGS;++i) {
+    root_dns_tcp_binding_t *candidate=&owner->tcp_bindings[i];
+    if(candidate->active && !candidate->session && candidate->deadline<=now)
+      memset(candidate,0,sizeof(*candidate));
+    if(!candidate->active && !free_binding)free_binding=candidate;
+    if(root_dns_tcp_same_tuple(candidate,lease) &&
+        candidate->input.identity.generation==owner->generation &&
+        candidate->input.identity.incarnation==flow->entry->incarnation &&
+        (!syn || candidate->syn_sequence==lease->facts.tcp_sequence)) {
+      if(binding)goto unavailable;
+      binding=candidate;
+    }
+  }
+  if(syn) {
+    if(!(lease->platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID) ||
+        !product_root_dns_tcp_syn_bytes(vlib_buffer_get_current(buffer),buffer->current_length) ||
+        (original_mark && !taken))goto unavailable;
+    if(!binding)binding=free_binding;
+    if(!binding)goto unavailable;
+  } else if(!binding)goto unavailable;
+  product_dns_proxy_input_t *input=&binding->input;
+  int existing=binding->active;
+  u32 caller_uid=input->context.packet.uid;u8 caller_known=input->context.packet.uid_known;
+  product_dns_caller_t caller=input->context.caller;
+  if(existing && caller_known && (lease->platform.availability&PRODUCT_PLATFORM_UID_KNOWN) && caller_uid!=lease->platform.uid)
+    { ++owner->tcp_identity_rejected; goto unavailable; }
+  product_packet_graph_l4_packet_projection(lease,&input->context.packet);
+  if(existing) {
+    input->context.packet.uid=caller_uid;input->context.packet.uid_known=caller_known;input->context.caller=caller;
+  } else input->context.caller=(lease->platform.availability&PRODUCT_PLATFORM_DNS_APP_RELIABLE)
+    ? PRODUCT_DNS_CALLER_PLATFORM_APP : PRODUCT_DNS_CALLER_UNKNOWN;
+  input->capture_present=1;input->capture_uid=(lease->platform.availability&PRODUCT_PLATFORM_UID_KNOWN)?lease->platform.uid:UINT32_MAX;
+  input->capture_availability=lease->platform.availability;
+  input->context.packet.ct_state=flow->tracker.facts.state;
+  input->context.packet.flow_direction=flow->tracker.facts.direction;
+  input->context.packet.ct_state_known=flow->tracker.facts.state!=0;
+  input->context.packet.flow_direction_known=flow->tracker.facts.direction!=0;
+  input->context.packet.protocol_set=flow->entry->lpi.protocols;
+  input->context.packet.protocol_set_known=flow->entry->lpi.available;
+  input->context.packet.sni_result=flow->entry->sni.result;
+  input->slot=flow->slot;input->route_revision=owner->route_revision;
+  input->identity=(product_dns_identity_t){.generation=owner->generation,
+    .incarnation=flow->entry->incarnation,.network_revision=owner->network_revision,.now_us=now,
+    .profile=1,.transport_session=binding->session};
+  input->token=lease->origin_obligation_id;
+  if(syn && !taken && !product_flow_entry_take_root_dns_tcp(product_packet_graph_main.flow_pools[index],
+       flow->slot,owner->generation,flow->entry->incarnation))goto unavailable;
+  binding->active=1;
+  if(syn) { binding->syn_sequence=lease->facts.tcp_sequence;
+    if(!binding->session)binding->deadline=now+PRODUCT_DNS_REQUEST_US; }
+  lease->platform.reserved|=(index+1)<<PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT;
+  product_packet_graph_set_platform_facts(buffer,&lease->platform,owner->generation);
+  return 1;
+unavailable:
+  ++owner->tcp_admission_failed;
+  product_root_dns_admission_facts_t facts={.family=lease->facts.ip_family,.protocol=6,
+    .source_port=lease->facts.source_port,.resolver_port=53,.packet_length=lease->facts.packet_length};
+  memcpy(facts.source_address,lease->facts.source_address+(facts.family==4?12:0),facts.family==4?4:16);
+  memcpy(facts.resolver_address,lease->facts.destination_address+(facts.family==4?12:0),facts.family==4?4:16);
+  product_root_dns_adapter_admission_observe(vm,lease->origin_obligation_id,&lease->platform,&facts,
+    PRODUCT_DNS_CAPACITY,PRODUCT_DNS_DELIVERY_RESOURCE_DROP);
+  if(product_packet_set_terminal(lease,PRODUCT_PACKET_INTENT_DROP_RUNTIME)!=PRODUCT_PACKET_OK)
+    clib_panic("Root TCP DNS admission terminal identity rejected");
+  lease->runtime_drop_reason=PRODUCT_PACKET_DROP_DNS_TAKEOVER;
+  return 1;
 }
 
 static root_dns_reply_t *root_dns_return (root_dns_owner_t *owner, u32 buffer,
@@ -1050,6 +1324,13 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         owner->route.address, address, sizeof (address));
       product_dns_proxy_resources_t core = product_dns_proxy_resources (owner->proxy);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
+      product_root_dns_tcp_status_t tcp=product_root_dns_tcp_io_status(owner->tcp_io);
+      vlib_cli_output(vm,"dns.proxy_tcp owner=%u generation=%llu ready=%u port=%u clients=%u client_limit=%u client_high_water=%u sockets=%u outputs=%u output_limit=%u pending=%u bytes=%llu byte_limit=%u frames=%llu delivered=%llu write_failed=%llu rejected=%llu identity_rejected=%llu admission_failed=%llu stale=%llu partial_expired=%llu error=%d",
+        i,(unsigned long long)owner->generation,owner->tcp_io!=NULL,tcp.port,tcp.clients,PRODUCT_ROOT_DNS_TCP_CLIENTS,tcp.high_water_clients,
+        tcp.sockets,tcp.outputs,PRODUCT_ROOT_DNS_TCP_OUTPUTS,tcp.pending,(unsigned long long)tcp.allocated_bytes,PRODUCT_ROOT_DNS_TCP_WORK_BYTES,
+        (unsigned long long)tcp.frames,(unsigned long long)tcp.delivered,(unsigned long long)tcp.write_failed,
+        (unsigned long long)tcp.rejected,(unsigned long long)owner->tcp_identity_rejected,(unsigned long long)owner->tcp_admission_failed,
+        (unsigned long long)tcp.stale,(unsigned long long)tcp.partial_expired,tcp.last_error);
       vlib_cli_output (vm, "dns.proxy owner=%u generation=%llu enabled=%u socket_ready=%u route_ready=%u udp_state=%s stopping=%u route_revision=%llu network_revision=%llu upstream=%s port=%u transactions=%u transaction_high_water=%u transaction_limit=%u waiter_limit=%u sockets=%u socket_limit=%u raw_sockets=%u replies=%u reply_high_water=%u reply_limit=%u proxy_bytes=%llu socket_bytes=%llu owner_work_bound=%llu intercepted=%llu reply_admitted=%llu reply_rejected=%llu kernel_accepted=%llu write_failed=%llu return_policy_drop=%llu returned=%llu stale=%llu error=%u proxy_high_water_bytes=%llu socket_high_water_bytes=%llu upstream_socket_high_water=%u upstream_socket_limit=%u socket_byte_bound=%llu proxy_capacity=%llu socket_capacity=%llu socket_errors=%llu authorization_pending=%u authorized_udp=%u profile=%u",
         i, (unsigned long long) owner->generation, owner->route.enabled, io.udp_ready,
         valid && root_dns_owner_current (owner, revision, network),

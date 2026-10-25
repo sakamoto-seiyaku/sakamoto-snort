@@ -7,7 +7,7 @@
 
 typedef struct
 {
-  uint8_t family, dns_header_present;
+  uint8_t family, dns_header_present, protocol;
   uint8_t source_address[16], resolver_address[16];
   uint16_t source_port, resolver_port, id, query_flags;
   uint32_t packet_length;
@@ -107,7 +107,7 @@ product_root_dns_admission_classify (const uint8_t *data, uint32_t length,
     }
   else
     return PRODUCT_ROOT_DNS_ADMISSION_NON_DNS;
-  if (protocol != 17)
+  if (protocol != 17 && protocol != 6)
     return PRODUCT_ROOT_DNS_ADMISSION_NON_DNS;
   if (length - at < 4)
     {
@@ -117,8 +117,8 @@ product_root_dns_admission_classify (const uint8_t *data, uint32_t length,
   if (product_root_dns_admission_be16 (data + at + 2) != 53)
     return PRODUCT_ROOT_DNS_ADMISSION_NON_DNS;
   facts.source_port = product_root_dns_admission_be16 (data + at);
-  facts.resolver_port = 53;
-  if (length - at >= 12)
+  facts.resolver_port = 53; facts.protocol = protocol;
+  if (protocol == 17 && length - at >= 12)
     {
       facts.dns_header_present = 1;
       facts.id = product_root_dns_admission_be16 (data + at + 8);

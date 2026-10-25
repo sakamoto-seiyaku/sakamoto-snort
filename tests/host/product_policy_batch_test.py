@@ -8,6 +8,7 @@ This checks the actual policy/settlement code, not a second host policy model;
 it does not claim native queue, real socket or FlowRuntime qualification.
 """
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import re
 import subprocess
 import tempfile
@@ -182,6 +183,16 @@ void product_observation_basic(vlib_main_t *vm,unsigned outcome,u32 bytes) {
   (void)vm;(void)outcome;(void)bytes;assert(0);
 }
 static void product_root_dns_adapter_changed(void) {}
+static int root_dns_tcp_capture(vlib_main_t *vm,u32 index,product_packet_lease_t *lease,
+ const product_policy_snapshot_t *snapshot,const product_flow_entry_observation_t *flow) {
+ (void)vm;(void)index;(void)snapshot;(void)flow;
+ if(lease->platform.provenance==PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+    lease->platform.direction==PRODUCT_PACKET_DIRECTION_OUTPUT && lease->facts.protocol==6 && lease->facts.destination_port==53) {
+   assert(!snapshot->bank->dns.enabled && !(lease->platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE));
+   assert(!flow->entry || !flow->entry->root_dns_tcp_taken);
+ }
+ return 0;
+}
 static product_packet_batch_stats_t product_packet_batch_stats[PRODUCT_GRAPH_WORKERS + 1];
 static char retired_domain_marker;
 static atomic_uint retired_destroyed, wait_seen, writer_done, wait_enabled;
@@ -407,7 +418,8 @@ static void product_fragment_terminal(vlib_main_t *vm,vlib_node_runtime_t *node,
   const product_buffer_metadata_t *m,const product_packet_lease_t *lease) {
   (void)vm; (void)node; (void)index; (void)m; (void)lease; ++fragment_calls;
 }
-static int product_nfqueue_send_verdict(int fd,u32 queue,u32 id,u32 verdict,int flags) {
+static int product_nfqueue_send_verdict(int fd,u32 queue,u32 id,u32 verdict,int flags,int set_mark,u32 mark) {
+  assert(!set_mark && !mark);
   (void)queue; (void)id; assert(fd==123 && !flags); ++native_send_calls; native_verdict=verdict;
   product_root_nfqueue_last_send_result=native_send_success?32:-1;
   product_root_nfqueue_last_errno=native_send_success?0:EIO; return native_send_success;
@@ -707,7 +719,7 @@ typedef struct { u32 thread_index; } vlib_main_t;
 typedef struct { u32 node_index; } vlib_node_runtime_t;
 typedef struct { u32 n_vectors, vectors[VLIB_FRAME_SIZE]; } vlib_frame_t;
 typedef struct {
- u32 index;
+ u32 flow_id_prefix[2],flow_id,index;
  u8 data[64],opaque[sizeof(product_adapter_obligation_t)+sizeof(product_platform_packet_facts_t)];
  u16 current_length;
 } vlib_buffer_t;
@@ -719,7 +731,7 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-policy-batch-") as temporary:
     (directory / "vlib").mkdir()
     (directory / "vlib/vlib.h").write_text(vlib_stub)
     test = directory / "test.c"
-    code = prefix + private_types + hooks + snapshot_code + publisher + stubs + projection + flow_commit + stage + owner
+    code = prefix + mark_fixture() + private_types + hooks + snapshot_code + publisher + stubs + projection + flow_commit + stage + owner
     code += function(GRAPH, "product_metadata_set_terminal_intent", "static void")
     test.write_text(code + node + flag_wrappers + completion + suffix)
     failures = []

@@ -15,6 +15,7 @@
 #include "product_vpn_flow_stack.h"
 #define SAKAMOTO_PRODUCT_VPN_TUN_MTU 10000
 #include "product_root_dns_io.h"
+#include "product_root_dns_tcp_io.h"
 #include "product_dns_tcp.h"
 #include "product_flow_entry.h"
 #include "product_packet_completion.h"
@@ -26,7 +27,7 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 typedef uintptr_t uword;
 typedef struct { unsigned thread_index; } vlib_main_t;
-typedef struct { u32 current_length; u8 opaque[128], data[2048]; } vlib_buffer_t;
+typedef struct { u32 current_length, flags, flow_id; u8 opaque[128], data[2048]; } vlib_buffer_t;
 typedef char clib_error_t;
 typedef int unformat_input_t;
 typedef struct { const char *path, *short_help; void *function; } vlib_cli_command_t;
@@ -43,6 +44,7 @@ struct clib_file {
 #define VLIB_NODE_TYPE_INPUT 1
 #define VLIB_NODE_STATE_INTERRUPT 1
 #define UNIX_FILE_DATA_AVAILABLE_TO_WRITE 1
+#define UNIX_FILE_EVENT_EDGE_TRIGGERED 2
 #define VLIB_NODE_FN(name) static uword name##_function
 #define VLIB_REGISTER_NODE(name) vlib_node_registration_t name
 #define VLIB_CLI_COMMAND(name,storage) storage vlib_cli_command_t name
@@ -232,6 +234,40 @@ product_root_dns_io_status_t product_root_dns_io_status(const product_root_dns_i
    io->live?(io->authorized?PRODUCT_ROOT_DNS_UDP_AUTHORIZED:PRODUCT_ROOT_DNS_UDP_AUTHORIZING):PRODUCT_ROOT_DNS_UDP_FAILED};
 }
 uint64_t product_root_dns_io_reservation(void) {return 1024*1024;}
+/* TCP sockets are a controlled transport dependency in this source-linked
+ * Adapter fixture. Real kernel framing/SAVED_SYN is tested separately. */
+struct product_root_dns_tcp_io { int live; };
+static struct product_root_dns_tcp_io fixture_tcp_io;
+static int tcp_reply_accept;
+static uint8_t tcp_reply_wire[65535];
+static size_t tcp_reply_length;
+static u64 tcp_reply_token;
+static unsigned tcp_reply_count;
+static unsigned fixture_tcp_clients;
+product_root_dns_tcp_io_t *product_root_dns_tcp_io_open(uint64_t generation,uint16_t port,
+ uint64_t *sequence,const product_root_dns_tcp_callbacks_t *cb,void *context,uint64_t now) {
+ (void)sequence;(void)context;assert(generation&&port==15353&&cb&&now==now_us);
+ fixture_tcp_io.live=1;return &fixture_tcp_io;
+}
+void product_root_dns_tcp_io_close(product_root_dns_tcp_io_t *io,uint64_t now){(void)now;if(io)io->live=0;}
+void product_root_dns_tcp_io_quiesce(product_root_dns_tcp_io_t *io,uint64_t now){(void)now;if(io)io->live=0;}
+int product_root_dns_tcp_io_resume(product_root_dns_tcp_io_t *io,uint64_t now){assert(io&&now==now_us);io->live=1;return 1;}
+int product_root_dns_tcp_io_ready(product_root_dns_tcp_io_t *io,uint64_t generation,uint64_t cookie,int fd,unsigned events,uint64_t now){(void)io;(void)generation;(void)cookie;(void)fd;(void)events;(void)now;return 0;}
+int product_root_dns_tcp_io_reply(product_root_dns_tcp_io_t *io,uint64_t session,uint64_t token,const uint8_t *wire,size_t length,uint64_t now){
+ assert(io&&session&&token&&length<=sizeof(tcp_reply_wire)&&now==now_us);
+ memcpy(tcp_reply_wire,wire,length);tcp_reply_length=length;tcp_reply_token=token;++tcp_reply_count;return tcp_reply_accept;
+}
+void product_root_dns_tcp_io_expire(product_root_dns_tcp_io_t *io,uint64_t now){(void)io;(void)now;}
+uint64_t product_root_dns_tcp_io_deadline(const product_root_dns_tcp_io_t *io){(void)io;return UINT64_MAX;}
+product_root_dns_tcp_status_t product_root_dns_tcp_io_status(const product_root_dns_tcp_io_t *io){return(product_root_dns_tcp_status_t){.accepting=io&&io->live,.clients=fixture_tcp_clients};}
+int product_flow_entry_take_root_dns_tcp(product_flow_runtime_t *pool,uint32_t slot,u64 generation,u64 incarnation) {
+ (void)pool;assert(slot==3&&generation==product_packet_graph_main.generation&&incarnation==entry.incarnation);
+ entry.root_dns_tcp_taken=1;return 1;
+}
+static void product_packet_graph_set_platform_facts(vlib_buffer_t *buffer,const product_platform_packet_facts_t *platform,u64 generation) {
+ product_buffer_platform_metadata_t metadata;memcpy(&metadata,buffer->opaque,sizeof(metadata));
+ metadata.platform=*platform;metadata.obligation.queue_generation=generation;memcpy(buffer->opaque,&metadata,sizeof(metadata));
+}
 void product_root_dns_adapter_expire(vlib_main_t *,uint64_t);
 #include "root_dns_projection.inc"
 #include "product_root_dns_admission.h"
@@ -538,8 +574,137 @@ static void root_idle_health(void) {
  puts("Root/VPN idle route health, current authorization, network/config/stop invalidation: PASS");
 }
 
+static void tcp_proxy_identity(void) {
+ tcp_reply_accept=1;
+ for(unsigned family=4;family<=6;family+=2) {
+  initialize(77,family);
+  lease.facts.protocol=6;lease.facts.l4_header_length=lease.facts.transport_length=20;
+  lease.facts.tcp_flags=2;lease.facts.tcp_sequence=0x12345678;
+  lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+  memset(buffers[0].data,0,sizeof(buffers[0].data));
+  unsigned at=family==4?20:40;
+  buffers[0].current_length=at+20;buffers[0].data[0]=family==4?0x45:0x60;
+  buffers[0].data[family==4?9:6]=6;
+  buffers[0].data[at+2]=0;buffers[0].data[at+3]=53;buffers[0].data[at+13]=2;
+  buffers[0].flow_id=0x1007b;
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent&&entry.root_dns_tcp_taken);
+  assert((lease.platform.reserved&PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK)==2);
+  assert(buffers[0].flow_id==0x1007b);
+  root_dns_owner_t *owner=&root_dns_owners[0];
+  root_dns_tcp_binding_t *binding=&owner->tcp_bindings[0];
+  product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40000,.resolver_port=53,.syn_sequence=0x12345679};
+  memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+  memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+  assert(!root_dns_tcp_accepted(owner,901,&endpoint));--endpoint.syn_sequence;
+  assert(root_dns_tcp_accepted(owner,901,&endpoint));assert(!root_dns_tcp_accepted(owner,902,&endpoint));
+  /* A later packet without UID retains the exact SYN caller, but its actual
+   * capture is separately Unknown in the normal observation. */
+  lease.facts.tcp_flags=0x10;lease.platform.uid=0;lease.platform.availability=0;
+  lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+  buffers[0].data[at+13]=0x10;buffers[0].flow_id=1U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT;
+  flow.tracker.facts.state=PRODUCT_CT_ESTABLISHED;
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent);
+  assert(binding->input.context.packet.uid==10123 && binding->input.context.packet.uid_known && binding->input.context.caller==1);
+  assert(binding->input.capture_uid==UINT32_MAX && binding->input.capture_availability==0);
+  sakamoto_product_domains_t source={.list_count=1,.entry_count=1,.entries={{.length=11,.name="example.com"}}};
+  assert(!product_domains_build(&source,&bank.domains));
+  product_l4_policy_rule_t deny={.uid=10123,.rule_id=317,.reason_id=317,.action=2,.network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,
+    .source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX,.expression_length=2,.expression={PRODUCT_EXPRESSION_DOMAIN_LIST,0}};
+  assert(!product_l4_policy_compile(&bank.view,&deny,1));
+  unsigned before=sends;u64 token=(UINT64_C(1)<<63)|(family*100U+1U);
+  root_dns_tcp_query(owner,901,token,question,sizeof(question),++now_us);
+  assert(sends==before && tcp_reply_token==token && (tcp_reply_wire[3]&15)==5);
+  root_dns_tcp_delivered(owner,token,1);
+  assert(records[record_count-1].uid==10123 && records[record_count-1].caller==1 && records[record_count-1].packet_uid==UINT32_MAX);
+  assert(records[record_count-1].protocol==6 && records[record_count-1].message_sequence==token && records[record_count-1].winner==317);
+  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+  root_dns_tcp_query(owner,901,++token,question,sizeof(question),++now_us);assert(sends==before+1);answer(0);
+  assert(tcp_reply_length==sizeof(question)+16 && (tcp_reply_wire[3]&15)==0);root_dns_tcp_delivered(owner,token,1);
+  root_dns_tcp_query(owner,901,++token,question,sizeof(question),++now_us);product_dns_proxy_key_t old=last_key;
+  bank.dns.port=53053;++bank.dns_revision;
+  product_root_dns_adapter_expire(&worker,++now_us);
+  assert(owner->tcp_io && fixture_tcp_io.live && !product_dns_proxy_resources(owner->proxy).active);
+  assert(tcp_reply_token==token && (tcp_reply_wire[3]&15)==2);root_dns_tcp_delivered(owner,token,1);
+  before=tcp_reply_count;product_dns_proxy_answer(owner->proxy,&old,1,last_wire,last_length,++now_us);assert(tcp_reply_count==before);
+  root_dns_tcp_query(owner,901,++token,question,sizeof(question),++now_us);answer(0);root_dns_tcp_delivered(owner,token,1);
+  assert(owner->route.port==53053 && !owner->replies);
+  lease.platform.uid=20234;lease.platform.availability=1;reset_terminal();
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&lease.terminal_intent==PRODUCT_PACKET_INTENT_DROP_RUNTIME);
+  assert(binding->input.context.packet.uid==10123 && binding->input.context.caller==1);
+  /* Config-off keeps the existing selected transport local, while a new
+   * ordinary off-path incarnation has no Root takeover selection. */
+  fixture_tcp_clients=1;
+  bank.dns.enabled=0;++bank.dns_revision;product_root_dns_adapter_expire(&worker,++now_us);
+  reset_terminal();lease.platform.uid=0;lease.platform.availability=0;
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent);
+  entry.root_dns_tcp_taken=0;lease.platform.reserved=0;reset_terminal();
+  assert(!root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent);
+  bank.dns.enabled=1;++bank.dns_revision;product_root_dns_adapter_expire(&worker,++now_us);
+  assert(owner->tcp_io && product_root_dns_tcp_io_status(owner->tcp_io).accepting && product_root_dns_adapter_ready());
+  fixture_tcp_clients=0;
+  root_dns_tcp_ended(owner,901,now_us);product_domains_destroy(bank.domains);bank.domains=NULL;
+  close_owner();
+ }
+ tcp_reply_accept=0;
+ puts("Root TCP source-linked captured SYN identity, Unknown later capture, per-query refusal/continue, view-failure drain, stale answer and off/closing selection: PASS");
+}
+
+static void tcp_unknown_caller(void) {
+ tcp_reply_accept=1;
+ for(unsigned family=4;family<=6;family+=2)for(unsigned known_uid=0;known_uid<=1;++known_uid) {
+  initialize(77,family);
+  lease.facts.protocol=6;lease.facts.l4_header_length=lease.facts.transport_length=20;
+  lease.facts.tcp_flags=2;lease.facts.tcp_sequence=0x12345678;
+  lease.platform.uid=10123;lease.platform.availability=known_uid?PRODUCT_PLATFORM_UID_KNOWN:0;
+  lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+  buffers[0].flow_id=0x1007b;
+  memset(buffers[0].data,0,sizeof(buffers[0].data));unsigned at=family==4?20:40;
+  buffers[0].current_length=at+20;buffers[0].data[0]=family==4?0x45:0x60;
+  buffers[0].data[family==4?9:6]=6;buffers[0].data[at+3]=53;buffers[0].data[at+13]=2;
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent);
+  root_dns_owner_t *owner=&root_dns_owners[0];root_dns_tcp_binding_t *binding=&owner->tcp_bindings[0];
+  product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40000,.resolver_port=53,.syn_sequence=0x12345678};
+  memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+  memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+  assert(root_dns_tcp_accepted(owner,903,&endpoint));
+  /* A later reliable capture is a new packet fact, not permission to invent
+   * an original caller for the already admitted kernel socket. */
+  lease.facts.tcp_flags=0x10;buffers[0].data[at+13]=0x10;
+  lease.platform.availability=PRODUCT_PLATFORM_UID_KNOWN|PRODUCT_PLATFORM_DNS_APP_RELIABLE;
+  buffers[0].flow_id=1U<<PRODUCT_ROOT_DNS_TCP_MARK_SHIFT;
+  assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow)&&!lease.terminal_intent);
+  assert(binding->input.context.caller==PRODUCT_DNS_CALLER_UNKNOWN);
+  assert(binding->input.context.packet.uid_known==known_uid);
+  assert(binding->input.capture_uid==10123 && binding->input.capture_availability==9);
+  sakamoto_product_domains_t source={.list_count=1,.entry_count=1,.entries={{.length=11,.name="example.com"}}};
+  assert(!product_domains_build(&source,&bank.domains));
+  product_l4_policy_rule_t deny={.uid=10123,.rule_id=317,.reason_id=317,.action=2,
+   .network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,.source_port_last=UINT16_MAX,
+   .destination_port_last=UINT16_MAX,.expression_length=2,.expression={PRODUCT_EXPRESSION_DOMAIN_LIST,0}};
+  assert(!product_l4_policy_compile(&bank.view,&deny,1));
+  unsigned before=sends;u64 token=(UINT64_C(1)<<63)|(family*100U+20U+known_uid);
+  root_dns_tcp_query(owner,903,token,question,sizeof(question),++now_us);
+  assert(sends==before+1);answer(0);
+  assert(tcp_reply_token==token && (tcp_reply_wire[3]&15)==0);root_dns_tcp_delivered(owner,token,1);
+  const product_dns_observation_record_t *record=&records[record_count-1];
+  assert(record->caller==0 && record->uid==(known_uid?10123:UINT32_MAX));
+  assert(!(record->availability&PRODUCT_PLATFORM_DNS_APP_RELIABLE) && !record->domain_available && !record->winner);
+  assert(record->packet_uid==10123 && record->packet_availability==9);
+  assert(record->protocol==6 && record->message_sequence==token && record->reply_capacity==65535);
+  root_dns_tcp_ended(owner,903,now_us);product_domains_destroy(bank.domains);bank.domains=NULL;close_owner();
+ }
+ tcp_reply_accept=0;
+ puts("Root TCP source-linked Unknown SYN caller stays Unknown after reliable capture and bypasses App DNS refusal: PASS");
+}
+
 int main(int argc,char **argv) {
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+ if(argc>1&&!strcmp(argv[1],"tcp-proxy")){
+  tcp_proxy_identity();
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  printf("Root TCP normal records=%u\n",record_count);return 0;
+ }
+ if(argc>1&&!strcmp(argv[1],"tcp-unknown")){tcp_unknown_caller();return 0;}
  if(argc>1&&!strcmp(argv[1],"idle-health")){root_idle_health();return 0;}
  if(argc>1&&!strcmp(argv[1],"vpn-authority")){vpn_authority();return 0;}
  if(argc>1&&!strcmp(argv[1],"vpn-return")){vpn_returns();return 0;}

@@ -173,10 +173,10 @@ impl DnsRecord {
     fn valid_proxy(&self) -> bool {
         let admission_resource = self.proxy_flags & 8 != 0;
         let common = self.generation != 0 && self.token != 0 && self.owner < 62 && matches!(self.adapter_profile, 1 | 2)
-            && matches!(self.family,4|6) && self.protocol == 17 && self.resolver_port == 53
+            && matches!(self.family,4|6) && matches!(self.protocol,6|17) && self.resolver_port == 53
             && self.route_revision != 0
             && self.proxy_result <= 10
-            && self.proxy_flags & !15 == 0 && self.delivery <= 7 && self.reply_rcode <= 4095 && self.rcode <= 4095
+            && self.proxy_flags & !15 == 0 && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
             && self.coverage >= 1 && self.coverage <= 5 && self.codec_peak_bytes <= 512*1024
             && self.caller <= 1 && self.availability & !15 == 0 && self.packet_availability & !15 == 0
             && (self.caller == 1) == (self.availability & 9 == 9 && self.uid != u32::MAX)
@@ -188,7 +188,10 @@ impl DnsRecord {
             && (!self.domain_available || (self.caller == 1 && self.coverage == 1 && !self.name.is_empty()))
             && self.correlation <= 5 && self.candidate_count <= 33 && self.chain_status <= 3
             && self.name_source <= 1 && (self.candidate_count == 0 || self.name_index < self.candidate_count)
-            && self.message_sequence == 0 && self.tcp_sequence == 0 && self.tcp_continuation == 0
+            && (if self.protocol == 6 { self.message_sequence == self.token && self.transport_session != 0 || admission_resource }
+                else { self.message_sequence == 0 })
+            && self.tcp_sequence == 0 && self.tcp_continuation == 0
+            && (self.delivery != 8 || (self.protocol == 6 && self.stage != 4))
             && matches!(self.stage,1..=4)
             && (if self.stage == 1 { self.direction == 3 && self.query_flags & 0x8000 == 0 && self.query_token == 0 }
                 else if self.stage == 2 { self.direction == 1 && self.query_flags & 0x8000 != 0 && self.query_token == self.token }
@@ -214,19 +217,20 @@ impl DnsRecord {
             self.request_attempt != 0 && matches!(self.upstream_transport,1|2)
                 && matches!(self.upstream_family,4|6) && self.upstream_port != 0
                 && (self.upstream_family != 4 || self.upstream_address[4..] == [0;12])
-                && self.delivery <= 5 && (self.client_udp_capacity == 0 || self.client_udp_capacity >= 512)
-                && (512..=1232).contains(&self.reply_capacity)
+                && (self.delivery <= 5 || self.delivery == 8) && (self.client_udp_capacity == 0 || self.client_udp_capacity >= 512)
+                && (if self.protocol == 6 { self.reply_capacity == 65535 }
+                    else { (512..=1232).contains(&self.reply_capacity) })
                 && self.output_bytes <= u32::from(self.reply_capacity)
         }
     }
 
     pub(crate) fn key(&self) -> String {
         let base = format!("{:020}:{:020}:{:04}", self.generation, self.token, self.owner);
-        if self.protocol == 6 {
+        if self.proxy_flags & 1 != 0 {
+            format!("{base}:proxy:{:020}:{}:{:02}:{:020}",self.request_attempt,self.stage,self.name_index,self.return_token)
+        } else if self.protocol == 6 {
             format!("{base}:tcp:{:020}:{}:{:02}:{}", self.message_sequence,
                 self.stage, self.name_index, self.tcp_continuation)
-        } else if self.proxy_flags & 1 != 0 {
-            format!("{base}:proxy:{:020}:{}:{:02}:{:020}",self.request_attempt,self.stage,self.name_index,self.return_token)
         } else if self.stage == 1 { base }
         else { format!("{base}:{}:{:02}", self.stage, self.name_index) }
     }

@@ -123,6 +123,9 @@ typedef struct
   uint64_t deadline_us;
   uint32_t heap_position;
   uint8_t timeout_class;
+  /* Selection belongs to this incarnation, including closing/config-off late
+   * packets. It is not a cached DNS permission or a cross-flow association. */
+  uint8_t root_dns_tcp_taken;
   product_lpi_state_t lpi;
   product_sni_state_t sni;
   /* key.protocol selects the independent lifetime/offset representation.
@@ -306,6 +309,9 @@ uint32_t product_flow_sni_retained_bytes (const product_flow_entry_t *);
 void product_flow_sni_stop (product_flow_entry_t *, unsigned);
 void product_flow_sni_observe (product_flow_entry_t *, const product_packet_facts_t *,
                                const uint8_t *, uint32_t);
+
+int product_flow_entry_take_root_dns_tcp(product_flow_runtime_t *, uint32_t slot,
+  uint64_t generation, uint64_t incarnation);
 
 /* Cache only the decision from this packet's acquired snapshot. */
 product_flow_entry_status_t

@@ -19,6 +19,7 @@
 #include "product_runtime_topology.h"
 #include "product_root_dns_adapter.h"
 #include "product_root_dns_admission.h"
+#include "product_root_dns_tcp_mark.h"
 #include "product_observation.h"
 
 #include <arpa/inet.h>
@@ -71,7 +72,7 @@ typedef enum
 typedef struct
 {
   u32 packet_id;
-  u32 uid;
+  u32 uid, mark;
   u8 hook;
   u8 ip_family;
   u8 protocol;
@@ -790,13 +791,13 @@ product_nfqueue_configure (int fd, u32 queue_id, u32 family, u32 queue_maxlen)
 typedef union
 {
   u8 bytes[NLMSG_SPACE (sizeof (struct nfgenmsg)) +
-           NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr))];
+           NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr)) + NFA_SPACE (sizeof (u32))];
   struct nlmsghdr nlh;
 } product_nfqueue_verdict_request_t;
 
 static int
 product_nfqueue_fill_verdict (product_nfqueue_verdict_request_t *request,
-  u32 queue_id, u32 packet_id, u32 verdict)
+  u32 queue_id, u32 packet_id, u32 verdict, int set_mark, u32 mark)
 {
   struct nfqnl_msg_verdict_hdr verdict_header;
   product_nfnl_fill_header (&request->nlh, sizeof (*request),
@@ -808,16 +809,19 @@ product_nfqueue_fill_verdict (product_nfqueue_verdict_request_t *request,
   clib_memset (&verdict_header, 0, sizeof (verdict_header));
   verdict_header.verdict = htonl (verdict);
   verdict_header.id = htonl (packet_id);
-  return product_nfnl_addattr (&request->nlh, sizeof (*request),
-    NFQA_VERDICT_HDR, &verdict_header, sizeof (verdict_header));
+  if (!product_nfnl_addattr (&request->nlh, sizeof (*request),
+      NFQA_VERDICT_HDR, &verdict_header, sizeof (verdict_header))) return 0;
+  mark = htonl (mark);
+  return !set_mark || product_nfnl_addattr (&request->nlh, sizeof (*request),
+    NFQA_MARK, &mark, sizeof (mark));
 }
 
 static int
 product_nfqueue_send_verdict (int fd, u32 queue_id, u32 packet_id,
-                              u32 verdict, int flags)
+                              u32 verdict, int flags, int set_mark, u32 mark)
 {
   product_nfqueue_verdict_request_t request;
-  if (!product_nfqueue_fill_verdict (&request, queue_id, packet_id, verdict))
+  if (!product_nfqueue_fill_verdict (&request, queue_id, packet_id, verdict, set_mark, mark))
     return 0;
   return product_nfnl_send (fd, &request.nlh, flags);
 }
@@ -857,7 +861,7 @@ product_root_nfqueue_send_counted_verdict (
 {
   product_root_nfqueue_record_verdict_attempt (nm, lane, packet_id);
   if (product_nfqueue_send_verdict (lane->fd, lane->queue_id, packet_id,
-                                    verdict, 0))
+                                    verdict, 0, 0, 0))
     {
       lane->verdict_succeeded++;
       clib_atomic_fetch_add_relax (&nm->verdict_succeeded, 1);
@@ -915,6 +919,12 @@ product_root_nfqueue_parse_packet (u8 *data, u32 length,
                   packet->hook = packet_header->hook;
                   packet->identity_present = 1;
                 }
+              break;
+            case NFQA_MARK:
+              if (NFA_PAYLOAD (attr) >= (int) sizeof (u32)) {
+                u32 mark; clib_memcpy_fast (&mark, NFA_DATA (attr), sizeof (mark));
+                packet->mark = ntohl (mark);
+              }
               break;
             case NFQA_UID:
               if (NFA_PAYLOAD (attr) >= (int) sizeof (u32))
@@ -1028,8 +1038,8 @@ product_root_nfqueue_unadmitted_dns_query (const u8 *data, u32 length,
   u32 message_length, product_root_dns_admission_facts_t *facts,
   product_platform_packet_facts_t *platform)
 {
-  if (!product_root_dns_adapter_enabled ()
-      || message_length < NLMSG_LENGTH (sizeof (struct nfgenmsg)))
+  int replacement_enabled = product_root_dns_adapter_enabled ();
+  if (message_length < NLMSG_LENGTH (sizeof (struct nfgenmsg)))
     return 0;
   const struct nlmsghdr *nlh = (const struct nlmsghdr *) data;
   const struct nfgenmsg *nfgen = (const struct nfgenmsg *) NLMSG_DATA (nlh);
@@ -1037,7 +1047,7 @@ product_root_nfqueue_unadmitted_dns_query (const u8 *data, u32 length,
   u32 offset = NLMSG_LENGTH (sizeof (*nfgen));
   u8 hook = 0;
   int hook_present = 0;
-  u32 uid = 0, outdev = 0;
+  u32 uid = 0, outdev = 0, mark = 0;
   int uid_present = 0, outdev_present = 0;
   u32 captured_length = 0;
   int captured_length_present = 0;
@@ -1069,6 +1079,8 @@ product_root_nfqueue_unadmitted_dns_query (const u8 *data, u32 length,
           payload_visible = value_visible;
           payload_incomplete = value_visible < declared_value;
         }
+      else if (NFA_TYPE (attr) == NFQA_MARK && value_visible >= sizeof (u32))
+        { clib_memcpy_fast (&mark, NFA_DATA (attr), sizeof (mark)); mark = ntohl (mark); }
       else if (NFA_TYPE (attr) == NFQA_UID && value_visible >= sizeof (u32))
         {
           clib_memcpy_fast (&uid, NFA_DATA (attr), sizeof (uid));
@@ -1100,6 +1112,8 @@ product_root_nfqueue_unadmitted_dns_query (const u8 *data, u32 length,
     product_root_dns_admission_classify (payload, payload_visible, facts);
   int physically_incomplete = payload_incomplete || message_length > length
     || (captured_length_present && captured_length > payload_visible);
+  if (!replacement_enabled && !(mark & PRODUCT_ROOT_DNS_TCP_MARK_MASK)) return 0;
+  if (!replacement_enabled && facts && facts->protocol && facts->protocol != 6) return 0;
   if (classification != PRODUCT_ROOT_DNS_ADMISSION_QUERY
       && !(classification == PRODUCT_ROOT_DNS_ADMISSION_INCOMPLETE
            && physically_incomplete))
@@ -1268,8 +1282,8 @@ typedef struct
   vlib_main_t *vm;
   product_root_nfqueue_lane_t *lane;
   product_root_nfqueue_pending_t *pending;
-  u32 buffer_index, verdict;
-  int send_flags, capacity_bypass, dns_admission_drop;
+  u32 buffer_index, verdict, mark;
+  int send_flags, capacity_bypass, dns_admission_drop, set_mark;
 } product_root_verdict_work_t;
 
 static int
@@ -1339,13 +1353,39 @@ product_root_nfqueue_prepare_completion (
           && platform.platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE
           && platform.platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT
           && product_root_nfqueue_dns_query_candidate (
-            vlib_buffer_get_current (buffer), buffer->current_length))
+            vlib_buffer_get_current (buffer), buffer->current_length)
+          && (capacity_bypass || !(platform.platform.reserved & PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK)))
         {
           verdict = NF_DROP;
           dns_admission_drop = 1;
           lane->ingress_dns_drop_attempts++;
         }
     }
+
+  int set_mark = 0; u32 mark = 0;
+  if (completion->root_dns_redirect_owner) {
+    vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+    product_root_buffer_platform_metadata_t platform;
+    clib_memcpy_fast (&platform, buffer->opaque, sizeof (platform));
+    unsigned selected = (platform.platform.reserved & PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_MASK)
+      >> PRODUCT_PLATFORM_ADMISSION_DNS_TCP_OWNER_SHIFT;
+    if (verdict != NF_ACCEPT || capacity_bypass || !selected ||
+        selected != completion->root_dns_redirect_owner ||
+        selected > product_packet_graph_worker_count () ||
+        completion->producer_thread != vlib_get_worker_thread_index (selected - 1) ||
+        !(platform.platform.reserved & PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID) ||
+        platform.platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+        platform.platform.direction != PRODUCT_PACKET_DIRECTION_OUTPUT ||
+        !product_root_dns_tcp_packet_bytes (vlib_buffer_get_current (buffer), buffer->current_length))
+      verdict = NF_DROP;
+    else {
+      mark = product_root_dns_original_mark (buffer);
+      u32 previous = mark & PRODUCT_ROOT_DNS_TCP_MARK_MASK;
+      u32 requested = selected << PRODUCT_ROOT_DNS_TCP_MARK_SHIFT;
+      if (previous && previous != requested) verdict = NF_DROP;
+      else { mark |= requested; set_mark = 1; }
+    }
+  }
 
   /* Commit identity consumption before the one native operation attempt. */
   product_root_nfqueue_pending_deactivate (nm, lane, pending);
@@ -1380,7 +1420,7 @@ product_root_nfqueue_prepare_completion (
   *work = (product_root_verdict_work_t) {
     .vm = vm, .lane = lane, .pending = pending, .buffer_index = buffer_index,
     .verdict = verdict, .send_flags = send_flags, .capacity_bypass = capacity_bypass,
-    .dns_admission_drop = dns_admission_drop,
+    .dns_admission_drop = dns_admission_drop, .set_mark = set_mark, .mark = mark,
   };
   return 1;
 
@@ -1481,7 +1521,7 @@ product_root_nfqueue_complete_from_graph (vlib_main_t *vm, u32 buffer_index,
     return 0;
   work.lane->graph_sendto_calls++;
   int success = product_nfqueue_send_verdict (work.lane->fd, work.lane->queue_id,
-    completion->obligation.packet_id, work.verdict, work.send_flags);
+    completion->obligation.packet_id, work.verdict, work.send_flags, work.set_mark, work.mark);
   u32 outcome = success ? PRODUCT_VERDICT_SUCCEEDED
     : product_root_nfqueue_last_send_result < 0
       ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
@@ -1508,7 +1548,7 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
   ASSERT (count && count <= PRODUCT_PACKET_BATCH_SIZE);
   _Static_assert (sizeof (product_nfqueue_verdict_request_t) ==
     NLMSG_ALIGN (NLMSG_LENGTH (sizeof (struct nfgenmsg)) +
-      NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr))),
+      NFA_SPACE (sizeof (struct nfqnl_msg_verdict_hdr)) + NFA_SPACE (sizeof (u32))),
     "verdict array stride must equal its aligned wire message size");
   lane->graph_verdict_windows++;
   lane->graph_verdict_window_messages += count;
@@ -1516,11 +1556,12 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
     {
       ASSERT (work[i].lane == lane && work[i].send_flags == work[0].send_flags);
       int filled = product_nfqueue_fill_verdict (&requests[i], lane->queue_id,
-        work[i].pending->completion.obligation.packet_id, work[i].verdict);
+        work[i].pending->completion.obligation.packet_id, work[i].verdict, work[i].set_mark, work[i].mark);
       ASSERT (filled);
-      /* The fixed request has room for the single fixed-size attribute. */
-      if (!filled || requests[i].nlh.nlmsg_len != sizeof (requests[i]) ||
-          NLMSG_ALIGN (requests[i].nlh.nlmsg_len) != sizeof (requests[i]))
+      /* Optional NFQA_MARK is part of this same per-ID operation. Ordinary
+       * requests keep their original one-attribute wire form. */
+      if (!filled || requests[i].nlh.nlmsg_len > sizeof (requests[i]) ||
+          NLMSG_ALIGN (requests[i].nlh.nlmsg_len) != requests[i].nlh.nlmsg_len)
         {
           for (u32 j = 0; j < count; ++j)
             product_root_nfqueue_finish_completion (&work[j],
@@ -1543,7 +1584,7 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
       /* Only a newly created diagnostic generation with IDs far below wrap
        * can arm this CLI probe. The original obligation remains unchanged. */
       int filled = product_nfqueue_fill_verdict (&requests[at], lane->queue_id,
-        UINT32_MAX, work[at].verdict);
+        UINT32_MAX, work[at].verdict, work[at].set_mark, work[at].mark);
       ASSERT (filled);
       lane->verdict_id_fault_next = 0;
       fprintf (stderr, "s297 event=verdict_id_fault generation=%llu lane=%u original=%u wire=%u position=%u count=%u\n",
@@ -1556,10 +1597,10 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
     {
       lane->graph_sendto_calls++;
       errno = 0;
-      ssize_t sent = sendto (lane->fd, &requests[i], sizeof (requests[i]),
+      ssize_t sent = sendto (lane->fd, &requests[i], requests[i].nlh.nlmsg_len,
         work[i].send_flags, (struct sockaddr *) &kernel, sizeof (kernel));
       int error = sent < 0 ? errno : 0;
-      u32 outcome = sent == sizeof (requests[i]) ? PRODUCT_VERDICT_SUCCEEDED
+      u32 outcome = sent == requests[i].nlh.nlmsg_len ? PRODUCT_VERDICT_SUCCEEDED
         : sent < 0 ? PRODUCT_VERDICT_FAILED_DEFINITE : PRODUCT_VERDICT_OUTCOME_UNKNOWN;
       product_root_nfqueue_finish_completion (&work[i], outcome, sent, error);
     }
@@ -1568,7 +1609,11 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
    * Native submit success does not confirm every NFQ handler or delivery.
    * In this kernel-port-0 path negative sendto returns precede dispatch;
    * an unexpected short return has no reliable per-ID successful prefix. */
-  size_t bytes = count * sizeof (requests[0]);
+  u8 packed[sizeof (requests)]; size_t bytes = 0;
+  for (u32 i = 0; i < count; ++i) {
+    size_t length = requests[i].nlh.nlmsg_len;
+    clib_memcpy_fast (packed + bytes, &requests[i], length); bytes += length;
+  }
   lane->graph_packed_calls++;
   lane->graph_packed_requested += count;
   lane->graph_packed_max_messages = clib_max (lane->graph_packed_max_messages, count);
@@ -1576,7 +1621,7 @@ product_root_nfqueue_send_verdict_window (product_root_verdict_work_t *work, u32
     if (work[i].verdict != work[0].verdict)
       { lane->graph_packed_mixed_calls++; break; }
   errno = 0;
-  ssize_t sent = sendto (lane->fd, requests, bytes, work[0].send_flags,
+  ssize_t sent = sendto (lane->fd, packed, bytes, work[0].send_flags,
     (struct sockaddr *) &kernel, sizeof (kernel));
   int error = sent < 0 ? errno : 0;
   u32 outcome = sent == (ssize_t) bytes ? PRODUCT_VERDICT_SUCCEEDED
@@ -1961,13 +2006,20 @@ product_root_nfqueue_read_dispatch (clib_file_t *file)
         (i16) (buffer->current_data + (packet.payload - base));
       buffer->current_length = (u16) packet.payload_length;
       clib_memset (&platform, 0, sizeof (platform));
+      product_root_dns_capture_mark (buffer, packet.mark);
+      if (packet.hook == NF_INET_LOCAL_OUT && product_root_dns_tcp_packet_bytes (
+            packet.payload, packet.payload_length))
+        platform.reserved |= PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
       platform.uid = packet.uid_present ? packet.uid : 0;
       platform.availability = packet.uid_present ? PRODUCT_PLATFORM_UID_KNOWN : 0;
       platform.provenance = PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE;
       platform.direction = packet.hook == NF_INET_LOCAL_OUT
         ? PRODUCT_PACKET_DIRECTION_OUTPUT : packet.hook == NF_INET_LOCAL_IN
         ? PRODUCT_PACKET_DIRECTION_INPUT : PRODUCT_PACKET_DIRECTION_UNKNOWN;
-      if (product_root_dns_adapter_enabled ())
+      product_root_dns_admission_facts_t tcp_route_facts = {0};
+      int retained_tcp_route = (packet.mark & PRODUCT_ROOT_DNS_TCP_MARK_MASK) &&
+        product_root_dns_admission_query (packet.payload, packet.payload_length, &tcp_route_facts) && tcp_route_facts.protocol == 6;
+      if (product_root_dns_adapter_enabled () || retained_tcp_route)
         platform.reserved |= PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE;
 #ifdef __ANDROID__
       /* NFQA_UID identifies the actual outgoing socket owner. Android normal

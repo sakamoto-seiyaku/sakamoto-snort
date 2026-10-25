@@ -34,7 +34,7 @@ def function(name, result):
 parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
 parser.add_argument('--records')
-parser.add_argument('--case', choices=('all', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health'), default='all')
+parser.add_argument('--case', choices=('all', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown'), default='all')
 args = parser.parse_args()
 cache = Path(args.libraries[1]).resolve().parent / 'CMakeCache.txt'
 batch = re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$', cache.read_text(), re.M)
@@ -43,6 +43,7 @@ defines = ['-DSAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT=1'] if batch[1] == 'ON' els
 with tempfile.TemporaryDirectory(prefix='sakamoto-root-dns-adapter-') as tmp:
     directory = Path(tmp)
     (directory / 'vlib').mkdir()
+    (directory / 'vlib/vlib.h').write_text('/* Controlled VPP buffer dependency. */\n')
     (directory / 'vlib/file.h').write_text('/* Controlled VPP file dependency. */\n')
     (directory / 'root_dns_projection.inc').write_text(
         function('product_packet_graph_l4_direction_from_platform', 'static void')
@@ -59,6 +60,7 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-root-dns-adapter-') as tmp:
     command = [str(binary)]
     if args.case != 'all':
         command.append(args.case)
+        if args.records: command.append(str(Path(args.records).resolve()))
     elif args.records:
         command.append(str(Path(args.records).resolve()))
     subprocess.run(command, check=True, timeout=20, env=os.environ.copy())

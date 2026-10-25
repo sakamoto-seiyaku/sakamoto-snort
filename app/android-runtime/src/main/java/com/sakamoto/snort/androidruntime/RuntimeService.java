@@ -91,6 +91,10 @@ public final class RuntimeService extends VpnService {
     private static final String PRODUCT_ROOT_NFQUEUE_LANES = "4";
     private static final String PRODUCT_ROOT_NFQUEUE_CHAIN = "SAKAMOTO_PRODUCT_S176_OUTPUT";
     private static final String PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN = "SAKAMOTO_PRODUCT_S178_INPUT";
+    private static final String PRODUCT_ROOT_DNS_TCP_CHAIN = "SAKAMOTO_PRODUCT_S317_TCP";
+    private static final String PRODUCT_ROOT_DNS_TCP_CT_CHAIN = "SAKAMOTO_PRODUCT_S317_CT";
+    private static final String PRODUCT_ROOT_DNS_TCP_TABLE = "1396985427";
+    private static final String PRODUCT_ROOT_DNS_TCP_MASK = "0x7e00000";
     private static final int PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS = 3;
     private static final long PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_RETRY_MILLIS = 250L;
     private static final String PRODUCT_CORE_GENERATION_STATE =
@@ -5909,6 +5913,7 @@ public final class RuntimeService extends VpnService {
         String outputChain = PRODUCT_ROOT_NFQUEUE_CHAIN;
         String inputChain = PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN;
         String command = "set +e; "
+                + productRootDnsTcpCleanup("iptables") + productRootDnsTcpCleanup("ip6tables")
                 + "while iptables -w -t mangle -D OUTPUT -j " + outputChain
                 + " >/dev/null 2>&1; do :; done; "
                 + "while iptables -w -t mangle -D INPUT -j " + inputChain
@@ -5941,6 +5946,7 @@ public final class RuntimeService extends VpnService {
                 + " >/dev/null 2>&1; then exit 1; fi; "
                 + "if ip6tables -w -t mangle -S " + inputChain
                 + " >/dev/null 2>&1; then exit 1; fi; "
+                + productRootDnsTcpAbsent("iptables") + productRootDnsTcpAbsent("ip6tables")
                 + "exit 0";
         boolean clean = runRootCommand(command, 5L);
         appendLog("product_root_nfqueue_cleanup=" + (clean ? "clean" : "failed"));
@@ -5968,6 +5974,7 @@ public final class RuntimeService extends VpnService {
         String inputChain = PRODUCT_ROOT_NFQUEUE_INPUT_CHAIN;
         String uid = Integer.toString(getApplicationInfo().uid);
         String command = "set +e; "
+                + productRootDnsTcpCleanup("iptables") + productRootDnsTcpCleanup("ip6tables")
                 + "while iptables -w -t mangle -D OUTPUT -j " + outputChain
                 + " >/dev/null 2>&1; do :; done; "
                 + "while iptables -w -t mangle -D INPUT -j " + inputChain
@@ -5985,8 +5992,8 @@ public final class RuntimeService extends VpnService {
                 + "ip6tables -w -t mangle -F " + inputChain + " >/dev/null 2>&1; "
                 + "ip6tables -w -t mangle -X " + inputChain + " >/dev/null 2>&1; "
                 + "set -e; "
-                + productRootFamilyHooks("iptables", outputChain, inputChain, uid, "176:177")
-                + productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179");
+                + productRootFamilyHooks("iptables", outputChain, inputChain, uid, "176:177", activeWorkerPlacement.ownerCount)
+                + productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179", activeWorkerPlacement.ownerCount);
         for (int attempt = 1; attempt <= PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS;
                 attempt++) {
             if (runRootCommand(command, 5L)) {
@@ -6008,24 +6015,130 @@ public final class RuntimeService extends VpnService {
         return false;
     }
 
+    private static String productRootDnsTcpCleanup(String tool) {
+        String chain = PRODUCT_ROOT_DNS_TCP_CHAIN, ct = PRODUCT_ROOT_DNS_TCP_CT_CHAIN;
+        String table = "ip6tables".equals(tool) ? "mangle" : "nat";
+        String hook = "ip6tables".equals(tool) ? "PREROUTING" : "OUTPUT";
+        StringBuilder command = new StringBuilder("while " + tool + " -w -t " + table
+                + " -D " + hook + " -j " + chain + " >/dev/null 2>&1; do :; done; "
+                + tool + " -w -t " + table + " -F " + chain + " >/dev/null 2>&1; "
+                + tool + " -w -t " + table + " -X " + chain + " >/dev/null 2>&1; "
+                + "while " + tool + " -w -t mangle -D POSTROUTING -j " + ct
+                + " >/dev/null 2>&1; do :; done; "
+                + tool + " -w -t mangle -F " + ct + " >/dev/null 2>&1; "
+                + tool + " -w -t mangle -X " + ct + " >/dev/null 2>&1; ");
+        if ("ip6tables".equals(tool)) {
+            for (int owner = 0; owner < 62; ++owner) {
+                command.append("while ip -6 rule del pref ").append(9001 + owner)
+                        .append(" fwmark 0x").append(Integer.toHexString((owner + 1) << 21))
+                        .append("/").append(PRODUCT_ROOT_DNS_TCP_MASK).append(" lookup ")
+                        .append(PRODUCT_ROOT_DNS_TCP_TABLE).append(" >/dev/null 2>&1; do :; done; ");
+            }
+            command.append("ip -6 route del table ").append(PRODUCT_ROOT_DNS_TCP_TABLE)
+                    .append(" local ::/0 dev lo metric 15353 >/dev/null 2>&1; ");
+        }
+        return command.toString();
+    }
+
+    private static String productRootDnsTcpAbsent(String tool) {
+        String table = "ip6tables".equals(tool) ? "mangle" : "nat";
+        String hook = "ip6tables".equals(tool) ? "PREROUTING" : "OUTPUT";
+        String command = "if " + tool + " -w -t " + table + " -S " + PRODUCT_ROOT_DNS_TCP_CHAIN
+                + " >/dev/null 2>&1; then exit 1; fi; "
+                + "if " + tool + " -w -t " + table + " -S " + hook + " 2>/dev/null | grep -F -- '-j "
+                + PRODUCT_ROOT_DNS_TCP_CHAIN + "' >/dev/null; then exit 1; fi; "
+                + "if " + tool + " -w -t mangle -S " + PRODUCT_ROOT_DNS_TCP_CT_CHAIN
+                + " >/dev/null 2>&1; then exit 1; fi; "
+                + "if " + tool + " -w -t mangle -S POSTROUTING 2>/dev/null | grep -F -- '-j "
+                + PRODUCT_ROOT_DNS_TCP_CT_CHAIN + "' >/dev/null; then exit 1; fi; ";
+        if ("ip6tables".equals(tool)) {
+            command += "if ip -6 rule show | grep -E '^90(0[1-9]|[1-5][0-9]|6[0-2]):.*lookup "
+                    + PRODUCT_ROOT_DNS_TCP_TABLE + "( |$)' >/dev/null; then exit 1; fi; "
+                    + "if [ -n \"$(ip -6 route show table " + PRODUCT_ROOT_DNS_TCP_TABLE
+                    + ")\" ]; then exit 1; fi; ";
+        }
+        return command;
+    }
+
+    private static String productRootDnsTcpHooks(String tool, int owners) {
+        if (owners < 1 || owners > 62) throw new IllegalArgumentException("Root DNS owner layout");
+        boolean ipv6 = "ip6tables".equals(tool);
+        String chain = PRODUCT_ROOT_DNS_TCP_CHAIN, ct = PRODUCT_ROOT_DNS_TCP_CT_CHAIN;
+        String table = ipv6 ? "mangle" : "nat", hook = ipv6 ? "PREROUTING" : "OUTPUT";
+        StringBuilder commands = new StringBuilder();
+        if (ipv6) {
+            commands.append("if [ -n \"$(ip -6 route show table ").append(PRODUCT_ROOT_DNS_TCP_TABLE)
+                    .append(")\" ]; then exit 1; fi; ");
+            commands.append("if ip -6 rule show | grep -E '^90(0[1-9]|[1-5][0-9]|6[0-2]):' >/dev/null; then exit 1; fi; ");
+            commands.append("ip -6 route add table ").append(PRODUCT_ROOT_DNS_TCP_TABLE)
+                    .append(" local ::/0 dev lo metric 15353; ");
+            commands.append("ip -6 route show table ").append(PRODUCT_ROOT_DNS_TCP_TABLE)
+                    .append(" | grep -E '^local (default|::/0) dev lo .*metric 15353' >/dev/null; ");
+        }
+        commands.append(tool).append(" -w -t ").append(table).append(" -N ").append(chain).append("; ");
+        String bypass = " -m mark --mark 0x40000000/0x40000000 -j RETURN";
+        commands.append(tool).append(" -w -t ").append(table).append(" -A ").append(chain).append(bypass).append("; ");
+        commands.append(tool).append(" -w -t ").append(table).append(" -C ").append(chain).append(bypass).append("; ");
+        for (int owner = 0; owner < owners; ++owner) {
+            String mark = "0x" + Integer.toHexString((owner + 1) << 21) + "/" + PRODUCT_ROOT_DNS_TCP_MASK;
+            String match = (ipv6 ? " -i lo" : "") + " -p tcp --dport 53 -m mark --mark " + mark
+                    + (ipv6 ? " -j TPROXY --on-port " : " -j REDIRECT --to-ports ") + (15353 + owner);
+            commands.append(tool).append(" -w -t ").append(table).append(" -A ").append(chain).append(match).append("; ");
+            commands.append(tool).append(" -w -t ").append(table).append(" -C ").append(chain).append(match).append("; ");
+            if (ipv6) {
+                commands.append("ip -6 rule add pref ").append(9001 + owner).append(" fwmark ").append(mark)
+                        .append(" lookup ").append(PRODUCT_ROOT_DNS_TCP_TABLE).append("; ");
+                commands.append("ip -6 rule show pref ").append(9001 + owner).append(" | grep -F -- 'fwmark ")
+                        .append(mark).append(" lookup ").append(PRODUCT_ROOT_DNS_TCP_TABLE).append("' >/dev/null; ");
+            }
+        }
+        commands.append(tool).append(" -w -t ").append(table).append(" -A ").append(hook).append(" -j ").append(chain).append("; ");
+        commands.append(tool).append(" -w -t ").append(table).append(" -C ").append(hook).append(" -j ").append(chain).append("; ");
+        // This is a routing latch for the already selected TCP connection.
+        // The mask is disjoint from netd's lower mark fields. It supplies no
+        // caller or policy authority, and zero CT marks never erase a first
+        // SYN's original reserved bits before native collision validation.
+        commands.append(tool).append(" -w -t mangle -N ").append(ct).append("; ");
+        String save = " -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport 53"
+                + " -m mark ! --mark 0/" + PRODUCT_ROOT_DNS_TCP_MASK
+                + " -m mark ! --mark 0x40000000/0x40000000 -j CONNMARK --save-mark --nfmask "
+                + PRODUCT_ROOT_DNS_TCP_MASK + " --ctmask " + PRODUCT_ROOT_DNS_TCP_MASK;
+        commands.append(tool).append(" -w -t mangle -A ").append(ct).append(save).append("; ");
+        commands.append(tool).append(" -w -t mangle -C ").append(ct).append(save).append("; ");
+        commands.append(tool).append(" -w -t mangle -A POSTROUTING -j ").append(ct).append("; ");
+        commands.append(tool).append(" -w -t mangle -C POSTROUTING -j ").append(ct).append("; ");
+        return commands.toString();
+    }
+
     /** Each family's TCP/UDP/Echo INPUT and OUTPUT share Q2. Kernel queue
      * placement is independent of the one canonical owner assignment. */
     private static String productRootFamilyHooks(String tool, String outputChain,
-            String inputChain, String uid, String range) {
+            String inputChain, String uid, String range, int ownerCount) {
         StringBuilder commands = new StringBuilder(tool + " -w -t mangle -N "
                 + outputChain + "; " + tool + " -w -t mangle -N " + inputChain + "; ");
-        // Ordinary UDP DNS reaches the same owner graph for every captured
-        // caller. Product-created upstream sockets carry only this scoped
-        // capture mark; generated returns still enter ordinary INPUT policy.
-        String dnsMatch = " -p udp --dport 53 -m mark ! --mark 0x40000000/0x40000000";
-        commands.append(tool).append(" -w -t mangle -A ").append(outputChain).append(dnsMatch)
-                .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
-        commands.append(tool).append(" -w -t mangle -A ").append(outputChain)
-                .append(" -p udp --dport 53 -j RETURN; ");
-        commands.append(tool).append(" -w -t mangle -C ").append(outputChain).append(dnsMatch)
-                .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
-        commands.append(tool).append(" -w -t mangle -C ").append(outputChain)
-                .append(" -p udp --dport 53 -j RETURN; ");
+        // These inert owner maps are installed and ACKed with the existing
+        // generation-scoped NFQ hook. Only VPP's effective DNS configuration
+        // and a prepared owner listener may issue a SYN redirect operation.
+        // Disabling DNS therefore restores the kernel path without Java
+        // becoming a second DNS configuration authority.
+        commands.append(productRootDnsTcpHooks(tool, ownerCount));
+        String restore = " -p tcp --dport 53 -m connmark ! --mark 0/" + PRODUCT_ROOT_DNS_TCP_MASK
+                + " -j CONNMARK --restore-mark --nfmask " + PRODUCT_ROOT_DNS_TCP_MASK
+                + " --ctmask " + PRODUCT_ROOT_DNS_TCP_MASK;
+        commands.append(tool).append(" -w -t mangle -A ").append(outputChain).append(restore).append("; ");
+        commands.append(tool).append(" -w -t mangle -C ").append(outputChain).append(restore).append("; ");
+        for (String protocol : new String[] {"udp", "tcp"}) {
+            String dnsMatch = " -p " + protocol
+                    + " --dport 53 -m mark ! --mark 0x40000000/0x40000000";
+            commands.append(tool).append(" -w -t mangle -A ").append(outputChain).append(dnsMatch)
+                    .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+            commands.append(tool).append(" -w -t mangle -A ").append(outputChain)
+                    .append(" -p ").append(protocol).append(" --dport 53 -j RETURN; ");
+            commands.append(tool).append(" -w -t mangle -C ").append(outputChain).append(dnsMatch)
+                    .append(" -j NFQUEUE --queue-balance ").append(range).append(" --queue-bypass; ");
+            commands.append(tool).append(" -w -t mangle -C ").append(outputChain)
+                    .append(" -p ").append(protocol).append(" --dport 53 -j RETURN; ");
+        }
         String icmp = "ip6tables".equals(tool) ? "ipv6-icmp" : "icmp";
         String typeOption = "ip6tables".equals(tool) ? " --icmpv6-type " : " --icmp-type ";
         for (String protocol : new String[] {"udp", "tcp", icmp}) {

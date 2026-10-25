@@ -47,6 +47,7 @@ prefix = f"#define LEGACY_SOURCE {int(bool(LEGACY_SOURCE))}\n" + r'''
 #include "product_dns.h"
 #include "sakamoto_product_observation.h"
 #include "product_root_dns_admission.h"
+#include "product_root_dns_tcp_io.h"
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
 #define ARRAY_LEN(a) (sizeof(a)/sizeof((a)[0]))
 #define PRODUCT_ROOT_NFQUEUE_MAX_LANES 4
@@ -63,7 +64,7 @@ typedef struct {
 typedef struct {
   u32 packet_id, uid; u8 hook, ip_family, protocol, uid_present, identity_present;
   u8 indev_present, outdev_present; u32 indev, outdev, skb_info, captured_length;
-  u8 skb_info_present, captured_length_present; u8 *payload; u32 payload_length;
+  u8 skb_info_present, captured_length_present; u32 mark; u8 *payload; u32 payload_length;
 } product_root_nfqueue_packet_t;
 typedef struct {
   u32 lane_index, queue_id; u64 next_obligation_token;

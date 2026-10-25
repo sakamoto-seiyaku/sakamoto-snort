@@ -8,6 +8,7 @@ this proves bounded callback/loan behavior, not kernel pressure or delivery.
 import hashlib
 import os
 from pathlib import Path
+from product_root_dns_mark_fixture import mark_fixture
 import re
 import resource
 import subprocess
@@ -55,12 +56,13 @@ prefix = r'''
 #include "product_packet_completion.h"
 #include "product_root_receive_pool.h"
 #include "product_packet_batch.h"
+#include "product_root_dns_admission.h"
 typedef uint8_t u8; typedef uint16_t u16; typedef int16_t i16;
 typedef uint32_t u32; typedef uint64_t u64; typedef unsigned long uword;
 typedef struct {u32 thread_index;} vlib_main_t;
 typedef struct {u32 file_descriptor, polling_thread_index; uword private_data;} clib_file_t;
 typedef int clib_error_t;
-typedef struct {u8 data[2048], opaque2[56]; u32 ref_count,flags,template,trace_handle,total_length_not_including_first_buffer,buffer_pool_index; i16 current_data; u16 current_length;} vlib_buffer_t;
+typedef struct {u32 flow_id_prefix[2],flow_id;u8 data[2048], opaque2[56]; u32 ref_count,flags,template,trace_handle,total_length_not_including_first_buffer,buffer_pool_index; i16 current_data; u16 current_length;} vlib_buffer_t;
 static vlib_buffer_t buffers[PRODUCT_ROOT_RECEIVE_TOTAL];
 static struct {u32 buffer_template;} buffer_pool;
 typedef struct {u32 buffer_index; product_platform_packet_facts_t platform; product_adapter_obligation_t obligation;} product_packet_graph_external_item_t;
@@ -97,6 +99,7 @@ static vlib_buffer_t *vlib_get_buffer(vlib_main_t *v,u32 i){assert(v==&vm && i<P
 #define vlib_buffer_get_current(b) ((b)->data+(b)->current_data)
 static u32 vlib_buffer_get_default_data_size(vlib_main_t *v){assert(v==&vm);return 2048;}
 '''
+prefix += mark_fixture()
 types = ''.join(declaration(name, kind) for name, kind in (
     ('product_root_nfqueue_fault_mode_t', 'enum'),
     ('product_root_nfqueue_packet_t', 'struct'),
@@ -217,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix='product-root-io-') as temp:
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O1', '-g',
                     '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-fno-pie', '-no-pie',
-                    '-I', str(PRODUCT), str(path / 'test.c'), '-o', str(path / 'test')], check=True)
+                    '-I', str(PRODUCT), '-I', str(ROOT / 'src/product/include'), str(path / 'test.c'), '-o', str(path / 'test')], check=True)
     # The sandbox uses a ptrace runner. Bound failures and let a genuine SIGSEGV
     # terminate directly instead of recursing through ASan's signal handler.
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
