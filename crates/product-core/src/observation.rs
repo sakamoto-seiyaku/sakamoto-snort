@@ -652,14 +652,20 @@ impl ProductCore {
     }
 
     pub fn start_observation_at(&mut self, path: &std::path::Path) -> Result<(), String> {
+        self.start_observation_at_with_boot_count(path, None)
+    }
+
+    pub fn start_observation_at_with_boot_count(&mut self, path: &std::path::Path,
+        boot_count: Option<u32>) -> Result<(), String> {
         if self.observation.is_none() {
             let owners = self.query().map_err(|error| format!("{error:?}"))?
                 .product_graph_worker_count;
-            self.observation = Some(crate::observation_service::ObservationService::start_for_owners(
+            self.observation = Some(crate::observation_service::ObservationService::start_for_owners_with_boot_count(
                 &self.api_path,
                 self.generation,
                 path,
                 owners,
+                boot_count,
             )?);
         }
         Ok(())

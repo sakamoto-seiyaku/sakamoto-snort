@@ -8,7 +8,10 @@ $responses = @{}
 $lastPlan = 0
 $nextConnection = 0
 $nextRequest = 0
-$stats = @{received=0; exchanged=0; cancelled=0; closed=0; udp_receive_errors=0}
+$clock = [Diagnostics.Stopwatch]::StartNew()
+function MonotonicMs { return $script:clock.ElapsedMilliseconds }
+$stats = @{received=0; exchanged=0; cancelled=0; closed=0; udp_receive_errors=0;
+    max_loop_ms=0; max_plan_io_ms=0; max_udp_queued_bytes=0}
 function Emit($row) {
     $row | ConvertTo-Json -Compress -Depth 6 | ForEach-Object { [Console]::Out.WriteLine($_); [Console]::Out.Flush() }
 }
@@ -44,6 +47,9 @@ function CloseConnection($connection, [string]$reason) {
     }
     Emit @{kind='connection_closed'; connection=$connection.id; buffered=$connection.bytes.Count; reason=$reason}
 }
+function CheckGateDeadline($item) {
+    if ($item.entry.gate -and (MonotonicMs) -ge $item.deadline) { throw 'reply gate deadline' }
+}
 function Admit($wire, $remote, $local, [string]$protocol, $connection, $socket) {
     if ($wire.Length -lt 2 -or $wire.Length -gt 65535 -or $script:waiting.Count -ge 1024) { throw 'request capacity' }
     $script:nextRequest++
@@ -51,7 +57,7 @@ function Admit($wire, $remote, $local, [string]$protocol, $connection, $socket) 
     $row = @{kind='received'; request=$script:nextRequest; protocol=$protocol;
         connection=0; received_utc=[DateTime]::UtcNow.ToString('o');
         peer=@($remote.Address.ToString(),$remote.Port); resolver=@($local.Address.ToString(),$local.Port);
-        request_hex=$hex}
+        request_hex=$hex; received_mono_ms=(MonotonicMs)}
     if ($connection) { $row.connection=$connection.id }
     Emit $row
     $key = $protocol + ':' + $local.Port + ':' + $hex.Substring(4)
@@ -67,9 +73,12 @@ function Admit($wire, $remote, $local, [string]$protocol, $connection, $socket) 
     $delay=0
     if ($entry.delay_ms) { $delay=[int]$entry.delay_ms }
     if ($delay -lt 0 -or $delay -gt 15000) { throw 'reply delay capacity' }
+    $gateBudget=30000
+    if ($null -ne $entry.gate_budget_ms) { $gateBudget=[int]$entry.gate_budget_ms }
+    if ($gateBudget -lt 1000 -or $gateBudget -gt 120000 -or (!$entry.gate -and $gateBudget -ne 30000)) { throw 'reply gate capacity' }
     $script:waiting.Add(@{connection=$connection; socket=$socket; peer=$remote;
-        wire=$wire; row=$row; entry=$entry; due=[DateTime]::UtcNow.AddMilliseconds($delay);
-        deadline=[DateTime]::UtcNow.AddSeconds(30); written=0})
+        wire=$wire; row=$row; entry=$entry; due=(MonotonicMs)+$delay;
+        deadline=[Math]::Min((MonotonicMs)+$gateBudget,$script:deadline); written=0})
     $script:stats.received++
 }
 try {
@@ -86,9 +95,14 @@ try {
         }
     }
     Emit @{kind='ready'; addresses=$Addresses; ports=@(53,53053); protocol='independent UDP and TCP DNS peer';
-        connection_limit=32; pending_limit=1024; process_id=$PID}
-    $deadline=[DateTime]::UtcNow.AddMinutes(20)
-    while (!(Test-Path -LiteralPath $StopPath) -and [DateTime]::UtcNow -lt $deadline) {
+        connection_limit=32; pending_limit=1024; process_id=$PID; relative_clock='Stopwatch';
+        udp_receive_buffers=@($udp | ForEach-Object { @{resolver=$_.Client.LocalEndPoint.ToString(); bytes=$_.Client.ReceiveBufferSize} })}
+    $deadline=(MonotonicMs)+1200000
+    $lastLoop=(MonotonicMs); $lastDiagnostic=$lastLoop
+    while (!(Test-Path -LiteralPath $StopPath) -and (MonotonicMs) -lt $deadline) {
+        $loopAt=(MonotonicMs); $gap=$loopAt-$lastLoop; $lastLoop=$loopAt
+        if ($gap -gt $stats.max_loop_ms) { $stats.max_loop_ms=$gap }
+        $planAt=(MonotonicMs)
         $stamp=(Get-Item -LiteralPath $PlanPath).LastWriteTimeUtc.Ticks
         if ($stamp -ne $lastPlan) {
             $plan=Get-Content -Raw -LiteralPath $PlanPath | ConvertFrom-Json
@@ -96,7 +110,16 @@ try {
             foreach ($entry in $plan.responses) { $responses[$entry.key]=$entry }
             $lastPlan=$stamp
         }
+        $planMs=(MonotonicMs)-$planAt
+        if ($planMs -gt $stats.max_plan_io_ms) { $stats.max_plan_io_ms=$planMs }
+        if ($gap -gt 250 -or $planMs -gt 250 -or $loopAt-$lastDiagnostic -ge 1000) {
+            Emit @{kind='loop_observation'; mono_ms=(MonotonicMs); loop_gap_ms=$gap; plan_io_ms=$planMs;
+                pending=$waiting.Count; udp_queued=@($udp | ForEach-Object { @{resolver=$_.Client.LocalEndPoint.ToString(); bytes=$_.Available} })}
+            $lastDiagnostic=$loopAt
+        }
         foreach ($socket in $udp) {
+            $queued=$socket.Available
+            if ($queued -gt $stats.max_udp_queued_bytes) { $stats.max_udp_queued_bytes=$queued }
             while ($true) {
                 try {
                     if ($socket.Available -eq 0) { break }
@@ -160,11 +183,10 @@ try {
         }
         for ($n=0; $n -lt $waiting.Count;) {
             $item=$waiting[$n]
-            if ($item.entry.gate -and !(Test-Path -LiteralPath $item.entry.gate)) {
-                if ([DateTime]::UtcNow -ge $item.deadline) { throw 'reply gate deadline' }
-                $n++; continue
-            }
-            if ([DateTime]::UtcNow -lt $item.due) { $n++; continue }
+            $gatePending=$item.entry.gate -and !(Test-Path -LiteralPath $item.entry.gate)
+            CheckGateDeadline $item
+            if ($gatePending) { $n++; continue }
+            if ((MonotonicMs) -lt $item.due) { $n++; continue }
             if ($item.entry.drop) { Cancel $item 'planned_silence'; $waiting.RemoveAt($n); continue }
             $reply=FromHex $item.entry.reply_hex
             if ($reply.Length -ge 2) { $reply[0]=$item.wire[0];$reply[1]=$item.wire[1] }
@@ -177,16 +199,17 @@ try {
                     foreach ($part in $item.entry.split_bytes) {
                         $take=[Math]::Min([int]$part,$framed.Length-$offset)
                         if ($take -le 0) { break }
+                        CheckGateDeadline $item
                         $item.connection.stream.Write($framed,$offset,$take);$offset+=$take;$item.written=$offset
                         if ($item.entry.split_delay_ms) { Start-Sleep -Milliseconds ([int]$item.entry.split_delay_ms) }
                     }
-                    if ($offset -lt $framed.Length) { $item.connection.stream.Write($framed,$offset,$framed.Length-$offset);$item.written=$framed.Length }
+                    if ($offset -lt $framed.Length) { CheckGateDeadline $item; $item.connection.stream.Write($framed,$offset,$framed.Length-$offset);$item.written=$framed.Length }
                 }
             } catch {
                 if (!$item.connection -or !(IsDisconnect $_.Exception)) { throw }
                 CloseConnection $item.connection 'write_disconnect';continue
             }
-            $row=$item.row.Clone();$row.kind='exchange';$row.reply_hex=Hex $reply;$row.sent_bytes=$item.written;$row.sent_utc=[DateTime]::UtcNow.ToString('o')
+            $row=$item.row.Clone();$row.kind='exchange';$row.reply_hex=Hex $reply;$row.sent_bytes=$item.written;$row.sent_utc=[DateTime]::UtcNow.ToString('o');$row.sent_mono_ms=(MonotonicMs)
             Emit $row;$waiting.RemoveAt($n);$stats.exchanged++
         }
         foreach ($connection in $connections) {
@@ -197,6 +220,7 @@ try {
     }
     if (!(Test-Path -LiteralPath $StopPath)) { throw 'peer overall deadline' }
 } finally {
+    $queuedAtStop=@($udp | ForEach-Object { @{resolver=$_.Client.LocalEndPoint.ToString(); bytes=$_.Available} })
     foreach ($connection in $connections) { CloseConnection $connection 'peer_stop' }
     $connections.Clear()
     foreach ($item in $waiting) { Cancel $item 'peer_stop' }
@@ -205,6 +229,7 @@ try {
     foreach ($socket in $udp) { $socket.Close() }
     Emit @{kind='stopped'; pending=$waiting.Count; connections=$connections.Count;
         received=$stats.received; exchanged=$stats.exchanged; cancelled=$stats.cancelled; closed=$stats.closed;
-        udp_receive_errors=$stats.udp_receive_errors}
+        udp_receive_errors=$stats.udp_receive_errors; max_loop_ms=$stats.max_loop_ms;
+        max_plan_io_ms=$stats.max_plan_io_ms; max_udp_queued_bytes=$stats.max_udp_queued_bytes; queued_at_stop=$queuedAtStop}
     if ($stats.received -ne $stats.exchanged+$stats.cancelled) { throw 'peer obligation conservation' }
 }

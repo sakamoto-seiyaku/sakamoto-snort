@@ -83,16 +83,35 @@ add_test(NAME sakamoto-product-dns-tcp-test COMMAND sakamoto-product-dns-tcp-tes
 add_executable(sakamoto-product-dns-proxy-test tests/host/product_dns_proxy_test.c)
 target_link_libraries(sakamoto-product-dns-proxy-test PRIVATE sakamoto_product_dns sakamoto_dns_wire)
 target_compile_options(sakamoto-product-dns-proxy-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-hev-stage-cache-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/hev_stage_cache_test.py")
 add_test(NAME sakamoto-product-dns-proxy-test COMMAND sakamoto-product-dns-proxy-test)
 add_executable(sakamoto-product-root-dns-io-test tests/host/product_root_dns_io_test.c
   src/product/vpp/product_root_dns_io.c)
 target_link_libraries(sakamoto-product-root-dns-io-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-root-dns-io-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-root-dns-io-test COMMAND sakamoto-product-root-dns-io-test)
+add_test(NAME sakamoto-product-dns-authorization-test COMMAND sakamoto-product-root-dns-io-test authorization)
+add_test(NAME sakamoto-product-dns-idle-authorization-test COMMAND sakamoto-product-root-dns-io-test idle-authorization)
+add_test(NAME sakamoto-dns-wire-observation-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/dns_wire_observation_test.py")
+add_test(NAME sakamoto-dns-peer-gate-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/dns_peer_gate_test.py")
+add_test(NAME sakamoto-product-dns-readiness-contract
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_readiness_test.py")
 add_test(NAME sakamoto-product-root-dns-adapter-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
     $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire>)
+add_test(NAME sakamoto-product-vpn-dns-authority-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case vpn-authority)
+add_test(NAME sakamoto-product-dns-idle-readiness-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case idle-health)
+add_test(NAME sakamoto-product-vpn-dns-return-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case vpn-return)
 add_test(NAME sakamoto-product-root-dns-generation-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>

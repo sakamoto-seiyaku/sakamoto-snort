@@ -192,7 +192,10 @@ product_open_build_cache android-vpp "$stage_dir" \
 source_content_sha256() {
   (
     cd "$1"
-    git diff --binary HEAD
+    # The cache identity must be independent of a checkout-local
+    # core.abbrev setting.  A shortened diff index is presentation, not input
+    # identity; force full object names before hashing this patch closure.
+    git -c core.abbrev=40 diff --full-index --binary HEAD
     git ls-files --others --exclude-standard -z | LC_ALL=C sort -z | xargs -0 -r sha256sum
   ) | sha256sum | awk '{print $1}'
 }

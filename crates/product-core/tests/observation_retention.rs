@@ -1,9 +1,263 @@
 use sakamoto_product_core::observation::{Attribution, FlowRecord};
+use sakamoto_product_core::dns_observation::DnsRecord;
 use sakamoto_product_core::observation_store::ObservationStore;
 
 const MINUTE: u64 = 60_000_000;
 const HOUR: u64 = 60 * MINUTE;
 const DAY: u64 = 24 * HOUR;
+
+#[test]
+fn real_clock_reconciliation_preserves_fresh_details_across_close_and_generations() {
+    let seed_path = std::env::var_os("SAKAMOTO_RECEIPT_SEED_PATH");
+    let path = seed_path.clone().map(std::path::PathBuf::from)
+        .unwrap_or_else(|| test_path("clock-reconcile-detail"));
+    let wall = || std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+    let dns = |generation, token| dns_record(generation, token, wall());
+    let ended = |generation, slot, blocked| ended_record(generation, slot, blocked, wall());
+    if seed_path.is_some() {
+        let old = wall() - 3 * DAY;
+        let mut store = ObservationStore::open(&path).unwrap();
+        store.begin_generation(5).unwrap();
+        store.consume_dns(&[dns(5, 1)], old).unwrap();
+        store.consume(&[ended(5, 1, false), ended(5, 2, true)], old).unwrap();
+        store.close().unwrap();
+        drop(store);
+
+        // The complete earlier generation is closed in a separate process.
+        let previous_dns = dns(6, 2);
+        let previous_ends = [ended(6, 1, false), ended(6, 2, true)];
+        let mut store = ObservationStore::open(&path).unwrap();
+        store.begin_generation(6).unwrap();
+        store.consume_dns_real(&[previous_dns.clone()], wall()).unwrap();
+        store.consume_real(&previous_ends, wall()).unwrap();
+        assert_eq!(store.query()["coverage"]["retention_clock_held"], true);
+        store.close().unwrap();
+        assert_eq!(store.query()["persistence"]["pending"], false);
+        drop(store);
+        std::fs::write(path.with_extension("expected-dns.json"),
+            serde_json::to_vec(&previous_dns).unwrap()).unwrap();
+        eprintln!("clock-reconcile-seed-process {}", std::process::id());
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "real_clock_reconciliation_preserves_fresh_details_across_close_and_generations",
+            "--nocapture"])
+        .env("SAKAMOTO_RECEIPT_SEED_PATH", &path).output().unwrap();
+    eprintln!("clock-reconcile-reader-process {}\n{}", std::process::id(),
+        String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    let previous_dns: DnsRecord = serde_json::from_slice(
+        &std::fs::read(path.with_extension("expected-dns.json")).unwrap()).unwrap();
+
+    let current_dns = dns(7, 3);
+    let current_ends = [ended(7, 1, false), ended(7, 2, true)];
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(7).unwrap();
+    // Backward wall input places fresh rows ahead of genuinely old legacy keys.
+    // The following stable forward correction must still expire the old rows.
+    store.consume_dns_real(&[current_dns.clone()], wall() - 4 * DAY).unwrap();
+    store.consume_real(&current_ends, wall() - 4 * DAY).unwrap();
+    store.tick_real(wall()).unwrap();
+    let before = store.query();
+    assert_eq!(before["dns"]["retained_count"], 3);
+    assert_eq!(before["dns"]["rejected"], 0);
+    assert_eq!(before["recent_count"], 6);
+    assert_eq!(before["packets"], serde_json::json!([9, 0]));
+    assert_eq!(before["blocked"]["packets"], serde_json::json!([3, 0]));
+    assert_eq!(before["rejected"], 0);
+    let started = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_millis(60_100));
+    store.tick_real(wall()).unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_secs(60));
+    assert_eq!(store.query()["coverage"]["retention_clock_held"], false);
+    store.close().unwrap();
+    drop(store);
+
+    let mut reopened = ObservationStore::open(&path).unwrap();
+    let reply = reopened.query();
+    eprintln!("clock-reconcile-core {}", serde_json::json!({
+        "dns_retained": reply["dns"]["retained_count"],
+        "dns_evicted": reply["dns"]["evicted"],
+        "recent_count": reply["recent_count"], "packets": reply["packets"],
+        "blocked_packets": reply["blocked"]["packets"],
+        "rejected": reply["rejected"], "detail_age_clock": reply["coverage"]["detail_age_clock"],
+    }));
+    assert_eq!(reply["dns"]["retained_count"], 2,
+        "clock reconciliation must expire genuinely old detail, not fresh closed/current generations");
+    assert_eq!(reply["dns"]["evicted"], 1);
+    let rows = reply["dns"]["recent"].as_object().unwrap();
+    for expected in [&previous_dns, &current_dns] {
+        assert!(rows.values().any(|row| row["record"] == serde_json::to_value(expected).unwrap()));
+    }
+    assert_eq!(reply["recent_count"], 4, "fresh Flow and Blocked END share the receive-age contract");
+    assert_eq!(reply["packets"], serde_json::json!([9, 0]));
+    assert_eq!(reply["blocked"]["packets"], serde_json::json!([3, 0]));
+    // A duplicate END cannot restart the original receive-age timer.
+    reopened.consume_real(&current_ends, wall()).unwrap();
+    reopened.consume(&[], wall() + DAY + MINUTE).unwrap();
+    reopened.close().unwrap();
+    assert_eq!(reopened.query()["dns"]["retained_count"], 0);
+    assert_eq!(reopened.query()["recent_count"], 0);
+    assert_eq!(reopened.query()["packets"], serde_json::json!([9, 0]));
+    drop(reopened);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+fn dns_record(generation: u64, token: u64, utc: u64) -> DnsRecord {
+    DnsRecord {
+        generation, owner: 0, token, mono_us: token, activity_utc_us: utc,
+        policy_generation: generation, policy_revision: 9, policy_hash: 123,
+        uid: 42, network: u32::MAX, slot: u32::MAX,
+        id: token as u16, query_flags: 0x0100, qtype: 1, qclass: 1,
+        source_port: 40000, resolver_port: 53, family: 4, protocol: 17,
+        direction: 3, availability: 9, caller: 1, coverage: 1,
+        declared_action: 1, actual_action: 1, domain_available: true, stage: 1,
+        source_address: [192,168,1,2,0,0,0,0,0,0,0,0,0,0,0,0],
+        resolver_address: [192,168,1,53,0,0,0,0,0,0,0,0,0,0,0,0],
+        name: "fresh.example".into(), ..Default::default()
+    }
+}
+
+fn ended_record(generation: u64, slot: u32, blocked: bool, utc: u64) -> FlowRecord {
+    let mut row = record(utc, slot, 1, if blocked { 1 } else { 2 }, true);
+    row.generation = generation;
+    row.attribution[0].policy_generation = generation;
+    row.blocked = blocked;
+    if blocked {
+        row.end_reason = 2;
+        row.attribution[0].actual_action = 2;
+        row.attribution[0].declared_action = 2;
+        for attribution in &mut row.attribution {
+            attribution.protocols_available = false;
+            attribution.protocol_set = 0;
+        }
+    }
+    row
+}
+
+#[test]
+fn real_receipts_survive_aborted_forward_and_backward_candidates_with_visible_boot_fallback() {
+    let path = test_path("clock-aborted-detail");
+    let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap().as_micros() as u64;
+    let mut store = ObservationStore::open_with_boot_count(&path, Some(0)).unwrap();
+    store.begin_generation(5).unwrap();
+    for (token, received) in [(1, wall), (2, wall + 181 * DAY), (3, wall - DAY)] {
+        store.consume_dns_real(&[dns_record(5, token, wall)], received).unwrap();
+        store.consume_real(&[ended_record(5, token as u32 * 2, false, wall),
+            ended_record(5, token as u32 * 2 + 1, true, wall)], received).unwrap();
+    }
+    store.tick_real(wall).unwrap(); // abort the forward candidate
+    let reply = store.query();
+    assert_eq!(reply["dns"]["retained_count"], 3);
+    assert_eq!(reply["recent_count"], 6);
+    assert_eq!(reply["packets"], serde_json::json!([9, 0]));
+    assert_eq!(reply["blocked"]["packets"], serde_json::json!([3, 0]));
+    assert_eq!(reply["rejected"], 0);
+    assert!(reply["dns"]["recent"].as_object().unwrap().values().all(|row|
+        row["received_us"].as_u64().unwrap() <= wall + 1_000_000));
+    store.close().unwrap();
+    drop(store);
+
+    let mut same_boot = ObservationStore::open_with_boot_count(&path, Some(0)).unwrap();
+    same_boot.tick_real(wall - 181 * DAY).unwrap();
+    let same = same_boot.query();
+    assert_eq!(same["dns"]["retained_count"], 3);
+    assert_eq!(same["coverage"]["detail_age_clock"]["dns_fallback_rows"], 0);
+    assert_eq!(same["coverage"]["detail_age_clock"]["ended_fallback_rows"], 0);
+    same_boot.close().unwrap();
+    drop(same_boot);
+
+    let mut other_boot = ObservationStore::open_with_boot_count(&path, Some(1)).unwrap();
+    let different = other_boot.query();
+    // A different boot cannot compare those monotonic anchors. The explicitly
+    // weaker historical mapping expires the backward-wall row at its safe age.
+    assert_eq!(different["dns"]["retained_count"], 2);
+    assert_eq!(different["dns"]["evicted"], 1);
+    assert_eq!(different["recent_count"], 4);
+    assert_eq!(different["packets"], serde_json::json!([9, 0]));
+    assert_eq!(different["coverage"]["detail_age_clock"]["dns_fallback_rows"], 2);
+    assert_eq!(different["coverage"]["detail_age_clock"]["ended_fallback_rows"], 4);
+    other_boot.close().unwrap();
+    drop(other_boot);
+    // The ordinary Host boot-id namespace cannot impersonate Android count0.
+    let mut host = ObservationStore::open(&path).unwrap();
+    assert_eq!(host.query()["coverage"]["detail_age_clock"]["dns_fallback_rows"], 2);
+    host.consume(&[], wall + DAY + MINUTE).unwrap();
+    host.close().unwrap();
+    assert_eq!(host.query()["dns"]["retained_count"], 0);
+    assert_eq!(host.query()["recent_count"], 0);
+    drop(host);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn all_supported_flow_owners_share_dns_flow_and_blocked_retention() {
+    let path = test_path("all-owner-receipts");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap().as_micros() as u64;
+    let mut store = ObservationStore::open_with_boot_count(&path, Some(7)).unwrap();
+    store.begin_generation(5).unwrap();
+    let mut expected_dns = Vec::new();
+    let mut expected_ends = Vec::new();
+    for (token, owner) in [(1, 2), (2, 61), (3, 62), (4, u16::MAX)] {
+        let mut dns = dns_record(5, token, now);
+        dns.owner = owner;
+        if owner == 2 || owner == 61 { expected_dns.push(dns.clone()); }
+        store.consume_dns_real(&[dns], now).unwrap();
+        let mut flow = ended_record(5, 1, false, now);
+        let mut blocked = ended_record(5, 2, true, now);
+        flow.owner = owner;
+        blocked.owner = owner;
+        if owner == 2 || owner == 61 {
+            expected_ends.push(serde_json::to_value(&flow).unwrap());
+            expected_ends.push(serde_json::to_value(&blocked).unwrap());
+        }
+        store.consume_real(&[flow, blocked], now).unwrap();
+    }
+    let reply = store.query();
+    eprintln!("all-owner-receipt-core {}", serde_json::json!({
+        "packets": reply["packets"], "blocked": reply["blocked"]["packets"],
+        "accepted": reply["accepted"], "rejected": reply["rejected"],
+        "dns": reply["dns"]["accepted"], "dns_rejected": reply["dns"]["rejected"],
+        "recent_count": reply["recent_count"],
+    }));
+    assert_eq!(reply["packets"], serde_json::json!([6, 0]));
+    assert_eq!(reply["blocked"]["packets"], serde_json::json!([2, 0]));
+    assert_eq!(reply["accepted"], 4);
+    assert_eq!(reply["rejected"], 4);
+    assert_eq!(reply["dns"]["accepted"], 2);
+    assert_eq!(reply["dns"]["rejected"], 2);
+    assert_eq!(reply["recent_count"], 4);
+    store.close().unwrap();
+    drop(store);
+    let mut reopened = ObservationStore::open_with_boot_count(&path, Some(7)).unwrap();
+    assert_eq!(reopened.query()["packets"], serde_json::json!([6, 0]));
+    assert_eq!(reopened.query()["recent_count"], 4);
+    assert_eq!(reopened.query()["coverage"]["detail_age_clock"]["ended_fallback_rows"], 0);
+    reopened.close().unwrap();
+    drop(reopened);
+    let db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    assert_eq!(db.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+    let mut select = db.prepare("SELECT kind,value FROM observation WHERE kind IN (2,20)").unwrap();
+    let rows: Vec<(i64, serde_json::Value)> = select.query_map([], |row|
+        Ok((row.get(0)?, row.get::<_, Vec<u8>>(1)?))).unwrap()
+        .map(|row| { let (kind, value) = row.unwrap(); (kind, serde_json::from_slice(&value).unwrap()) })
+        .collect();
+    assert_eq!(rows.iter().filter(|(kind, _)| *kind == 2).count(), 4);
+    assert_eq!(rows.iter().filter(|(kind, _)| *kind == 20).count(), 2);
+    for expected in &expected_ends {
+        assert!(rows.iter().any(|(kind, row)| *kind == 2 && row["record"] == *expected));
+    }
+    for expected in &expected_dns {
+        assert!(rows.iter().any(|(kind, row)| *kind == 20
+            && row["record"] == serde_json::to_value(expected).unwrap()));
+    }
+    drop(select);
+    drop(db);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
 
 fn test_path(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("t27-{name}-{}", std::process::id()));
@@ -28,6 +282,97 @@ fn record(utc: u64, slot: u32, incarnation: u64, packets: u64, ended: bool) -> F
         attribution: [a, Attribution::default()], ended,
         ..Default::default()
     }
+}
+
+#[test]
+fn duplicate_end_at_recent_capacity_preserves_counts_and_existing_detail() {
+    let path = test_path("duplicate-end-capacity");
+    let at = 200 * DAY + MINUTE;
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(5).unwrap();
+    let records: Vec<_> = (0..32768).map(|slot| FlowRecord {
+        generation: 5, slot, incarnation: 1, sequence: 1,
+        activity_utc_us: at, first_seen: 1, last_seen: 1,
+        packets: [1, 0], bytes: [64, 0], ended: true,
+        ..Default::default()
+    }).collect();
+    // Seed a valid legacy representation. Its absent attribution field is a
+    // supported serde default; canonical modern rows hit SQLite byte pressure
+    // before this independent 32768-row count limit can be reached.
+    let mut total = records[0].clone();
+    total.packets = [32768, 0];
+    total.bytes = [2097152, 0];
+    store.consume(&[total], at).unwrap();
+    store.close().unwrap();
+    drop(store);
+    let mut db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("DELETE FROM observation WHERE kind IN (1,2)", []).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(&tx.query_row(
+        "SELECT value FROM observation WHERE kind=0", [], |row| row.get::<_, Vec<u8>>(0)
+    ).unwrap()).unwrap();
+    metadata["accepted"] = 32768.into();
+    metadata["ended"] = 32768.into();
+    tx.execute("UPDATE observation SET value=?1 WHERE kind=0",
+        [serde_json::to_vec(&metadata).unwrap()]).unwrap();
+    {
+        let mut insert = tx.prepare("INSERT INTO observation(kind,key,value) VALUES(?1,?2,?3)").unwrap();
+        for record in &records {
+            let mut encoded = serde_json::to_value(record).unwrap();
+            encoded.as_object_mut().unwrap().remove("attribution");
+            let value = serde_json::to_vec(&serde_json::json!({
+                "record": encoded, "first_end_us": at
+            })).unwrap();
+            let identity = format!("5:0:{}", record.slot);
+            insert.execute(rusqlite::params![1, identity, value]).unwrap();
+            insert.execute(rusqlite::params![2, format!("{at:020}:{identity}:1"), value]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM observation WHERE kind=2", [],
+        |row| row.get::<_, u32>(0)).unwrap(), 32768);
+    drop(db);
+    let mut store = ObservationStore::open(&path).unwrap();
+    let before = store.query();
+    eprintln!("duplicate-capacity-precondition {}", serde_json::json!({
+        "recent_count": before["recent_count"], "packets": before["packets"],
+        "storage_space": before["storage_space"], "persistence": before["persistence"],
+    }));
+    assert_eq!(before["recent_count"], 32768, "real full-capacity prerequisite");
+    store.consume(&[records[0].clone()], at + MINUTE).unwrap();
+    let after = store.query();
+    assert_eq!(after["packets"], serde_json::json!([32768, 0]));
+    assert_eq!(after["recent_count"], 32768);
+    assert_eq!(after["accepted"], 32768);
+    assert_eq!(after["recent"], before["recent"]);
+    assert_eq!(after["rejected"], 1);
+    store.consume(&[records[32767].clone()], at + MINUTE + 1).unwrap();
+    assert_eq!(store.query()["recent"], before["recent"]);
+    assert_eq!(store.query()["packets"], serde_json::json!([32768, 0]));
+    let mut next = records[0].clone();
+    next.incarnation = 2;
+    next.packets = [2, 0];
+    next.bytes = [128, 0];
+    store.consume(&[next], at + 2 * MINUTE).unwrap();
+    assert_eq!(store.query()["packets"], serde_json::json!([32770, 0]));
+    assert_eq!(store.query()["recent_count"], 32768);
+    store.close().unwrap();
+    drop(store);
+    let db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    let newest_first: serde_json::Value = serde_json::from_slice(&db.query_row(
+        "SELECT value FROM observation WHERE kind=2 AND key=?1",
+        [format!("{at:020}:5:0:32767:1")], |row| row.get::<_, Vec<u8>>(0)).unwrap()).unwrap();
+    assert_eq!(newest_first["first_end_us"], at);
+    let keys: std::collections::BTreeSet<String> = db.prepare(
+        "SELECT key FROM observation WHERE kind=2").unwrap().query_map([], |row| row.get(0))
+        .unwrap().map(Result::unwrap).collect();
+    let mut expected: std::collections::BTreeSet<_> = (0..32768)
+        .map(|slot| format!("{at:020}:5:0:{slot}:1")).collect();
+    expected.remove(&format!("{at:020}:5:0:0:1"));
+    expected.insert(format!("{:020}:5:0:0:2", at + 2 * MINUTE));
+    assert_eq!(keys, expected);
+    drop(db);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
 
 #[test]
@@ -389,9 +734,29 @@ fn real_linux_records_controlled_time_and_capacity() {
         let dir = output.join(label);
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("overall.json");
-        std::fs::copy(input.with_extension("sqlite3"), path.with_extension("sqlite3")).unwrap();
+        let sqlite = path.with_extension("sqlite3");
+        std::fs::copy(input.with_extension("sqlite3"), &sqlite).unwrap();
+        // A sealed real-observation input can be intentionally read-only.
+        // The test never opens it in place: its isolated copy must be writable
+        // because opening the store can checkpoint/recover persisted state.
+        let mut permissions = std::fs::metadata(&sqlite).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&sqlite, permissions).unwrap();
         if input.is_file() { std::fs::copy(&input, &path).unwrap(); }
         path
+    };
+    let drain_retention = |store: &mut ObservationStore| {
+        // A real retained store can have several bounded transition steps.
+        // One flush proves neither completion nor persistence; drain the
+        // existing maintenance state without changing the test clock again.
+        for _ in 0..256 {
+            if !store.query()["persistence"]["maintenance_pending"].as_bool().unwrap() {
+                return;
+            }
+            store.flush().unwrap();
+        }
+        assert!(!store.query()["persistence"]["maintenance_pending"].as_bool().unwrap(),
+            "retention did not settle within its bounded test budget");
     };
     let age_path = copy("age");
     let mut store = ObservationStore::open(&age_path).unwrap();
@@ -400,7 +765,7 @@ fn real_linux_records_controlled_time_and_capacity() {
     assert!(before["rule_window_count"].as_u64().unwrap() > 0);
     let last = before["coverage"]["last_activity_us"].as_u64().unwrap();
     store.tick(last + 48 * HOUR + 2 * MINUTE).unwrap();
-    store.flush().unwrap();
+    drain_retention(&mut store);
     let hourly = store.query();
     assert_eq!(hourly["packets"], before["packets"]);
     assert_eq!(hourly["stored_minute_count"], 0);
@@ -410,14 +775,14 @@ fn real_linux_records_controlled_time_and_capacity() {
     let mut store = ObservationStore::open(&age_path).unwrap();
     assert_eq!(store.query()["packets"], before["packets"]);
     store.tick(last + 30 * DAY + 2 * HOUR).unwrap();
-    store.flush().unwrap();
+    drain_retention(&mut store);
     let daily = store.query();
     assert_eq!(daily["packets"], before["packets"]);
     assert!(daily["day_windows"]["counts"]["overall"].as_u64().unwrap() > 0);
     store.close().unwrap(); drop(store);
     let mut store = ObservationStore::open(&age_path).unwrap();
     store.tick(last + 180 * DAY + 2 * DAY).unwrap();
-    store.flush().unwrap();
+    drain_retention(&mut store);
     let expired = store.query();
     assert_eq!(expired["packets"], before["packets"]);
     assert!(expired["day_windows"]["overall"].as_object().unwrap().is_empty());

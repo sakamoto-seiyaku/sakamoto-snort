@@ -34,7 +34,7 @@ def function(name, result):
 parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
 parser.add_argument('--records')
-parser.add_argument('--case', choices=('all', 'generation', 'crossover', 'reverse-crossover'), default='all')
+parser.add_argument('--case', choices=('all', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health'), default='all')
 args = parser.parse_args()
 cache = Path(args.libraries[1]).resolve().parent / 'CMakeCache.txt'
 batch = re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$', cache.read_text(), re.M)

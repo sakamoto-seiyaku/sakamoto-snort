@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 #include "product_dns_proxy.h"
+#include "product_vpn_flow_stack.h"
+#define SAKAMOTO_PRODUCT_VPN_TUN_MTU 10000
 #include "product_root_dns_io.h"
 #include "product_dns_tcp.h"
 #include "product_flow_entry.h"
@@ -65,6 +67,7 @@ static product_platform_packet_facts_t admitted_platform[132];
 static product_adapter_obligation_t admitted_obligation[132];
 static product_dns_observation_record_t records[4096];
 static unsigned record_count;
+static unsigned start_profile=1;
 static product_flow_entry_t entry;
 typedef struct {
  u64 generation, dns_revision;
@@ -83,6 +86,7 @@ typedef struct {
 static product_policy_snapshot_t snapshot;
 typedef struct {
  u64 generation;
+ product_adapter_obligation_kind_t adapter_kind;
  product_dns_owner_t dns_requests[2];
  product_dns_tcp_owner_t dns_tcp[2];
  product_flow_runtime_t *flow_pools[2];
@@ -112,7 +116,11 @@ static void vlib_buffer_free(vlib_main_t *vm,u32 *indices,unsigned count) {
  assert(vm==&worker);for(unsigned i=0;i<count;++i){assert(allocated[indices[i]]);allocated[indices[i]]=0;++freed;}
 }
 static void vlib_node_set_interrupt_pending(vlib_main_t *vm,unsigned index) {(void)index;assert(vm==&worker);}
-static void vlib_cli_output(vlib_main_t *vm,const char *fmt,...) {(void)vm;(void)fmt;}
+static char cli_output[32768];
+static void vlib_cli_output(vlib_main_t *vm,const char *fmt,...) {
+ (void)vm;va_list args;va_start(args,fmt);
+ size_t used=strlen(cli_output);vsnprintf(cli_output+used,sizeof(cli_output)-used,fmt,args);va_end(args);
+}
 static void *format(void *first,const char *fmt,...) {(void)first;(void)fmt;return NULL;}
 static uword clib_file_add(void *main,clib_file_t *file) {assert(main==&file_main);watched=*file;++watches;return 1;}
 static void clib_file_del_by_index(void *main,uword index) {assert(main==&file_main&&index==1);--watches;}
@@ -157,17 +165,46 @@ static ssize_t fixture_sendto(int fd,const void *wire,size_t length,int flags,co
  ++raw_sent;memcpy(emitted_wire,wire,length);emitted_length=length;return raw_fail?-1:(ssize_t)length;
 }
 struct product_root_dns_io {
- int live;
+ int live, authorized;
+ uint64_t last_activity;
+ int idle_expired;
  product_root_dns_io_callbacks_t callbacks;
  void *context;
  uint64_t cookie;
 };
 static struct product_root_dns_io fixture_io;
+static int product_vpn_flow_stack_driver_ready(void) { return 1; }
+static uint64_t product_vpn_flow_stack_driver_dns_reservation(unsigned index) {assert(!index);return 100000;}
+static int product_vpn_flow_stack_driver_dns_authorize(vlib_main_t *vm,u64 generation,u64 cookie,int fd)
+{ assert(vm==&worker&&generation&&cookie&&fd==50); return 0; }
+static int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *,u64,u64,const u8 *,size_t,const product_vpn_flow_stack_transport_t *);
+static product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_udp(
+ vlib_main_t *vm,const u8 *l3,size_t bytes,const product_platform_packet_facts_t *platform,
+ u64 generation,u64 incarnation,u64 *session,u8 *message,size_t capacity,size_t *length)
+{
+ assert(vm==&worker&&generation&&incarnation==8&&platform->provenance==PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+ size_t offset=(l3[0]>>4)==6?48:28; assert(bytes>=offset&&capacity>=bytes-offset);
+ memcpy(message,l3+offset,bytes-offset);*length=bytes-offset;*session=71;return PRODUCT_VPN_FLOW_STACK_ACCEPTED;
+}
+int product_root_dns_io_authorized(product_root_dns_io_t *io,u64 generation,u64 cookie,int success,u64 now)
+{
+ assert(io==&fixture_io&&generation&&cookie&&now==now_us);
+ io->authorized=success;
+ if(success)assert(io->callbacks.watch(io->context,50,PRODUCT_ROOT_DNS_READ,io->cookie));
+ else {io->live=0;assert(io->callbacks.watch(io->context,50,0,io->cookie));}
+ return 0;
+}
+int product_root_dns_vpn_return_known(vlib_main_t *,u32);
+
 product_root_dns_io_t *product_root_dns_io_open(uint64_t generation,const product_dns_proxy_route_t *route,uint32_t mark,
  uint64_t *sequence,const product_root_dns_io_callbacks_t *callbacks,void *context,uint64_t now) {
- assert(generation&&route->enabled&&mark==PRODUCT_ROOT_DNS_SOCKET_MARK&&now==now_us);
- last_cookie=++*sequence;assert(callbacks->watch(context,50,PRODUCT_ROOT_DNS_READ,last_cookie));
- fixture_io=(struct product_root_dns_io){1,*callbacks,context,last_cookie};return &fixture_io;
+ assert(generation&&route->enabled&&(mark==PRODUCT_ROOT_DNS_SOCKET_MARK||callbacks->authorize)&&now==now_us);
+ last_cookie=++*sequence;
+ fixture_io=(struct product_root_dns_io){.live=1,.authorized=!callbacks->authorize,
+  .callbacks=*callbacks,.context=context,.cookie=last_cookie,.last_activity=now};
+ if(callbacks->authorize)assert(!callbacks->authorize(context,50,last_cookie));
+ else assert(callbacks->watch(context,50,PRODUCT_ROOT_DNS_READ,last_cookie));
+ return &fixture_io;
 }
 void product_root_dns_io_close(product_root_dns_io_t *io) {
  if(io&&io->live){assert(io->callbacks.watch(io->context,50,0,io->cookie));io->live=0;}
@@ -181,8 +218,19 @@ void product_root_dns_io_ready(product_root_dns_io_t *io,uint64_t generation,uin
  assert(io==&fixture_io&&generation&&fd==50&&events&&now==now_us);if(cookie==last_cookie)++ready_calls;
 }
 uint64_t product_root_dns_io_deadline(const product_root_dns_io_t *io) {(void)io;return UINT64_MAX;}
-void product_root_dns_io_expire(product_root_dns_io_t *io,uint64_t now) {(void)io;assert(now==now_us);}
-product_root_dns_io_status_t product_root_dns_io_status(const product_root_dns_io_t *io) {return (product_root_dns_io_status_t){.sockets=!!io};}
+void product_root_dns_io_expire(product_root_dns_io_t *io,uint64_t now) {
+ assert(now==now_us);
+ if(io&&io->live&&now>=io->last_activity+PRODUCT_ROOT_DNS_IDLE_US) {
+  assert(io->callbacks.watch(io->context,50,0,io->cookie));
+  io->idle_expired=io->authorized;io->live=0;io->authorized=0;
+ }
+}
+product_root_dns_io_status_t product_root_dns_io_status(const product_root_dns_io_t *io) {
+ return (product_root_dns_io_status_t){.sockets=io&&io->live,.udp_ready=io&&io->live&&io->authorized,
+  .authorizing=io&&io->live&&!io->authorized,
+  .udp_state=!io?PRODUCT_ROOT_DNS_UDP_NONE:io->idle_expired?PRODUCT_ROOT_DNS_UDP_IDLE:
+   io->live?(io->authorized?PRODUCT_ROOT_DNS_UDP_AUTHORIZED:PRODUCT_ROOT_DNS_UDP_AUTHORIZING):PRODUCT_ROOT_DNS_UDP_FAILED};
+}
 uint64_t product_root_dns_io_reservation(void) {return 1024*1024;}
 void product_root_dns_adapter_expire(vlib_main_t *,uint64_t);
 #include "root_dns_projection.inc"
@@ -197,17 +245,32 @@ void product_root_dns_adapter_expire(vlib_main_t *,uint64_t);
 #undef close
 #undef sendto
 
+static int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *vm,u64 generation,u64 session,
+ const u8 *message,size_t length,const product_vpn_flow_stack_transport_t *binding)
+{
+ (void)binding;assert(vm==&worker&&generation==product_packet_graph_main.generation&&session==71);
+ if(!submit_allowed)return -1;
+ u32 index;assert(vlib_buffer_alloc(vm,&index,1));
+ buffers[index].current_length=length;memcpy(buffers[index].data,message,length);
+ product_adapter_obligation_t obligation={.token=(UINT64_C(1)<<63)|index,
+  .queue_generation=generation,.kind=PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,.packet_id=1};
+ product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN,.direction=1,.uid=10123,.availability=PRODUCT_PLATFORM_UID_KNOWN};
+ product_root_dns_vpn_return_admit(vm,index,&obligation,&platform);
+ assert(product_packet_graph_submit_external(vm,index,&platform,&obligation));return 0;
+}
+
 static const uint8_t question[]={0x12,0x34,1,0,0,1,0,0,0,0,0,0,
  7,'e','x','a','m','p','l','e',3,'c','o','m',0,0,1,0,1};
 static product_packet_lease_t lease;
 static product_flow_entry_observation_t flow;
 static u64 original_token=17;
 static void initialize(uint64_t generation,unsigned family) {
+ product_packet_graph_main.adapter_kind=start_profile==2?PRODUCT_ADAPTER_OBLIGATION_VPN_TUN:PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE;
  product_packet_graph_main.generation=generation;bank.generation=generation;bank.dns_revision=3;
  bank.dns=(product_dns_proxy_route_t){.enabled=1,.family=4,.port=53,.address={198,51,100,53}};
  snapshot=(product_policy_snapshot_t){.bank=&bank,.identity={generation,3,123}};
  assert(product_root_dns_adapter_start(&worker,generation,1));
- product_root_dns_adapter_expire(&worker,now_us);assert(product_root_dns_adapter_ready());
+ product_root_dns_adapter_expire(&worker,now_us);if(start_profile==1)assert(product_root_dns_adapter_ready());
  entry=(product_flow_entry_t){.linked=1,.policy_generation=generation,.incarnation=8};flow=(product_flow_entry_observation_t){.entry=&entry,.slot=3};
  flow.tracker.facts.state=PRODUCT_CT_NEW;flow.tracker.facts.direction=PRODUCT_FLOW_DIRECTION_ORIG;
  lease=(product_packet_lease_t){.policy_owner_ready=1,.origin_obligation_id=original_token};original_token+=10000;lease.assignment.valid=1;
@@ -362,8 +425,124 @@ static void reverse_crossover(void) {
  puts("Active proxy or queued REFUSED to fresh original query before recapture: PASS");
  puts("Generated-return guard table capacity explicitly withholds unsafe TCP/UDP correlation: PASS");
 }
+static void vpn_authority(void)
+{
+ start_profile=2;initialize(77,4);
+ assert(!product_root_dns_adapter_ready()&&!root_dns_owners[0].ready);
+ u64 first=last_cookie;
+ assert(!product_root_dns_vpn_authorized(&worker,77,first,2,0,0,0));
+ assert(!product_root_dns_adapter_ready()&&root_dns_owners[0].last_error==2);
+ close_owner();
+ initialize(78,4);assert(!product_root_dns_adapter_ready());
+ assert(!product_root_dns_vpn_authorized(&worker,78,last_cookie,0,99,9,1));
+ assert(product_root_dns_adapter_ready()&&!root_dns_owners[0].last_error);
+ assert(product_root_dns_vpn_authorized(&worker,77,first,0,98,9,1)<0);
+ assert(product_root_dns_adapter_ready());close_owner();start_profile=1;
+ puts("VPN effective route: pending/denied protect not ready; success ready and stale generation rejected PASS");
+}
+static void vpn_returns(void)
+{
+ vlib_main_t tun_io={2};
+ for(unsigned delivery=2;delivery<=5;++delivery) {
+  initialize(77,4);
+  root_dns_owner_t *owner=&root_dns_owners[0];root_dns_close_raw(owner);owner->profile=2;
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;buffers[0].data[0]=0x45;
+  consume();answer(0);unsigned index=pending();assert(index&&product_root_dns_adapter_pending(0)==1);
+  product_packet_completion_frame_t completion={.obligation=admitted_obligation[index]};
+  unsigned before=record_count;
+  product_root_dns_vpn_reply_complete(&tun_io,index,&completion,delivery);
+  assert(record_count==before&&owner->reply[0].state==2);
+  product_root_dns_vpn_reply_complete(&tun_io,index,&completion,delivery==2?4:2);
+  assert(owner->reply[0].state==2&&owner->reply[0].record.delivery==delivery);
+  vlib_buffer_free(&worker,&index,1);submitted[index]=0;
+  product_root_dns_vpn_reply_freed(&tun_io,index,&completion);
+  assert(record_count==before&&product_root_dns_adapter_pending(0)==1&&owner->reply[0].state==3);
+  product_root_dns_vpn_reply_complete(&tun_io,index,&completion,delivery==2?4:2);
+  product_root_dns_vpn_reply_freed(&tun_io,index,&completion);
+  assert(owner->reply[0].state==3&&owner->reply[0].record.delivery==delivery);
+  product_root_dns_adapter_expire(&worker,++now_us);
+  assert(record_count==before+1&&!product_root_dns_adapter_pending(0));
+  const product_dns_observation_record_t *record=&records[record_count-1];
+  assert(record->stage==4&&record->adapter_profile==2&&record->return_provenance==3);
+  assert(record->transport_session==71&&record->return_packet_uid==10123&&record->delivery==delivery);
+  product_root_dns_vpn_reply_complete(&tun_io,index,&completion,delivery);
+  product_root_dns_vpn_reply_freed(&tun_io,index,&completion);
+  product_root_dns_adapter_expire(&worker,++now_us);assert(record_count==before+1);
+  close_owner();assert(raw_created==raw_closed);
+ }
+ puts("VPN TUN complete/native free -> original owner normal export; four delivery outcomes and stale events: PASS");
+}
+static void assert_cli_route_ready(int expected) {
+ cli_output[0]=0;root_dns_status_cli(&worker,NULL,NULL);
+ assert(strstr(cli_output,expected?" route_ready=1 ":" route_ready=0 "));
+}
+static void root_idle_health(void) {
+ /* Android Root publishes its first platform snapshot after Adapter startup.
+  * Revision zero is the current initial Unknown network, not an old epoch. */
+ start_profile=1;network.revision=0;initialize(76,4);
+ assert(product_root_dns_adapter_ready());assert_cli_route_ready(1);
+ ++network.revision;assert(!product_root_dns_adapter_ready());assert_cli_route_ready(0);
+ product_root_dns_adapter_expire(&worker,++now_us);assert(product_root_dns_adapter_ready());
+ close_owner();network.revision=5;
+ for(unsigned profile=1;profile<=2;++profile) {
+  start_profile=profile;initialize(77+profile,4);
+  if(profile==2) {
+   assert(!product_root_dns_adapter_ready());
+   assert(!product_root_dns_vpn_authorized(&worker,79,last_cookie,0,99,9,1));
+  }
+  assert(product_root_dns_adapter_ready());
+  now_us+=PRODUCT_ROOT_DNS_IDLE_US+1;
+  product_root_dns_adapter_expire(&worker,now_us);
+  assert(fixture_io.idle_expired&&!product_root_dns_io_status(&fixture_io).udp_ready);
+  product_root_dns_adapter_expire(&worker,++now_us);
+  fprintf(stderr,"idle-health profile=%u route_ready=%d socket_ready=%u io_idle=%d\n",
+   profile,product_root_dns_adapter_ready(),product_root_dns_io_status(&fixture_io).udp_ready,fixture_io.idle_expired);
+  assert(product_root_dns_adapter_ready());
+  /* A historical failure does not undo the current clean-idle capability. */
+  root_dns_owners[0].last_error=17;
+  product_root_dns_adapter_expire(&worker,++now_us);assert(product_root_dns_adapter_ready());
+  assert_cli_route_ready(1);
+  /* A current policy bank cannot qualify an owner from the prior generation. */
+  ++bank.generation;++product_packet_graph_main.generation;
+  assert(!product_root_dns_adapter_ready());assert_cli_route_ready(0);
+  --bank.generation;--product_packet_graph_main.generation;
+  assert(product_root_dns_adapter_ready());assert_cli_route_ready(1);
+  ++network.revision;
+  assert(!product_root_dns_adapter_ready());assert_cli_route_ready(0);
+  product_root_dns_adapter_expire(&worker,++now_us);
+  assert(!fixture_io.idle_expired); /* The old epoch's idle proof cannot survive reconfiguration. */
+  if(profile==2) {
+   assert(!product_root_dns_adapter_ready());
+   assert(!product_root_dns_vpn_authorized(&worker,79,last_cookie,7,0,0,0));
+   assert(!product_root_dns_adapter_ready());
+  } else assert(product_root_dns_adapter_ready());
+  bank.dns.enabled=0;++bank.dns_revision;
+  assert_cli_route_ready(0);
+  product_root_dns_adapter_expire(&worker,++now_us);
+  assert(product_root_dns_adapter_ready()&&!product_root_dns_io_status(root_dns_owners[0].io).udp_ready);
+  assert_cli_route_ready(1);
+  ++network.revision;assert_cli_route_ready(0);
+  product_root_dns_adapter_expire(&worker,++now_us);assert_cli_route_ready(1);
+  bank.dns.enabled=1;++bank.dns_revision;
+  product_root_dns_adapter_expire(&worker,++now_us);
+  if(profile==2)assert(!product_root_dns_adapter_ready());
+  product_root_dns_adapter_quiesce(&worker);assert(!product_root_dns_adapter_ready());
+  product_root_dns_adapter_stop(&worker);assert(raw_created==raw_closed);
+ }
+ start_profile=2;initialize(90,4);
+ now_us+=PRODUCT_ROOT_DNS_IDLE_US+1;
+ product_root_dns_adapter_expire(&worker,now_us);
+ assert(!fixture_io.idle_expired&&!product_root_dns_adapter_ready());
+ close_owner();
+ start_profile=1;
+ puts("Root/VPN idle route health, current authorization, network/config/stop invalidation: PASS");
+}
+
 int main(int argc,char **argv) {
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+ if(argc>1&&!strcmp(argv[1],"idle-health")){root_idle_health();return 0;}
+ if(argc>1&&!strcmp(argv[1],"vpn-authority")){vpn_authority();return 0;}
+ if(argc>1&&!strcmp(argv[1],"vpn-return")){vpn_returns();return 0;}
  if(argc>1&&!strcmp(argv[1],"crossover")){crossover();return 0;}
  if(argc>1&&!strcmp(argv[1],"reverse-crossover")){reverse_crossover();return 0;}
  if(argc>1&&!strcmp(argv[1],"generation")){

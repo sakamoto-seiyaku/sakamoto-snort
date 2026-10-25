@@ -32,6 +32,11 @@ repeated acceptance builds, and local build/test helpers.
   It prepares and verifies source separately from its persistent CMake tree.
   Reuse the repository API depfile wrapper and cached configure identity so an
   unchanged repeat does not rebuild API consumers or compiler-capability probes.
+- HEV keeps immutable source snapshots for artifact identity and a separate
+  owned `compile-inputs/source` under each compatible build cache. Staging
+  replaces only changed files there; unchanged dependency paths and timestamps
+  survive Product glue edits. Do not compile directly from a whole-source-hash
+  snapshot path or modify a frozen snapshot.
 - Keep generated VAPI paths stable. Cargo must track changes to owned/VPP/generated
   headers and compiler selections, as well as source files; a cache hit never
   bypasses input validation, VPP closure checks or artifact identity checks.

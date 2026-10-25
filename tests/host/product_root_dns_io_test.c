@@ -17,6 +17,9 @@ typedef struct {int fd;unsigned events;uint64_t cookie;} watch_t;
 static watch_t watches[PRODUCT_DNS_PROXY_SOCKETS];
 static product_root_dns_io_t *active_io;
 static unsigned answers, failures;
+static uint64_t authorization_cookie;
+static int authorize(void *context,int fd,uint64_t cookie)
+{ assert(!context&&fd>=0&&cookie);authorization_cookie=cookie;return 0; }
 static uint8_t answer_wire[65535];
 static size_t answer_length;
 static product_dns_proxy_key_t answered_key;
@@ -86,7 +89,7 @@ static void read_progress (uint64_t bytes,uint64_t now)
   assert(product_root_dns_io_status(active_io).tcp_read_bytes==bytes);
 }
 
-int main (void)
+int main (int argc,char **argv)
 {
   int udp=socket(AF_INET,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
   int tcp=socket(AF_INET,SOCK_STREAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
@@ -99,6 +102,117 @@ int main (void)
   product_dns_proxy_route_t route={.enabled=1,.family=4,.port=ntohs(resolver.sin_port),.address={127,0,0,1}};
   product_root_dns_io_callbacks_t callbacks={.watch=watch,.answer=answer,.failed=failed};
   uint64_t sequence=0;
+  if(argc==2 && !strcmp(argv[1],"idle-authorization")) {
+    callbacks.authorize=authorize;
+    active_io=product_root_dns_io_open(90,&route,0,&sequence,&callbacks,NULL,100);
+    assert(active_io&&product_root_dns_io_status(active_io).udp_state==PRODUCT_ROOT_DNS_UDP_AUTHORIZING);
+    product_dns_proxy_key_t key={.generation=90,.token=9,.attempt=1};
+    assert(product_root_dns_io_send(active_io,&key,PRODUCT_DNS_PROXY_UDP,question,sizeof(question),1000,101)==1);
+    uint64_t first_cookie=authorization_cookie;
+    struct pollfd peer={.fd=udp,.events=POLLIN};assert(!poll(&peer,1,20));
+    assert(!product_root_dns_io_authorized(active_io,90,first_cookie,1,110));
+    assert(product_root_dns_io_status(active_io).udp_state==PRODUCT_ROOT_DNS_UDP_AUTHORIZED);
+    assert(poll(&peer,1,1000)==1);
+    uint8_t wire[sizeof(question)];assert(recv(udp,wire,sizeof(wire),0)==sizeof(wire));
+    assert(!memcmp(wire,question,sizeof(wire)));product_root_dns_io_cancel(active_io,&key);
+    uint64_t idle=product_root_dns_io_deadline(active_io);
+    product_root_dns_io_expire(active_io,idle);
+    product_root_dns_io_status_t state=product_root_dns_io_status(active_io);
+    assert(state.udp_state==PRODUCT_ROOT_DNS_UDP_IDLE&&!state.udp_ready&&!state.sockets&&!watched_count());
+    ++key.attempt;
+    assert(product_root_dns_io_send(active_io,&key,PRODUCT_DNS_PROXY_UDP,question,sizeof(question),idle+1000,idle+1)==1);
+    uint64_t denied_cookie=authorization_cookie;assert(denied_cookie!=first_cookie);
+    assert(product_root_dns_io_status(active_io).udp_state==PRODUCT_ROOT_DNS_UDP_AUTHORIZING);
+    assert(!product_root_dns_io_status(active_io).udp_ready&&!poll(&peer,1,20));
+    assert(product_root_dns_io_authorized(active_io,90,first_cookie,1,idle+2)<0&&!poll(&peer,1,20));
+    assert(!product_root_dns_io_authorized(active_io,90,denied_cookie,0,idle+10));
+    state=product_root_dns_io_status(active_io);
+    assert(state.udp_state==PRODUCT_ROOT_DNS_UDP_FAILED&&!state.sockets&&!state.requests&&failures==1);
+    assert(product_root_dns_io_authorized(active_io,90,denied_cookie,1,idle+11)<0&&!poll(&peer,1,20));
+    ++key.attempt;
+    assert(product_root_dns_io_send(active_io,&key,PRODUCT_DNS_PROXY_UDP,question,sizeof(question),idle+2000,idle+20)==1);
+    assert(authorization_cookie!=denied_cookie&&!poll(&peer,1,20));
+    assert(!product_root_dns_io_authorized(active_io,90,authorization_cookie,1,idle+30));
+    state=product_root_dns_io_status(active_io);
+    assert(state.udp_state==PRODUCT_ROOT_DNS_UDP_AUTHORIZED&&state.udp_ready&&state.errors==1);
+    assert(poll(&peer,1,1000)==1&&recv(udp,wire,sizeof(wire),0)==sizeof(wire));
+    assert(!memcmp(wire,question,sizeof(wire))&&failures==1);
+    product_root_dns_io_cancel(active_io,&key);
+    int owned_fd=watches[0].fd;
+    product_root_dns_io_close(active_io);active_io=NULL;
+    assert(!watched_count()&&fcntl(owned_fd,F_GETFD)==-1&&errno==EBADF);
+    assert(product_root_dns_io_status(NULL).udp_state==PRODUCT_ROOT_DNS_UDP_NONE);
+    assert(product_root_dns_io_authorized(NULL,90,authorization_cookie,1,idle+40)<0&&!poll(&peer,1,20));
+    /* Reaping an initial authorization that never completed is not proof of a
+     * clean, previously authorized idle route. Late success cannot revive it. */
+    active_io=product_root_dns_io_open(90,&route,0,&sequence,&callbacks,NULL,idle+100);
+    uint64_t unconfirmed=authorization_cookie;
+    product_root_dns_io_expire(active_io,idle+100+PRODUCT_ROOT_DNS_IDLE_US);
+    assert(product_root_dns_io_status(active_io).udp_state==PRODUCT_ROOT_DNS_UDP_FAILED);
+    assert(!product_root_dns_io_status(active_io).udp_ready&&!product_root_dns_io_status(active_io).sockets);
+    assert(product_root_dns_io_authorized(active_io,90,unconfirmed,1,idle+101+PRODUCT_ROOT_DNS_IDLE_US)<0);
+    assert(!poll(&peer,1,20));product_root_dns_io_close(active_io);active_io=NULL;
+    close(udp);close(tcp);
+    puts("actual idle reopen reauthorizes FIRST UDP input; denied/stale/stop never send; current state recovers despite historical error PASS");return 0;
+  }
+  if(argc==2 && !strcmp(argv[1],"authorization")) {
+    callbacks.authorize=authorize;
+    active_io=product_root_dns_io_open(90,&route,0,&sequence,&callbacks,NULL,100);
+    assert(active_io&&!watched_count());
+    assert(product_root_dns_io_status(active_io).authorizing==1&&!product_root_dns_io_status(active_io).udp_ready);
+    product_dns_proxy_key_t auth_key={.generation=90,.token=6,.attempt=1};
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_UDP,question,sizeof(question),1000,101)==1);
+    struct pollfd no_udp={.fd=udp,.events=POLLIN};assert(!poll(&no_udp,1,20));
+    uint64_t denied_cookie=authorization_cookie;
+    assert(!product_root_dns_io_authorized(active_io,90,denied_cookie,0,110));
+    assert(failures==1&&!product_root_dns_io_status(active_io).udp_ready&&!product_root_dns_io_status(active_io).requests);
+    assert(!product_root_dns_io_status(active_io).sockets&&!product_root_dns_io_status(active_io).authorizing);
+    assert(product_root_dns_io_authorized(active_io,90,denied_cookie,1,111)<0&&!poll(&no_udp,1,20));
+    product_root_dns_io_close(active_io);
+    active_io=product_root_dns_io_open(90,&route,0,&sequence,&callbacks,NULL,120);
+    assert(active_io&&authorization_cookie!=denied_cookie);
+    ++auth_key.attempt;
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_UDP,question,sizeof(question),1000,121)==1);
+    assert(!poll(&no_udp,1,20));
+    assert(!product_root_dns_io_authorized(active_io,90,authorization_cookie,1,130));
+    assert(watched_count()==1&&product_root_dns_io_status(active_io).udp_ready&&!product_root_dns_io_status(active_io).authorizing);
+    assert(poll(&no_udp,1,1000)==1);
+    uint8_t datagram[sizeof(question)];assert(recv(udp,datagram,sizeof(datagram),0)==sizeof(question));
+    assert(!memcmp(datagram,question,sizeof(question)));product_root_dns_io_cancel(active_io,&auth_key);
+    ++auth_key.attempt;
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_TCP,question,sizeof(question),1000,200)==1);
+    uint64_t late=authorization_cookie;
+    struct pollfd no_connect={.fd=tcp,.events=POLLIN};assert(poll(&no_connect,1,20)==0);
+    assert(!product_root_dns_io_authorized(active_io,90,late,1,1001));
+    assert(poll(&no_connect,1,20)==0 && failures==2); /* First late event cannot start a connection. */
+    assert(product_root_dns_io_authorized(active_io,90,late,1,1002)<0 && failures==2);
+    ++auth_key.attempt;
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_TCP,question,sizeof(question),2000,1100)==1);
+    assert(!product_root_dns_io_authorized(active_io,90,authorization_cookie,1,1110));
+    assert(poll(&no_connect,1,1000)==1);
+    int authorized_peer=accept4(tcp,NULL,NULL,SOCK_NONBLOCK|SOCK_CLOEXEC);assert(authorized_peer>=0);
+    uint8_t authorized_wire[sizeof(question)+2];peer_read(authorized_peer,authorized_wire,sizeof(authorized_wire),1111);
+    assert(!memcmp(authorized_wire+2,question,sizeof(question)));
+    product_root_dns_io_cancel(active_io,&auth_key);close(authorized_peer);
+    ++auth_key.attempt;
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_TCP,question,sizeof(question),3000,2100)==1);
+    assert(!product_root_dns_io_authorized(active_io,90,authorization_cookie,1,2110));
+    assert(poll(&no_connect,1,1000)==1);
+    int expired_peer=accept4(tcp,NULL,NULL,SOCK_NONBLOCK|SOCK_CLOEXEC);assert(expired_peer>=0);
+    drive(90,3001);
+    struct pollfd ended={.fd=expired_peer,.events=POLLIN};assert(poll(&ended,1,1000)==1);
+    assert(recv(expired_peer,datagram,sizeof(datagram),0)==0&&failures==3);close(expired_peer);
+    ++auth_key.attempt;
+    assert(product_root_dns_io_send(active_io,&auth_key,PRODUCT_DNS_PROXY_TCP,question,sizeof(question),4000,3100)==1);
+    uint64_t cancelled_cookie=authorization_cookie;
+    product_root_dns_io_cancel(active_io,&auth_key);
+    assert(product_root_dns_io_authorized(active_io,90,cancelled_cookie,1,3110)<0);
+    assert(poll(&no_connect,1,20)==0);
+    product_root_dns_io_close(active_io);active_io=NULL;
+    assert(product_root_dns_io_authorized(NULL,90,cancelled_cookie,1,3111)<0&&!watched_count());
+    close(udp);close(tcp);
+    puts("actual authorization pending/success/deadline/cancel/late: no expired connect or application bytes PASS");return 0;
+  }
   active_io=product_root_dns_io_open(90,&route,0,&sequence,&callbacks,NULL,1000);
   assert(active_io && watched_count()==1);
   watch_t original=watches[0];

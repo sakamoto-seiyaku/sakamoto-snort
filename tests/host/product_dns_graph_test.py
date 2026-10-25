@@ -12,6 +12,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / 'src/product/vpp/product_packet_graph.c').read_text()
+ADAPTER_HEADER = (ROOT / 'src/product/vpp/product_root_dns_adapter.h').read_text()
+
+
+def adapter_declaration(name):
+    match = re.search(r'(?m)^(?:int|void)\s+' + re.escape(name) + r'\([^;]+;', ADAPTER_HEADER, re.S)
+    assert match, name
+    return match.group()
 
 
 def function(name, result):
@@ -91,6 +98,11 @@ static u64 product_flow_entry_current_incarnation(void *pool, const void *assign
 }
 static int product_vpn_tun_return_context(u64 generation, u64 token, u64 *inc, u64 *session, u64 *epoch) {
   assert(generation==77 && token==42); *inc=8;*session=55;*epoch=7;return 1;
+}
+'''
+prefix += adapter_declaration('product_root_dns_vpn_return_known') + r'''
+int product_root_dns_vpn_return_known(vlib_main_t *vm, u32 buffer_index) {
+  assert(vm->thread_index==1 && buffer_index==3); return 0;
 }
 unsigned product_dns_owner_active(product_dns_owner_t *owner, uint64_t now) { assert(owner && now==1000000); return 0; }
 product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }

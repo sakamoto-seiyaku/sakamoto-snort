@@ -100,7 +100,17 @@ pub unsafe extern "C" fn sakamoto_product_core_observation_start_at(
     generation: u64,
     store_path: ProductBytes,
 ) -> c_uint {
-    if handle.is_null() || generation == 0 {
+    unsafe { sakamoto_product_core_observation_start_at_boot(handle, generation, store_path, -1) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_observation_start_at_boot(
+    handle: *mut ProductCoreHandle,
+    generation: u64,
+    store_path: ProductBytes,
+    boot_count: i64,
+) -> c_uint {
+    if handle.is_null() || generation == 0 || !(-1..=i32::MAX as i64).contains(&boot_count) {
         return ErrorCode::InvalidArgument.raw();
     }
     match catch_unwind(AssertUnwindSafe(|| {
@@ -112,7 +122,8 @@ pub unsafe extern "C" fn sakamoto_product_core_observation_start_at(
             Ok(path) => path,
             Err(_) => return ErrorCode::InvalidArgument.raw(),
         };
-        match core.start_observation_at(std::path::Path::new(&path)) {
+        match core.start_observation_at_with_boot_count(std::path::Path::new(&path),
+            (boot_count >= 0).then_some(boot_count as u32)) {
             Ok(()) => 0,
             Err(_) => ErrorCode::ApiUnavailable.raw(),
         }

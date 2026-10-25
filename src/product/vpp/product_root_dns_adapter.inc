@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Root's private complete-message/return Adapter. Included beside the shared
- * graph's protected snapshot and FlowOwner helpers; no second policy runtime. */
+ * graph's protected snapshot and FlowOwner helpers; no second policy runtime.
+ * VPN reuses its owner transaction, policy, socket and observation machinery;
+ * its local HEV session and existing TUN return replace Root raw delivery. */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -13,7 +15,7 @@ typedef struct {
   product_adapter_obligation_t obligation;
   product_dns_observation_record_t record;
   u32 buffer;
-  u8 state; /* 1 graph-owned; 2 native completion done, waiting actual free */
+  u8 state; /* 1 graph-owned; 2 completion done; VPN 3 awaits owner export after free */
 } root_dns_reply_t;
 typedef struct {
   int fd;
@@ -21,13 +23,21 @@ typedef struct {
   u64 cookie;
 } root_dns_watch_t;
 typedef struct {
+  u64 cookie, epoch;
+  u32 context;
+  u8 known;
+} root_dns_binding_t;
+typedef struct {
   vlib_main_t *vm;
   u64 generation, route_revision, network_revision, socket_sequence, reply_sequence;
   u64 retry_at, raw_idle, current_upstream_session, last_reply_token;
   u64 intercepted, reply_admitted, reply_rejected, kernel_accepted, write_failed;
   u64 return_policy_drop, returned, stale, raw_opened, raw_closed;
   u32 owner, replies, high_water_replies, last_error;
-  u8 ready, stopping;
+  u8 ready, stopping, profile;
+  root_dns_reply_t *vpn_reply;
+  u8 vpn_message[SAKAMOTO_PRODUCT_VPN_TUN_MTU];
+  root_dns_binding_t vpn_bindings[PRODUCT_DNS_PROXY_SOCKETS], current_binding;
   int raw4, raw6;
   product_dns_proxy_route_t route;
   product_dns_proxy_t *proxy;
@@ -44,6 +54,33 @@ extern vlib_node_registration_t product_root_dns_node;
 static u64 root_dns_now (vlib_main_t *vm)
 { return (u64) (vlib_time_now (vm) * 1000000.0); }
 
+static void root_dns_publish_ready (root_dns_owner_t *owner)
+{
+  product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
+  /* A clean idle close preserves this route's ability to reopen. Pending or
+   * failed authorization never inherits a previous socket's availability. */
+  /* Android's current initial network is revision zero until platform capture
+   * starts. Current-view equality is checked by root_dns_owner_current. */
+  int prepared = !owner->stopping && owner->route_revision &&
+    (!owner->route.enabled || (owner->proxy && owner->io &&
+      (io.udp_state == PRODUCT_ROOT_DNS_UDP_AUTHORIZED || io.udp_state == PRODUCT_ROOT_DNS_UDP_IDLE)));
+  __atomic_store_n (&owner->ready, prepared, __ATOMIC_RELEASE);
+}
+
+static const char *root_dns_udp_state (const root_dns_owner_t *owner,
+  const product_root_dns_io_status_t *io)
+{
+  if (owner->stopping) return "stopped";
+  if (!owner->route.enabled) return "disabled";
+  switch (io->udp_state) {
+    case PRODUCT_ROOT_DNS_UDP_AUTHORIZING: return "authorizing";
+    case PRODUCT_ROOT_DNS_UDP_AUTHORIZED: return "authorized";
+    case PRODUCT_ROOT_DNS_UDP_IDLE: return "idle";
+    case PRODUCT_ROOT_DNS_UDP_FAILED: return "failed";
+    default: return "unavailable";
+  }
+}
+
 static int root_dns_configuration (product_dns_proxy_route_t *route, u64 *revision)
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
@@ -55,17 +92,30 @@ static int root_dns_configuration (product_dns_proxy_route_t *route, u64 *revisi
   return valid;
 }
 
+/* Use the same authoritative view for global availability and each CLI row.
+ * Worker preparation can remain cached while a new route/network is published. */
+static int root_dns_owner_current (const root_dns_owner_t *owner, u64 revision, u64 network)
+{
+  return __atomic_load_n (&owner->ready, __ATOMIC_ACQUIRE) &&
+    owner->generation == product_packet_graph_main.generation &&
+    __atomic_load_n (&owner->route_revision, __ATOMIC_ACQUIRE) == revision &&
+    __atomic_load_n (&owner->network_revision, __ATOMIC_ACQUIRE) == network;
+}
+
 static u64 root_dns_other_bytes (root_dns_owner_t *owner)
 {
   return sizeof (*owner) + sizeof (product_dns_owner_t) + sizeof (product_dns_tcp_owner_t) +
     product_packet_graph_main.dns_tcp[owner->owner].allocated_bytes + product_root_dns_io_reservation () +
+    (owner->profile == 2 ? product_vpn_flow_stack_driver_dns_reservation (owner->owner) : 0) +
     ROOT_DNS_REPLIES * (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (owner->vm));
 }
 
 static u64 root_dns_tcp_other_bytes (unsigned owner)
 {
   if (owner >= root_dns_owner_count) return 0;
-  return sizeof (root_dns_owner_t) + ROOT_DNS_REPLIES *
+  return sizeof (root_dns_owner_t) +
+    (root_dns_owners[owner].profile == 2 ? product_vpn_flow_stack_driver_dns_reservation (owner) : 0) +
+    ROOT_DNS_REPLIES *
     (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (root_dns_owners[owner].vm)) +
     (root_dns_owners[owner].proxy ? product_dns_proxy_resources (root_dns_owners[owner].proxy).owned_bytes +
       product_root_dns_io_reservation () : 0);
@@ -109,6 +159,9 @@ static int root_dns_watch (void *opaque, int fd, unsigned events, uint64_t cooki
     if (owner->watches[i].fd == fd) { watch = &owner->watches[i]; break; }
   if (!events)
     {
+      for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+        if (owner->vpn_bindings[i].cookie == cookie)
+          memset (&owner->vpn_bindings[i], 0, sizeof (owner->vpn_bindings[i]));
       if (watch)
         {
           clib_file_del_by_index (&file_main, watch->file);
@@ -145,7 +198,9 @@ static int root_dns_send (void *opaque, const product_dns_proxy_key_t *key, unsi
   const uint8_t *wire, size_t length, uint64_t deadline)
 {
   root_dns_owner_t *owner = opaque;
-  return product_root_dns_io_send (owner->io, key, transport, wire, length, deadline, root_dns_now (owner->vm));
+  int result = product_root_dns_io_send (owner->io, key, transport, wire, length, deadline, root_dns_now (owner->vm));
+  root_dns_publish_ready (owner);
+  return result;
 }
 static void root_dns_cancel (void *opaque, const product_dns_proxy_key_t *key)
 { root_dns_owner_t *owner = opaque; product_root_dns_io_cancel (owner->io, key); }
@@ -173,6 +228,10 @@ static int root_dns_policy_acquire (void *opaque, const product_dns_proxy_input_
   packet->source_port = input->context.packet.destination_port;
   packet->destination_port = input->context.packet.source_port;
   packet->direction = PRODUCT_PACKET_DIRECTION_INPUT;
+  if (owner->profile == 2 && owner->current_binding.known) {
+    packet->network_context_id = owner->current_binding.context;
+    packet->network_context_known = 1;
+  }
   packet->ct_state_known = packet->flow_direction_known = packet->protocol_set_known = 0;
   packet->sni_result = 0;
   const product_flow_entry_t *entry = input->slot == UINT32_MAX ? NULL :
@@ -236,10 +295,12 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .query_policy_revision = event->stage == 1 ? 0 : event->query_policy.revision,
     .query_policy_hash = event->stage == 1 ? 0 : event->query_policy.hash,
     .query_winner = event->stage == 1 ? 0 : event->query_policy.winner,
-    .domain_lists = query->packet.domain_lists, .adapter_profile = 1,
+    .domain_lists = query->packet.domain_lists, .adapter_profile = owner->profile,
     .packet_uid = packet->uid_known ? packet->uid : UINT32_MAX,
     .route_revision = event->key.route_revision, .request_attempt = event->key.attempt,
     .upstream_session = owner->current_upstream_session,
+    .transport_session = event->input.identity.transport_session,
+    .underlay_epoch = owner->profile == 2 ? owner->current_binding.epoch : event->input.identity.underlay_epoch,
     .upstream_port = event->route.port, .upstream_family = event->route.family,
     .upstream_transport = event->transport, .proxy_result = event->result,
     .reply_rcode = event->rcode, .client_udp_capacity = query->udp_capacity,
@@ -352,8 +413,42 @@ static int root_dns_reply (void *opaque, const product_dns_proxy_event_t *event,
 {
   root_dns_owner_t *owner = opaque; owner->last_reply_token = 0;
   if (owner->stopping || !product_packet_graph_accepting ()) return 0;
+  if (owner->profile == 2) {
+    unsigned slot;
+    for (slot = 0; slot < ROOT_DNS_REPLIES &&
+      __atomic_load_n (&owner->reply[slot].state, __ATOMIC_ACQUIRE); ++slot) ;
+    if (slot == ROOT_DNS_REPLIES) { ++owner->reply_rejected; return 0; }
+    root_dns_reply_t *reply = &owner->reply[slot];
+    memset (reply, 0, sizeof (*reply));
+    reply->record = root_dns_record (owner, event);
+    reply->record.output_bytes = length;
+    reply->record.query_token = event->input.token;
+    reply->record.query_flags = ((u16) message[2] << 8) | message[3];
+    reply->record.query_policy_generation = event->query_policy.generation;
+    reply->record.query_policy_revision = event->query_policy.revision;
+    reply->record.query_policy_hash = event->query_policy.hash;
+    reply->record.query_winner = event->query_policy.winner;
+    reply->record.return_provenance = PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN;
+    reply->record.return_packet_uid = event->input.context.packet.uid_known
+      ? event->input.context.packet.uid : UINT32_MAX;
+    __atomic_add_fetch (&owner->replies, 1, __ATOMIC_RELAXED);
+    if (owner->replies > owner->high_water_replies) owner->high_water_replies = owner->replies;
+    owner->vpn_reply = reply;
+    product_vpn_flow_stack_transport_t binding = {
+      .underlay_epoch = owner->current_binding.epoch, .network_context = owner->current_binding.context,
+      .context_known = owner->current_binding.known};
+    int result = product_vpn_flow_stack_driver_local_reply_context (owner->vm, owner->generation,
+      event->input.identity.transport_session, message, length, &binding);
+    owner->vpn_reply = NULL;
+    if (result || !reply->state) {
+      __atomic_store_n (&reply->state, 0, __ATOMIC_RELEASE);
+      __atomic_fetch_sub (&owner->replies, 1, __ATOMIC_RELAXED);
+      owner->last_reply_token = 0; ++owner->reply_rejected; return 0;
+    }
+    ++owner->reply_admitted; return 1;
+  }
   unsigned slot;
-  for (slot = 0; slot < ROOT_DNS_REPLIES && owner->reply[slot].state; ++slot) ;
+  for (slot = 0; slot < ROOT_DNS_REPLIES && __atomic_load_n (&owner->reply[slot].state, __ATOMIC_ACQUIRE); ++slot) ;
   if (slot == ROOT_DNS_REPLIES || owner->reply_sequence == UINT64_MAX ||
       !root_dns_raw (owner, event->input.context.packet.family))
     { ++owner->reply_rejected; return 0; }
@@ -412,14 +507,29 @@ static const product_dns_proxy_callbacks_t root_dns_proxy_callbacks = {
   .acquire = root_dns_policy_acquire, .release = root_dns_policy_release, .observe = root_dns_observe,
 };
 
+static int root_dns_authorize (void *opaque, int fd, uint64_t cookie)
+{
+  root_dns_owner_t *owner = opaque;
+  unsigned slot;
+  for (slot = 0; slot < PRODUCT_DNS_PROXY_SOCKETS && owner->vpn_bindings[slot].cookie; ++slot) ;
+  if (slot == PRODUCT_DNS_PROXY_SOCKETS) return -1;
+  if (product_vpn_flow_stack_driver_dns_authorize (owner->vm, owner->generation, cookie, fd)) return -1;
+  owner->vpn_bindings[slot].cookie = cookie; return 0;
+}
+
 static void root_dns_sync (root_dns_owner_t *owner, u64 now)
 {
   if (owner->stopping || !product_packet_graph_enabled ()) return;
+  if (owner->profile == 2 && !product_vpn_flow_stack_driver_ready ()) return;
   product_dns_proxy_route_t route; u64 revision;
   if (!root_dns_configuration (&route, &revision)) return;
   u64 network = product_network_snapshot_current ()->revision;
   int changed = owner->route_revision != revision || owner->network_revision != network;
-  if (!changed && (owner->ready || owner->retry_at > now)) return;
+  if (!changed && owner->proxy) {
+    root_dns_publish_ready (owner);
+    return;
+  }
+  if (!changed && owner->retry_at > now) return;
   __atomic_store_n (&owner->ready, 0, __ATOMIC_RELEASE);
   if (owner->proxy)
     {
@@ -432,12 +542,13 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
   __atomic_store_n (&owner->network_revision, network, __ATOMIC_RELEASE);
   owner->retry_at = 0;
   if (!route.enabled)
-    { root_dns_close_raw (owner); __atomic_store_n (&owner->ready, 1, __ATOMIC_RELEASE); return; }
+    { root_dns_close_raw (owner); root_dns_publish_ready (owner); return; }
   const product_root_dns_io_callbacks_t io_callbacks = {
     .watch = root_dns_watch, .answer = root_dns_io_answer, .failed = root_dns_io_failed,
+    .authorize = owner->profile == 2 ? root_dns_authorize : NULL,
   };
-  if (root_dns_raw (owner, 4) && root_dns_raw (owner, 6))
-    owner->io = product_root_dns_io_open (owner->generation, &route, PRODUCT_ROOT_DNS_SOCKET_MARK,
+  if (owner->profile == 2 || (root_dns_raw (owner, 4) && root_dns_raw (owner, 6)))
+    owner->io = product_root_dns_io_open (owner->generation, &route, owner->profile == 2 ? 0 : PRODUCT_ROOT_DNS_SOCKET_MARK,
       &owner->socket_sequence, &io_callbacks, owner, now);
   if (owner->io) owner->proxy = product_dns_proxy_open (owner->generation, &route, &root_dns_proxy_callbacks, owner);
   if (!owner->proxy)
@@ -446,7 +557,7 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
       root_dns_close_raw (owner); owner->retry_at = now + UINT64_C(5000000); return;
     }
   product_dns_proxy_other_bytes (owner->proxy, root_dns_other_bytes (owner));
-  __atomic_store_n (&owner->ready, 1, __ATOMIC_RELEASE);
+  root_dns_publish_ready (owner);
 }
 
 static clib_error_t *root_dns_file_dispatch (clib_file_t *file, unsigned events)
@@ -463,8 +574,11 @@ static clib_error_t *root_dns_file_dispatch (clib_file_t *file, unsigned events)
   u64 now = root_dns_now (vm); root_dns_sync (owner, now);
   if (owner->stopping) return NULL;
   owner->current_upstream_session = cookie;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+    if (owner->vpn_bindings[i].cookie == cookie) owner->current_binding = owner->vpn_bindings[i];
   product_root_dns_io_ready (owner->io, owner->generation, cookie, fd, events, now);
   owner->current_upstream_session = 0;
+  owner->current_binding = (root_dns_binding_t) {0};
   product_root_dns_adapter_expire (vm, now);
   product_flow_expiry_changed (vm);
   return NULL;
@@ -487,6 +601,7 @@ int product_root_dns_adapter_start (vlib_main_t *vm, uint64_t generation, unsign
       memset (owner, 0, sizeof (*owner)); owner->socket_sequence = socket_sequence;
       owner->vm = vlib_get_main_by_index (vlib_get_worker_thread_index (i));
       owner->generation = generation; owner->owner = i; owner->raw4 = owner->raw6 = -1;
+      owner->profile = product_packet_graph_main.adapter_kind == PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ? 2 : 1;
       for (unsigned j = 0; j < PRODUCT_DNS_PROXY_SOCKETS; ++j)
         owner->watches[j] = (root_dns_watch_t) {.fd = -1, .file = ~0};
     }
@@ -503,10 +618,9 @@ int product_root_dns_adapter_ready (void)
   product_dns_proxy_route_t route; u64 revision;
   if (!root_dns_configuration (&route, &revision)) return 0;
   if (!route.enabled) return 1;
+  u64 network = product_network_snapshot_current ()->revision;
   for (unsigned i = 0; i < root_dns_owner_count; ++i)
-    if (!__atomic_load_n (&root_dns_owners[i].ready, __ATOMIC_ACQUIRE) ||
-        __atomic_load_n (&root_dns_owners[i].route_revision, __ATOMIC_ACQUIRE) != revision ||
-        __atomic_load_n (&root_dns_owners[i].network_revision, __ATOMIC_ACQUIRE) != product_network_snapshot_current ()->revision) return 0;
+    if (!root_dns_owner_current (&root_dns_owners[i], revision, network)) return 0;
   return 1;
 }
 
@@ -571,7 +685,13 @@ void product_root_dns_adapter_quiesce (vlib_main_t *vm)
     {
       root_dns_owner_t *owner = &root_dns_owners[i]; owner->stopping = 1;
       __atomic_store_n (&owner->ready, 0, __ATOMIC_RELEASE);
+      product_dns_proxy_resources_t before = product_dns_proxy_resources (owner->proxy);
       product_dns_proxy_stop (owner->proxy, root_dns_now (owner->vm));
+      product_dns_proxy_resources_t after = product_dns_proxy_resources (owner->proxy);
+      if (before.active) fprintf (stderr,
+        "dns.proxy event=quiesce generation=%llu owner=%u active_before=%u cancelled_now=%llu\n",
+        (unsigned long long) owner->generation, i, before.active,
+        (unsigned long long) (after.cancelled - before.cancelled));
       product_root_dns_io_close (owner->io); owner->io = NULL;
       root_dns_close_raw (owner);
     }
@@ -600,10 +720,28 @@ uint64_t product_root_dns_adapter_deadline (unsigned index)
   if (!owner->replies && owner->raw_idle && owner->raw_idle < next) next = owner->raw_idle;
   return next;
 }
+uint32_t product_root_dns_adapter_pending (unsigned index)
+{
+  return index < root_dns_owner_count
+    ? __atomic_load_n (&root_dns_owners[index].replies, __ATOMIC_ACQUIRE) : 0;
+}
+static void root_dns_vpn_reclaim (root_dns_owner_t *owner)
+{
+  if (owner->profile != 2) return;
+  for (unsigned i = 0; i < ROOT_DNS_REPLIES; ++i) {
+    root_dns_reply_t *reply = &owner->reply[i];
+    if (__atomic_load_n (&reply->state, __ATOMIC_ACQUIRE) != 3) continue;
+    product_observation_dns (owner->vm, &reply->record);
+    __atomic_fetch_sub (&owner->replies, 1, __ATOMIC_RELAXED);
+    ++owner->returned;
+    __atomic_store_n (&reply->state, 0, __ATOMIC_RELEASE);
+  }
+}
 void product_root_dns_adapter_expire (vlib_main_t *vm, uint64_t now)
 {
   if (!vm->thread_index || vm->thread_index > root_dns_owner_count) return;
   root_dns_owner_t *owner = &root_dns_owners[vlib_get_worker_index (vm->thread_index)];
+  root_dns_vpn_reclaim (owner);
   root_dns_sync (owner, now);
   if (owner->proxy)
     {
@@ -612,6 +750,7 @@ void product_root_dns_adapter_expire (vlib_main_t *vm, uint64_t now)
     }
   product_root_dns_io_expire (owner->io, now);
   if (owner->raw_idle && owner->raw_idle <= now) root_dns_close_raw (owner);
+  root_dns_publish_ready (owner);
 }
 VLIB_NODE_FN (product_root_dns_node) (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
@@ -630,7 +769,8 @@ VLIB_REGISTER_NODE (product_root_dns_node) = {
 static int root_dns_intercept (vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
   const product_policy_snapshot_t *snapshot, const product_flow_entry_observation_t *flow)
 {
-  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
+  if ((lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
+       lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) ||
       lease->platform.direction != PRODUCT_PACKET_DIRECTION_OUTPUT || lease->facts.protocol != 17 ||
       lease->facts.destination_port != 53 || lease->facts.l4_status != PRODUCT_PACKET_L4_COMPLETE ||
       !lease->assignment.valid || !lease->policy_owner_ready ||
@@ -644,7 +784,7 @@ static int root_dns_intercept (vlib_main_t *vm, u32 buffer_index, product_packet
   if (!snapshot->bank->dns.enabled) return 0;
   product_dns_proxy_input_t input = {.identity = {.generation = owner->generation,
       .incarnation = flow->entry ? flow->entry->incarnation : 0,
-      .network_revision = product_network_snapshot_current ()->revision, .now_us = now, .profile = 1},
+      .network_revision = product_network_snapshot_current ()->revision, .now_us = now, .profile = owner->profile},
     .token = lease->origin_obligation_id, .route_revision = snapshot->bank->dns_revision,
     .slot = flow->entry ? flow->slot : UINT32_MAX};
   product_packet_graph_l4_packet_projection (lease, &input.context.packet);
@@ -670,6 +810,16 @@ static int root_dns_intercept (vlib_main_t *vm, u32 buffer_index, product_packet
   const u8 *wire = offset <= buffer->current_length && length <= buffer->current_length - offset
     ? (const u8 *) vlib_buffer_get_current (buffer) + offset : NULL;
   if (wire && length >= 4 && (wire[2] & 0x80)) return 0;
+  if (owner->profile == 2) {
+    size_t complete = 0; u64 session = 0;
+    product_vpn_flow_stack_input_result_t admitted = product_vpn_flow_stack_driver_local_udp (
+      vm, vlib_buffer_get_current (buffer), buffer->current_length, &lease->platform,
+      owner->generation, input.identity.incarnation, &session,
+      owner->vpn_message, sizeof (owner->vpn_message), &complete);
+    input.identity.transport_session = session;
+    wire = admitted == PRODUCT_VPN_FLOW_STACK_ACCEPTED ? owner->vpn_message : NULL;
+    length = wire ? complete : 0;
+  }
   owner->event_view = &snapshot->bank->view; owner->event_revision = snapshot->identity.revision;
   int same_view = owner->route_revision == input.route_revision && owner->network_revision == input.identity.network_revision;
   int intercepted = owner->proxy && same_view && !owner->stopping
@@ -694,6 +844,16 @@ static int root_dns_intercept (vlib_main_t *vm, u32 buffer_index, product_packet
 static root_dns_reply_t *root_dns_return (root_dns_owner_t *owner, u32 buffer,
   const product_adapter_obligation_t *obligation)
 {
+  if (owner->profile == 2) {
+    if (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_VPN_TUN ||
+        obligation->queue_generation != owner->generation || obligation->packet_id != owner->owner + 1) return NULL;
+    for (unsigned i = 0; i < ROOT_DNS_REPLIES; ++i) {
+      root_dns_reply_t *reply = &owner->reply[i];
+      if (__atomic_load_n (&reply->state, __ATOMIC_ACQUIRE) &&
+          reply->buffer == buffer && reply->obligation.token == obligation->token) return reply;
+    }
+    return NULL;
+  }
   if (obligation->kind != PRODUCT_ADAPTER_OBLIGATION_ROOT_DNS_REPLY ||
       obligation->queue_generation != owner->generation || obligation->origin_worker != owner->owner ||
       obligation->origin_lane != owner->owner || !obligation->packet_id || obligation->packet_id > ROOT_DNS_REPLIES)
@@ -704,7 +864,8 @@ static root_dns_reply_t *root_dns_return (root_dns_owner_t *owner, u32 buffer,
 static void root_dns_return_policy (vlib_main_t *vm, u32 buffer, const product_packet_lease_t *lease,
   const product_packet_graph_policy_evaluation_t *evaluation)
 {
-  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN) return;
+  if (lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_DNS_RETURN &&
+      lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN) return;
   root_dns_owner_t *owner = &root_dns_owners[vlib_get_worker_index (vm->thread_index)];
   product_buffer_platform_metadata_t saved;
   memcpy (&saved, vlib_get_buffer (vm, buffer)->opaque, sizeof (saved));
@@ -718,6 +879,101 @@ static void root_dns_return_policy (vlib_main_t *vm, u32 buffer, const product_p
   reply->record.return_actual_action = evaluation->matched ? evaluation->actual_action : 1;
   reply->record.return_mode = evaluation->matched ? evaluation->mode : 0;
 }
+void product_root_dns_vpn_return_admit (vlib_main_t *vm, uint32_t buffer,
+  const product_adapter_obligation_t *obligation, const product_platform_packet_facts_t *platform)
+{
+  unsigned index = vlib_get_worker_index (vm->thread_index);
+  if (index >= root_dns_owner_count) return;
+  root_dns_owner_t *owner = &root_dns_owners[index];
+  root_dns_reply_t *reply = owner->vpn_reply;
+  if (!reply || owner->profile != 2) return;
+  reply->buffer = buffer; reply->obligation = *obligation;
+  reply->record.return_token = obligation->token;
+  reply->record.return_packet_uid = (platform->availability & PRODUCT_PLATFORM_UID_KNOWN) ? platform->uid : UINT32_MAX;
+  owner->last_reply_token = obligation->token;
+  __atomic_store_n (&reply->state, 1, __ATOMIC_RELEASE);
+}
+int product_root_dns_vpn_return_known (vlib_main_t *vm, uint32_t buffer)
+{
+  unsigned index = vlib_get_worker_index (vm->thread_index);
+  if (index >= root_dns_owner_count || root_dns_owners[index].profile != 2) return 0;
+  product_buffer_platform_metadata_t saved;
+  memcpy (&saved, vlib_get_buffer (vm, buffer)->opaque, sizeof (saved));
+  return root_dns_return (&root_dns_owners[index], buffer, &saved.obligation) != NULL;
+}
+void product_root_dns_vpn_reply_complete (vlib_main_t *vm, uint32_t buffer,
+  const product_packet_completion_frame_t *completion, uint8_t delivery)
+{
+  unsigned index = completion->obligation.packet_id - 1;
+  if (index >= root_dns_owner_count || root_dns_owners[index].profile != 2) return;
+  root_dns_reply_t *reply = root_dns_return (&root_dns_owners[index], buffer, &completion->obligation);
+  if (!reply || __atomic_load_n (&reply->state, __ATOMIC_ACQUIRE) != 1 ||
+      (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)) return;
+  (void) vm;
+  reply->record.stage = 4;
+  reply->record.direction = reply->record.packet_direction = PRODUCT_PACKET_DIRECTION_INPUT;
+  reply->record.delivery = delivery;
+  __atomic_store_n (&reply->state, 2, __ATOMIC_RELEASE);
+}
+void product_root_dns_vpn_reply_freed (vlib_main_t *vm, uint32_t buffer,
+  const product_packet_completion_frame_t *completion)
+{
+  (void) vm;
+  unsigned index = completion->obligation.packet_id - 1;
+  if (index >= root_dns_owner_count || root_dns_owners[index].profile != 2) return;
+  root_dns_owner_t *owner = &root_dns_owners[index];
+  root_dns_reply_t *reply = root_dns_return (owner, buffer, &completion->obligation);
+  if (!reply || (completion->flags & PRODUCT_COMPLETION_REPLAY_PROBE)) return;
+  if (__atomic_load_n (&reply->state, __ATOMIC_ACQUIRE) != 2) return;
+  __atomic_store_n (&reply->state, 3, __ATOMIC_RELEASE);
+  vlib_node_set_interrupt_pending (owner->vm, product_root_dns_node.index);
+}
+int product_root_dns_vpn_authorized (vlib_main_t *vm, uint64_t generation,
+  uint64_t cookie, unsigned error, uint64_t epoch, uint32_t context, int known)
+{
+  unsigned index = vlib_get_worker_index (vm->thread_index);
+  if (index >= root_dns_owner_count) return -1;
+  root_dns_owner_t *owner = &root_dns_owners[index];
+  if (owner->profile != 2 || generation != owner->generation || owner->stopping) return -1;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+    if (owner->vpn_bindings[i].cookie == cookie) {
+      owner->vpn_bindings[i].epoch = error ? 0 : epoch;
+      owner->vpn_bindings[i].context = context;
+      owner->vpn_bindings[i].known = !error && known;
+      owner->current_binding = owner->vpn_bindings[i];
+      owner->current_upstream_session = cookie;
+      int result = product_root_dns_io_authorized (owner->io, generation, cookie,
+        !error && epoch, root_dns_now (vm));
+      owner->current_upstream_session = 0;
+      owner->current_binding = (root_dns_binding_t) {0};
+      owner->last_error = error ? error : epoch ? 0 : EPROTO;
+      root_dns_publish_ready (owner);
+      return result;
+    }
+  ++owner->stale; return -1;
+}
+void product_root_dns_vpn_invalidate (vlib_main_t *vm, uint64_t generation, uint64_t epoch)
+{
+  unsigned index = vlib_get_worker_index (vm->thread_index);
+  if (index >= root_dns_owner_count) return;
+  root_dns_owner_t *owner = &root_dns_owners[index];
+  if (owner->profile != 2 || generation != owner->generation || owner->stopping) return;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
+    if (owner->vpn_bindings[i].epoch == epoch) {
+      product_dns_proxy_advance (owner->proxy, root_dns_now (vm), owner->network_revision + 1, owner->route_revision);
+      product_dns_proxy_close (owner->proxy); owner->proxy = NULL;
+      product_root_dns_io_close (owner->io); owner->io = NULL;
+      __atomic_store_n (&owner->ready, 0, __ATOMIC_RELEASE); owner->retry_at = 0;
+      product_root_dns_adapter_changed (); return;
+    }
+}
+void product_root_dns_vpn_session_end (vlib_main_t *vm, uint64_t generation, uint64_t session)
+{
+  unsigned index = vlib_get_worker_index (vm->thread_index);
+  if (index < root_dns_owner_count)
+    product_dns_proxy_session_end (root_dns_owners[index].proxy, generation, session, root_dns_now (vm));
+}
+
 void product_root_dns_reply_complete (vlib_main_t *vm, uint32_t buffer,
   const product_packet_completion_frame_t *completion)
 {
@@ -784,6 +1040,9 @@ void product_root_dns_reply_freed (vlib_main_t *vm, uint32_t buffer,
 static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *command)
 {
   (void) input; (void) command;
+  product_dns_proxy_route_t route; u64 revision;
+  int valid = root_dns_configuration (&route, &revision);
+  u64 network = product_network_snapshot_current ()->revision;
   for (unsigned i = 0; i < root_dns_owner_count; ++i)
     {
       root_dns_owner_t *owner = &root_dns_owners[i]; char address[INET6_ADDRSTRLEN] = "unselected";
@@ -791,8 +1050,10 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         owner->route.address, address, sizeof (address));
       product_dns_proxy_resources_t core = product_dns_proxy_resources (owner->proxy);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
-      vlib_cli_output (vm, "dns.proxy owner=%u generation=%llu enabled=%u socket_ready=%u stopping=%u route_revision=%llu network_revision=%llu upstream=%s port=%u transactions=%u transaction_high_water=%u transaction_limit=%u waiter_limit=%u sockets=%u socket_limit=%u raw_sockets=%u replies=%u reply_high_water=%u reply_limit=%u proxy_bytes=%llu socket_bytes=%llu owner_work_bound=%llu intercepted=%llu reply_admitted=%llu reply_rejected=%llu kernel_accepted=%llu write_failed=%llu return_policy_drop=%llu returned=%llu stale=%llu error=%u proxy_high_water_bytes=%llu socket_high_water_bytes=%llu upstream_socket_high_water=%u upstream_socket_limit=%u socket_byte_bound=%llu proxy_capacity=%llu socket_capacity=%llu socket_errors=%llu",
-        i, (unsigned long long) owner->generation, owner->route.enabled, owner->ready, owner->stopping,
+      vlib_cli_output (vm, "dns.proxy owner=%u generation=%llu enabled=%u socket_ready=%u route_ready=%u udp_state=%s stopping=%u route_revision=%llu network_revision=%llu upstream=%s port=%u transactions=%u transaction_high_water=%u transaction_limit=%u waiter_limit=%u sockets=%u socket_limit=%u raw_sockets=%u replies=%u reply_high_water=%u reply_limit=%u proxy_bytes=%llu socket_bytes=%llu owner_work_bound=%llu intercepted=%llu reply_admitted=%llu reply_rejected=%llu kernel_accepted=%llu write_failed=%llu return_policy_drop=%llu returned=%llu stale=%llu error=%u proxy_high_water_bytes=%llu socket_high_water_bytes=%llu upstream_socket_high_water=%u upstream_socket_limit=%u socket_byte_bound=%llu proxy_capacity=%llu socket_capacity=%llu socket_errors=%llu authorization_pending=%u authorized_udp=%u profile=%u",
+        i, (unsigned long long) owner->generation, owner->route.enabled, io.udp_ready,
+        valid && root_dns_owner_current (owner, revision, network),
+        root_dns_udp_state (owner, &io), owner->stopping,
         (unsigned long long) owner->route_revision, (unsigned long long) owner->network_revision, address, owner->route.port,
         core.active, core.high_water, PRODUCT_DNS_PROXY_TRANSACTIONS, PRODUCT_DNS_PROXY_WAITERS,
         io.sockets + (owner->raw4 >= 0) + (owner->raw6 >= 0), PRODUCT_DNS_PROXY_SOCKETS,
@@ -806,11 +1067,11 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         (unsigned long long) core.high_water_bytes, (unsigned long long) io.high_water_bytes,
         io.high_water_sockets, 1U + PRODUCT_ROOT_DNS_TCP_SOCKETS,
         (unsigned long long) product_root_dns_io_reservation (), (unsigned long long) core.capacity,
-        (unsigned long long) io.capacity, (unsigned long long) io.errors);
+        (unsigned long long) io.capacity, (unsigned long long) io.errors, io.authorizing, io.udp_ready, owner->profile);
     }
   return NULL;
 }
 VLIB_CLI_COMMAND (product_root_dns_status_command, static) = {
   .path = "show product dns proxy", .function = root_dns_status_cli,
-  .short_help = "show product dns proxy: selected Root UDP route, real resources and delivery outcomes",
+  .short_help = "show product dns proxy: selected UDP route, real resources and delivery outcomes",
 };

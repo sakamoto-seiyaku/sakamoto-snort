@@ -91,6 +91,15 @@ void product_dns_proxy_cancel (product_dns_proxy_t *proxy, const product_dns_pro
   if (request) finish_failure (proxy, request, now, PRODUCT_DNS_PROXY_CANCELLED, 0);
 }
 
+void product_dns_proxy_session_end (product_dns_proxy_t *proxy, uint64_t generation,
+  uint64_t session, uint64_t now)
+{
+  if (!proxy || !session || generation != proxy->generation) return;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
+    if (proxy->requests[i].wire && proxy->requests[i].event.input.identity.transport_session == session)
+      finish_failure (proxy, &proxy->requests[i], now, PRODUCT_DNS_PROXY_CANCELLED, 0);
+}
+
 void product_dns_proxy_end (product_dns_proxy_t *proxy, uint64_t generation, uint64_t incarnation, uint64_t now)
 {
   if (!proxy || !incarnation || generation != proxy->generation) return;

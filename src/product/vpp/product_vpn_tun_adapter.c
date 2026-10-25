@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #endif
 #include "product_vpn_tun_adapter.h"
+#include "product_root_dns_adapter.h"
 #include "product_packet_graph.h"
 #include "product_packet_batch.h"
 #include "product_network_snapshot.h"
@@ -281,6 +282,7 @@ product_vpn_flow_stack_output_result_t product_vpn_tun_submit_return(
     .origin_worker = tun.origin_worker, .origin_lane = 0, .packet_id = owner_index + 1};
   if (!product_vpn_return_stamp_publish_context(&owner->stamps, generation, token,
       flow_incarnation, transport_session, epoch)) abort();
+  product_root_dns_vpn_return_admit(vm, bi, &obligation, platform);
   if (serial <= product_packet_graph_trace_limit()) {
     fprintf(stderr, "s237 event=return_copy thread=%u tls=%u generation=%llu serial=%llu buffer=%u token=%llu spans=%u bytes=%zu uid=%u availability=%u context=%u epoch=%llu\n",
       vm->thread_index, vlib_get_thread_index(), (unsigned long long)generation,
@@ -456,6 +458,10 @@ int product_vpn_tun_complete_from_graph (vlib_main_t *vm, u32 bi,
   else if (frame->flow_stack_result) { ++tun.stack_rejected_originals; outcome = "INPUT_REJECTED"; }
   else if (unsupported) { tun.transport_unsupported++; outcome = "UNSUPPORTED"; }
   else { tun.transport_unavailable++; outcome = "UNAVAILABLE"; }
+  if (returned) product_root_dns_vpn_reply_complete(vm, bi, frame,
+    policy_drop ? PRODUCT_DNS_DELIVERY_POLICY_DROP :
+    !strcmp(outcome, "TUN_WRITE_SUCCEEDED") ? PRODUCT_DNS_DELIVERY_KERNEL_ACCEPTED :
+    write_result != -2 ? PRODUCT_DNS_DELIVERY_WRITE_FAILED : PRODUCT_DNS_DELIVERY_ADMISSION_FAILED);
   /* The shared origin consumer frees the VPP buffer after this callback. No
    * TUN write is a valid completion for an outbound TUN-origin packet. */
   if (frame->flags & PRODUCT_COMPLETION_TRACE)
@@ -477,6 +483,7 @@ void product_vpn_tun_return_freed(vlib_main_t *vm, u32 bi,
   const product_adapter_obligation_t *o = &frame->obligation;
   tun_resume_reads(vm);
   if (!o->packet_id) return; /* Original TUN capture uses its existing ledger. */
+  product_root_dns_vpn_reply_freed(vm, bi, frame);
   if (vm->thread_index != vlib_get_worker_thread_index(tun.origin_worker) ||
       o->packet_id > active_owner_count() ||
       (frame->flags & PRODUCT_COMPLETION_REPLAY_PROBE) ||

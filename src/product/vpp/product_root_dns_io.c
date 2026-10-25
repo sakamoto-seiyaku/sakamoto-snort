@@ -13,12 +13,13 @@ typedef struct {
   product_dns_proxy_key_t key;
   uint16_t id;
   uint8_t active;
+  uint8_t *pending; size_t length; uint64_t deadline;
 } udp_request_t;
 typedef struct {
   product_dns_proxy_key_t key;
-  uint64_t cookie;
+  uint64_t cookie, deadline;
   int fd;
-  uint8_t connecting, header[2];
+  uint8_t connecting, authorized, header[2];
   uint8_t *output, *input;
   size_t output_length, output_at, input_length, input_at, header_at;
 } tcp_socket_t;
@@ -27,6 +28,8 @@ struct product_root_dns_io {
   uint64_t *sequence;
   uint32_t mark;
   int udp_fd;
+  uint8_t udp_authorized;
+  size_t pending_bytes;
   struct sockaddr_storage resolver;
   socklen_t resolver_length;
   product_root_dns_io_callbacks_t callbacks;
@@ -40,7 +43,8 @@ struct product_root_dns_io {
 uint64_t product_root_dns_io_reservation (void)
 {
   return sizeof (product_root_dns_io_t) + PRODUCT_ROOT_DNS_TCP_SOCKETS *
-    (2U * PRODUCT_DNS_MESSAGE_MAX + 2U);
+    (2U * PRODUCT_DNS_MESSAGE_MAX + 2U) +
+    PRODUCT_DNS_MESSAGE_MAX;
 }
 
 static int same_key (const product_dns_proxy_key_t *a, const product_dns_proxy_key_t *b)
@@ -86,11 +90,22 @@ static void close_tcp (product_root_dns_io_t *io, tcp_socket_t *tcp)
 static int open_udp (product_root_dns_io_t *io, uint64_t now)
 {
   if (io->udp_fd >= 0) return 1;
+  io->status.udp_state = PRODUCT_ROOT_DNS_UDP_AUTHORIZING;
   io->udp_fd = new_socket (io, SOCK_DGRAM, &io->udp_cookie);
-  if (io->udp_fd < 0) return 0;
+  if (io->udp_fd < 0) { io->status.udp_state = PRODUCT_ROOT_DNS_UDP_FAILED; return 0; }
+  io->udp_authorized = !io->callbacks.authorize;
+  if (io->callbacks.authorize)
+    {
+      if (io->callbacks.authorize (io->context, io->udp_fd, io->udp_cookie))
+        { close_socket (io, &io->udp_fd, io->udp_cookie);
+          io->status.udp_state = PRODUCT_ROOT_DNS_UDP_FAILED; return 0; }
+      io->last_activity = now; return 1;
+    }
   if (connect (io->udp_fd, (struct sockaddr *) &io->resolver, io->resolver_length) ||
       !io->callbacks.watch (io->context, io->udp_fd, PRODUCT_ROOT_DNS_READ, io->udp_cookie))
-    { close_socket (io, &io->udp_fd, io->udp_cookie); return 0; }
+    { close_socket (io, &io->udp_fd, io->udp_cookie);
+      io->status.udp_state = PRODUCT_ROOT_DNS_UDP_FAILED; return 0; }
+  io->status.udp_state = PRODUCT_ROOT_DNS_UDP_AUTHORIZED;
   io->last_activity = now;
   return 1;
 }
@@ -128,7 +143,8 @@ void product_root_dns_io_cancel (product_root_dns_io_t *io, const product_dns_pr
   if (!io || !key) return;
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
     if (io->udp[i].active && same_key (&io->udp[i].key, key))
-      { memset (&io->udp[i], 0, sizeof (io->udp[i])); --io->status.requests; }
+      { io->status.allocated_bytes -= io->udp[i].length; io->pending_bytes -= io->udp[i].length; free (io->udp[i].pending);
+        memset (&io->udp[i], 0, sizeof (io->udp[i])); --io->status.requests; }
   for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i)
     if (io->tcp[i].fd >= 0 && same_key (&io->tcp[i].key, key)) close_tcp (io, &io->tcp[i]);
 }
@@ -136,13 +152,14 @@ void product_root_dns_io_cancel (product_root_dns_io_t *io, const product_dns_pr
 void product_root_dns_io_close (product_root_dns_io_t *io)
 {
   if (!io) return;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i) free (io->udp[i].pending);
   for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i) close_tcp (io, &io->tcp[i]);
   close_socket (io, &io->udp_fd, io->udp_cookie);
   free (io);
 }
 
 static int send_udp (product_root_dns_io_t *io, const product_dns_proxy_key_t *key,
-  const uint8_t *wire, size_t length, uint64_t now)
+  const uint8_t *wire, size_t length, uint64_t deadline, uint64_t now)
 {
   if (!open_udp (io, now)) return -1;
   uint16_t id = ((uint16_t) wire[0] << 8) | wire[1];
@@ -157,6 +174,16 @@ static int send_udp (product_root_dns_io_t *io, const product_dns_proxy_key_t *k
     for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
       if (!io->udp[i].active) { request = &io->udp[i]; break; }
   if (!request) { ++io->status.capacity; return 0; }
+  if (!io->udp_authorized) {
+    if (request->pending) return 1;
+    if (length > PRODUCT_DNS_MESSAGE_MAX - io->pending_bytes) { ++io->status.capacity; return 0; }
+    uint8_t *copy = malloc (length); if (!copy) return -1;
+    memcpy (copy, wire, length); allocation (io, length); io->pending_bytes += length;
+    if (!request->active) ++io->status.requests;
+    *request = (udp_request_t) {.key = *key, .id = id, .active = 1,
+      .pending = copy, .length = length, .deadline = deadline};
+    return 1;
+  }
   ssize_t sent = send (io->udp_fd, wire, length, MSG_DONTWAIT | MSG_NOSIGNAL);
   if (sent != (ssize_t) length) { ++io->status.errors; return -1; }
   if (!request->active) ++io->status.requests;
@@ -170,7 +197,7 @@ int product_root_dns_io_send (product_root_dns_io_t *io, const product_dns_proxy
 {
   if (!io || !key || key->generation != io->generation || !wire || length < 2 ||
       length > PRODUCT_DNS_MESSAGE_MAX || deadline <= now) return -1;
-  if (transport == PRODUCT_DNS_PROXY_UDP) return send_udp (io, key, wire, length, now);
+  if (transport == PRODUCT_DNS_PROXY_UDP) return send_udp (io, key, wire, length, deadline, now);
   if (transport != PRODUCT_DNS_PROXY_TCP) return -1;
   tcp_socket_t *tcp = NULL;
   for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i)
@@ -182,15 +209,63 @@ int product_root_dns_io_send (product_root_dns_io_t *io, const product_dns_proxy
   if (!tcp->output) return -1;
   tcp->output_length = length + 2; allocation (io, length + 2);
   tcp->output[0] = length >> 8; tcp->output[1] = length;
-  memcpy (tcp->output + 2, wire, length); tcp->key = *key;
+  memcpy (tcp->output + 2, wire, length); tcp->key = *key; tcp->deadline = deadline;
   tcp->fd = new_socket (io, SOCK_STREAM, &tcp->cookie);
   if (tcp->fd < 0) { close_tcp (io, tcp); return -1; }
+  if (io->callbacks.authorize) {
+    if (io->callbacks.authorize (io->context, tcp->fd, tcp->cookie))
+      { close_tcp (io, tcp); return -1; }
+    return 1;
+  }
+  tcp->authorized = 1;
   int result = connect (tcp->fd, (struct sockaddr *) &io->resolver, io->resolver_length);
   if (result && errno != EINPROGRESS) { close_tcp (io, tcp); return -1; }
   tcp->connecting = result != 0;
   if (!io->callbacks.watch (io->context, tcp->fd, PRODUCT_ROOT_DNS_READ | PRODUCT_ROOT_DNS_WRITE, tcp->cookie))
     { close_tcp (io, tcp); return -1; }
   return 1;
+}
+
+int product_root_dns_io_authorized (product_root_dns_io_t *io, uint64_t generation,
+  uint64_t cookie, int success, uint64_t now)
+{
+  if (!io || generation != io->generation) return -1;
+  if (io->udp_fd >= 0 && io->udp_cookie == cookie && !io->udp_authorized) {
+    if (success && (!connect (io->udp_fd, (struct sockaddr *) &io->resolver, io->resolver_length)) &&
+        io->callbacks.watch (io->context, io->udp_fd, PRODUCT_ROOT_DNS_READ, cookie)) {
+      io->udp_authorized = 1;
+      io->status.udp_state = PRODUCT_ROOT_DNS_UDP_AUTHORIZED;
+      for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i) if (io->udp[i].pending) {
+        udp_request_t *r = &io->udp[i]; product_dns_proxy_key_t key = r->key;
+        int sent = r->deadline > now &&
+          send (io->udp_fd, r->pending, r->length, MSG_DONTWAIT | MSG_NOSIGNAL) == (ssize_t) r->length;
+        io->status.allocated_bytes -= r->length; io->pending_bytes -= r->length; free (r->pending); r->pending = NULL; r->length = 0;
+        if (sent) { ++io->status.udp_sent; io->last_activity = now; }
+        else { ++io->status.errors; io->callbacks.failed (io->context, &key, now); }
+      }
+      return 0;
+    }
+    product_dns_proxy_key_t keys[PRODUCT_DNS_PROXY_TRANSACTIONS]; unsigned count = 0;
+    for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
+      if (io->udp[i].active) keys[count++] = io->udp[i].key;
+    close_socket (io, &io->udp_fd, cookie); ++io->status.errors;
+    io->status.udp_state = PRODUCT_ROOT_DNS_UDP_FAILED;
+    for (unsigned i = 0; i < count; ++i) io->callbacks.failed (io->context, &keys[i], now);
+    return 0;
+  }
+  for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i) {
+    tcp_socket_t *tcp = &io->tcp[i];
+    if (tcp->fd < 0 || tcp->cookie != cookie || tcp->authorized) continue;
+    success = success && tcp->deadline > now;
+    int result = success ? connect (tcp->fd, (struct sockaddr *) &io->resolver, io->resolver_length) : -1;
+    if (success && (!result || errno == EINPROGRESS)) {
+      tcp->authorized = 1; tcp->connecting = result != 0;
+      if (io->callbacks.watch (io->context, tcp->fd, PRODUCT_ROOT_DNS_READ | PRODUCT_ROOT_DNS_WRITE, cookie)) return 0;
+    }
+    product_dns_proxy_key_t key = tcp->key;
+    close_tcp (io, tcp); ++io->status.errors; io->callbacks.failed (io->context, &key, now); return 0;
+  }
+  ++io->status.stale; return -1;
 }
 
 static void tcp_failed (product_root_dns_io_t *io, tcp_socket_t *tcp, uint64_t now)
@@ -202,7 +277,7 @@ static void tcp_failed (product_root_dns_io_t *io, tcp_socket_t *tcp, uint64_t n
 
 static void tcp_ready (product_root_dns_io_t *io, tcp_socket_t *tcp, unsigned events, uint64_t now)
 {
-  if (events & PRODUCT_ROOT_DNS_ERROR)
+  if (tcp->deadline <= now || (events & PRODUCT_ROOT_DNS_ERROR))
     { tcp_failed (io, tcp, now); return; }
   if (tcp->connecting)
     {
@@ -272,6 +347,7 @@ void product_root_dns_io_ready (product_root_dns_io_t *io, uint64_t generation,
           for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
             if (io->udp[i].active) keys[count++] = io->udp[i].key;
           close_socket (io, &io->udp_fd, io->udp_cookie); ++io->status.errors;
+          io->status.udp_state = PRODUCT_ROOT_DNS_UDP_FAILED;
           for (unsigned i = 0; i < count; ++i) io->callbacks.failed (io->context, &keys[i], now);
           return;
         }
@@ -305,7 +381,20 @@ uint64_t product_root_dns_io_deadline (const product_root_dns_io_t *io)
 void product_root_dns_io_expire (product_root_dns_io_t *io, uint64_t now)
 {
   if (io && product_root_dns_io_deadline (io) <= now)
-    close_socket (io, &io->udp_fd, io->udp_cookie);
+    {
+      int clean_idle = io->udp_authorized && io->status.udp_state == PRODUCT_ROOT_DNS_UDP_AUTHORIZED;
+      close_socket (io, &io->udp_fd, io->udp_cookie);
+      io->udp_authorized = 0;
+      io->status.udp_state = clean_idle ? PRODUCT_ROOT_DNS_UDP_IDLE : PRODUCT_ROOT_DNS_UDP_FAILED;
+    }
 }
 product_root_dns_io_status_t product_root_dns_io_status (const product_root_dns_io_t *io)
-{ return io ? io->status : (product_root_dns_io_status_t) {0}; }
+{
+  if (!io) return (product_root_dns_io_status_t) {0};
+  product_root_dns_io_status_t status = io->status;
+  status.udp_ready = io->udp_fd >= 0 && io->udp_authorized;
+  status.authorizing = io->udp_fd >= 0 && !io->udp_authorized;
+  for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i)
+    status.authorizing += io->tcp[i].fd >= 0 && !io->tcp[i].authorized;
+  return status;
+}

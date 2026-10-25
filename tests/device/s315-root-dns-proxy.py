@@ -61,10 +61,11 @@ class Peer(tcp.Peer):
         super().__init__(addresses, out, ROOT/'tests/device/helpers/s315_dns_peer.ps1', deadline)
 
     def register(self, query, reply, *, protocol='udp', port=53053, gate=None,
-                 delay=0, drop=False, split=False):
+                 delay=0, drop=False, split=False, gate_seconds=30):
+        assert 1 <= gate_seconds <= 120 and (gate or gate_seconds == 30)
         key = protocol+':'+str(port)+':'+query[2:].hex()
         self.responses[key] = dict(key=key, reply_hex=reply.hex(),
-            gate=support.winpath(gate) if gate else '', delay_ms=delay, drop=drop,
+            gate=support.winpath(gate) if gate else '', gate_budget_ms=int(gate_seconds*1000), delay_ms=delay, drop=drop,
             split_bytes=[1, 5] if split else [], split_delay_ms=40 if split else 0)
         self.publish()
 
@@ -103,6 +104,7 @@ class Device(tcp.Device):
         super().__init__(args)
         self.capture_deadline=time.monotonic()+1200
         self.witnesses={}
+        self.forbidden_udp_returns=[]
         self.next_identifier=31500
         self.expected_durable=[]
         self.required_durable=[]
@@ -218,10 +220,17 @@ class Device(tcp.Device):
         deadline=min(30,self.capture_deadline-time.monotonic()-10);assert deadline>0
         receipt=dict(started_ns=time.time_ns(),argv=command,timeout_seconds=deadline,status='HOLD')
         try:
+            # adb exec-out's raw transport can return0 when remote cat fails.
+            # Pin an actual existing file before interpreting its stdout as data.
+            remote=self.adb('shell','run-as',PKG,'sha256sum',path)
+            match=re.fullmatch(r'([0-9a-f]{64})\s+'+re.escape(path)+r'\s*',remote)
+            assert match, 'binary source hash unavailable: '+remote
+            receipt['remote_sha256']=match[1]
             with local.open('xb')as stream,(self.out/(label+'.stderr')).open('xb')as errors:
                 process=subprocess.run(command,stdout=stream,stderr=errors,timeout=deadline)
             receipt['returncode']=process.returncode
             assert process.returncode==0 and local.stat().st_size<=limit,(label,receipt)
+            assert digest(local)==receipt['remote_sha256'], 'binary read differs from the actual source file'
             receipt['status']='PASS';return local
         except BaseException as error:receipt['error']=repr(error);raise
         finally:
@@ -294,17 +303,25 @@ class Device(tcp.Device):
         return result
 
     def proxy_ready(self, label, enabled=True):
+        # Applied route readiness includes a clean idle socket that can reopen.
+        # Current authorization is separate and remains visible in every row.
         deadline=time.monotonic()+10
         while time.monotonic()<deadline:
             raw=self.cli(label+'-proxy','show product dns proxy')
             rows=[props(line.replace(' ','\n')) for line in raw.splitlines()if'dns.proxy owner='in line]
             expected=self.selected_dns
             ready=(len(rows)==self.owners and{int(r['owner'])for r in rows}==set(range(self.owners))
-                and all(int(r['generation'])==self.generation and r['enabled']==str(int(enabled))and r['socket_ready']=='1'
+                and len({int(r['network_revision'])for r in rows})==1
+                and all(int(r['generation'])==self.generation and r['enabled']==str(int(enabled))and r.get('route_ready')=='1'
+                    and r.get('profile')==str(2 if self.profile=='vpn'else 1)
                     and r['stopping']=='0'and int(r['network_revision'])>0 and int(r['route_revision'])>0 for r in rows))
             if ready and enabled:
                 ready=all(ipaddress.ip_address(r['upstream'])==ipaddress.ip_address(expected['endpoint'][0])
-                    and int(r['port'])==expected['endpoint'][1]for r in rows)
+                    and int(r['port'])==expected['endpoint'][1]
+                    and r.get('udp_state')in('authorized','idle')and int(r['proxy_bytes'])>0
+                    and r['socket_ready']==r['authorized_udp']==str(int(r['udp_state']=='authorized'))for r in rows)
+            elif ready:
+                ready=all(r.get('udp_state')=='disabled'and r['socket_ready']==r['authorized_udp']=='0'for r in rows)
             if ready:
                 revisions={int(r['route_revision'])for r in rows};ready=len(revisions)==1
                 if ready and expected['route_revision']is not None:ready=revisions=={expected['route_revision']}
@@ -396,6 +413,25 @@ class Device(tcp.Device):
             result[interface]=rows
         return result
 
+    def forbid_udp_return(self,label,interface,before,source,reply):
+        assert interface in self.witnesses
+        identity={key:self.witnesses[interface][key]for key in('pid','start','uid','exe')}
+        self.forbidden_udp_returns.append(dict(label=label,interface=interface,generation=self.generation,
+            witness=identity,baseline_rows=len(before),source=source,reply=reply.hex()if reply is not None else None))
+
+    def verify_udp_return_fences(self,interface,rows):
+        for fence in list(self.forbidden_udp_returns):
+            if fence['interface']!=interface:continue
+            identity={key:self.witnesses[interface][key]for key in('pid','start','uid','exe')}
+            assert identity==fence['witness'],'wire witness changed during late-return interval'
+            forbidden=[row for row in rows[fence['baseline_rows']:]if row.get('kind')=='udp'
+                and row['source_port']==53 and row['destination_port']==fence['source']
+                and(fence['reply']is None or row['payload_hex']==fence['reply'])]
+            self.save(fence['label']+'-terminal-'+interface+'-no-return.json',json.dumps(dict(
+                fence,status='HOLD'if forbidden else'PASS',observed_rows=len(rows),forbidden=forbidden),indent=2)+'\n')
+            assert not forbidden,'late old reply appeared during complete return-capture interval'
+            self.forbidden_udp_returns.remove(fence)
+
     def durable(self,label):
         first=self.observation(label+'-target');target=first['consumer']['persistent']['dns']['accepted']
         value=self.observation_matching(label+'-committed',lambda v:
@@ -425,9 +461,10 @@ class Device(tcp.Device):
             verified_case_records=sum(r['generation']==self.generation for r in self.expected_durable))
         self.save(label+'-sqlite-readback.json',json.dumps(report,indent=2)+'\n');return report
 
-    def wire_stop(self):
+    def wire_stop(self,interfaces=None):
         errors=[]
         for interface,item in list(self.witnesses.items()):
+            if interfaces is not None and interface not in interfaces:continue
             with self.cleanup_budget(10):
                 try:
                     self.adb('shell','touch',item['stop'])
@@ -443,6 +480,7 @@ class Device(tcp.Device):
                     assert stopped['reason']=='requested'and stopped['stats_ok']and stopped['socket_drops']==0,stopped
                     processes=self.save('wire-'+interface+'-processes-after.txt',self.root('ps -A -o PID,UID,ARGS'))
                     assert not any((v:=line.split())and v[0]==str(item['pid'])for line in processes.splitlines())
+                    self.verify_udp_return_fences(interface,rows)
                     self.adb('shell','rm','-f',item['stop'],item['log']);del self.witnesses[interface]
                 except BaseException as error:
                     errors.append(error)
@@ -845,6 +883,29 @@ def assert_hot(rows):
     assert any(r['stage']==2 and r['query_policy_revision']<r['policy_revision']and r['actual_action']==2 and r['winner']for r in rows),rows
 
 
+def await_late_wire(d,label,before,writes):
+    """Observe the exact peer write at Device; send completion alone is insufficient."""
+    assert writes
+    with d.control_budget(2):
+        deadline=d.capture_deadline;captures=[]
+        while True:
+            assert time.monotonic()<deadline,'actual late old resolver wire reply absent'
+            after=d.wire_coverage(label+'-capture-'+str(len(captures)))
+            observed=time.monotonic()
+            arrived=[row for row in after['wlan0'][len(before['wlan0']):]if row.get('kind')=='udp'
+                and any(row['source']==write['resolver'][0]and row['source_port']==int(write['resolver'][1])
+                    and row['destination']==write['peer'][0]and row['destination_port']==int(write['peer'][1])
+                    and row['payload_hex']==write['reply_hex']for write in writes)]
+            captures.append(dict(monotonic=observed,wlan_rows=len(after['wlan0']),arrived=len(arrived)))
+            status='HOLD_OBSERVER_DEADLINE'if observed>=deadline else'PASS'if arrived else'IN_PROGRESS'
+            d.save(label+'-arrival-observation.json',json.dumps(dict(status=status,
+                generation=d.generation,writes=writes,captures=captures,arrived_exact=arrived),indent=2)+'\n')
+            assert observed<deadline,'late-wire observation deadline exhausted'
+            if arrived:return after,arrived
+            assert time.monotonic()<deadline,'actual late old resolver wire reply absent'
+            time.sleep(.05)
+
+
 def hot_policy(d,peer,result,prefix):
     label=prefix+'-hot-policy';q=d.question(label);r,_=fixtures.answer(q,'alias')
     gate=d.out/(label+'.gate');peer.register(q,r,gate=gate)
@@ -858,7 +919,7 @@ def hot_upstream(d,peer,result,prefix):
     label=prefix+'-hot-upstream';path='files/product-state/complete-rule-config.properties'
     old=d.query_rules(label+'-before');text='udp '+d.args.endpoint4+' 53'
     d.save(label+'-prefill.txt',d.action('--es','completeRuleText',shlex.quote(text)))
-    d.foreground_ui(label+'-prepared');point=d.tap(label+'-point','Set Root DNS upstream',click=False)
+    d.foreground_ui(label+'-prepared');point=d.tap(label+'-point','Set DNS upstream',click=False)
     source=d.reserve_source_port(label);query=d.question(label);reply,_=fixtures.answer(query,'ordinary')
     gate=d.out/(label+'.gate');peer.register(query,reply,gate=gate)
     cursor=peer.cursor();before=d.wire_coverage(label+'-before')
@@ -885,15 +946,8 @@ def hot_upstream(d,peer,result,prefix):
                 and bytes.fromhex(r['request_hex'])[2:]==query[2:]]
         if sent:break
         assert time.monotonic()<deadline,'old resolver did not actually send after route publication';time.sleep(.01)
-    deadline=time.monotonic()+2;attempt=0
-    while True:
-        after=d.wire_coverage(label+'-after-'+str(attempt));attempt+=1
-        arrived=[row for row in after['wlan0'][len(before['wlan0']):]if row.get('kind')=='udp'
-            and any(row['source']==item['resolver'][0]and row['source_port']==int(item['resolver'][1])
-                and row['destination']==item['peer'][0]and row['destination_port']==int(item['peer'][1])
-                and row['payload_hex']==item['reply_hex']for item in sent)]
-        if arrived:break
-        assert time.monotonic()<deadline,'late old-resolver write did not arrive on Device underlay';time.sleep(.05)
+    d.forbid_udp_return(label,'lo',before['lo'],source,reply)
+    after,arrived=await_late_wire(d,label+'-late',before,sent)
     assert not any(r.get('kind')=='udp'and r['source_port']==53 and r['destination_port']==source
         and r['payload_hex']==reply.hex()for r in after['lo'][len(before['lo']):])
     result['cases'].append(dict(status='PASS',label=label,generation=d.generation,owners=d.owners,
@@ -904,6 +958,7 @@ def hot_upstream(d,peer,result,prefix):
 
 
 def system_unknown(d,peer,result,label):
+    selected_port=getattr(d.args,'upstream_port',53053)
     d.rules(label+'-app-deny','query-deny');name=label+'.qname.test';cursor=peer.cursor();before=d.wire_coverage(label+'-before')
     nonce=d.launch_queries(label,d.args.endpoint4,d.reserve_source_port(label),[],system_name=name)
     client=d.client(label,nonce);assert client['uid']==d.uid and client.get('systemDnsRcode')==3,client
@@ -914,9 +969,9 @@ def system_unknown(d,peer,result,label):
     with peer.lock:
         received=[r for r in peer.messages if r.get('kind')=='received'and r['request']>cursor
             and fixtures.decode_question(bytes.fromhex(r['request_hex']))[0]==name]
-    assert len(received)==1 and int(received[0]['resolver'][1])==53053,received
+    assert len(received)==1 and int(received[0]['resolver'][1])==selected_port,received
     after=d.wire_coverage(label+'-after');request=bytes.fromhex(received[0]['request_hex'])
-    assert any(r.get('kind')=='udp'and r['destination_port']==53053 and bytes.fromhex(r['payload_hex'])==request
+    assert any(r.get('kind')=='udp'and r['destination_port']==selected_port and bytes.fromhex(r['payload_hex'])==request
         for r in after['wlan0'][len(before['wlan0']):])
     d.expected_durable.extend(rows)
     result['cases'].append(dict(status='PASS',label=label,generation=d.generation,
@@ -990,15 +1045,8 @@ def settled_cancellation(d,peer,result,pending):
                 and bytes.fromhex(r['request_hex'])[2:]==pending['query'][2:]]
         if completed:break
         assert time.monotonic()<deadline,'old upstream did not actually send after Product stop';time.sleep(.01)
-    deadline=time.monotonic()+2;attempt=0
-    while True:
-        after=d.wire_coverage(label+'-after-'+str(attempt));attempt+=1
-        arrived=[row for row in after['wlan0'][len(pending['before']['wlan0']):]if row.get('kind')=='udp'
-            and any(row['source']==completed_row['resolver'][0]and row['source_port']==int(completed_row['resolver'][1])
-                and row['destination']==completed_row['peer'][0]and row['destination_port']==int(completed_row['peer'][1])
-                and row['payload_hex']==completed_row['reply_hex']for completed_row in completed)]
-        if arrived:break
-        assert time.monotonic()<deadline,'old peer write did not arrive on actual Device wlan0';time.sleep(.05)
+    d.forbid_udp_return(label,'lo',pending['before']['lo'],pending['source'],None)
+    after,arrived=await_late_wire(d,label+'-late',pending['before'],completed)
     assert not any(r.get('kind')=='udp'and r['source_port']==53 and r['destination_port']==pending['source']
         for r in after['lo'][len(pending['before']['lo']):])
     result['cases'].append(dict(status='PASS',label=label,generation=d.generation,owners=d.owners,

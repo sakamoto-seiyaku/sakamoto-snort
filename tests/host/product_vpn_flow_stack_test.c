@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-typedef struct { uint64_t session; int fd; unsigned outputs, ipv6; } fixture_t;
+typedef struct { uint64_t session; int fd; unsigned outputs, ipv6, local; } fixture_t;
 static int broker(void *opaque, uint64_t generation, uint64_t session, int fd)
 {
   fixture_t *f = opaque;
@@ -22,7 +22,7 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
     uint64_t flow_incarnation, uint64_t transport_session)
 {
   fixture_t *f = opaque;
-  assert(count && spans && total == (f->ipv6 ? 49U : 29U) && generation == 9 && serial && epoch == 13);
+  assert(count && spans && total == (f->ipv6 ? 49U : 29U) && generation == 9 && serial && epoch == (f->local ? 0U : 13U));
   assert(flow_incarnation == UINT64_C(0x100000007));
   assert(transport_session == f->session && transport_session);
   unsigned char returned[49];
@@ -51,10 +51,16 @@ static product_vpn_flow_stack_output_result_t output(void *opaque,
   assert(platform->provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN);
   assert(platform->direction == PRODUCT_PACKET_DIRECTION_INPUT);
   assert(platform->uid == 0 && platform->network_context_id == 0);
-  assert(platform->availability == (PRODUCT_PLATFORM_UID_KNOWN | PRODUCT_PLATFORM_CONTEXT_KNOWN));
+  assert(platform->availability == (PRODUCT_PLATFORM_UID_KNOWN | (f->local ? 0 : PRODUCT_PLATFORM_CONTEXT_KNOWN)));
   assert(platform->linux_ifindex == 0);
   ++f->outputs;
   return PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED;
+}
+static void local_udp(void *opaque, uint64_t generation, uint64_t session, const uint8_t *message, size_t length)
+{
+  fixture_t *f = opaque;
+  assert(generation == 9 && session && length == 1 && message[0] == 42);
+  f->session = session;
 }
 static void step(product_vpn_flow_stack_t *stack)
 {
@@ -62,9 +68,13 @@ static void step(product_vpn_flow_stack_t *stack)
 }
 int main(int argc, char **argv)
 {
+  int bound = argc==2 && (!strcmp(argv[1],"local-bound") || !strcmp(argv[1],"local-bound6"));
+  int to_direct = argc==2 && (!strcmp(argv[1],"local-to-direct") || !strcmp(argv[1],"local-to-direct6"));
+  int to_local = argc==2 && (!strcmp(argv[1],"direct-to-local") || !strcmp(argv[1],"direct-to-local6"));
+  int local = bound || to_direct || (argc == 2 && (!strcmp(argv[1], "local") || !strcmp(argv[1], "local6")));
   int malformed = argc == 2 && !strcmp(argv[1], "ipv6-malformed");
   int extension = malformed || (argc == 2 && !strcmp(argv[1], "ipv6-extension"));
-  int ipv6 = extension || (argc == 2 && !strcmp(argv[1], "ipv6"));
+  int ipv6 = (argc==2 && (strstr(argv[1],"direct6") || strstr(argv[1],"local6") || strstr(argv[1],"bound6"))) || extension || (argc == 2 && !strcmp(argv[1], "ipv6"));
   alarm(5);
   int endpoint = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   assert(endpoint >= 0);
@@ -111,11 +121,11 @@ int main(int argc, char **argv)
     input = packet6_extension;
     input_length = sizeof(packet6_extension);
   }
-  fixture_t fixture = {.ipv6 = ipv6};
-  product_vpn_flow_stack_config_t config = {.generation = 9, .max_sessions = 1,
+  fixture_t fixture = {.ipv6 = ipv6, .local = local};
+  product_vpn_flow_stack_config_t config = {.generation = 9, .max_sessions = (to_direct||to_local)?2:1,
     .max_input_packets = 2, .max_pbufs = 16, .max_packet_bytes = 1500,
     .task_stack_bytes = 32768, .broker_timeout_ms = 1000, .idle_timeout_ms = 1000,
-    .output = output, .broker = broker, .opaque = &fixture};
+    .output = output, .broker = broker, .local_udp = local_udp, .opaque = &fixture};
   product_vpn_flow_stack_t *stack = product_vpn_flow_stack_create(&config);
   assert(stack);
   product_platform_packet_facts_t platform = {.uid = 0,
@@ -130,8 +140,8 @@ int main(int argc, char **argv)
     == PRODUCT_VPN_FLOW_STACK_INVALID_GENERATION);
   product_vpn_flow_stack_transport_t transport={0};
   product_vpn_flow_stack_input_result_t result =
-    product_vpn_flow_stack_input_copy_context(stack, input, input_length, &platform,
-      9, UINT64_C(0x100000007), &transport);
+    product_vpn_flow_stack_input_local_udp(stack, input, input_length, &platform,
+      9, UINT64_C(0x100000007), local, &transport);
   if (malformed) {
     assert(result != PRODUCT_VPN_FLOW_STACK_ACCEPTED);
     product_vpn_flow_stack_quiesce(stack);
@@ -145,6 +155,37 @@ int main(int argc, char **argv)
   }
   assert(result == PRODUCT_VPN_FLOW_STACK_ACCEPTED);
   assert(transport.session && !transport.underlay_epoch && !transport.context_known);
+  unsigned char repeated[57];memcpy(repeated,input,input_length);
+  if (local) {
+    assert(fixture.session == transport.session && fixture.fd == 0);
+    product_vpn_flow_stack_snapshot_t before = product_vpn_flow_stack_snapshot(stack);
+    assert(!before.sockets_created && !before.broker_requested && !before.direct_sent);
+    uint8_t reply = 42;
+    assert(product_vpn_flow_stack_local_udp_reply(stack, 8, fixture.session, &reply, 1) < 0);
+    assert(!product_vpn_flow_stack_local_udp_reply(stack, 9, fixture.session, &reply, 1));
+    assert(fixture.outputs == 1);
+    if(bound) {
+      fixture.local=0;
+      product_vpn_flow_stack_transport_t actual_binding={.underlay_epoch=13,.network_context=0,.context_known=1};
+      assert(!product_vpn_flow_stack_local_udp_reply_context(stack,9,fixture.session,&reply,1,&actual_binding));
+      assert(fixture.outputs==2);fixture.local=1;
+      assert(!product_vpn_flow_stack_local_udp_reply(stack,9,fixture.session,&reply,1));
+      assert(fixture.outputs==3); /* No old binding leaks into a later local error. */
+    }
+    if(to_direct) {
+      uint64_t old=fixture.session;fixture.local=0;
+      assert(product_vpn_flow_stack_input_local_udp(stack,input,input_length,&platform,9,
+        UINT64_C(0x100000007),0,&transport)==PRODUCT_VPN_FLOW_STACK_ACCEPTED);
+      assert(transport.session&&transport.session!=old);
+    } else {
+    product_vpn_flow_stack_quiesce(stack);
+    step(stack);
+    product_vpn_flow_stack_snapshot_t stopped = product_vpn_flow_stack_snapshot(stack);
+    assert(stopped.stopped && !stopped.sessions && !stopped.pbufs && !stopped.sockets_created);
+    assert(product_vpn_flow_stack_local_udp_reply(stack, 9, fixture.session, &reply, 1) < 0);
+    assert(!product_vpn_flow_stack_close(stack)); close(endpoint); return 0;
+    }
+  }
   memset(input, 0, input_length); /* Borrow ended; copied packet must survive. */
   step(stack);
   assert(transport.session==fixture.session); /* Actual selected, pending session. */
@@ -161,12 +202,22 @@ int main(int argc, char **argv)
   ready.fd = fixture.fd;
   assert(poll(&ready, 1, 1000) == 1);
   step(stack);
-  assert(fixture.outputs == 1);
+  assert(fixture.outputs == 1U+to_direct);
+  if(to_local) {
+    uint64_t old=fixture.session;fixture.local=1;
+    assert(product_vpn_flow_stack_input_local_udp(stack,repeated,input_length,&platform,9,
+      UINT64_C(0x100000007),1,&transport)==PRODUCT_VPN_FLOW_STACK_ACCEPTED);
+    assert(transport.session==fixture.session&&transport.session!=old);
+    unsigned char local_reply=42;
+    assert(!product_vpn_flow_stack_local_udp_reply(stack,9,fixture.session,&local_reply,1));
+    assert(fixture.outputs==2);step(stack);
+    struct pollfd silent={.fd=endpoint,.events=POLLIN};assert(!poll(&silent,1,20));
+  }
   product_vpn_flow_stack_quiesce(stack);
   step(stack);
   product_vpn_flow_stack_snapshot_t s = product_vpn_flow_stack_snapshot(stack);
   assert(s.stopped && !s.pbufs && !s.sessions && !s.input_packets);
-  assert(s.direct_sent == 1 && s.direct_received == 1 && s.output_accepted == 1);
+  assert(s.direct_sent == 1 && s.direct_received == 1 && s.output_accepted == 1U+to_direct+to_local);
   assert(!product_vpn_flow_stack_close(stack));
   close(endpoint);
   return 0;

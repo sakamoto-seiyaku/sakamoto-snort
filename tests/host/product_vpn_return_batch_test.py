@@ -15,6 +15,13 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCT = ROOT / "src/product/vpp"
 source = (PRODUCT / "product_vpn_tun_adapter.c").read_text()
+adapter_header = (PRODUCT / "product_root_dns_adapter.h").read_text()
+
+
+def adapter_declaration(name):
+    match = re.search(r"(?m)^(?:int|void)\s+" + re.escape(name) + r"\([^;]+;", adapter_header, re.S)
+    assert match, name
+    return match.group()
 
 
 def function(name):
@@ -50,6 +57,7 @@ prefix = r"""
 #include "product_vpn_return_credit.h"
 #include "product_vpn_return_stamp.h"
 #include "product_vpn_tun_write.h"
+#include "sakamoto_product_observation.h"
 typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
 typedef double f64;
 typedef struct {u32 thread_index;} vlib_main_t;
@@ -68,6 +76,9 @@ typedef struct {u8 opaque[40],opaque2[56],data[10240];u16 current_length;} vlib_
 typedef struct {u64 token;u32 buffer;u8 active;} tun_pending_t;
 typedef struct {u32 file;int fd;} tun_control_t;
 """
+prefix += "\n".join(adapter_declaration(name) for name in (
+    "product_root_dns_vpn_return_admit", "product_root_dns_vpn_reply_complete",
+    "product_root_dns_vpn_reply_freed")) + "\n"
 deps = r"""
 static u32 owners=2;
 static u32 active_owner_count(void){return owners;}
@@ -116,6 +127,18 @@ int product_packet_graph_submit_vpn_return_next(vlib_main_t *vm,vlib_node_runtim
 static int product_packet_graph_submit_external(vlib_main_t *vm,u32 index,
  const product_platform_packet_facts_t *platform,const product_adapter_obligation_t *obligation){
  fallback_calls++;return schedule_return(vm,index,platform,obligation);
+}
+void product_root_dns_vpn_return_admit(vlib_main_t *vm,u32 index,
+ const product_adapter_obligation_t *obligation,const product_platform_packet_facts_t *platform){
+ assert(vm && index<allocated && obligation && platform);
+}
+void product_root_dns_vpn_reply_complete(vlib_main_t *vm,u32 index,
+ const product_packet_completion_frame_t *frame,u8 delivery){
+ assert(vm && index<allocated && frame && delivery<=PRODUCT_DNS_DELIVERY_OUTCOME_UNKNOWN);
+}
+void product_root_dns_vpn_reply_freed(vlib_main_t *vm,u32 index,
+ const product_packet_completion_frame_t *frame){
+ assert(vm && index<allocated && frame);
 }
 """
 production = "\n".join(function(name) for name in (
@@ -224,7 +247,8 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-vpn-return-") as temporary:
                         + deps + production + suffix)
     for mode in (0, 1):
         subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-Wall", "-Wextra", "-Werror",
-                        f"-DTEST_TCP_BATCH={mode}", "-I", str(PRODUCT), str(c_source),
+                        f"-DTEST_TCP_BATCH={mode}", "-I", str(PRODUCT),
+                        "-I", str(ROOT / "src/product/include"), str(c_source),
                         "-o", str(executable)], check=True, timeout=30)
         subprocess.run([str(executable)], check=True, timeout=5)
 print("tun_source_sha256=" + hashlib.sha256(source.encode()).hexdigest())

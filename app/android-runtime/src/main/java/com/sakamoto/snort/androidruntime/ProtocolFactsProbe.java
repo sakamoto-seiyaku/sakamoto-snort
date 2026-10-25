@@ -293,16 +293,22 @@ final class ProtocolFactsProbe {
         }
     }
 
-    private static void dnsQueries(JSONObject plan, JSONObject result,
+    private static void dnsQueries(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         org.json.JSONArray queries = plan.getJSONArray("dnsQueries");
         int timeout = plan.has("dnsProxyTimeoutMs")
                 ? plan.getInt("dnsProxyTimeoutMs") : plan.optInt("dnsTimeoutMs", 1000);
         int delay = plan.optInt("dnsQueryDelayMs", 0);
         int initialDelay = plan.optInt("dnsInitialDelayMs", 0);
-        if (queries.length() < 1 || queries.length() > 64 || port != 53
+        boolean gateReads = plan.optBoolean("dnsGateAfterReads");
+        int gateSend = plan.optInt("dnsGateAfterSend", -1);
+        // 65 complete queries exercise the Product's fixed 64-transaction cap.
+        if (queries.length() < 1 || queries.length() > 65 || port != 53
                 || timeout < 100 || timeout > (plan.has("dnsProxyTimeoutMs") ? 12000 : 3000)
-                || delay < 0 || delay > 1000 || initialDelay < 0 || initialDelay > 3000)
+                || delay < 0 || delay > 1000 || initialDelay < 0 || initialDelay > 3000
+                || (plan.optBoolean("dnsPipeline") && delay != 0 && queries.length() > 8)
+                || gateSend < -1 || gateSend >= queries.length()
+                || ((gateReads || gateSend >= 0) && (queries.length() > 8 || plan.optBoolean("dnsPipeline"))))
             throw new IllegalArgumentException("bounded ordinary DNS probe");
         org.json.JSONArray exchanges = new org.json.JSONArray();
         result.put("dnsExchanges", exchanges);
@@ -319,6 +325,9 @@ final class ProtocolFactsProbe {
                 byte[][] requests = new byte[queries.length()][];
                 boolean[] answered = new boolean[queries.length()];
                 for (int i = 0; i < requests.length; ++i) {
+                    // A short ordinary pipeline can establish a later packet's
+                    // UID lookup precondition without waiting for DNS latency.
+                    if (i != 0 && delay != 0) Thread.sleep(delay);
                     requests[i] = hex(queries.getString(i));
                     if (requests[i].length < 2 || requests[i].length > 4096)
                         throw new IllegalArgumentException("bounded pipelined DNS identity");
@@ -361,6 +370,7 @@ final class ProtocolFactsProbe {
                 JSONObject exchange = new JSONObject().put("sentHex", toHex(request));
                 exchanges.put(exchange);
                 socket.send(new DatagramPacket(request, request.length));
+                if (i == gateSend) gate(app, nonce, result, "dns_udp_sent_" + i);
                 DatagramPacket reply = new DatagramPacket(received, received.length);
                 try {
                     socket.receive(reply);
@@ -369,6 +379,7 @@ final class ProtocolFactsProbe {
                 } catch (SocketTimeoutException expected) {
                     exchange.put("timedOut", true);
                 }
+                if (gateReads && i + 1 < queries.length()) gate(app, nonce, result, "dns_udp_read_" + i);
             }
         }
     }
@@ -776,7 +787,7 @@ final class ProtocolFactsProbe {
                 int source = plan.getInt("source"), port = plan.getInt("port");
                 if (source < 1024 || source > 65535 || port < 1 || port > 65535) throw new IllegalArgumentException("port");
                 if (plan.has("systemDnsName")) systemDns(plan, result);
-                else if (plan.has("dnsQueries")) dnsQueries(plan, result, endpoint, local, source, port);
+                else if (plan.has("dnsQueries")) dnsQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("dnsTcpQueries")) dnsTcpQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);

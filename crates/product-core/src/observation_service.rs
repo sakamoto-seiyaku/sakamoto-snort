@@ -120,6 +120,16 @@ mod live {
             store_path: &Path,
             owner_count: u32,
         ) -> Result<Self, String> {
+            Self::start_for_owners_with_boot_count(api, generation, store_path, owner_count, None)
+        }
+
+        pub(crate) fn start_for_owners_with_boot_count(
+            api: &Path,
+            generation: u64,
+            store_path: &Path,
+            owner_count: u32,
+            boot_count: Option<u32>,
+        ) -> Result<Self, String> {
             if !(1..=62).contains(&owner_count) {
                 return Err("invalid_observation_owner_count".into());
             }
@@ -158,7 +168,7 @@ mod live {
                     }
                     let mut health = ObservationHealth::default();
                     unsafe { product_observation_transport_status(handle, &mut health) };
-                    let mut store = match ObservationStore::open(&store_path)
+                    let mut store = match ObservationStore::open_with_boot_count(&store_path, boot_count)
                         .and_then(|mut store| { store.begin_generation(generation)?; Ok(store) }) {
                         Ok(store) => Some(store),
                         Err(error) => {
@@ -1139,6 +1149,10 @@ impl ObservationService {
     }
     pub(crate) fn start_for_owners(_: &std::path::Path, _: u64, _: &std::path::Path,
                                    _: u32) -> Result<Self, String> {
+        Err("observation_requires_product_vpp".into())
+    }
+    pub(crate) fn start_for_owners_with_boot_count(_: &std::path::Path, _: u64,
+        _: &std::path::Path, _: u32, _: Option<u32>) -> Result<Self, String> {
         Err("observation_requires_product_vpp".into())
     }
     pub(crate) fn snapshot(&self) -> serde_json::Value {

@@ -91,6 +91,7 @@ typedef struct {
   uint64_t tcp_resume_rounds[8], tcp_resume_idle[8];
   uint64_t scheduler_io_polls, scheduler_io_events;
   uint32_t sessions, input_packets, pbufs, pbuf_peak;
+  uint32_t local_udp_sessions, local_udp_peak;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;
   uint64_t pcb_allocations, pcb_frees;
   uint64_t faults[PRODUCT_VPN_FLOW_STACK_FAULT_COUNT];

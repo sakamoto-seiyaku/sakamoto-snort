@@ -5,8 +5,8 @@ project(sakamoto_hev LANGUAGES C ASM)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(Threads REQUIRED)
 get_filename_component(SAKAMOTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-# Staged sources are immutable snapshots. Editing the fork must re-run staging
-# even when a persistent build reuses its CMake command-line identity.
+# Frozen source identities remain immutable. The compiler uses stable owned
+# paths, updating only changed files so glue edits reuse upstream objects.
 file(GLOB_RECURSE HEV_FORK_INPUTS CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/product/*"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/*")
@@ -17,6 +17,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" "${SAKAMOTO_ROOT}/tools/product/stage-hev.py"
           --output-root "${CMAKE_CURRENT_BINARY_DIR}/staged"
+          --compile-root "${CMAKE_CURRENT_BINARY_DIR}/compile-inputs"
   OUTPUT_VARIABLE HEV_SOURCE OUTPUT_STRIP_TRAILING_WHITESPACE
   RESULT_VARIABLE HEV_STAGE_RESULT)
 if(NOT HEV_STAGE_RESULT EQUAL 0)
@@ -208,6 +209,13 @@ if(SAKAMOTO_HEV_TESTS)
   target_link_libraries(sakamoto-product-flow-stack-test PRIVATE sakamoto_hev_owner)
   target_link_options(sakamoto-product-flow-stack-test PRIVATE -Wl,--gc-sections)
   target_compile_options(sakamoto-product-flow-stack-test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME sakamoto-product-flow-stack-local-bound-test COMMAND sakamoto-product-flow-stack-test local-bound)
+  add_test(NAME sakamoto-product-flow-stack-local-bound6-test COMMAND sakamoto-product-flow-stack-test local-bound6)
+  foreach(transition local-to-direct local-to-direct6 direct-to-local direct-to-local6)
+    add_test(NAME "sakamoto-product-flow-stack-${transition}-test" COMMAND sakamoto-product-flow-stack-test "${transition}")
+  endforeach()
+  add_test(NAME sakamoto-product-flow-stack-local4-test COMMAND sakamoto-product-flow-stack-test local)
+  add_test(NAME sakamoto-product-flow-stack-local6-test COMMAND sakamoto-product-flow-stack-test local6)
   add_test(NAME sakamoto-product-flow-stack-test COMMAND sakamoto-product-flow-stack-test)
   add_test(NAME sakamoto-product-flow-stack-ipv6-test COMMAND sakamoto-product-flow-stack-test ipv6)
   add_test(NAME sakamoto-product-flow-stack-ipv6-extension-test COMMAND sakamoto-product-flow-stack-test ipv6-extension)

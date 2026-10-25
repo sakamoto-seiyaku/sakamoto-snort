@@ -1320,7 +1320,15 @@ public final class RuntimeService extends VpnService {
                     && new File(getFilesDir(), "observation/t27-test.enabled").isFile()) {
                 observationStore = new File(getFilesDir(), "observation/t27-test/overall.json");
             }
-            if (session.startObservation(observationStore.getAbsolutePath()) != 0) {
+            int observationBootCount = -1;
+            try {
+                observationBootCount = Math.max(-1, android.provider.Settings.Global.getInt(
+                        getContentResolver(), android.provider.Settings.Global.BOOT_COUNT, -1));
+            } catch (RuntimeException unavailable) {
+                // The store reports its guarded clock fallback if the platform
+                // cannot provide the ordinary read-only boot epoch.
+            }
+            if (session.startObservation(observationStore.getAbsolutePath(), observationBootCount) != 0) {
                 failProductCoreGeneration("product_observation_start_failed",
                         "Flow observation ingestion could not start");
                 return;

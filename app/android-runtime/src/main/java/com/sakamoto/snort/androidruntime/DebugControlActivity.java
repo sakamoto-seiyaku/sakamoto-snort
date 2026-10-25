@@ -850,7 +850,7 @@ public class DebugControlActivity extends Activity {
         Button queryAll = new Button(this); queryAll.setText("Query all rules"); queryAll.setAllCaps(false);
         queryAll.setOnClickListener(view -> submitCompleteRules(0)); completeButtons.addView(queryAll, weighted());
         root.addView(completeButtons, fillWrap());
-        Button dnsUpstream = new Button(this); dnsUpstream.setText("Set Root DNS upstream"); dnsUpstream.setAllCaps(false);
+        Button dnsUpstream = new Button(this); dnsUpstream.setText("Set DNS upstream"); dnsUpstream.setAllCaps(false);
         dnsUpstream.setOnClickListener(view -> submitCompleteRules(4)); root.addView(dnsUpstream, fillWrap());
         TextView dnsHint = new TextView(this); dnsHint.setText("DNS setting: udp <numeric IP> [port], or off. Default: original resolver.");
         root.addView(dnsHint, fillWrap());

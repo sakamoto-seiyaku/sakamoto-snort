@@ -1,6 +1,6 @@
 # Current mainline
 
-Baseline: 2026-10-22. This short implementation entry is not a release announcement; current task state belongs to Plane.
+Baseline: 2026-10-25. This short implementation entry is not a release announcement; current task state belongs to Plane.
 
 Accepted 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md) and the
 [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md) define
@@ -12,6 +12,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 [S313](../testing/2026-10-23_S313_ROOT_TCP_DNS.md) adds bounded Root TCP DNS framing and QName/CNAME policy; its R2/R3 artifact qualifications remain separate.
 [S314](../testing/2026-10-23_S314_VPN_TCP_DNS.md) connects VPN Direct TCP to the shared core and qualifies 104 current R5 groups across Root/VPN, UDP/TCP, IPv4/IPv6 and N1/N3, with normal SQLite and clean stops. Root active-socket capture and one incomplete public attempt remain explicit limits. Its scope excludes replacement, association consumption and KSU/libnetd integration.
 [S315](../testing/2026-10-24_S315_ROOT_UDP_DNS_REPLACEMENT.md) adds explicitly configured Root UDP53 replacement with ordinary dual-stack upstreams, same-resolver TC→TCP, current query/response policy and bounded resources. Its 35 composed N1/N3 groups have independent normal SQLite and native-zero cleanup; failed attempts, unexplained earlier peer loss and bounded stop-history gaps remain explicit. Original APK/all4861 members are restored with BOTH2727. VPN/TCP-client replacement, cache, encrypted upstreams, association consumption and KSU/libnetd integration remain unestablished.
+
+[S316](../testing/2026-10-25_S316_VPN_UDP_DNS_REPLACEMENT.md) connects optional VPN UDP DNS replacement before Direct, retaining shared policy, broker and TUN return/completion semantics. Its 52 composed N1/N3 groups include capacity, pending Stop and old-generation late answers, with 685 whole records in one final SQLite MAIN. Current Root idle health and first-input recovery also pass. Original APK/all4861 members are restored with BOTH2755; failed attempts and scope limits remain explicit.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP

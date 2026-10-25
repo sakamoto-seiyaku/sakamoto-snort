@@ -17,6 +17,11 @@ uint32_t sakamoto_product_core_observation_start(
 /* Explicit persistent path, separate from generation-owned runtime files. */
 uint32_t sakamoto_product_core_observation_start_at(
     sakamoto_product_core_handle_t *, uint64_t generation, sakamoto_product_bytes_t store_path);
+/* Android BOOT_COUNT identifies the shared BOOTTIME epoch; -1 uses the host
+ * boot-id probe. Invalid counts are rejected rather than trusted as an epoch. */
+uint32_t sakamoto_product_core_observation_start_at_boot(
+    sakamoto_product_core_handle_t *, uint64_t generation,
+    sakamoto_product_bytes_t store_path, int64_t boot_count);
 /* operation 0=current query, 1/2=controlled pause/resume validation. */
 uint32_t sakamoto_product_core_observation_query(
     sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,

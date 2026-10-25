@@ -19,9 +19,20 @@ typedef struct {
   uint32_t max_packet_bytes, task_stack_bytes, broker_timeout_ms, idle_timeout_ms;
   product_vpn_flow_stack_output_fn output;
   product_vpn_flow_stack_broker_fn broker;
+  void (*local_udp)(void *, uint64_t generation, uint64_t session, const uint8_t *, size_t);
+  void (*local_close)(void *, uint64_t generation, uint64_t session);
   product_vpn_flow_stack_trace_fn trace;
   void *opaque;
 } product_vpn_flow_stack_config_t;
+
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_local_udp(
+  product_vpn_flow_stack_t *, const uint8_t *, size_t, const product_platform_packet_facts_t *,
+  uint64_t generation, uint64_t incarnation, int local, product_vpn_flow_stack_transport_t *);
+uint64_t product_vpn_flow_stack_local_udp_reservation(const product_vpn_flow_stack_t *);
+int product_vpn_flow_stack_local_udp_reply_context(product_vpn_flow_stack_t *, uint64_t generation,
+  uint64_t session, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
+int product_vpn_flow_stack_local_udp_reply(product_vpn_flow_stack_t *, uint64_t generation,
+  uint64_t session, const uint8_t *, size_t);
 
 product_vpn_flow_stack_t *product_vpn_flow_stack_create(
   const product_vpn_flow_stack_config_t *config);

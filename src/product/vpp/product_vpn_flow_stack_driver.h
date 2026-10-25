@@ -21,4 +21,14 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_input(
   const product_platform_packet_facts_t *platform, uint64_t generation,
   uint64_t flow_incarnation, uint64_t request_token);
 
+/* Complete-message local UDP path, selected before HEV Direct creation. */
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_udp(
+  vlib_main_t *, const uint8_t *, size_t, const product_platform_packet_facts_t *,
+  uint64_t generation, uint64_t incarnation, uint64_t *session,
+  uint8_t *message, size_t capacity, size_t *length);
+int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *, uint64_t generation,
+  uint64_t session, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
+uint64_t product_vpn_flow_stack_driver_dns_reservation(unsigned owner);
+int product_vpn_flow_stack_driver_dns_authorize(vlib_main_t *, uint64_t generation,
+  uint64_t cookie, int fd);
 #endif

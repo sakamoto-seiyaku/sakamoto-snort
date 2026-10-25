@@ -2774,8 +2774,7 @@ product_packet_graph_start_external (vlib_main_t *vm, u64 generation,
 #endif
       return 0;
     }
-  if (adapter_kind == PRODUCT_ADAPTER_OBLIGATION_ROOT_NFQUEUE &&
-      !product_root_dns_adapter_start (vm, generation, graph->owner_count))
+  if (!product_root_dns_adapter_start (vm, generation, graph->owner_count))
     { product_packet_graph_flow_pools_abort (graph); return 0; }
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[0], __ATOMIC_SEQ_CST) == 0);
   ASSERT (__atomic_load_n (&graph->l4_policy_bank_readers[1], __ATOMIC_SEQ_CST) == 0);
@@ -4530,6 +4529,7 @@ product_packet_graph_dns_response_prepare (
   product_policy_snapshot_t *snapshot, product_dns_response_t *response, int *observed)
 {
   *observed = 0;
+  if (product_root_dns_vpn_return_known (vm, buffer_index)) return;
   if ((lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE &&
        lease->platform.provenance != PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN) ||
       lease->platform.direction != PRODUCT_PACKET_DIRECTION_INPUT ||

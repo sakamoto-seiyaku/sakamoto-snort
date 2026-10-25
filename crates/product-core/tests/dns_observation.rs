@@ -191,3 +191,62 @@ fn recent_dns_uses_receive_time_across_independent_lane_tokens() {
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn vpn_proxy_stages_preserve_normal_sqlite_history_and_return_provenance() {
+    let root = test_root("vpn-proxy");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();
+    let mut records = Vec::new();
+    for (token, profile, provenance) in [(101, 1, 5), (102, 2, 3)] {
+        for stage in 1..=4 {
+            let mut record = query(token, 1, 1);
+            record.adapter_profile = profile;
+            record.packet_uid = record.uid;
+            record.packet_availability = 1;
+            record.route_revision = 3;
+            record.request_attempt = 1;
+            record.proxy_flags = 1;
+            record.upstream_family = 4;
+            record.upstream_address = [192,0,2,53,0,0,0,0,0,0,0,0,0,0,0,0];
+            record.upstream_port = 53053;
+            record.upstream_transport = 1;
+            record.client_udp_capacity = 512;
+            record.reply_capacity = 512;
+            record.stage = stage;
+            if stage != 1 { record.query_token = token; }
+            if stage == 2 || stage == 4 {
+                record.direction = 1;
+                record.query_flags = 0x8180;
+            }
+            if stage == 4 {
+                record.return_provenance = provenance;
+                record.return_packet_uid = record.uid;
+                record.return_token = (1u64 << 63) | token;
+                record.delivery = 2;
+            }
+            assert!(record.valid(), "profile {profile} stage {stage}");
+            records.push(record);
+        }
+    }
+    store.consume_dns(&records, 61_000_000).unwrap();
+    let mut invalid = records[7].clone();
+    invalid.return_provenance = 5; // Root raw lineage cannot masquerade as VPN.
+    assert!(!invalid.valid());
+    invalid = records[3].clone();
+    invalid.return_provenance = 3;
+    assert!(!invalid.valid());
+    store.close().unwrap(); drop(store);
+    let db = rusqlite::Connection::open(path.with_extension("sqlite3")).unwrap();
+    let mut select = db.prepare("SELECT value FROM observation WHERE kind=20").unwrap();
+    let persisted: Vec<DnsRecord> = select.query_map([], |row| row.get::<_, Vec<u8>>(0)).unwrap()
+        .map(|value| serde_json::from_value(serde_json::from_slice::<serde_json::Value>(&value.unwrap()).unwrap()["record"].clone()).unwrap()).collect();
+    assert_eq!(persisted.len(), records.len());
+    for expected in &records { assert!(persisted.contains(expected)); }
+    drop(select); drop(db);
+    let reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["dns"]["accepted"], 8);
+    drop(reopened); std::fs::remove_dir_all(root).unwrap();
+}

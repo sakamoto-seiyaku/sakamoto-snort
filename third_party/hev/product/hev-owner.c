@@ -22,6 +22,7 @@ typedef struct owner_session {
   HevSocks5SessionUDP *transport;
   HevSocks5SessionTCP *tcp;
   struct tcp_pcb *pcb;
+  struct udp_pcb *local_udp;
   HevTask *task;
   udp_recv_fn receive;
   void *receive_arg;
@@ -219,6 +220,9 @@ static void close_session(owner_session_t *session, const char *reason)
     memset(&session->owner->input_context, 0, sizeof(session->owner->input_context));
   if (session->closing) return;
   session->closing = 1; /* Gate send/receive before waking its task. */
+  if (session->local_udp && session->owner->config.local_close)
+    session->owner->config.local_close(session->owner->config.opaque,
+      session->owner->config.generation, session->id);
   trace(session->owner, reason, session->id,
         session->tcp ? (void *)session->tcp : (void *)session->transport, 0, 0, 0);
   if (session->task) hev_task_wakeup(session->task);
@@ -233,6 +237,7 @@ static void release_session(owner_session_t *session)
   while (*link != session) link = &(*link)->next;
   *link = session->next;
   --owner->stats.sessions;
+  if (session->local_udp) --owner->stats.local_udp_sessions;
   ++owner->stats.sessions_closed;
   free(session);
 }
@@ -309,8 +314,12 @@ static void session_task(void *opaque)
   HevSocks5SessionUDP *transport = session->transport;
   HevTask *task = hev_task_self();
   struct sockaddr_storage destination = {0};
-  int family = IP_IS_V6(&transport->pcb->local_ip) ? AF_INET6 : AF_INET;
+  int family;
   socklen_t destination_length;
+  /* A route transition can transfer the PCB before this task first runs.
+   * The retiring task still owns its queue/socket and finishes cooperatively. */
+  if (!owner->stats.running || session->closing || !transport->pcb) goto finished;
+  family = IP_IS_V6(&transport->pcb->local_ip) ? AF_INET6 : AF_INET;
   if (family == AF_INET6) {
 #if LWIP_IPV6
     struct sockaddr_in6 *address = (struct sockaddr_in6 *)&destination;
@@ -413,6 +422,8 @@ finished:
   release_session(session);
 }
 
+static owner_session_t *new_udp_session(hev_owner_t *, struct udp_pcb *);
+
 static void receive_input(void *opaque, struct udp_pcb *pcb, struct pbuf *packet,
                           const ip_addr_t *address, u16_t port)
 {
@@ -438,6 +449,32 @@ static void receive_input(void *opaque, struct udp_pcb *pcb, struct pbuf *packet
     session->facts.uid = facts->uid;
     session->facts.availability |= HEV_OWNER_UID_KNOWN;
   }
+  if (!!session->local_udp != !!(facts->availability & HEV_OWNER_LOCAL_UDP)) {
+    /* The current independent datagram has not entered the old transport.
+     * Transfer only its PCB on this owner; old Direct tasks retain their queue
+     * and fd until cooperative cleanup, and cannot remove the transferred PCB. */
+    owner_session_t *replacement = new_udp_session(owner, pcb);
+    close_session(session, "udp_route_changed");
+    if (!replacement) goto rejected;
+    if (session->transport) session->transport->pcb = NULL;
+    if (session->local_udp) --owner->stats.local_udp_sessions;
+    session->local_udp = NULL;
+    if (!session->task) release_session(session);
+    receive_input(replacement, pcb, packet, address, port);
+    return;
+  }
+  if (session->local_udp) {
+    if (packet->tot_len > owner->config.max_packet_bytes) goto rejected;
+    size_t length = packet->tot_len;
+    pbuf_copy_partial(packet, owner->scratch, length, 0);
+    pbuf_free(packet);
+    select_input_context(session);
+    session->deadline = now_ms() + owner->config.udp_idle_timeout_ms;
+    owner->config.local_udp(owner->config.opaque, owner->config.generation,
+      session->id, owner->scratch, length);
+    owner->input_result = HEV_OWNER_INPUT_ACCEPTED;
+    return;
+  }
   if (owner->lwip.pbuf_live[HEV_LWIP_PBUF_POOL] > owner->config.max_input_packets) {
     pbuf_free(packet);
     owner->input_result = HEV_OWNER_INPUT_NO_CAPACITY;
@@ -462,16 +499,13 @@ rejected:
   owner->input_result = HEV_OWNER_INPUT_FAILED;
 }
 
-static void create_session(void *opaque, struct udp_pcb *pcb, struct pbuf *packet,
-                           const ip_addr_t *address, u16_t port)
+static owner_session_t *new_udp_session(hev_owner_t *owner, struct udp_pcb *pcb)
 {
-  hev_owner_t *owner = opaque;
   owner_session_t *session;
   HevTask *task;
-  (void)packet; (void)address; (void)port;
   owner->input_result = HEV_OWNER_INPUT_NO_CAPACITY;
   if (owner->stats.sessions >= owner->config.max_sessions ||
-      owner->session_serial == UINT64_MAX) {
+      owner->session_serial == INT64_MAX) {
     failure(owner, HEV_OWNER_FAULT_SESSION_CAPACITY, 0, ENOBUFS);
     goto rejected;
   }
@@ -481,6 +515,22 @@ static void create_session(void *opaque, struct udp_pcb *pcb, struct pbuf *packe
   }
   session = calloc(1, sizeof(*session));
   if (!session) goto allocation_failed;
+  if ((owner->input_facts.availability & HEV_OWNER_LOCAL_UDP) && owner->config.local_udp) {
+    session->owner = owner; session->local_udp = pcb;
+    session->facts = owner->input_facts;
+    session->facts.availability &= HEV_OWNER_UID_KNOWN;
+    session->id = ++owner->session_serial;
+    session->facts.transport_session = session->id;
+    session->deadline = now_ms() + owner->config.udp_idle_timeout_ms;
+    session->next = owner->sessions; owner->sessions = session;
+    ++owner->stats.sessions; ++owner->stats.sessions_created;
+    ++owner->stats.local_udp_sessions;
+    if (owner->stats.local_udp_sessions > owner->stats.local_udp_peak)
+      owner->stats.local_udp_peak = owner->stats.local_udp_sessions;
+    udp_recv(pcb, receive_input, session);
+    trace(owner, "local_udp_created", session->id, pcb, 0, 0, 17);
+    return session;
+  }
   task = hev_task_new(owner->config.task_stack_bytes);
   if (!task) { free(session); goto allocation_failed; }
   session->transport = hev_socks5_session_udp_direct_new(pcb, &owner->mutex,
@@ -507,11 +557,18 @@ static void create_session(void *opaque, struct udp_pcb *pcb, struct pbuf *packe
   ++owner->stats.sessions_created;
   trace(owner, "session_created", session->id, session->transport, 0, 0, 0);
   hev_task_run(task, session_task, session);
-  return;
+  return session;
 allocation_failed:
   failure(owner, HEV_OWNER_FAULT_ALLOCATION, 0, ENOMEM);
 rejected:
-  udp_remove(pcb);
+  return NULL;
+}
+
+static void create_session(void *opaque, struct udp_pcb *pcb, struct pbuf *packet,
+                           const ip_addr_t *address, u16_t port)
+{
+  (void) packet; (void) address; (void) port;
+  if (!new_udp_session(opaque, pcb)) udp_remove(pcb);
 }
 
 static void tcp_pcb_destroyed(u8_t id, void *opaque)
@@ -759,7 +816,7 @@ static err_t create_tcp_session(u8_t id, struct tcp_pcb_listen *listener,
   static const struct tcp_ext_arg_callbacks callbacks = {tcp_pcb_destroyed, NULL};
   if (!owner->stats.running) goto rejected;
   if (owner->stats.sessions >= owner->config.max_sessions ||
-      owner->session_serial == UINT64_MAX) {
+      owner->session_serial == INT64_MAX) {
     failure(owner, HEV_OWNER_FAULT_SESSION_CAPACITY, 0, ENOBUFS);
     goto rejected;
   }
@@ -1091,7 +1148,10 @@ hev_owner_step_result_t hev_owner_step(hev_owner_t *owner, uint32_t quanta,
   } else owner->next_tcp_timer = 0;
   for (owner_session_t *s = owner->sessions, *next; s; s = next) {
     next = s->next;
-    if (s->closing && !s->task && s->pcb) tcp_abort(s->pcb);
+    if (s->local_udp) {
+      if (!s->closing && now_ms() >= s->deadline) close_session(s, "local_udp_expired");
+      if (s->closing) { udp_remove(s->local_udp); release_session(s); }
+    } else if (s->closing && !s->task && s->pcb) tcp_abort(s->pcb);
   }
   result.quanta = hev_task_system_step(quanta, max_us);
   owner->stats.task_quanta += result.quanta;
@@ -1107,10 +1167,54 @@ hev_owner_step_result_t hev_owner_step(hev_owner_t *owner, uint32_t quanta,
       !hev_list_first(&owner->scheduler->all_tasks) &&
       !owner->stats.sessions && !owner->stats.input_packets && !owner->lwip.pbufs)
     owner->stats.stopped = 1;
+  for (owner_session_t *s = owner->sessions; s; s = s->next) if (s->local_udp && !s->closing) {
+    uint64_t now = now_ms();
+    int timeout = s->deadline > now ? (int)(s->deadline - now) : 0;
+    if (result.timeout_ms < 0 || timeout < result.timeout_ms) result.timeout_ms = timeout;
+  }
   result.stopped = owner->stats.stopped;
   leave(owner, &scope);
   return result;
 }
+
+uint64_t hev_owner_local_udp_reservation(const hev_owner_t *owner)
+{
+  return owner ? (uint64_t)owner->config.max_sessions *
+    (sizeof(owner_session_t) + sizeof(struct udp_pcb)) + owner->config.max_packet_bytes : 0;
+}
+
+int hev_owner_local_udp_reply_context(hev_owner_t *owner, uint64_t generation,
+  uint64_t id, const uint8_t *message, size_t length, const hev_owner_binding_t *binding)
+{
+  owner_scope_t scope;
+  if (!owner || generation != owner->config.generation || !message || !length ||
+      length > owner->config.max_packet_bytes || enter(owner, &scope)) return -1;
+  int result = -1;
+  for (owner_session_t *s = owner->sessions; s; s = s->next) {
+    if (s->id != id || !s->local_udp || s->closing || !owner->stats.running) continue;
+    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, length, PBUF_RAM);
+    if (!p) break;
+    if (pbuf_take(p, message, length) == ERR_OK) {
+      hev_owner_facts_t original = s->facts;
+      if (binding && binding->underlay_epoch) {
+        s->facts.underlay_epoch = binding->underlay_epoch;
+        s->facts.network_context = binding->network_context;
+        if (binding->context_known) s->facts.availability |= HEV_OWNER_CONTEXT_KNOWN;
+        else s->facts.availability &= ~HEV_OWNER_CONTEXT_KNOWN;
+      }
+      owner->output_session = s;
+      result = udp_sendto(s->local_udp, p, &s->local_udp->remote_ip, s->local_udp->remote_port) == ERR_OK ? 0 : -1;
+      owner->output_session = NULL;
+      s->facts = original; /* Binding describes this reply, not a future query. */
+    }
+    pbuf_free(p); break;
+  }
+  leave(owner, &scope); return result;
+}
+
+int hev_owner_local_udp_reply(hev_owner_t *owner, uint64_t generation,
+  uint64_t id, const uint8_t *message, size_t length)
+{ return hev_owner_local_udp_reply_context(owner, generation, id, message, length, NULL); }
 
 int hev_owner_destroy(hev_owner_t *owner)
 {

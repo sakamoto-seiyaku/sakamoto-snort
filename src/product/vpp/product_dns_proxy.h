@@ -101,6 +101,7 @@ void product_dns_proxy_answer (product_dns_proxy_t *, const product_dns_proxy_ke
 void product_dns_proxy_fail (product_dns_proxy_t *, const product_dns_proxy_key_t *, uint64_t now_us);
 void product_dns_proxy_cancel (product_dns_proxy_t *, const product_dns_proxy_key_t *, uint64_t now_us);
 void product_dns_proxy_end (product_dns_proxy_t *, uint64_t generation, uint64_t incarnation, uint64_t now_us);
+void product_dns_proxy_session_end (product_dns_proxy_t *, uint64_t generation, uint64_t session, uint64_t now_us);
 /* Admission can fail before an owner transaction exists. It still applies
  * current query policy and returns the appropriate legal local DNS result. */
 int product_dns_proxy_unavailable (const product_dns_proxy_input_t *, const uint8_t *, size_t,

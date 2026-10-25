@@ -12,6 +12,7 @@ void product_root_dns_adapter_changed (void);
 void product_root_dns_adapter_quiesce (vlib_main_t *);
 void product_root_dns_adapter_stop (vlib_main_t *);
 int product_root_dns_adapter_ready (void);
+uint32_t product_root_dns_adapter_pending (unsigned owner);
 /* Configuration authority only: true while Root ordinary-query replacement is
  * selected. Admission uses this to prevent a resource bypass to the original
  * resolver before the complete-message proxy can take ownership. */
@@ -25,5 +26,16 @@ void product_root_dns_adapter_expire (vlib_main_t *, uint64_t now_us);
 void product_root_dns_reply_complete (vlib_main_t *, uint32_t buffer,
   const product_packet_completion_frame_t *);
 void product_root_dns_reply_freed (vlib_main_t *, uint32_t buffer,
+  const product_packet_completion_frame_t *);
+int product_root_dns_vpn_return_known(vlib_main_t *, uint32_t buffer);
+int product_root_dns_vpn_authorized(vlib_main_t *, uint64_t generation, uint64_t cookie,
+  unsigned error, uint64_t epoch, uint32_t context, int known);
+void product_root_dns_vpn_invalidate(vlib_main_t *, uint64_t generation, uint64_t epoch);
+void product_root_dns_vpn_session_end(vlib_main_t *, uint64_t generation, uint64_t session);
+void product_root_dns_vpn_return_admit(vlib_main_t *, uint32_t buffer,
+  const product_adapter_obligation_t *, const product_platform_packet_facts_t *);
+void product_root_dns_vpn_reply_complete(vlib_main_t *, uint32_t buffer,
+  const product_packet_completion_frame_t *, uint8_t delivery);
+void product_root_dns_vpn_reply_freed(vlib_main_t *, uint32_t buffer,
   const product_packet_completion_frame_t *);
 #endif

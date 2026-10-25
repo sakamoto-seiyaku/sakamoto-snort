@@ -9,7 +9,7 @@
  * only its HEV implementation sees this header or the socket broker hook. */
 typedef struct hev_owner hev_owner_t;
 
-enum { HEV_OWNER_UID_KNOWN = 1, HEV_OWNER_CONTEXT_KNOWN = 2 };
+enum { HEV_OWNER_UID_KNOWN = 1, HEV_OWNER_CONTEXT_KNOWN = 2, HEV_OWNER_LOCAL_UDP = 4 };
 typedef struct {
   uint32_t uid;
   uint32_t network_context;
@@ -117,6 +117,9 @@ typedef struct {
   uint32_t udp_idle_timeout_ms;
   hev_owner_output_fn output;
   hev_owner_broker_fn broker;
+  /* Synchronous complete datagram borrow; callback must not reenter owner. */
+  void (*local_udp)(void *, uint64_t generation, uint64_t session, const uint8_t *, size_t);
+  void (*local_close)(void *, uint64_t generation, uint64_t session);
   hev_owner_trace_fn trace;
   void *opaque;
 } hev_owner_config_t;
@@ -147,6 +150,7 @@ typedef struct {
   uint64_t scheduler_io_polls, scheduler_io_events;
   uint64_t task_quanta, steps, wrong_owner, stale_generation;
   uint32_t sessions, input_packets, input_peak, pbufs, pbuf_peak;
+  uint32_t local_udp_sessions, local_udp_peak;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;
   uint64_t pcb_allocations, pcb_frees;
   uint64_t faults[HEV_OWNER_FAULT_COUNT];
@@ -184,6 +188,11 @@ hev_owner_input_result_t hev_owner_input_copy (
 hev_owner_input_result_t hev_owner_input_copy_context (
   hev_owner_t *owner, const uint8_t *l3, size_t length,
   const hev_owner_facts_t *facts, uint64_t generation, hev_owner_input_context_t *context);
+uint64_t hev_owner_local_udp_reservation(const hev_owner_t *);
+int hev_owner_local_udp_reply(hev_owner_t *, uint64_t generation, uint64_t session,
+  const uint8_t *, size_t);
+int hev_owner_local_udp_reply_context(hev_owner_t *, uint64_t generation, uint64_t session,
+  const uint8_t *, size_t, const hev_owner_binding_t *);
 hev_owner_step_result_t hev_owner_step (hev_owner_t *owner,
                                        uint32_t quanta, uint32_t max_us);
 int hev_owner_broker_complete (hev_owner_t *owner, uint64_t generation,

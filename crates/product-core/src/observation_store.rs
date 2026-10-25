@@ -92,6 +92,12 @@ impl RetentionLimits {
 }
 unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
+    fn clock_gettime(clock: i32, time: *mut BootTime) -> i32;
+}
+#[repr(C)]
+struct BootTime {
+    seconds: std::ffi::c_long,
+    nanoseconds: std::ffi::c_long,
 }
 
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
@@ -200,6 +206,27 @@ struct ProtocolWindow {
 struct Baseline {
     record: FlowRecord,
     first_end_us: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_end_clock: Option<ReceiptClock>,
+}
+// A UTC correction must not add elapsed age to an observation just consumed.
+// BOOTTIME includes suspend and is shared by all processes on the same boot.
+#[derive(Clone, Serialize, Deserialize)]
+struct ReceiptClock {
+    boot_id: String,
+    uptime_us: u64,
+}
+impl ReceiptClock {
+    fn valid(&self) -> bool {
+        if let Some(count) = self.boot_id.strip_prefix("android-boot-count:") {
+            return count.parse::<u32>().is_ok_and(|value| value.to_string() == count);
+        }
+        let Some(id) = self.boot_id.strip_prefix("linux-boot-id:") else { return false; };
+        id.len() == 36 && id.bytes().enumerate().all(|(at, byte)| {
+            if [8, 13, 18, 23].contains(&at) { byte == b'-' }
+            else { byte.is_ascii_hexdigit() }
+        })
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct EndMarker {
@@ -620,6 +647,8 @@ const UPSERT_ROW: &str = "INSERT INTO observation(kind,key,value) VALUES(?1,?2,?
 struct DnsStored {
     record: DnsRecord,
     received_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    received_clock: Option<ReceiptClock>,
 }
 
 fn identity_key(record: &FlowRecord) -> String {
@@ -767,18 +796,23 @@ pub struct ObservationStore {
     limits: RetentionLimits,
     scaled_test: bool,
     boot_id: String,
-    uptime_at_open_us: u64,
     clock_origin_us: u64,
     clock_started: Instant,
     clock_held: bool,
     clock_candidate: Option<(u64, Instant)>,
     stale_generations_pending: bool,
+    receipt_now: Option<ReceiptClock>,
 }
 impl ObservationStore {
     /// DNS detail uses the same SQLite transaction, dirty-row limit, retention
     /// clock and pressure recovery as Flow/Blocked observations. It contributes
     /// no synthetic Flow packets and never claims Adapter delivery.
     pub fn consume_dns(&mut self, records: &[DnsRecord], received_us: u64) -> Result<(), String> {
+        self.receipt_now = None;
+        self.consume_dns_at(records, received_us)
+    }
+
+    fn consume_dns_at(&mut self, records: &[DnsRecord], received_us: u64) -> Result<(), String> {
         let received_us = received_us.saturating_add(self.limits.clock_offset_us);
         self.advance_retention(received_us)?;
         for record in records {
@@ -806,7 +840,9 @@ impl ObservationStore {
             if self.state.dns.len() == MAX_DNS_RECENT {
                 self.expire_oldest_dns();
             }
-            self.state.dns.insert(key.clone(), DnsStored { record: record.clone(), received_us });
+            self.state.dns.insert(key.clone(), DnsStored {
+                record: record.clone(), received_us, received_clock: self.receipt_now.clone(),
+            });
             self.dirty.dns.insert(key);
             self.state.meta.dns_accepted = self.state.meta.dns_accepted.saturating_add(1);
             self.state.meta.dns_unknown_caller = self.state.meta.dns_unknown_caller
@@ -822,11 +858,35 @@ impl ObservationStore {
     pub fn consume_dns_real(&mut self, records: &[DnsRecord], wall_now_us: u64) -> Result<(), String> {
         let safe_now = self.safe_real_time(wall_now_us);
         self.record_clock_anchor();
-        self.consume_dns(records, safe_now)
+        self.consume_dns_at(records, safe_now)
     }
 
     fn oldest_dns(&self) -> Option<(&String, &DnsStored)> {
-        self.state.dns.iter().min_by_key(|(_, row)| row.received_us)
+        let now = self.state.meta.retention_watermark_us;
+        self.state.dns.iter().max_by_key(|(key, row)|
+            (self.detail_age(row.received_us, row.received_clock.as_ref(), now), std::cmp::Reverse(*key)))
+    }
+
+    fn oldest_recent(&self) -> Option<(&String, &Baseline)> {
+        let now = self.state.meta.retention_watermark_us;
+        self.state.recent.iter().max_by_key(|(key, row)|
+            (self.detail_age(row.first_end_us.unwrap_or(now), row.first_end_clock.as_ref(), now), std::cmp::Reverse(*key)))
+    }
+
+    fn detail_age(&self, received_us: u64, receipt: Option<&ReceiptClock>, now: u64) -> u64 {
+        if let (Some(current), Some(receipt)) = (&self.receipt_now, receipt) {
+            if current.boot_id == receipt.boot_id && current.uptime_us >= receipt.uptime_us {
+                return current.uptime_us - receipt.uptime_us;
+            }
+        }
+        // Legacy rows, unavailable clocks and a different boot retain the
+        // guarded historical time mapping. Query reports this weaker boundary.
+        now.saturating_sub(received_us)
+    }
+
+    fn comparable_receipt(&self, receipt: Option<&ReceiptClock>) -> bool {
+        matches!((&self.receipt_now, receipt), (Some(current), Some(receipt))
+            if current.boot_id == receipt.boot_id && current.uptime_us >= receipt.uptime_us)
     }
 
     fn expire_oldest_dns(&mut self) {
@@ -1098,11 +1158,25 @@ impl ObservationStore {
         self.retire_old_generation_rows(RETENTION_ROWS_PER_BATCH);
         self.flush()
     }
-    fn boot_clock() -> Option<(String, u64)> {
-        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-        let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
-        let seconds = uptime.split_whitespace().next()?.parse::<f64>().ok()?;
-        Some((boot_id.trim().to_owned(), (seconds * 1_000_000.0) as u64))
+    fn boot_time_us() -> Option<u64> {
+        let mut time = BootTime { seconds: 0, nanoseconds: 0 };
+        // Linux and Android CLOCK_BOOTTIME, independent of UTC adjustments.
+        if unsafe { clock_gettime(7, &mut time) } != 0 || time.seconds < 0
+            || !(0..1_000_000_000).contains(&time.nanoseconds) {
+            return None;
+        }
+        (time.seconds as u64).checked_mul(1_000_000)?
+            .checked_add(time.nanoseconds as u64 / 1000)
+    }
+
+    fn boot_clock(boot_count: Option<u32>) -> Option<ReceiptClock> {
+        let boot_id = match boot_count {
+            Some(count) => format!("android-boot-count:{count}"),
+            None => format!("linux-boot-id:{}",
+                std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?.trim()),
+        };
+        let clock = ReceiptClock { boot_id, uptime_us: Self::boot_time_us()? };
+        clock.valid().then_some(clock)
     }
 
     fn wall_now_us() -> u64 {
@@ -1140,25 +1214,31 @@ impl ObservationStore {
 
     fn record_clock_anchor(&mut self) {
         if self.scaled_test { return; }
+        self.receipt_now = Self::boot_time_us().filter(|_| !self.boot_id.is_empty())
+            .map(|uptime_us| ReceiptClock { boot_id: self.boot_id.clone(), uptime_us });
         self.state.meta.retention_boot_id = self.boot_id.clone();
-        self.state.meta.retention_uptime_us = self.uptime_at_open_us
-            .saturating_add(self.clock_started.elapsed().as_micros() as u64);
+        self.state.meta.retention_uptime_us = self.receipt_now.as_ref()
+            .map_or(0, |clock| clock.uptime_us);
         self.dirty.meta = true;
     }
 
     pub fn consume_real(&mut self, records: &[FlowRecord], wall_now_us: u64) -> Result<(), String> {
         let safe_now = self.safe_real_time(wall_now_us);
         self.record_clock_anchor();
-        self.consume(records, safe_now)
+        self.consume_at(records, safe_now)
     }
 
     pub fn tick_real(&mut self, wall_now_us: u64) -> Result<(), String> {
         let safe_now = self.safe_real_time(wall_now_us);
+        if !self.scaled_test {
+            self.receipt_now = Self::boot_time_us().filter(|_| !self.boot_id.is_empty())
+                .map(|uptime_us| ReceiptClock { boot_id: self.boot_id.clone(), uptime_us });
+        }
         if safe_now >= self.state.meta.retention_watermark_us.saturating_add(MINUTE_US)
             || self.maintenance_pending {
             self.record_clock_anchor();
         }
-        self.tick(safe_now)
+        self.tick_at(safe_now)
     }
     fn record_save_error(&mut self, error: &str) {
         self.save_error = Some(error.to_owned());
@@ -1217,7 +1297,7 @@ impl ObservationStore {
             self.expire_oldest_dns();
             return Ok(true);
         }
-        if let Some((key, _)) = self.state.recent.first_key_value() {
+        if let Some((key, _)) = self.oldest_recent() {
             if !self.dirty_room_for(3) { return Ok(false); }
             self.expire_recent(key.clone());
             return Ok(true);
@@ -1321,22 +1401,29 @@ impl ObservationStore {
             protocols: latest_rows_at(source_protocols, start, limit),
         };
         projected.merge(&source, target_start).expect("validated rollup projection");
-        // A visible protocol can have a less recent application key. Build
-        // that one denominator from both physical tiers, without copying
-        // either application's full map.
+        // A visible protocol can have an application denominator that falls
+        // outside the separately bounded application projection. Reconstruct
+        // each denominator from the full physical tiers: a transition-target
+        // row combines its source bucket with the target bucket exactly once;
+        // every older visible row keeps its own target-window denominator.
         let denominator_keys: BTreeSet<_> = projected.protocols.values().map(|row|
-            (row.uid, row.actual_action)).collect();
-        for (uid, action) in denominator_keys {
-            let target_key = format!("{target_start:020}:{uid}:{action}");
-            let source_key = format!("{start:020}:{uid}:{action}");
-            let complete = if let Some(source_app) = source_apps.get(&source_key) {
-                merged_application(target.applications.get(&target_key), source_app, target_start)
-                    .expect("validated protocol denominator")
+            (row.minute, row.uid, row.actual_action)).collect();
+        for (minute, uid, action) in denominator_keys {
+            let app_key = format!("{minute:020}:{uid}:{action}");
+            let complete = if minute == target_start {
+                let source_key = format!("{start:020}:{uid}:{action}");
+                match source_apps.get(&source_key) {
+                    Some(source_app) => merged_application(
+                        target.applications.get(&app_key), source_app, target_start)
+                        .expect("validated protocol denominator"),
+                    None => target.applications.get(&app_key).cloned()
+                        .expect("validated protocol denominator"),
+                }
             } else {
-                target.applications.get(&target_key).cloned()
+                target.applications.get(&app_key).cloned()
                     .expect("validated protocol denominator")
             };
-            projected.applications.insert(target_key, complete);
+            projected.applications.insert(app_key, complete);
         }
         let overall_count = target.totals.len() + usize::from(source_totals.contains_key(&start))
             - usize::from(source_totals.contains_key(&start) && target.totals.contains_key(&target_start));
@@ -1376,10 +1463,10 @@ impl ObservationStore {
     fn retention_due(&self) -> bool {
         let now = self.state.meta.retention_watermark_us;
         self.stale_generations_pending || self.state.meta.transition.is_some()
-            || self.oldest_dns().is_some_and(|(_, row)|
-                now.saturating_sub(row.received_us) >= self.limits.end_age_us)
-            || self.state.recent.first_key_value().is_some_and(|(_, row)|
-            row.first_end_us.is_some_and(|at| now.saturating_sub(at) >= self.limits.end_age_us))
+            || self.state.dns.values().any(|row|
+                self.detail_age(row.received_us, row.received_clock.as_ref(), now) >= self.limits.end_age_us)
+            || self.state.recent.values().any(|row| row.first_end_us.is_some_and(|at|
+                self.detail_age(at, row.first_end_clock.as_ref(), now) >= self.limits.end_age_us))
             || self.state.minutes.first_key_value().is_some_and(|(&at, _)|
                 bucket_expired(now, at, 60, self.limits.minute_age_us))
             || self.state.hours.totals.first_key_value().is_some_and(|(&at, _)|
@@ -1397,12 +1484,31 @@ impl ObservationStore {
         if self.stale_generations_pending && self.dirty.len() < MAX_DIRTY / 2 {
             self.retire_old_generation_rows(RETENTION_ROWS_PER_BATCH);
         }
+        // Select each bounded expiry batch once. Mixed legacy/monotonic rows
+        // need not have the same order as their historical UTC keys, and a
+        // fresh head row must not hide an expired row behind it.
+        let mut dns_due: Vec<_> = self.state.dns.iter().filter_map(|(key, row)| {
+            let age = self.detail_age(row.received_us, row.received_clock.as_ref(), now);
+            (age >= self.limits.end_age_us).then_some((std::cmp::Reverse(age), key))
+        }).collect();
+        dns_due.sort_unstable();
+        let mut dns_due = dns_due.into_iter().take(RETENTION_ROWS_PER_BATCH)
+            .map(|(_, key)| key.clone()).collect::<Vec<_>>().into_iter();
+        let mut recent_due: Vec<_> = self.state.recent.iter().filter_map(|(key, row)| {
+            let age = self.detail_age(row.first_end_us?, row.first_end_clock.as_ref(), now);
+            (age >= self.limits.end_age_us).then_some((std::cmp::Reverse(age), key))
+        }).collect();
+        recent_due.sort_unstable();
+        let mut recent_due = recent_due.into_iter().take(RETENTION_ROWS_PER_BATCH)
+            .map(|(_, key)| key.clone()).collect::<Vec<_>>().into_iter();
         let mut work = 0;
         let mut dropped_day = false;
         while work < RETENTION_ROWS_PER_BATCH && self.dirty.len() < MAX_DIRTY / 2 {
-            if self.oldest_dns().is_some_and(|(_, row)|
-                now.saturating_sub(row.received_us) >= self.limits.end_age_us) {
-                self.expire_oldest_dns();
+            if let Some(key) = dns_due.next() {
+                self.state.dns.remove(&key);
+                self.dirty.dns.insert(key);
+                self.state.meta.dns_evicted = self.state.meta.dns_evicted.saturating_add(1);
+                self.dirty.meta = true;
             } else if let Some(transition) = self.state.meta.transition {
                 match transition {
                     RetentionTransition::Rollup { from, to, start } => {
@@ -1413,9 +1519,8 @@ impl ObservationStore {
                         dropped_day = true;
                     }
                 }
-            } else if let Some((key, _)) = self.state.recent.first_key_value().filter(|(_, row)|
-                row.first_end_us.is_some_and(|at| now.saturating_sub(at) >= self.limits.end_age_us)) {
-                self.expire_recent(key.clone());
+            } else if let Some(key) = recent_due.next() {
+                self.expire_recent(key);
             } else if let Some((&start, _)) = self.state.minutes.first_key_value().filter(|(&at, _)|
                 bucket_expired(now, at, 60, self.limits.minute_age_us)) {
                 self.rollup_step(3, 9, start, 3600)?;
@@ -1438,6 +1543,10 @@ impl ObservationStore {
     }
 
     pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_with_boot_count(path, None)
+    }
+
+    pub fn open_with_boot_count(path: &Path, boot_count: Option<u32>) -> Result<Self, String> {
         let (limits, scaled_test) = RetentionLimits::load(path)?;
         let parent = path
             .parent()
@@ -1654,7 +1763,9 @@ impl ObservationStore {
             state.meta.l7_unknown = state.meta.totals;
             state.meta.protocol_schema = 1;
         }
-        let (boot_id, uptime_at_open_us) = Self::boot_clock().unwrap_or_default();
+        let receipt_now = (!scaled_test).then(|| Self::boot_clock(boot_count)).flatten();
+        let (boot_id, uptime_at_open_us) = receipt_now.as_ref()
+            .map_or_else(|| (String::new(), 0), |clock| (clock.boot_id.clone(), clock.uptime_us));
         let clock_origin_us = if state.meta.retention_watermark_us != 0 {
             let downtime = if !boot_id.is_empty()
                 && state.meta.retention_boot_id == boot_id
@@ -1688,12 +1799,12 @@ impl ObservationStore {
             limits,
             scaled_test,
             boot_id,
-            uptime_at_open_us,
             clock_origin_us,
             clock_started: Instant::now(),
             clock_held: false,
             clock_candidate: None,
             stale_generations_pending,
+            receipt_now,
         };
         if meta.is_none() {
             store.migrate()?;
@@ -1829,7 +1940,8 @@ impl ObservationStore {
 
     fn validate_state(state: &State) -> Result<(), String> {
         Self::validate_bounds(state)?;
-        if state.dns.iter().any(|(key, row)| !row.record.valid() || *key != row.record.key()) {
+        if state.dns.iter().any(|(key, row)| !row.record.valid() || *key != row.record.key()
+            || row.received_clock.as_ref().is_some_and(|clock| !clock.valid())) {
             return Err("observation_dns_record".into());
         }
         let hidden_day = match state.meta.transition {
@@ -2008,6 +2120,7 @@ impl ObservationStore {
                 || !Self::valid_record(r)
                 || Self::validate_segments(r, None).is_err()
                 || baseline.first_end_us.is_some() != r.ended
+                || baseline.first_end_clock.as_ref().is_some_and(|clock| !r.ended || !clock.valid())
             {
                 return Err("observation_invalid_baseline".into());
             }
@@ -2020,6 +2133,7 @@ impl ObservationStore {
             if !r.ended
                 || !Self::valid_record(r)
                 || key != &format!("{first:020}:{}:{}", identity_key(r), r.incarnation)
+                || baseline.first_end_clock.as_ref().is_some_and(|clock| !clock.valid())
             {
                 return Err("observation_invalid_lifecycle".into());
             }
@@ -2083,7 +2197,7 @@ impl ObservationStore {
         record.generation != 0
             && record.incarnation != 0
             && record.sequence != 0
-            && record.owner < 2
+            && record.owner < 62
             && record.slot < 65536
             && record.kind_attribution_valid()
             && record.attribution.iter().all(|a| (a.protocols_available || a.protocol_set == 0)
@@ -2117,9 +2231,14 @@ impl ObservationStore {
     }
 
     pub fn tick(&mut self, now_us: u64) -> Result<(), String> {
+        self.receipt_now = None;
+        self.tick_at(now_us)
+    }
+
+    fn tick_at(&mut self, now_us: u64) -> Result<(), String> {
         let now = now_us.saturating_add(self.limits.clock_offset_us);
         if now >= self.state.meta.retention_watermark_us.saturating_add(MINUTE_US)
-            || self.maintenance_pending {
+            || self.maintenance_pending || self.retention_due() {
             if let Err(error) = self.advance_retention(now) {
                 self.record_save_error(&error);
                 return Err(error);
@@ -2297,6 +2416,11 @@ impl ObservationStore {
     }
 
     pub fn consume(&mut self, records: &[FlowRecord], received_us: u64) -> Result<(), String> {
+        self.receipt_now = None;
+        self.consume_at(records, received_us)
+    }
+
+    fn consume_at(&mut self, records: &[FlowRecord], received_us: u64) -> Result<(), String> {
         let received_us = received_us.saturating_add(self.limits.clock_offset_us);
         if let Err(error) = self.advance_retention(received_us) {
             self.record_save_error(&error);
@@ -2389,13 +2513,27 @@ impl ObservationStore {
             self.state.meta.rejected = self.state.meta.rejected.saturating_add(1);
             return Ok(());
         }
+        // Validate before capacity can retire the duplicate's own END baseline.
+        if let Some(old) = self.state.baselines.get(&key) {
+            let previous = &old.record;
+            if record.incarnation < previous.incarnation
+                || (record.incarnation == previous.incarnation
+                    && (previous.ended || record.sequence <= previous.sequence
+                        || record.last_seen < previous.last_seen
+                        || (0..2).any(|i| record.packets[i] < previous.packets[i]
+                            || record.bytes[i] < previous.bytes[i]))) {
+                self.state.meta.rejected = self.state.meta.rejected.saturating_add(1);
+                return Ok(());
+            }
+        }
+        Self::validate_segments(record, self.state.baselines.get(&key).map(|row| &row.record))?;
         let mut delta = Counts {
             packets: record.packets,
             bytes: record.bytes,
         };
         while (!self.state.baselines.contains_key(&key) && self.state.baselines.len() >= MAX_BASELINES)
             || (record.ended && self.state.recent.len() >= MAX_RECENT) {
-            let Some((oldest, _)) = self.state.recent.first_key_value() else { break; };
+            let Some((oldest, _)) = self.oldest_recent() else { break; };
             self.expire_recent(oldest.clone());
         }
         if !self.state.baselines.contains_key(&key) && self.state.baselines.len() >= MAX_BASELINES {
@@ -2407,19 +2545,6 @@ impl ObservationStore {
         let old = self.state.baselines.get(&key);
         if let Some(old) = old {
             let previous = &old.record;
-            if record.incarnation < previous.incarnation
-                || (record.incarnation == previous.incarnation
-                    && (previous.ended
-                        || record.sequence <= previous.sequence
-                        || record.last_seen < previous.last_seen
-                        || (0..2).any(|i| {
-                            record.packets[i] < previous.packets[i]
-                                || record.bytes[i] < previous.bytes[i]
-                        })))
-            {
-                self.state.meta.rejected = self.state.meta.rejected.saturating_add(1);
-                return Ok(());
-            }
             if record.incarnation == previous.incarnation {
                 if record.sequence - previous.sequence != 1 {
                     self.state.meta.gaps = self.state.meta.gaps.saturating_add(1);
@@ -2443,7 +2568,6 @@ impl ObservationStore {
         {
             self.state.meta.clock_changes = self.state.meta.clock_changes.saturating_add(1);
         }
-        Self::validate_segments(record, old.map(|b| &b.record))?;
         // Stage all affected rows before mutating the live aggregate. One
         // record can touch two application and two rule rows, never history.
         let mut applications = BTreeMap::<String, ApplicationWindow>::new();
@@ -2706,6 +2830,7 @@ impl ObservationStore {
         let baseline = Baseline {
             record: record.clone(),
             first_end_us: record.ended.then_some(received_us),
+            first_end_clock: record.ended.then(|| self.receipt_now.clone()).flatten(),
         };
         if record.ended {
             self.state.meta.ended = self.state.meta.ended.saturating_add(1);
@@ -2800,7 +2925,12 @@ impl ObservationStore {
                     "share": protocol_share(&window.counts, denominator),
                 }))
             }).collect();
-        let recent: BTreeMap<_, _> = self.state.recent.iter().rev().take(128)
+        let now = self.state.meta.retention_watermark_us;
+        let mut recent_rows: Vec<_> = self.state.recent.iter().collect();
+        recent_rows.sort_unstable_by_key(|(key, row)| (
+            self.detail_age(row.first_end_us.unwrap_or(now), row.first_end_clock.as_ref(), now),
+            std::cmp::Reverse(*key)));
+        let recent: BTreeMap<_, _> = recent_rows.into_iter().take(128)
             .map(|(key, baseline)| {
                 let mut row = serde_json::to_value(baseline).expect("stored recent observation");
                 for side in 0..2 {
@@ -2856,11 +2986,12 @@ impl ObservationStore {
         // Root packet tokens advance independently per lane. Their numeric
         // order cannot select the newest decisions across owners/lanes.
         let mut dns_recent: Vec<_> = self.state.dns.iter().collect();
-        dns_recent.sort_unstable_by(|(left_key, left), (right_key, right)|
-            right.received_us.cmp(&left.received_us).then_with(|| right_key.cmp(left_key)));
+        let now = self.state.meta.retention_watermark_us;
+        dns_recent.sort_unstable_by_key(|(key, row)|
+            (self.detail_age(row.received_us, row.received_clock.as_ref(), now), std::cmp::Reverse(*key)));
         let dns_recent: BTreeMap<_, _> = dns_recent.into_iter().take(128).collect();
         response["dns"] = serde_json::json!({
-            "scope": "root_vpn_dns_query_response_and_root_proxy_delivery", "recent": dns_recent,
+            "scope": "root_vpn_dns_query_response_and_proxy_delivery", "recent": dns_recent,
             "accepted": self.state.meta.dns_accepted, "rejected": self.state.meta.dns_rejected,
             "unknown_caller": self.state.meta.dns_unknown_caller,
             "incomplete_message": self.state.meta.dns_incomplete,
@@ -2884,6 +3015,14 @@ impl ObservationStore {
         response["coverage"]["evicted"] = serde_json::json!(self.state.meta.evicted);
         response["coverage"]["retention_watermark_us"] = self.state.meta.retention_watermark_us.into();
         response["coverage"]["retention_clock_held"] = self.clock_held.into();
+        response["coverage"]["detail_age_clock"] = serde_json::json!({
+            "scope": "same_boot_elapsed_realtime_with_guarded_legacy_fallback",
+            "monotonic_available": self.receipt_now.is_some(),
+            "dns_fallback_rows": self.state.dns.values().filter(|row|
+                !self.comparable_receipt(row.received_clock.as_ref())).count(),
+            "ended_fallback_rows": self.state.recent.values().filter(|row|
+                !self.comparable_receipt(row.first_end_clock.as_ref())).count(),
+        });
         response["coverage"]["incomplete"] = (self.state.meta.gaps != 0 || self.uncertain
             || self.state.meta.evicted.packets != [0; 2] || self.state.meta.evicted.bytes != [0; 2]).into();
         response["hour_windows"] = match self.state.meta.transition {
@@ -3119,6 +3258,130 @@ mod tests {
         let reopened = ObservationStore::open(&path).unwrap();
         assert_eq!(reopened.query()["packets"], serde_json::json!([2, 0]));
         assert_eq!(reopened.query()["coverage"]["evicted"]["packets"], serde_json::json!([2, 0]));
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_rollup_query_keeps_each_protocol_denominator_in_its_own_window() {
+        // Public seam: query while persisted minute-to-hour and hour-to-day
+        // transitions are incomplete.  An old unique UID makes the prior
+        // panic observable; the same UID/action on two different windows
+        // ensures a future non-panicking implementation cannot silently use
+        // the newer denominator for the older protocol row.
+        let root = std::env::temp_dir().join(format!("t27-partial-denominator-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let old_at = 200 * DAY_US + MINUTE_US + 1_000_000;
+        let new_at = old_at + DAY_US;
+        let old_minute = old_at / MINUTE_US * 60;
+        let new_minute = new_at / MINUTE_US * 60;
+        let prior_at = new_at - MINUTE_US;
+        let prior_minute = prior_at / MINUTE_US * 60;
+        let old_hour = old_minute / 3600 * 3600;
+        let new_hour = new_minute / 3600 * 3600;
+        let old_day = old_minute / 86400 * 86400;
+        let new_day = new_minute / 86400 * 86400;
+        let old = FlowRecord {
+            generation: 5, slot: 1, incarnation: 1, sequence: 1,
+            activity_utc_us: old_at, first_seen: 1, last_seen: 1,
+            protocol: 17, packets: [2, 0], bytes: [128, 0],
+            attribution: [Attribution {
+                valid: true, segment: 1, activity_utc_us: old_at,
+                policy_generation: 5, policy_revision: 1, policy_hash: 9,
+                uid: 42, winner: 65537, name: "old".into(),
+                declared_action: 1, actual_action: 1,
+                protocols_available: true, protocol_set: 1,
+                ..Default::default()
+            }, Attribution::default()],
+            ..Default::default()
+        };
+        let mut old_unique = old.clone();
+        old_unique.slot = 2;
+        old_unique.attribution[0].uid = 7;
+        old_unique.attribution[0].name = "old unique".into();
+        old_unique.packets = [3, 0];
+        old_unique.bytes = [192, 0];
+        let mut current = old.clone();
+        current.slot = 4;
+        current.activity_utc_us = new_at;
+        current.attribution[0].activity_utc_us = new_at;
+        current.attribution[0].name = "new".into();
+        current.packets = [4, 0];
+        current.bytes = [512, 0];
+        let mut current_prior = current.clone();
+        current_prior.slot = 3;
+        current_prior.activity_utc_us = prior_at;
+        current_prior.attribution[0].activity_utc_us = prior_at;
+        current_prior.attribution[0].name = "new prior".into();
+        current_prior.packets = [6, 0];
+        current_prior.bytes = [384, 0];
+        let mut current_unique = current.clone();
+        current_unique.slot = 5;
+        current_unique.attribution[0].uid = 99;
+        current_unique.attribution[0].name = "new unique".into();
+        current_unique.packets = [5, 0];
+        current_unique.bytes = [320, 0];
+        let assert_l4 = |query: &serde_json::Value, tier: &str, minute: u64,
+            uid: u32, packets: u64, bytes: u64| {
+            let row = query[tier]["protocol_windows"].as_object().unwrap().values()
+                .find(|row| row["minute"] == minute && row["uid"] == uid
+                    && row["actual_action"] == 1 && row["layer"] == "l4")
+                .unwrap_or_else(|| panic!("missing {tier} protocol row {minute}/{uid}: {query}"));
+            assert_eq!(row["counts"]["packets"], serde_json::json!([packets, 0]));
+            assert_eq!(row["counts"]["bytes"], serde_json::json!([bytes, 0]));
+            assert_eq!(row["denominator"]["packets"], serde_json::json!([packets, 0]));
+            assert_eq!(row["denominator"]["bytes"], serde_json::json!([bytes, 0]));
+            assert_eq!(row["share"]["packets"], serde_json::json!([1.0, null]));
+            assert_eq!(row["share"]["bytes"], serde_json::json!([1.0, null]));
+        };
+        let mut store = ObservationStore::open(&path).unwrap();
+        store.consume(&[old, old_unique], old_at).unwrap();
+        while store.state.minutes.contains_key(&old_minute) {
+            assert!(store.rollup_step(3, 9, old_minute, 3600).unwrap());
+        }
+        store.consume(&[current_prior], prior_at).unwrap();
+        while store.state.minutes.contains_key(&prior_minute) {
+            assert!(store.rollup_step(3, 9, prior_minute, 3600).unwrap());
+        }
+        store.consume(&[current, current_unique], new_at).unwrap();
+        assert!(store.rollup_step(3, 9, new_minute, 3600).unwrap());
+        assert!(store.state.meta.transition.is_some());
+
+        let query = store.query();
+        assert_l4(&query, "hour_windows", old_hour, 42, 2, 128);
+        assert_l4(&query, "hour_windows", new_hour, 42, 10, 896);
+        while store.state.minutes.contains_key(&new_minute) {
+            assert!(store.rollup_step(3, 9, new_minute, 3600).unwrap());
+        }
+        store.write_dirty().unwrap();
+        store.checkpoint().unwrap();
+        drop(store);
+
+        let mut store = ObservationStore::open(&path).unwrap();
+        let query = store.query();
+        assert_l4(&query, "hour_windows", old_hour, 42, 2, 128);
+        assert_l4(&query, "hour_windows", new_hour, 42, 10, 896);
+        while store.state.hours.totals.contains_key(&old_hour) {
+            assert!(store.rollup_step(9, 14, old_hour, 86400).unwrap());
+        }
+        assert!(store.rollup_step(9, 14, new_hour, 86400).unwrap());
+        assert!(store.state.meta.transition.is_some());
+        let query = store.query();
+        assert_l4(&query, "day_windows", old_day, 42, 2, 128);
+        assert_l4(&query, "day_windows", new_day, 42, 10, 896);
+        while store.state.hours.totals.contains_key(&new_hour) {
+            assert!(store.rollup_step(9, 14, new_hour, 86400).unwrap());
+        }
+        store.write_dirty().unwrap();
+        store.checkpoint().unwrap();
+        drop(store);
+
+        let reopened = ObservationStore::open(&path).unwrap();
+        let query = reopened.query();
+        assert_l4(&query, "day_windows", old_day, 42, 2, 128);
+        assert_l4(&query, "day_windows", new_day, 42, 10, 896);
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

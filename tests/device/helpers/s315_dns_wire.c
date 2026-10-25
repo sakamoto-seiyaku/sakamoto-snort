@@ -14,7 +14,8 @@
 static unsigned u16 (const unsigned char *p) { return p[0] * 256U + p[1]; }
 int main (int argc, char **argv) {
   if (argc < 5 || argc > 9 || getuid () != 0 ||
-      (strcmp (argv[1], "wlan0") && strcmp (argv[1], "lo")) ||
+      (strcmp (argv[1], "wlan0") && strcmp (argv[1], "lo") &&
+       (strncmp (argv[1], "tun", 3) || !argv[1][3] || strspn (argv[1] + 3, "0123456789") != strlen (argv[1] + 3))) ||
       strncmp (argv[2], "/data/local/tmp/s315-wire-", 26)) return 2;
   unsigned char addresses[6][16] = {{0}}; int families[6];
   for (int i = 3; i < argc; ++i) {
@@ -38,6 +39,7 @@ int main (int argc, char **argv) {
     unsigned char packet[65536];struct sockaddr_ll from={0};socklen_t from_size=sizeof(from);
     ssize_t count=recvfrom(fd,packet,sizeof(packet),0,(void*)&from,&from_size);
     if(count<0){if(errno==EINTR)continue;perror("wire recv");return 1;}
+    if(clock_gettime(CLOCK_MONOTONIC,&now)){perror("wire received clock");return 1;}
     size_t size=(size_t)count,header,total;unsigned protocol,family,fragmented=0;
     const unsigned char *source,*destination;
     if(size>=20&&(packet[0]>>4)==4){
@@ -53,7 +55,7 @@ int main (int argc, char **argv) {
     }else continue;
     if(protocol!=6&&protocol!=17)continue;
     unsigned sport=u16(packet+header),dport=u16(packet+header+2);
-    if(sport!=53&&dport!=53&&sport!=53053&&dport!=53053)continue;
+    if(sport!=53&&dport!=53&&sport!=53053&&dport!=53053&&sport!=53054&&dport!=53054)continue;
     unsigned selected=0;
     for(int i=3;i<argc;++i)if(families[i-3]==(int)family&&
       (!memcmp(source,addresses[i-3],family==AF_INET?4:16)||!memcmp(destination,addresses[i-3],family==AF_INET?4:16)))selected=1;
@@ -72,7 +74,7 @@ int main (int argc, char **argv) {
       protocol==17?(fragmented?"udp_fragment_first":"udp"):"tcp",argv[1],src,dst,sport,dport,from.sll_pkttype);
     for(size_t i=0;i<payload;++i)printf("%02x",packet[header+transport+i]);
     printf("\",\"packet_hex\":\"");for(size_t i=0;i<total;++i)printf("%02x",packet[i]);
-    printf("\",\"mono_ns\":%llu",(unsigned long long)now.tv_sec*1000000000+(unsigned long long)now.tv_nsec);
+    printf("\",\"mono_ns\":%llu,\"timestamp_scope\":\"userspace_after_recv\"",(unsigned long long)now.tv_sec*1000000000+(unsigned long long)now.tv_nsec);
     if(protocol==6)printf(",\"sequence\":%u,\"flags\":%u",((unsigned)packet[header+4]<<24)|((unsigned)packet[header+5]<<16)|((unsigned)packet[header+6]<<8)|packet[header+7],packet[header+13]);
     else printf(",\"udp_length\":%u,\"fragmented\":%s",udp_length,fragmented?"true":"false");
     puts("}");

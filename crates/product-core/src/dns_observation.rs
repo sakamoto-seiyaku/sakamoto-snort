@@ -172,7 +172,7 @@ impl DnsRecord {
 
     fn valid_proxy(&self) -> bool {
         let admission_resource = self.proxy_flags & 8 != 0;
-        let common = self.generation != 0 && self.token != 0 && self.owner < 62 && self.adapter_profile == 1
+        let common = self.generation != 0 && self.token != 0 && self.owner < 62 && matches!(self.adapter_profile, 1 | 2)
             && matches!(self.family,4|6) && self.protocol == 17 && self.resolver_port == 53
             && self.route_revision != 0
             && self.proxy_result <= 10
@@ -199,7 +199,7 @@ impl DnsRecord {
                 && self.actual_action == if self.mode == 1 {1} else {self.declared_action}))
             && self.return_declared_action <= 2 && self.return_actual_action <= 2 && self.return_mode <= 1
             && (self.return_winner == 0 || (self.return_policy_generation == self.generation && self.return_policy_revision != 0))
-            && (self.return_provenance == 0 || self.return_provenance == 5);
+            && (self.return_provenance == 0 || self.return_provenance == if self.adapter_profile == 1 {5} else {3});
         common && if admission_resource {
             self.proxy_flags == 9 && self.stage == 3 && self.proxy_result == 6
                 && self.request_attempt == 0 && self.upstream_session == 0
