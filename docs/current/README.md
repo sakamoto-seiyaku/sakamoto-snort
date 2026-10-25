@@ -1,6 +1,6 @@
 # Current mainline
 
-Baseline: 2026-10-25. This short implementation entry is not a release announcement; current task state belongs to Plane.
+Baseline: 2026-10-26. This short implementation entry is not a release announcement; current task state belongs to Plane.
 
 Accepted 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md) and the
 [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md) define
@@ -14,6 +14,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 [S315](../testing/2026-10-24_S315_ROOT_UDP_DNS_REPLACEMENT.md) adds explicitly configured Root UDP53 replacement with ordinary dual-stack upstreams, same-resolver TC→TCP, current query/response policy and bounded resources. Its 35 composed N1/N3 groups have independent normal SQLite and native-zero cleanup; failed attempts, unexplained earlier peer loss and bounded stop-history gaps remain explicit. Original APK/all4861 members are restored with BOTH2727. VPN/TCP-client replacement, cache, encrypted upstreams, association consumption and KSU/libnetd integration remain unestablished.
 
 [S316](../testing/2026-10-25_S316_VPN_UDP_DNS_REPLACEMENT.md) connects optional VPN UDP DNS replacement before Direct, retaining shared policy, broker and TUN return/completion semantics. Its 52 composed N1/N3 groups include capacity, pending Stop and old-generation late answers, with 685 whole records in one final SQLite MAIN. Current Root idle health and first-input recovery also pass. Original APK/all4861 members are restored with BOTH2755; failed attempts and scope limits remain explicit. [S317](../testing/2026-10-25_S317_ROOT_TCP_DNS_REPLACEMENT.md) adds optional Root client TCP53 replacement with bounded transparent socket I/O, per-message policy and normal SQLite. Its 70 composed R3 groups cover N1/N3 dual-stack pipeline, real client UDP-TC→TCP retry, cancellation, Stop/late answers and capacity; 654 required whole records plus8 original-path records remain in one final MAIN. Original APK/all4861 members are restored with BOTH2778; Host baseline and transport/evidence limits stay explicit.
+
+[S318](../testing/2026-10-26_S318_VPN_TCP_DNS_REPLACEMENT.md) adds optional VPN client TCP53 replacement before Direct through bounded local HEV/lwIP messages and the shared current-policy proxy. R4/R5 qualify78 groups/583 whole records in MAIN1656; R6 adds event/deadline-driven progress and19 scoped groups/92 whole records in separate MAIN301, including real pending Stop/new-TUN late fencing and N3 dual-stack progress. Original APK/all4861 members are restored at fresh BOTH2809; original HOLDs and deferred cache/encrypted-upstream/association scope remain explicit.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
@@ -67,11 +69,7 @@ Current measurements remain scoped observations: [N1 fixed-frequency baseline](.
 and [current multiflow cohort](../testing/2026-10-22_CURRENT_MULTIFLOW_MAXFREQ.md).
 Those reports retain raw identities, failed UID gates and explicit limits; they do not establish Wi-Fi causation, a capacity/frequency benefit or approximately500 Mbps single-flow recovery.
 
-The [foundation joint report](../testing/2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md)
-records `PASS_WITH_EXPLICIT_LIMITS` across Linux Root and 64 distinct Pixel
-generations, with independent verifiers and retained failed attempts. Its Product
-source closure is `ab278ba6c69555a0772277f17d9350bc73ced8312d061a663d52fe3b06b05b96`.
-That identity describes the frozen Product sources, not every later docs/test commit.
+The [foundation joint report](../testing/2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md) records `PASS_WITH_EXPLICIT_LIMITS` across Linux Root and 64 distinct Pixel generations, with independent verifiers and retained failed attempts. Its Product source closure is `ab278ba6c69555a0772277f17d9350bc73ced8312d061a663d52fe3b06b05b96`. That identity describes the frozen Product sources, not every later docs/test commit.
 
 ## What that does not establish
 

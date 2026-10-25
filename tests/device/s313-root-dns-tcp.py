@@ -25,17 +25,19 @@ class Peer(support.Peer):
     def __init__(self, addresses, out, helper=None, deadline=None):
         self.out, self.rows, self.messages, self.responses = out, [], [], {}
         self.deadline = deadline
+        self.start_timeout(12)
         self.lock, self.ready = threading.Lock(), threading.Event()
         self.plan, self.stop_path = out / 'peer-plan.json', out / 'peer.stop'
         self.publish()
         helper = helper or ROOT / 'tests/device/helpers/s313_dns_peer.ps1'
         quote = lambda value: "'" + value.replace("'", "''") + "'"
-        command = ('& ' + quote(support.winpath(helper)) + ' -Addresses @('
-            + ','.join(quote(a) for a in addresses) + ') -StopPath ' + quote(support.winpath(self.stop_path))
-            + ' -PlanPath ' + quote(support.winpath(self.plan)))
+        command = ('& ' + quote(self.path(helper)) + ' -Addresses @('
+            + ','.join(quote(a) for a in addresses) + ') -StopPath ' + quote(self.path(self.stop_path))
+            + ' -PlanPath ' + quote(self.path(self.plan)))
         encoded = base64.b64encode(command.encode('utf-16le')).decode('ascii')
         self.encoded = encoded
         for attempt in range(3):
+            self.start_timeout(12)
             self.process = subprocess.Popen(['/init', '/mnt/c/Windows/System32/cmd.exe', '/C', 'powershell.exe',
                 '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
                 cwd='/mnt/c', stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
@@ -44,8 +46,8 @@ class Peer(support.Peer):
                 # A timed Event.wait returned False in 160ms on this WSL host
                 # despite its 12s argument; the reader signalled at 1.16s.
                 # Bound readiness with the monotonic deadline and actual flag.
-                deadline=time.monotonic()+12
-                while not self.ready.is_set() and time.monotonic()<deadline:
+                ready_deadline=time.monotonic()+self.budget_timeout(12)
+                while not self.ready.is_set() and time.monotonic()<ready_deadline:
                     time.sleep(.05)
                 if self.ready.is_set(): return
                 self.process.wait(timeout=self.budget_timeout(15))
@@ -65,15 +67,15 @@ class Peer(support.Peer):
                 raise RuntimeError('independent peer did not bind; inspect peer.log')
             (out/'peer.log').rename(out/f'peer-launch-{attempt}.log')
             self.stop_path.unlink()
+            self.__dict__.pop('cleanup_deadline',None)
         raise RuntimeError('WSL peer launcher failed three times; no remote peer remained')
 
     def remote_read(self, label, command):
         encoded=base64.b64encode(("$ErrorActionPreference='Stop'; "+command).encode('utf-16le')).decode()
         for attempt in range(3):
             try:
-                check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
-                    '-NoProfile','-NonInteractive','-EncodedCommand',encoded],cwd='/mnt/c',
-                    capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
+                check=self.external(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
+                    '-NoProfile','-NonInteractive','-EncodedCommand',encoded])
                 (self.out/f'{label}-{attempt}.txt').write_text(check.stdout+check.stderr)
                 if check.returncode==0: return json.loads(check.stdout)
             except subprocess.TimeoutExpired as error:
@@ -83,8 +85,13 @@ class Peer(support.Peer):
         raise RuntimeError('owned peer physical inspection unavailable: '+label)
 
     def cleanup_failed_start(self, attempt):
+        try:self.cleanup_failed_remote_start(attempt)
+        finally:self.reap_launcher()
+
+    def cleanup_failed_remote_start(self, attempt):
         # Constructor owns the remote process even before the caller can assign
         # this object. Stop cooperatively first; PID alone is never kill authority.
+        self.begin_cleanup()
         self.stop_path.touch()
         try: self.process.wait(timeout=self.budget_timeout(15))
         except subprocess.TimeoutExpired: pass
@@ -102,9 +109,8 @@ class Peer(support.Peer):
             # unrelated endpoint owner, even if it occupies the requested port.
             mutation=selector+" | ForEach-Object {Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop}"
             encoded=base64.b64encode(mutation.encode('utf-16le')).decode()
-            check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
-                '-NoProfile','-NonInteractive','-EncodedCommand',encoded],cwd='/mnt/c',
-                capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
+            check=self.external(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
+                '-NoProfile','-NonInteractive','-EncodedCommand',encoded])
             (self.out/f'peer-failed-{attempt}-terminate.txt').write_text(check.stdout+check.stderr)
         after=self.remote_read(f'peer-failed-{attempt}-after',command)
         owned=set(remote['process_ids']) | {row['process_id'] for row in self.messages if row.get('kind')=='ready'}
@@ -118,7 +124,7 @@ class Peer(support.Peer):
 
     def register(self, request, reply, gate=None, split=False, copies=1):
         self.responses[request.hex()] = dict(request_hex=request.hex(), reply_hex=reply.hex(),
-            gate=support.winpath(gate) if gate else '', split_bytes=[1, 5] if split else [],
+            gate=self.path(gate) if gate else '', split_bytes=[1, 5] if split else [],
             split_delay_ms=40 if split else 0, frame_copies=copies)
         self.publish()
 
@@ -144,9 +150,8 @@ class Peer(support.Peer):
             "@{n='State';e={$_.State.ToString()}},OwningProcess); process_present=[bool]"
             "(Get-Process -Id "+str(process_id)+" -ErrorAction SilentlyContinue)} | ConvertTo-Json -Depth 4 -Compress")
         for attempt in range(3):
-            check=subprocess.run(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
-                '-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()],
-                cwd='/mnt/c',capture_output=True,text=True,errors='replace',timeout=self.budget_timeout(20))
+            check=self.external(['/init','/mnt/c/Windows/System32/cmd.exe','/C','powershell.exe',
+                '-NoProfile','-NonInteractive','-EncodedCommand',base64.b64encode(command.encode('utf-16le')).decode()])
             (self.out/f'peer-remote-after-{attempt}.txt').write_text(check.stdout+check.stderr)
             if check.returncode==0: break
         assert check.returncode==0, 'actual peer endpoint inspection failed'
@@ -162,20 +167,26 @@ class Device(support.Device):
     def __init__(self, args):
         super().__init__(args)
         self.adb_trace = None
+        self.local_adb_recorder = self.transport_recorder()
         if getattr(args, 'trace', False) or os.environ.get('SAKAMOTO_ADB_TRACE') == '1':
-            path = ROOT / 'tests/device/helpers/s314_adb_trace.py'
-            spec = importlib.util.spec_from_file_location('s314_adb_trace', path)
-            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-            self.adb_trace = module.AdbTrace(self.out, [str(ROOT/'dev/adb'), '-s', SERIAL])
+            self.adb_trace = self.local_adb_recorder
+
+    def transport_recorder(self):
+        if not getattr(self,'local_adb_recorder',None):
+            path=Path(__file__).resolve().parent/'helpers/s314_adb_trace.py'
+            spec=importlib.util.spec_from_file_location('s314_adb_trace',path)
+            module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            self.local_adb_recorder=module.AdbTrace(self.out,[str(ROOT/'dev/adb'),'-s',SERIAL])
+        return self.local_adb_recorder
 
     def close_trace(self):
-        if self.adb_trace:
-            deadline=getattr(self,'capture_deadline',None)
-            # Incremental retirement leaves only active obligations here; this
-            # finite close phase is also used by S313/S314 callers without a
-            # matrix-wide capture deadline.
-            budget=deadline-time.monotonic() if deadline else 30
-            self.adb_trace.close(budget)
+        recorder=getattr(self,'adb_trace',None) or getattr(self,'local_adb_recorder',None)
+        if recorder:
+            # Closing already-owned work must survive an expired case clock,
+            # while still honoring an explicit reserved cleanup phase.
+            deadline=getattr(self,'cleanup_deadline',None)
+            budget=deadline-time.monotonic() if deadline is not None else 30
+            recorder.close(budget)
 
     def budget_timeout(self, maximum):
         deadline=getattr(self,'capture_deadline',None)
@@ -250,40 +261,29 @@ class Device(support.Device):
             or command == ('shell','run-as',PKG,'su','-c','id')
             or command == ('shell','cmd','wifi','status') or proc_tables_read)
         ui_convergent=command in (('shell','input','keyevent','224'),('shell','wm','dismiss-keyguard'))
-        capture=command[:2]==('exec-out','cat')or command[:4]==('exec-out','run-as',PKG,'cat')or proc_tables_read
-        release=command[:4]==('shell','run-as',PKG,'touch')and any('t12-release-'in str(value)for value in command[4:])
         for attempt in range(3):
-            started=time.time_ns()
-            started_monotonic=time.monotonic_ns()
             try:
                 deadline=getattr(self,'capture_deadline',None)
-                if not(capture or release or deadline):return super().adb(*command,check=check)
                 # A single stalled read must not consume the ordinary App's
                 # 60s active-socket hold. Preserve every failed partial read;
                 # only this side-effect-free capture may be retried.
                 timeout=10
                 if deadline:
                     remaining=deadline-time.monotonic()
-                    assert remaining>0,'end-to-end capture budget exhausted'
+                    if remaining<1:raise TimeoutError('insufficient remaining budget to start an external client')
                     timeout=min(timeout,remaining)
-                process=subprocess.run([str(ROOT/'dev/adb'),'-s',SERIAL,*map(str,command)],
-                    capture_output=True,text=True,errors='replace',timeout=timeout)
-                with(self.out/'operations.jsonl').open('a')as log:
-                    log.write(json.dumps(dict(started_ns=started,completed_ns=time.time_ns(),
-                        started_monotonic_ns=started_monotonic,completed_monotonic_ns=time.monotonic_ns(),
-                        argv=list(map(str,command)),code=process.returncode))+'\n')
-                value=(process.stdout+process.stderr).replace('\r','')
-                if check and process.returncode:raise RuntimeError(value)
+                recorder=self.transport_recorder()
+                previous=getattr(recorder,'operation_deadline',None)
+                recorder.operation_deadline=deadline
+                try:
+                    stdout,stderr,code,record=recorder.execute(command,command,timeout,check=False,kind='untraced-transport')
+                finally:
+                    if previous is None:recorder.__dict__.pop('operation_deadline',None)
+                    else:recorder.operation_deadline=previous
+                value=(stdout+stderr).decode(errors='replace').replace('\r','')
+                if check and code:raise RuntimeError(value)
                 return value
-            except subprocess.TimeoutExpired as error:
-                encoded_bytes=lambda value:value.encode()if isinstance(value,str)else value or b''
-                failure=dict(started_ns=started,completed_ns=time.time_ns(),argv=list(map(str,command)),
-                    started_monotonic_ns=started_monotonic,completed_monotonic_ns=time.monotonic_ns(),
-                    outcome='timeout',timeout_seconds=error.timeout,
-                    stdout_base64=base64.b64encode(encoded_bytes(error.stdout)).decode(),
-                    stderr_base64=base64.b64encode(encoded_bytes(error.stderr)).decode())
-                self.save('transport-timeout-'+str(started)+'.json',json.dumps(failure,indent=2)+'\n')
-                with (self.out/'operations.jsonl').open('a') as log: log.write(json.dumps(failure)+'\n')
+            except subprocess.TimeoutExpired:
                 if not read or attempt==2: raise
             except RuntimeError as error:
                 if not (read or ui_convergent) or 'WSL' not in str(error) or attempt==2: raise

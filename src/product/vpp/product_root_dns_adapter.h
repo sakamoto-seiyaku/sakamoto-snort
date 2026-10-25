@@ -31,6 +31,12 @@ int product_root_dns_vpn_return_known(vlib_main_t *, uint32_t buffer);
 int product_root_dns_vpn_authorized(vlib_main_t *, uint64_t generation, uint64_t cookie,
   unsigned error, uint64_t epoch, uint32_t context, int known);
 void product_root_dns_vpn_invalidate(vlib_main_t *, uint64_t generation, uint64_t epoch);
+void product_root_dns_vpn_tcp_query(vlib_main_t *, uint64_t generation, uint64_t session,
+  uint64_t token, const uint8_t *, size_t);
+void product_root_dns_vpn_tcp_done(vlib_main_t *, uint64_t generation, uint64_t session,
+  uint64_t token, int success);
+int product_root_dns_vpn_tcp_output(vlib_main_t *, uint64_t generation, uint64_t session,
+  uint64_t token, int begin);
 void product_root_dns_vpn_session_end(vlib_main_t *, uint64_t generation, uint64_t session);
 void product_root_dns_vpn_return_admit(vlib_main_t *, uint32_t buffer,
   const product_adapter_obligation_t *, const product_platform_packet_facts_t *);

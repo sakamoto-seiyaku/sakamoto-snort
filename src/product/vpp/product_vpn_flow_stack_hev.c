@@ -53,9 +53,15 @@ static hev_owner_output_result_t output(void *opaque,
     platform.availability |= PRODUCT_PLATFORM_UID_KNOWN;
   if (facts->availability & HEV_OWNER_CONTEXT_KNOWN)
     platform.availability |= PRODUCT_PLATFORM_CONTEXT_KNOWN;
-  switch (stack->config.output(stack->config.opaque, borrowed, count, total,
+  if(facts->local_reply_token && (!stack->config.local_tcp_output ||
+      !stack->config.local_tcp_output(stack->config.opaque,generation,
+        facts->transport_session,facts->local_reply_token,1)))return HEV_OWNER_OUTPUT_NO_MEMORY;
+  product_vpn_flow_stack_output_result_t sent=stack->config.output(stack->config.opaque, borrowed, count, total,
                               &platform, generation, serial, facts->underlay_epoch,
-                              facts->flow_incarnation, facts->transport_session)) {
+                              facts->flow_incarnation, facts->transport_session);
+  if(facts->local_reply_token)stack->config.local_tcp_output(stack->config.opaque,generation,
+    facts->transport_session,facts->local_reply_token,0);
+  switch(sent) {
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_ACCEPTED: return HEV_OWNER_OUTPUT_ACCEPTED;
   case PRODUCT_VPN_FLOW_STACK_OUTPUT_NO_MEMORY: return HEV_OWNER_OUTPUT_NO_MEMORY;
   default: return HEV_OWNER_OUTPUT_REJECTED;
@@ -73,6 +79,11 @@ static void local_udp(void *opaque, uint64_t generation, uint64_t session,
 {
   product_vpn_flow_stack_t *stack = opaque;
   stack->config.local_udp(stack->config.opaque, generation, session, message, length);
+}
+static void local_tcp_done(void *opaque,uint64_t generation,uint64_t session,uint64_t token,int success)
+{
+  product_vpn_flow_stack_t *stack=opaque;
+  if(stack->config.local_tcp_done)stack->config.local_tcp_done(stack->config.opaque,generation,session,token,success);
 }
 static void local_close(void *opaque, uint64_t generation, uint64_t session)
 {
@@ -105,6 +116,7 @@ product_vpn_flow_stack_t *product_vpn_flow_stack_create(
     .udp_idle_timeout_ms = config->idle_timeout_ms,
     .output = output, .broker = broker, .trace = trace, .opaque = stack,
     .local_udp = config->local_udp ? local_udp : NULL, .local_close = local_close,
+    .local_tcp_done=local_tcp_done,
   };
   stack->owner = hev_owner_create(&dependency);
   if (!stack->owner) { free(stack); return NULL; }
@@ -125,7 +137,8 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_local_udp(
     .flow_incarnation = flow_incarnation};
   if (platform->availability & PRODUCT_PLATFORM_UID_KNOWN)
     facts.availability |= HEV_OWNER_UID_KNOWN;
-  if (local) facts.availability |= HEV_OWNER_LOCAL_UDP;
+  if (local==1) facts.availability |= HEV_OWNER_LOCAL_UDP;
+  else if(local==2)facts.availability |= HEV_OWNER_LOCAL_TCP;
   hev_owner_input_context_t selected = {0};
   hev_owner_input_result_t result = hev_owner_input_copy_context(
     stack->owner, l3, length, &facts, generation, &selected);
@@ -150,6 +163,18 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_input_copy_context(
     generation, incarnation, 0, transport); }
 uint64_t product_vpn_flow_stack_local_udp_reservation(const product_vpn_flow_stack_t *stack)
 { return stack ? hev_owner_local_udp_reservation(stack->owner) : 0; }
+uint64_t product_vpn_flow_stack_local_tcp_reservation(const product_vpn_flow_stack_t *stack)
+{ return stack?hev_owner_local_tcp_reservation(stack->owner):0; }
+int product_vpn_flow_stack_local_tcp_next(product_vpn_flow_stack_t *stack,uint64_t generation,
+  uint64_t *session,uint64_t *token,uint8_t *message,size_t capacity,size_t *length)
+{ return stack?hev_owner_local_tcp_next(stack->owner,generation,session,token,message,capacity,length):-1; }
+int product_vpn_flow_stack_local_tcp_reply(product_vpn_flow_stack_t *stack,uint64_t generation,
+  uint64_t session,uint64_t token,const uint8_t *message,size_t length,const product_vpn_flow_stack_transport_t *transport)
+{
+  hev_owner_binding_t binding={0};
+  if(transport)binding=(hev_owner_binding_t){transport->underlay_epoch,transport->network_context,transport->context_known};
+  return stack?hev_owner_local_tcp_reply(stack->owner,generation,session,token,message,length,&binding):-1;
+}
 int product_vpn_flow_stack_local_udp_reply_context(product_vpn_flow_stack_t *stack,
   uint64_t generation, uint64_t session, const uint8_t *message, size_t length,
   const product_vpn_flow_stack_transport_t *transport)
@@ -237,6 +262,9 @@ product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_snapshot(
   }
   COPY(scheduler_io_polls); COPY(scheduler_io_events);
   COPY(local_udp_sessions); COPY(local_udp_peak);
+  COPY(local_tcp_sessions); COPY(local_tcp_peak); COPY(local_tcp_pending); COPY(local_tcp_outputs);
+  COPY(local_tcp_pending_peak); COPY(local_tcp_output_peak);
+  COPY(local_tcp_bytes); COPY(local_tcp_peak_bytes); COPY(local_tcp_frames); COPY(local_tcp_delivered); COPY(local_tcp_failed);
   COPY(sessions); COPY(input_packets); COPY(pbufs); COPY(pbuf_peak); COPY(running); COPY(stopped);
   COPY(pcbs); COPY(pcb_peak); COPY(sockets); COPY(socket_peak); COPY(input_pbufs);
   COPY(pcb_allocations); COPY(pcb_frees);

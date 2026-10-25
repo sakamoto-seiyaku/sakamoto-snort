@@ -26,9 +26,11 @@ class CompletionWitnessTest(unittest.TestCase):
         self.fake.write_text('''import os,pathlib,subprocess,sys,time
 os.environ['PATH']=str(pathlib.Path(__file__).parent)+os.pathsep+os.environ['PATH']
 args=sys.argv[1:]
+with pathlib.Path(__file__).with_suffix('.calls').open('a') as log:log.write(repr(args)+'\\n')
+if args[:2]==['exec-out','mkdir'] and pathlib.Path(__file__).with_suffix('.bootstrap-delay').exists():time.sleep(.2)
 if args[0]=='shell':
     result=subprocess.run(' '.join(args[1:]),shell=True)
-    if pathlib.Path(__file__).with_suffix('.hold').exists():time.sleep(1)
+    if pathlib.Path(__file__).with_suffix('.hold').exists():time.sleep(2.5)
     raise SystemExit(result.returncode)
 if args[:3]==['exec-out','su','-c']:
     if args[3].startswith('ps -A'):print('PID PPID UID ARGS');raise SystemExit(0)
@@ -62,7 +64,7 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
         self.fake.with_suffix('.hold').touch()
         original = ('shell', 'sh', '-c', shlex.quote('printf once >> ' + shlex.quote(str(counter))))
         with self.assertRaises(subprocess.TimeoutExpired):
-            self.client.run(original, time.monotonic() + .3)
+            self.client.run(original, time.monotonic() + 1.3)
         self.assertEqual(counter.read_text(), 'once')
         item, = self.client.items
         self.assertEqual(item['outcome'], 'timeout')
@@ -75,6 +77,49 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
         self.client.close()
         self.assertEqual(item['witness']['exit_code'], 0)
         self.assertFalse(Path(self.client.remote).exists())
+
+    def test_insufficient_start_budget_spawns_no_external_client(self):
+        counter = self.path / 'must-not-run.txt'
+        original = ('shell', 'sh', '-c', shlex.quote('printf forbidden >> ' + shlex.quote(str(counter))))
+        with self.assertRaises(TimeoutError):
+            self.client.run(original, time.monotonic() + .068)
+        self.assertFalse(counter.exists())
+        self.assertFalse(self.fake.with_suffix('.calls').exists())
+        self.assertFalse(Path(self.client.remote).exists())
+        self.assertEqual(self.client.items, [])
+        self.assertFalse(self.client.created)
+
+    def test_bootstrap_consumption_prevents_a_later_control_spawn(self):
+        self.fake.with_suffix('.bootstrap-delay').touch()
+        counter=self.path/'control-must-not-run'
+        original=('shell','sh','-c',shlex.quote('printf forbidden >> '+shlex.quote(str(counter))))
+        with self.assertRaises(TimeoutError):self.client.run(original,time.monotonic()+1.1)
+        calls=self.fake.with_suffix('.calls').read_text().splitlines()
+        self.assertEqual(len(calls),1)
+        self.assertIn("'mkdir'",calls[0]);self.assertNotIn("'shell'",calls[0])
+        self.assertFalse(counter.exists());self.assertEqual(self.client.items,[])
+        self.assertTrue(self.client.created)
+
+    def test_expiring_witness_collection_starts_no_external_read(self):
+        item=dict(label='never-started',remote_stem=str(self.path/'missing'))
+        self.client.collect(item,time.monotonic()+.068)
+        self.assertFalse(self.fake.with_suffix('.calls').exists())
+        self.assertNotEqual(item['witness']['gaps'],[])
+        self.assertIn('read_error',item['remote_meta'])
+        self.assertIn('read_error',item['remote_out'])
+
+    def test_expired_operation_does_not_prevent_reaping_started_client(self):
+        self.client.operation_deadline = time.monotonic() + 1.1
+        try:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.client.execute(['exec-out', 'sleep', '10'], ['exec-out', 'sleep', '10'], 2)
+        finally:
+            self.client.__dict__.pop('operation_deadline', None)
+        row = json.loads((self.path / 'operations.jsonl').read_text().splitlines()[-1])
+        self.assertEqual(row['outcome'], 'timeout')
+        self.assertTrue(row['local_reaped'])
+        self.assertNotIn('local_cleanup_error', row)
+        self.assertEqual(self.client.unreaped, {})
 
     def test_command_output_without_final_newline_is_unchanged(self):
         original = ('shell', 'sh', '-c', shlex.quote('printf %s original-output'))
@@ -94,8 +139,8 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
             observed.append(timeout)
             return real(original, wire, timeout, **options)
         with patch.object(self.client, 'execute', side_effect=bounded):
-            self.client.run(('shell', 'sh', '-c', shlex.quote('printf ready')), time.monotonic() + .8)
-        self.assertLessEqual(observed[0], .8)
+            self.client.run(('shell', 'sh', '-c', shlex.quote('printf ready')), time.monotonic() + 1.8)
+        self.assertLessEqual(observed[0], 1.8)
 
     def test_close_budget_clamps_every_followup_transport(self):
         self.client.close_deadline=time.monotonic()-.01
@@ -124,7 +169,7 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
                 self.client.run(('shell','sh','-c',shlex.quote('printf blocked')),None)
         self.assertEqual(len(self.client.retired),400)
 
-    def test_close_reaps_a_retained_local_child_with_its_budget(self):
+    def test_close_reaps_a_retained_local_child_with_independent_finite_budget(self):
         class Child:
             pid=17
             def __init__(self): self.returncode=None; self.killed=False
@@ -135,7 +180,7 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
         with patch.object(self.client,'process_rows',side_effect=RuntimeError('stop after local reap')):
             with self.assertRaisesRegex(RuntimeError,'stop after local reap'):
                 self.client.close(budget=1)
-        self.assertTrue(child.killed); self.assertLessEqual(child.timeout,1)
+        self.assertTrue(child.killed); self.assertLessEqual(child.timeout,2)
 
     def test_close_reaps_a_real_retained_local_child(self):
         child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])
@@ -195,7 +240,7 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
             return process
         with patch.object(trace.subprocess, 'Popen', side_effect=stalled):
             with self.assertRaises(subprocess.TimeoutExpired):
-                self.client.execute(['shell', 'input', 'tap', 1, 2], ['exec-out', 'true'], .1)
+                self.client.execute(['shell', 'input', 'tap', 1, 2], ['exec-out', 'true'], 1)
         process, = processes
         self.assertIsNotNone(process.poll())
         self.assertTrue(process.stdout.closed)
@@ -222,7 +267,7 @@ raise SystemExit(subprocess.run(args[1:]).returncode)
             return process
         with patch.object(trace.subprocess, 'Popen', side_effect=interrupted):
             with self.assertRaises(KeyboardInterrupt):
-                self.client.execute(['shell', 'input', 'tap', 1, 2], ['exec-out', 'sleep', '1'], .5)
+                self.client.execute(['shell', 'input', 'tap', 1, 2], ['exec-out', 'sleep', '1'], 1)
         self.assertIsNotNone(processes[0].poll())
         row = json.loads((self.path / 'operations.jsonl').read_text().splitlines()[-1])
         self.assertTrue(row['local_reaped'])

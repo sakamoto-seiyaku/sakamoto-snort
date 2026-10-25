@@ -51,9 +51,10 @@ class CleanupEnvelope:
         remaining=self.end-time.monotonic()
         assert remaining>0,'cleanup envelope exhausted before '+name
         deadline=time.monotonic()+min(seconds,max(0,remaining-later))
-        previous=getattr(device,'capture_deadline',None); device.capture_deadline=deadline
+        previous=getattr(device,'capture_deadline',None); cleanup=getattr(device,'cleanup_deadline',None)
+        device.capture_deadline=device.cleanup_deadline=deadline
         try:yield deadline
-        finally:device.capture_deadline=previous
+        finally:device.capture_deadline=previous; device.cleanup_deadline=cleanup
 
 
 class Peer(tcp.Peer):
@@ -65,7 +66,7 @@ class Peer(tcp.Peer):
         assert 1 <= gate_seconds <= 120 and (gate or gate_seconds == 30)
         key = protocol+':'+str(port)+':'+query[2:].hex()
         self.responses[key] = dict(key=key, reply_hex=reply.hex(),
-            gate=support.winpath(gate) if gate else '', gate_budget_ms=int(gate_seconds*1000), delay_ms=delay, drop=drop,
+            gate=self.path(gate) if gate else '', gate_budget_ms=int(gate_seconds*1000), delay_ms=delay, drop=drop,
             split_bytes=[1, 5] if split else [], split_delay_ms=40 if split else 0)
         self.publish()
 
@@ -114,7 +115,7 @@ class Device(tcp.Device):
     def cleanup_budget(self, seconds=45):
         """Keep failure cleanup bounded but independent of test-case deadlines."""
         previous = getattr(self, 'capture_deadline', None)
-        self.capture_deadline = min(previous or float('inf'),time.monotonic()+seconds)
+        self.capture_deadline = min(getattr(self,'cleanup_deadline',None) or float('inf'),time.monotonic()+seconds)
         try:
             yield
         finally:
@@ -1222,9 +1223,9 @@ def main():
             finish_phase('wire',lambda _:device.wire_stop())
         if peer:
             def finish_peer(deadline):
-                previous=getattr(peer,'deadline',None);peer.deadline=deadline
+                previous=getattr(peer,'cleanup_deadline',None);peer.cleanup_deadline=deadline
                 try:peer.close()
-                finally:peer.deadline=previous
+                finally:peer.cleanup_deadline=previous
             finish_phase('peer',finish_peer)
         finish_phase('trace',lambda _:device.close_trace())
         if cleanup:result['cleanup_errors']=cleanup;result['status']='HOLD'

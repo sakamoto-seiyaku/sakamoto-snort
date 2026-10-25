@@ -182,6 +182,20 @@ static void local_udp(void *opaque, uint64_t generation, uint64_t session,
   memcpy(owner->local_message, message, length);
   owner->local_length = length; owner->local_session = session;
 }
+static void local_tcp_done(void *opaque,uint64_t generation,uint64_t session,uint64_t token,int success)
+{ (void)opaque;product_root_dns_vpn_tcp_done(vlib_get_main(),generation,session,token,success); }
+static int local_tcp_output(void *opaque,uint64_t generation,uint64_t session,uint64_t token,int begin)
+{ (void)opaque;return product_root_dns_vpn_tcp_output(vlib_get_main(),generation,session,token,begin); }
+static void local_tcp_drain(product_vpn_stack_owner_t *owner)
+{
+  uint8_t message[65535];
+  for(unsigned budget=0;budget<129;++budget) {
+    uint64_t session=0,token=0;size_t length=0;
+    int result=product_vpn_flow_stack_local_tcp_next(owner->stack,owner->generation,&session,&token,message,sizeof(message),&length);
+    if(result<=0)break;
+    product_root_dns_vpn_tcp_query(vlib_get_main(),owner->generation,session,token,message,length);
+  }
+}
 static void local_close(void *opaque, uint64_t generation, uint64_t session)
 {
   (void)opaque;
@@ -226,6 +240,7 @@ static int start_owner(uint64_t generation, u32 index)
   config.owner_index = index;
   config.output = output; config.broker = request; config.trace = trace; config.opaque = owner;
   config.local_udp = local_udp; config.local_close = local_close;
+  config.local_tcp_done=local_tcp_done;config.local_tcp_output=local_tcp_output;
   owner->stack = product_vpn_flow_stack_create(&config);
   if (!owner->stack) return 0;
   owner->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -405,6 +420,36 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_udp(
   } else if (result == PRODUCT_VPN_FLOW_STACK_ACCEPTED) result = PRODUCT_VPN_FLOW_STACK_FAILED;
   schedule(vm); return result;
 }
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_tcp(vlib_main_t *vm,
+  const uint8_t *l3,size_t length,const product_platform_packet_facts_t *platform,
+  uint64_t generation,uint64_t incarnation,uint64_t *session)
+{
+  *session=0;
+  if(!vm || !vm->thread_index || vlib_get_worker_index(vm->thread_index)>=active_owner_count())return PRODUCT_VPN_FLOW_STACK_NOT_RUNNING;
+  product_vpn_stack_owner_t *owner=&owners[vlib_get_worker_index(vm->thread_index)];
+  if(!owner->stack || owner->stop_requested || !owner->ready)return PRODUCT_VPN_FLOW_STACK_NOT_RUNNING;
+  product_vpn_flow_stack_transport_t selected={0};
+  product_vpn_flow_stack_input_result_t result=product_vpn_flow_stack_input_local_udp(owner->stack,
+    l3,length,platform,generation,incarnation,2,&selected);
+  if(result==PRODUCT_VPN_FLOW_STACK_ACCEPTED)*session=selected.session;
+  schedule(vm);return result;
+}
+product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_driver_tcp_status(unsigned index)
+{ return index<active_owner_count()?owners[index].snapshot:(product_vpn_flow_stack_snapshot_t){0}; }
+void product_vpn_flow_stack_driver_tcp_drain(vlib_main_t *vm)
+{
+  if(vm && vm->thread_index && vlib_get_worker_index(vm->thread_index)<active_owner_count())
+    local_tcp_drain(&owners[vlib_get_worker_index(vm->thread_index)]);
+}
+int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *vm,uint64_t generation,uint64_t session,
+  uint64_t token,const uint8_t *message,size_t length,const product_vpn_flow_stack_transport_t *binding)
+{
+  if(!vm || !vm->thread_index || vlib_get_worker_index(vm->thread_index)>=active_owner_count())return -1;
+  product_vpn_stack_owner_t *owner=&owners[vlib_get_worker_index(vm->thread_index)];
+  if(!owner->stack || owner->stop_requested)return -1;
+  int result=product_vpn_flow_stack_local_tcp_reply(owner->stack,generation,session,token,message,length,binding);
+  schedule(vm);return result;
+}
 int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *vm, uint64_t generation,
   uint64_t session, const uint8_t *message, size_t length, const product_vpn_flow_stack_transport_t *binding)
 {
@@ -414,7 +459,7 @@ int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *vm, uint64_t 
   return product_vpn_flow_stack_local_udp_reply_context(owner->stack, generation, session, message, length, binding);
 }
 uint64_t product_vpn_flow_stack_driver_dns_reservation(unsigned index)
-{ return index < active_owner_count() ? product_vpn_flow_stack_local_udp_reservation(owners[index].stack) : 0; }
+{ return index < active_owner_count() ? product_vpn_flow_stack_local_udp_reservation(owners[index].stack)+product_vpn_flow_stack_local_tcp_reservation(owners[index].stack) : 0; }
 int product_vpn_flow_stack_driver_dns_authorize(vlib_main_t *vm, uint64_t generation,
   uint64_t cookie, int fd)
 {
@@ -469,6 +514,7 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
   owner->output_next = 0; /* product-vpn-flow-stack-input -> product-packet-admit */
   u64 step_started = clock_ns();
   product_vpn_flow_stack_step_result_t result = product_vpn_flow_stack_step(owner->stack, 8, 200);
+  if(!owner->stop_requested)local_tcp_drain(owner);
   u64 step_elapsed = clock_ns() - step_started;
   owner->step_ns += step_elapsed;
   if (step_elapsed > owner->step_max_ns) owner->step_max_ns = step_elapsed;
@@ -486,6 +532,11 @@ VLIB_NODE_FN(product_vpn_flow_stack_input_node)
     product_vpn_socket_broker_close(&owner->broker);
     __atomic_store_n(&owner->ready, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&owner->stopped, 1, __ATOMIC_RELEASE);
+    fprintf(stderr,"dns.vpn_tcp event=stop generation=%llu owner=%u clients=%u pending=%u outputs=%u bytes=%llu frames=%llu acknowledged=%llu failed=%llu\n",
+      (unsigned long long)owner->generation,owner->index,owner->snapshot.local_tcp_sessions,
+      owner->snapshot.local_tcp_pending,owner->snapshot.local_tcp_outputs,
+      (unsigned long long)owner->snapshot.local_tcp_bytes,(unsigned long long)owner->snapshot.local_tcp_frames,
+      (unsigned long long)owner->snapshot.local_tcp_delivered,(unsigned long long)owner->snapshot.local_tcp_failed);
     fprintf(stderr, "s237 event=owner_stopped generation=%llu owner=%u thread=%u sessions=%u inputs=%u pbufs=%u sockets_created=%llu sockets_closed=%llu timer_fd=%d broker_fd=%d buffers=%llu obligations=%llu frames=%llu local_dns_sessions=%u\n",
       (unsigned long long)owner->generation, owner->index, vm->thread_index, owner->snapshot.sessions,
       owner->snapshot.input_packets, owner->snapshot.pbufs,

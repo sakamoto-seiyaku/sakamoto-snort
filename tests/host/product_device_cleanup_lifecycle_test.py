@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 from contextlib import contextmanager
 import unittest
@@ -142,6 +143,27 @@ class CleanupLifecycleTest(unittest.TestCase):
             def close(self, _): raise RuntimeError('trace hold')
         device=s313.Device.__new__(s313.Device); device.adb_trace=Trace(); device.capture_deadline=None
         with self.assertRaisesRegex(RuntimeError,'trace hold'): device.close_trace()
+
+    def test_prepared_stop_capture_reuses_reader_and_keeps_cleanup_stop_independent(self):
+        for actual_label in ('pending','cleanup'):
+            with self.subTest(actual_label=actual_label),tempfile.TemporaryDirectory() as temporary:
+                out=Path(temporary);device=s312.Device.__new__(s312.Device)
+                device.out=out;device.profile='root';device.reader=None
+                calls=[];device.app=lambda path:calls.append(('read',path)) or 'before query\n'
+                device.save=lambda name,value:((out/name).write_text(value),value)[1]
+                device.action=lambda *_:calls.append(('stop',)) or (_ for _ in ()).throw(RuntimeError('action witness'))
+                readers=[]
+                def launch(*_args,**kwargs):
+                    reader=Reader(kwargs['stdout']);readers.append(reader);return reader
+                with patch.object(s312.subprocess,'Popen',side_effect=launch):
+                    device.prepare_stop_capture('pending')
+                    calls.append(('query',))
+                    with self.assertRaisesRegex(RuntimeError,'action witness'):device.stop(actual_label)
+                self.assertEqual(calls,[('read','files/profiles/root/vpp/logs/vpp-stdout.log'),('query',),('stop',)])
+                self.assertEqual(len(readers),1);self.assertFalse(readers[0].terminated)
+                self.assertIsNone(device.reader);self.assertIsNone(device.prepared_stop_capture)
+                self.assertTrue((out/(actual_label+'-stop.log')).read_bytes())
+                self.assertEqual(json.loads((out/(actual_label+'-stop-reader-settlement.json')).read_text())['status'],'PASS')
 
     def test_stop_timeout_settles_the_owned_reader(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -299,6 +321,49 @@ class CleanupLifecycleTest(unittest.TestCase):
         with patch.object(s315.time,'monotonic',return_value=100):
             with device.cleanup_budget(): self.assertEqual(device.capture_deadline,145)
         self.assertEqual(device.capture_deadline,0)
+
+    def test_untraced_device_rejects_short_budget_before_external_spawn(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out=Path(temporary); (out/'dev').mkdir(); calls=out/'calls'
+            adb=out/'dev/adb'; adb.write_text('#!/bin/sh\nprintf called >> "'+str(calls)+'"\n')
+            adb.chmod(0o755)
+            device=s313.Device.__new__(s313.Device); device.out=out; device.adb_trace=None
+            device.capture_deadline=time.monotonic()+.068
+            with patch.object(s313,'ROOT',out):
+                with self.assertRaises(TimeoutError): device.adb('exec-out','cat','owned-file')
+            self.assertFalse(calls.exists())
+
+    def test_peer_short_lived_transport_retains_timeout_and_reaps_local_client(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            peer=s312.Peer.__new__(s312.Peer);peer.out=Path(temporary);peer.deadline=time.monotonic()+1.1
+            marker=peer.out/'started'
+            command=[sys.executable,'-c',"from pathlib import Path;import time;Path("+repr(str(marker))+").touch();time.sleep(10)"]
+            with self.assertRaises(subprocess.TimeoutExpired):peer.external(command,maximum=2,cwd=None)
+            self.assertTrue(marker.exists())
+            row=json.loads((peer.out/'operations.jsonl').read_text().splitlines()[-1])
+            self.assertEqual(row['outcome'],'timeout');self.assertTrue(row['local_reaped'])
+            self.assertNotIn('local_cleanup_error',row)
+
+    def test_peer_expiry_is_checked_before_winpath_or_launcher(self):
+        for module in (s312,s313):
+            with self.subTest(module=module.__name__),tempfile.TemporaryDirectory() as temporary:
+                with patch.object(module if module is s312 else module.support,'winpath',side_effect=RuntimeError('external winpath launched')):
+                    with self.assertRaises(TimeoutError): module.Peer(['127.0.0.1'],Path(temporary),deadline=time.monotonic()+.068)
+
+    def test_positive_expired_case_deadline_does_not_block_cleanup(self):
+        device=s315.Device.__new__(s315.Device); device.capture_deadline=90
+        with patch.object(s315.time,'monotonic',return_value=100):
+            with device.cleanup_budget(): self.assertEqual(device.capture_deadline,145)
+        self.assertEqual(device.capture_deadline,90)
+
+    def test_nested_cleanup_honors_the_reserved_phase_deadline(self):
+        device=s315.Device.__new__(s315.Device); device.capture_deadline=90
+        envelope=s315.CleanupEnvelope(65,[('stop',25),('wire',20),('trace',20)])
+        with patch.object(s315.time,'monotonic',return_value=100):
+            envelope.end=165
+            with envelope.phase(device,'stop'):
+                with device.cleanup_budget(45): self.assertEqual(device.capture_deadline,125)
+        self.assertEqual(device.capture_deadline,90)
 
     def test_cleanup_envelope_preserves_later_wire_reservation(self):
         device=types.SimpleNamespace(capture_deadline=0)
@@ -496,7 +561,7 @@ class CleanupLifecycleTest(unittest.TestCase):
         class Thread:
             def join(self, timeout): self.timeout=timeout
         with tempfile.TemporaryDirectory() as temporary:
-            peer=s312.Peer.__new__(s312.Peer); peer.deadline=15; peer.stop_path=Path(temporary)/'peer.stop'
+            peer=s312.Peer.__new__(s312.Peer); peer.deadline=0; peer.cleanup_deadline=15; peer.stop_path=Path(temporary)/'peer.stop'
             peer.process=Process(); peer.thread=Thread(); peer.messages=[dict(kind='stopped')]
             with patch.object(s312.time,'monotonic',return_value=10): peer.close()
             self.assertEqual(peer.process.timeout,5)
@@ -513,13 +578,13 @@ class CleanupLifecycleTest(unittest.TestCase):
             def is_alive(self): return True
             def join(self, timeout): pass
         with tempfile.TemporaryDirectory() as temporary:
-            out=Path(temporary); clock=iter((0,12,12,12))
-            with (patch.object(s313.support,'winpath',side_effect=lambda value:str(value)),
+            out=Path(temporary); clock=iter([0]*6+[12]*12)
+            with (patch.object(s313.support,'winpath',side_effect=lambda value,**_:str(value)),
                   patch.object(s313.subprocess,'Popen',return_value=Process()),
                   patch.object(s313.threading,'Thread',Thread),
                   patch.object(s313.Peer,'cleanup_failed_start',side_effect=RuntimeError('cleanup exhausted')),
                   patch.object(s313.time,'monotonic',side_effect=lambda:next(clock))):
-                with self.assertRaisesRegex(AssertionError,'peer lifecycle budget exhausted'): s313.Peer(['127.0.0.1'],out,deadline=12)
+                with self.assertRaisesRegex(TimeoutError,'peer lifecycle budget exhausted'): s313.Peer(['127.0.0.1'],out,deadline=12)
             receipt=json.loads((out/'peer-failed-0-unresolved.json').read_text())
             self.assertEqual(receipt['local_pid'],91)
             self.assertTrue(receipt['reader_alive'])

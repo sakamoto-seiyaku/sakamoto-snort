@@ -62,6 +62,9 @@ def witness(item):
     return result
 
 
+MIN_START_SECONDS = 1.0
+
+
 class AdbTrace:
     def __init__(self, output, adb, remote_parent='/data/local/tmp'):
         self.output, self.adb = Path(output), list(adb)
@@ -90,13 +93,20 @@ class AdbTrace:
                 timeout=min(timeout,remaining)
         return timeout
 
-    def execute(self, original, wire, timeout, check=True, kind='traced-control'):
-        timeout=self.budget_timeout(timeout)
+    def start_timeout(self, maximum, deadline=None):
+        timeout=self.budget_timeout(maximum)
+        if deadline is not None: timeout=min(timeout,deadline-time.monotonic())
+        if timeout < MIN_START_SECONDS:
+            raise TimeoutError('insufficient remaining budget to start an external client')
+        return timeout
+
+    def execute(self, original, wire, timeout, check=True, kind='traced-control', cwd=None):
+        timeout=self.start_timeout(timeout)
         started, monotonic = time.time_ns(), time.monotonic_ns()
         process, failure, stdout, stderr = None, None, b'', b''
         cleanup_error = None
         try:
-            process = subprocess.Popen(self.adb + list(map(str, wire)), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            process = subprocess.Popen(self.adb + list(map(str, wire)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
             stdout, stderr = process.communicate(timeout=timeout)
         except BaseException as error:
             failure = error
@@ -108,14 +118,14 @@ class AdbTrace:
                     if process.poll() is None:
                         process.kill()
                     try:
-                        stdout, stderr = process.communicate(timeout=self.budget_timeout(2))
+                        stdout, stderr = process.communicate(timeout=2)
                     except BaseException as drain:
                         if isinstance(drain, subprocess.TimeoutExpired):
                             stdout, stderr = drain.output or stdout, drain.stderr or stderr
                         for pipe in (process.stdout, process.stderr):
                             if pipe:
                                 pipe.close()
-                        process.wait(timeout=self.budget_timeout(2))
+                        process.wait(timeout=2)
                 except BaseException as error:
                     cleanup_error = repr(error)
             record = dict(started_ns=started, completed_ns=time.time_ns(), started_monotonic_ns=monotonic,
@@ -187,11 +197,12 @@ class AdbTrace:
         # Drain completed prior witnesses before issuing another mutation. This
         # makes final close bounded by the last operation rather than the full
         # matrix history, while preserving every remote receipt.
+        self.start_timeout(60,deadline)
         self.retire_completed(deadline)
+        self.start_timeout(60,deadline)
         assert not self.items, 'an unresolved trace obligation blocks a later control mutation'
         if not self.created:
-            remaining = deadline-time.monotonic() if deadline else 5
-            assert remaining > 0, 'end-to-end capture budget exhausted'
+            remaining = self.start_timeout(5,deadline)
             self.created = True  # An ambiguous mkdir still requires cleanup.
             create = ['exec-out', 'mkdir', self.remote]
             self.execute(create, create, min(5, remaining), kind='trace-owned-directory')
@@ -220,8 +231,7 @@ class AdbTrace:
         # completion witness; the caller's end-to-end deadline still wins.
         command_bytes = sum(len(part.encode()) for part in original)
         command_limit = 30 if command_bytes > 4096 else 10
-        timeout = min(command_limit, deadline-time.monotonic()) if deadline else 60
-        assert timeout > 0, 'end-to-end capture budget exhausted'
+        timeout = self.start_timeout(command_limit if deadline else 60,deadline)
         item = dict(label='adb-trace-' + str(number), original_argv=original, remote_stem=stem)
         self.items.append(item)
         try:
@@ -266,17 +276,20 @@ class AdbTrace:
                 if len(parts := line.split()) >= 4 and parts[0].isdigit()}
 
     def close(self, budget=None):
-        if self.closed or not self.created:
+        if self.closed or (not self.created and not self.unreaped):
             return
         if budget is not None:
-            assert budget>0, 'trace close requires a positive remaining cleanup budget'
-            self.close_deadline=time.monotonic()+budget
+            self.close_deadline=time.monotonic()+max(0,budget)
         try:
             for pid, process in list(self.unreaped.items()):
                 if process.poll() is None: process.kill()
-                process.wait(timeout=self.budget_timeout(2))
+                process.wait(timeout=2)
                 assert process.poll() is not None, 'owned local trace client remains'
                 del self.unreaped[pid]
+            if not self.created:
+                self.closed=True
+                self.save('COMPLETE_LOCAL_CLIENTS',owned_local_clients_reaped=True)
+                return
             for item in self.items:
                 self.collect(item)
             rows, known = self.process_rows('adb-trace-processes-before'), {}

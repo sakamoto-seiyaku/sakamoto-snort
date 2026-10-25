@@ -169,7 +169,7 @@ class Device(shared.Device):
                 time.sleep(.05)
             else:raise AssertionError('owned TCP wire witness did not become ready')
 
-    def wire_stop(self,interfaces=None):
+    def wire_stop(self,interfaces=None,*,defer_files=False):
         errors=[]
         for interface,item in list(self.witnesses.items()):
             if interfaces is not None and interface not in interfaces:continue
@@ -187,10 +187,27 @@ class Device(shared.Device):
                 if interface=='wlan0':self.verify_tcp_route_fences(rows)
                 processes=self.save('wire-'+interface+'-processes-after.txt',self.root('ps -A -o PID,UID,ARGS'))
                 assert not any((fields:=line.split())and fields[0]==str(item['pid'])for line in processes.splitlines())
-                self.adb('shell','rm','-f',item['stop'],item['log']);del self.witnesses[interface]
+                if defer_files:
+                    # Actor completion is proved now. Removing its already
+                    # archived files can follow the deadline-sensitive Stop.
+                    debt=dict(interface=interface,item=dict(item),raw_sha256=digest(self.out/('wire-final-'+interface+'.jsonl')))
+                    self.deferred_wire_files=getattr(self,'deferred_wire_files',[])+[debt]
+                else:self.adb('shell','rm','-f',item['stop'],item['log'])
+                del self.witnesses[interface]
             except BaseException as error:errors.append(error)
-        if not self.witnesses:self.adb('shell','rm','-f','/data/local/tmp/s317-wire','/data/local/tmp/s317-rules.txt')
+        if not self.witnesses and not getattr(self,'deferred_wire_files',[]):self.adb('shell','rm','-f','/data/local/tmp/s317-wire','/data/local/tmp/s317-rules.txt')
         if errors:raise BaseExceptionGroup('S317 exact owned wire cleanup retained HOLD',errors)
+
+    def settle_deferred_wire_files(self):
+        for debt in list(getattr(self,'deferred_wire_files',[])):
+            item=debt['item']
+            actual=self.adb('shell','sha256sum',item['log']).split()[0]
+            assert actual==debt['raw_sha256'],'terminal wire file changed after actor completion'
+            self.adb('shell','rm','-f',item['stop'],item['log'])
+            self.deferred_wire_files.remove(debt)
+            self.save('wire-'+debt['interface']+'-deferred-file-settlement.json',json.dumps(dict(
+                status='PASS_ARCHIVED_TERMINAL_FILES_REMOVED',debt=debt,original_actor_already_proved_absent=True),indent=2)+'\n')
+        if not self.witnesses:self.adb('shell','rm','-f','/data/local/tmp/s317-wire','/data/local/tmp/s317-rules.txt')
 
     def qualified_stop(self,label):
         result=super().qualified_stop(label)
@@ -665,7 +682,7 @@ def main():
         if (d.stop_owed or d.active)and getattr(d,'stop_retry_authorized',True):phase('stop',lambda _:d.stop('failure-cleanup'))
         if d.reader:phase('reader',lambda _:d.settle_reader('final'))
         if d.witnesses:phase('wire',lambda _:d.wire_stop())
-        if peer:phase('peer',lambda deadline:(setattr(peer,'deadline',deadline),peer.close()))
+        if peer:phase('peer',lambda deadline:(setattr(peer,'cleanup_deadline',deadline),peer.close()))
         phase('trace',lambda _:d.close_trace())
         if cleanup:result.update(cleanup_errors=cleanup,status='HOLD')
         result['completed_monotonic_ns']=time.monotonic_ns();(args.output/'result.json').write_text(json.dumps(result,indent=2)+'\n')

@@ -398,10 +398,13 @@ final class ProtocolFactsProbe {
         boolean partialFin = plan.optBoolean("dnsTcpPartialFin");
         boolean reset = plan.optBoolean("dnsTcpResetAfterWrite");
         boolean pipeline = plan.optBoolean("dnsTcpPipeline");
+        int gateAfterRead = plan.optInt("dnsTcpGateAfterRead", -1);
         org.json.JSONArray sizes = plan.optJSONArray("dnsTcpWriteSizes");
         if (queries.length() < 1 || queries.length() > 4096 || repeat < 1 || repeat > 4096
                 || queries.length() * repeat > 4096 || port != 53
                 || timeout < 100 || timeout > (plan.has("dnsProxyTimeoutMs") ? 12000 : 3000)
+                || gateAfterRead < -1 || gateAfterRead >= queries.length() * repeat
+                || (gateAfterRead >= 0 && pipeline)
                 || delay < 0 || delay > 1000 || readDelay < 0 || readDelay > 10000
                 || (receiveBuffer != 0 && (receiveBuffer < 1024 || receiveBuffer > 65536))
                 || (partialFin && !halfClose) || ((halfClose || reset) && !pipeline)
@@ -459,6 +462,21 @@ final class ProtocolFactsProbe {
                         exchanges.getJSONObject(i).put("replyHex", toHex(reply));
                     } catch (SocketTimeoutException expected) {
                         exchanges.getJSONObject(i).put("timedOut", true);
+                    }
+                    if (i == gateAfterRead) {
+                        // One explicitly selected read may pause for controller
+                        // publication. Its existing gate is bounded by 60s;
+                        // the default 15s socket-work budget is unchanged.
+                        long paused = SystemClock.elapsedRealtime();
+                        result.put("dnsTcpGateReadIndex", i).put("dnsTcpGateReleased", false);
+                        try {
+                            gate(app, nonce, result, "dns_tcp_read_" + i);
+                            result.put("dnsTcpGateReleased", true);
+                        } finally {
+                            long waited = SystemClock.elapsedRealtime() - paused;
+                            result.put("dnsTcpGateWaitMs", waited);
+                            deadline += waited;
+                        }
                     }
                 }
             }

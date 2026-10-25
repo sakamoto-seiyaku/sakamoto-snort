@@ -28,6 +28,14 @@ product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_udp(
   uint8_t *message, size_t capacity, size_t *length);
 int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *, uint64_t generation,
   uint64_t session, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
+product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local_tcp(vlib_main_t *,
+  const uint8_t *, size_t, const product_platform_packet_facts_t *, uint64_t generation,
+  uint64_t incarnation, uint64_t *session);
+void product_vpn_flow_stack_driver_tcp_drain(vlib_main_t *);
+/* Last owner-published bounded snapshot, read under the control-plane barrier. */
+product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_driver_tcp_status(unsigned owner);
+int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *, uint64_t generation, uint64_t session,
+  uint64_t token, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
 uint64_t product_vpn_flow_stack_driver_dns_reservation(unsigned owner);
 int product_vpn_flow_stack_driver_dns_authorize(vlib_main_t *, uint64_t generation,
   uint64_t cookie, int fd);

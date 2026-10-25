@@ -539,7 +539,7 @@ def main():
         if d.reader: finish('reader', lambda _: d.settle_reader('failure-cleanup'))
         if peer:
             def close_peer(deadline):
-                peer.deadline = deadline; peer.close()
+                peer.cleanup_deadline = deadline; peer.close()
             finish('peer', close_peer)
         finish('trace', lambda _: d.close_trace())
         if errors: result.update(status='HOLD', cleanup_errors=errors)

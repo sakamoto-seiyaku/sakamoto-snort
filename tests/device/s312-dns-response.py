@@ -32,8 +32,8 @@ def props(text):
                 if '=' in line and not line.startswith('#'))
 
 
-def winpath(path):
-    return subprocess.check_output(['wslpath', '-w', str(path)], text=True).strip()
+def winpath(path, timeout=5):
+    return subprocess.check_output(['wslpath', '-w', str(path)], text=True, timeout=timeout).strip()
 
 
 class Peer:
@@ -41,25 +41,31 @@ class Peer:
     def __init__(self, addresses, out, deadline=None):
         self.out, self.rows, self.messages, self.responses = out, [], [], {}
         self.deadline = deadline
+        self.start_timeout(12)
         self.lock, self.ready = threading.Lock(), threading.Event()
         self.plan = out / 'peer-plan.json'
         self.stop_path = out / 'peer.stop'
         self.publish()
         helper = ROOT / 'tests/device/helpers/s312_dns_peer.ps1'
         quote = lambda value: "'" + value.replace("'", "''") + "'"
-        command = ('& ' + quote(winpath(helper)) + ' -Addresses @('
+        command = ('& ' + quote(self.path(helper)) + ' -Addresses @('
                    + ','.join(map(quote, addresses)) + ') -StopPath '
-                   + quote(winpath(self.stop_path)) + ' -PlanPath ' + quote(winpath(self.plan)))
+                   + quote(self.path(self.stop_path)) + ' -PlanPath ' + quote(self.path(self.plan)))
         encoded = base64.b64encode(command.encode('utf-16le')).decode('ascii')
+        self.start_timeout(12)
         self.process = subprocess.Popen(['/init', '/mnt/c/Windows/System32/cmd.exe', '/C',
             'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
             '-EncodedCommand', encoded], cwd='/mnt/c', stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, errors='replace')
         self.thread = threading.Thread(target=self.read, daemon=True)
         self.thread.start()
-        if not self.ready.wait(self.budget_timeout(12)):
-            self.close()
-            raise RuntimeError('independent CNAME peer did not bind; inspect peer.log')
+        try:
+            if not self.ready.wait(self.budget_timeout(12)):
+                raise RuntimeError('independent CNAME peer did not bind; inspect peer.log')
+        except BaseException as error:
+            try:self.close()
+            except BaseException as cleanup:error.add_note('peer constructor cleanup retained HOLD: '+repr(cleanup))
+            raise
 
     def publish(self):
         temp = self.out / 'peer-plan.tmp'
@@ -67,14 +73,54 @@ class Peer:
         temp.replace(self.plan)
 
     def budget_timeout(self, maximum):
-        if self.deadline is None:return maximum
-        remaining=self.deadline-time.monotonic()
-        assert remaining>0,'peer lifecycle budget exhausted'
+        deadline=getattr(self,'cleanup_deadline',None)
+        if deadline is None:deadline=self.deadline
+        if deadline is None:return maximum
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise TimeoutError('peer lifecycle budget exhausted')
         return min(maximum,remaining)
+
+    def start_timeout(self, maximum):
+        timeout=self.budget_timeout(maximum)
+        if timeout<1:raise TimeoutError('insufficient remaining peer budget to start an external client')
+        return timeout
+
+    def path(self, value):
+        return winpath(value,timeout=self.start_timeout(5))
+
+    def external(self, command, maximum=20, cwd='/mnt/c'):
+        # The same recorder owns short-lived transports, including timeout
+        # partials and an independent finite local reap after the caller expires.
+        recorder=getattr(self,'local_recorder',None)
+        if recorder is None:
+            path=Path(__file__).resolve().parent/'helpers/s314_adb_trace.py'
+            spec=importlib.util.spec_from_file_location('peer_local_trace',path)
+            module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            recorder=self.local_recorder=module.AdbTrace(self.out,[])
+        recorder.operation_deadline=getattr(self,'cleanup_deadline',None)
+        if recorder.operation_deadline is None:recorder.operation_deadline=self.deadline
+        stdout,stderr,code,_=recorder.execute(command,command,self.start_timeout(maximum),check=False,kind='owned-peer-transport',cwd=cwd)
+        from types import SimpleNamespace
+        return SimpleNamespace(stdout=stdout.decode(errors='replace'),stderr=stderr.decode(errors='replace'),returncode=code)
+
+    def reap_launcher(self):
+        # Local launcher ownership is independent of remote process identity.
+        # Terminating this bridge never authorizes a signal to a remote PID.
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill();self.process.wait(timeout=2)
+        else:self.process.wait(timeout=2)
+        self.thread.join(timeout=2)
+
+    def begin_cleanup(self, seconds=45):
+        if getattr(self,'cleanup_deadline',None) is None:
+            self.cleanup_deadline=time.monotonic()+seconds
 
     def register(self, request, reply, gate=None):
         self.responses[request.hex()] = dict(request_hex=request.hex(), reply_hex=reply.hex(),
-                                            gate=winpath(gate) if gate else '')
+                                            gate=self.path(gate) if gate else '')
         self.publish()
 
     def read(self):
@@ -96,11 +142,20 @@ class Peer:
                        for r in self.messages)
 
     def close(self):
+        self.begin_cleanup()
         self.stop_path.touch()
-        self.process.wait(timeout=self.budget_timeout(15))
-        self.thread.join(timeout=self.budget_timeout(2))
-        assert self.process.returncode == 0, 'independent peer exited unsuccessfully'
-        assert any(r.get('kind') == 'stopped' for r in self.messages), 'peer stop acknowledgement absent'
+        try:
+            self.process.wait(timeout=self.budget_timeout(15))
+            self.thread.join(timeout=self.budget_timeout(2))
+            assert self.process.returncode == 0, 'independent peer exited unsuccessfully'
+            assert any(r.get('kind') == 'stopped' for r in self.messages), 'peer stop acknowledgement absent'
+        except BaseException as error:
+            try:self.reap_launcher()
+            except BaseException as cleanup:error.add_note('local peer launcher reap failed: '+repr(cleanup))
+            (self.out/'peer-close-hold.json').write_text(json.dumps(dict(status='HOLD',error=repr(error),
+                local_pid=self.process.pid,local_returncode=self.process.returncode,
+                reader_alive=self.thread.is_alive()),indent=2)+'\n')
+            raise
 
 
 class Device:
@@ -211,13 +266,26 @@ class Device:
         assert 'metadata.udp_check roundtrip=1 bounds_guard=1 variants=3 ip_padding_excluded=5 buffer_return=1' in topology
         return dict(owners=owners, generation=self.generation, profile=self.profile)
 
+    def prepare_stop_capture(self, label):
+        # Prepare this owned reader before a deadline-sensitive query. Product
+        # Stop remains a later independent action; cleanup may consume it too.
+        assert not getattr(self,'prepared_stop_capture',None) and not self.reader
+        self.save(label+'-before-stop.log',self.app(f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'))
+        path=self.out/(label+'-stop.log');log=path.open('wb')
+        try:errors=(self.out/(label+'-stop-reader.stderr')).open('wb')
+        except BaseException:log.close();raise
+        try:
+            self.reader=subprocess.Popen([str(ROOT/'dev/adb'),'-s',SERIAL,'exec-out',
+                'run-as',PKG,'timeout','20','tail','-n','+1','-f',
+                f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'],stdout=log,stderr=errors)
+        except BaseException:log.close();errors.close();raise
+        self.prepared_stop_capture=dict(label=label,path=path,log=log,errors=errors)
+
     def stop(self, label):
-        path = self.out / (label + '-stop.log')
-        self.save(label + '-before-stop.log', self.app(f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'))
-        with path.open('wb') as log, (self.out / (label + '-stop-reader.stderr')).open('wb') as errors:
-            self.reader = subprocess.Popen([str(ROOT / 'dev/adb'), '-s', SERIAL, 'exec-out',
-                'run-as', PKG, 'timeout', '20', 'tail', '-n', '+1', '-f',
-                f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'], stdout=log, stderr=errors)
+        if not getattr(self,'prepared_stop_capture',None):self.prepare_stop_capture(label)
+        capture=self.prepared_stop_capture;self.prepared_stop_capture=None
+        path=capture['path']
+        with capture['log'] as log,capture['errors'] as errors:
             try:
                 for _ in range(30):
                     if path.stat().st_size: break
@@ -243,6 +311,8 @@ class Device:
                     if reader.poll() is not None:
                         self.reader = None
                 self.save(label + '-stop-reader-settlement.json', json.dumps(settlement, indent=2)+'\n')
+                if path!=self.out/(label+'-stop.log'):
+                    self.save(label+'-stop.log',path.read_text())
         raw = path.read_text()
         for owner in range(self.owners):
             assert f'dns event=stop generation={self.generation} owner={owner} requests=0 codec_live_bytes=0 active_operations=0' in raw

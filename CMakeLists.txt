@@ -107,6 +107,8 @@ add_test(NAME sakamoto-product-dns-authorization-test COMMAND sakamoto-product-r
 add_test(NAME sakamoto-product-dns-idle-authorization-test COMMAND sakamoto-product-root-dns-io-test idle-authorization)
 add_test(NAME sakamoto-dns-wire-observation-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/dns_wire_observation_test.py")
 add_test(NAME sakamoto-dns-peer-gate-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/dns_peer_gate_test.py")
+add_test(NAME sakamoto-product-vpn-stopped-tcp-wire-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_device_vpn_tcp_stop_wire_test.py")
 add_test(NAME sakamoto-product-dns-readiness-contract
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_readiness_test.py")
 add_test(NAME sakamoto-product-root-dns-adapter-test
@@ -125,6 +127,12 @@ add_test(NAME sakamoto-product-vpn-dns-authority-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
     $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case vpn-authority)
+foreach(vpn_tcp_case off view)
+  add_test(NAME "sakamoto-product-vpn-dns-tcp-${vpn_tcp_case}-test"
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+      $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+      $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case "vpn-tcp-${vpn_tcp_case}")
+endforeach()
 add_test(NAME sakamoto-product-dns-idle-readiness-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>

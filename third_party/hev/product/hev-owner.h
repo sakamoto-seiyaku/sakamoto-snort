@@ -9,12 +9,13 @@
  * only its HEV implementation sees this header or the socket broker hook. */
 typedef struct hev_owner hev_owner_t;
 
-enum { HEV_OWNER_UID_KNOWN = 1, HEV_OWNER_CONTEXT_KNOWN = 2, HEV_OWNER_LOCAL_UDP = 4 };
+enum { HEV_OWNER_UID_KNOWN = 1, HEV_OWNER_CONTEXT_KNOWN = 2, HEV_OWNER_LOCAL_UDP = 4, HEV_OWNER_LOCAL_TCP = 8 };
 typedef struct {
   uint32_t uid;
   uint32_t network_context;
   uint64_t underlay_epoch;
   uint64_t flow_incarnation; /* admitted Product flow, zero if unavailable */
+  uint64_t local_reply_token; /* Local TCP DNS frame, zero for ordinary output. */
   uint64_t transport_session; /* Exact owner-local session; never an App ID. */
   uint8_t availability;
 } hev_owner_facts_t;
@@ -119,6 +120,7 @@ typedef struct {
   hev_owner_broker_fn broker;
   /* Synchronous complete datagram borrow; callback must not reenter owner. */
   void (*local_udp)(void *, uint64_t generation, uint64_t session, const uint8_t *, size_t);
+  void (*local_tcp_done)(void *, uint64_t generation, uint64_t session, uint64_t token, int success);
   void (*local_close)(void *, uint64_t generation, uint64_t session);
   hev_owner_trace_fn trace;
   void *opaque;
@@ -151,6 +153,9 @@ typedef struct {
   uint64_t task_quanta, steps, wrong_owner, stale_generation;
   uint32_t sessions, input_packets, input_peak, pbufs, pbuf_peak;
   uint32_t local_udp_sessions, local_udp_peak;
+  uint32_t local_tcp_sessions, local_tcp_peak, local_tcp_pending, local_tcp_outputs;
+  uint32_t local_tcp_pending_peak, local_tcp_output_peak;
+  uint64_t local_tcp_bytes, local_tcp_peak_bytes, local_tcp_frames, local_tcp_delivered, local_tcp_failed;
   uint32_t pcbs, pcb_peak, sockets, socket_peak, input_pbufs;
   uint64_t pcb_allocations, pcb_frees;
   uint64_t faults[HEV_OWNER_FAULT_COUNT];
@@ -193,6 +198,17 @@ int hev_owner_local_udp_reply(hev_owner_t *, uint64_t generation, uint64_t sessi
   const uint8_t *, size_t);
 int hev_owner_local_udp_reply_context(hev_owner_t *, uint64_t generation, uint64_t session,
   const uint8_t *, size_t, const hev_owner_binding_t *);
+/* Owner-local byte-stream endpoint. Complete frames are copied out only after
+ * input/step has returned, so callbacks never reenter HEV. Every frame gets an
+ * independent generation/session/token; DNS IDs carry no transport authority. */
+#define HEV_OWNER_LOCAL_TCP_CLIENTS 8U
+#define HEV_OWNER_LOCAL_TCP_PENDING 128U
+#define HEV_OWNER_LOCAL_TCP_BYTES (2U * 1024U * 1024U)
+int hev_owner_local_tcp_next(hev_owner_t *, uint64_t generation, uint64_t *session,
+  uint64_t *token, uint8_t *message, size_t capacity, size_t *length);
+int hev_owner_local_tcp_reply(hev_owner_t *, uint64_t generation, uint64_t session,
+  uint64_t token, const uint8_t *, size_t, const hev_owner_binding_t *);
+uint64_t hev_owner_local_tcp_reservation(const hev_owner_t *);
 hev_owner_step_result_t hev_owner_step (hev_owner_t *owner,
                                        uint32_t quanta, uint32_t max_us);
 int hev_owner_broker_complete (hev_owner_t *owner, uint64_t generation,

@@ -830,7 +830,16 @@ impl ObservationStore {
                 continue;
             }
             let key = record.key();
-            if let Some(previous) = self.state.dns.get(&key) {
+            let legacy_key = record.legacy_proxy_key();
+            let previous = self.state.dns.get(&key).or_else(|| {
+                legacy_key.as_ref().and_then(|legacy| self.state.dns.get(legacy))
+                    .filter(|previous| previous.record.key() == key)
+            });
+            // Preserve legacy rows and their original receipt clocks. A
+            // legacy numeric-key collision in a different actual scope must
+            // not reject a new request, while exact replay and true conflicts
+            // in the same scope retain the existing immutable-row behavior.
+            if let Some(previous) = previous {
                 if previous.record != *record {
                     self.state.meta.dns_rejected = self.state.meta.dns_rejected.saturating_add(1);
                     self.mark_gap();
@@ -1940,7 +1949,7 @@ impl ObservationStore {
 
     fn validate_state(state: &State) -> Result<(), String> {
         Self::validate_bounds(state)?;
-        if state.dns.iter().any(|(key, row)| !row.record.valid() || *key != row.record.key()
+        if state.dns.iter().any(|(key, row)| !row.record.valid() || !row.record.storage_key_matches(key)
             || row.received_clock.as_ref().is_some_and(|clock| !clock.valid())) {
             return Err("observation_dns_record".into());
         }

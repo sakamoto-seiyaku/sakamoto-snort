@@ -193,6 +193,13 @@ static int root_dns_tcp_capture(vlib_main_t *vm,u32 index,product_packet_lease_t
  }
  return 0;
 }
+static int vpn_dns_tcp_capture(vlib_main_t *vm,u32 index,product_packet_lease_t *lease,
+ const product_policy_snapshot_t *snapshot,const product_flow_entry_observation_t *flow) {
+ (void)vm;(void)index;(void)lease;(void)flow;
+ /* The extracted policy/completion operations explicitly keep replacement OFF. */
+ assert(snapshot->bank && !snapshot->bank->dns.enabled);
+ return 0;
+}
 static product_packet_batch_stats_t product_packet_batch_stats[PRODUCT_GRAPH_WORKERS + 1];
 static char retired_domain_marker;
 static atomic_uint retired_destroyed, wait_seen, writer_done, wait_enabled;

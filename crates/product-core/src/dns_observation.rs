@@ -172,6 +172,20 @@ impl DnsRecord {
 
     fn valid_proxy(&self) -> bool {
         let admission_resource = self.proxy_flags & 8 != 0;
+        // A selected HEV TCP session remains local after replacement is OFF.
+        // Its later messages can have no selected upstream and still produce
+        // real query/error/delivery observations. Keep that absence explicit.
+        let local_without_upstream = self.adapter_profile == 2 && self.protocol == 6
+            && self.proxy_flags == 1 && self.upstream_transport == 1
+            && self.upstream_family == 0 && self.upstream_port == 0
+            && self.upstream_address == [0; 16] && self.upstream_session == 0
+            && self.candidate_count == 0 && self.matched_requests == 0
+            && self.name_index == 0 && self.name_source == 0
+            && self.chain_status == 0 && self.correlation == 0 && self.rcode == 0
+            && (self.stage != 4 || self.return_provenance == 3)
+            && matches!((self.stage, self.proxy_result, self.reply_rcode),
+                (1, 0 | 10, 0) | (1 | 4, 2, 5) | (1 | 4, 4, 1)
+                | (1 | 4, 5, 4) | (3 | 4, 6 | 9, 2));
         let common = self.generation != 0 && self.token != 0 && self.owner < 62 && matches!(self.adapter_profile, 1 | 2)
             && matches!(self.family,4|6) && matches!(self.protocol,6|17) && self.resolver_port == 53
             && self.route_revision != 0
@@ -215,8 +229,9 @@ impl DnsRecord {
                 && self.policy_hash == 0 && self.return_token == 0 && self.return_winner == 0
         } else {
             self.request_attempt != 0 && matches!(self.upstream_transport,1|2)
-                && matches!(self.upstream_family,4|6) && self.upstream_port != 0
-                && (self.upstream_family != 4 || self.upstream_address[4..] == [0;12])
+                && ((matches!(self.upstream_family,4|6) && self.upstream_port != 0
+                    && (self.upstream_family != 4 || self.upstream_address[4..] == [0;12]))
+                    || local_without_upstream)
                 && (self.delivery <= 5 || self.delivery == 8) && (self.client_udp_capacity == 0 || self.client_udp_capacity >= 512)
                 && (if self.protocol == 6 { self.reply_capacity == 65535 }
                     else { (512..=1232).contains(&self.reply_capacity) })
@@ -227,12 +242,31 @@ impl DnsRecord {
     pub(crate) fn key(&self) -> String {
         let base = format!("{:020}:{:020}:{:04}", self.generation, self.token, self.owner);
         if self.proxy_flags & 1 != 0 {
-            format!("{base}:proxy:{:020}:{}:{:02}:{:020}",self.request_attempt,self.stage,self.name_index,self.return_token)
+            // Tokens and attempt numbers belong to their actual Adapter,
+            // transport session and resolution view. In particular HEV TCP
+            // tokens need not be globally disjoint from TUN/NFQUEUE tokens.
+            // Hex scope components keep the complete key below the existing
+            // 192-byte store limit, including every u64 at its maximum value.
+            format!("{base}:proxy2:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{}:{:x}:{:x}",
+                self.adapter_profile, self.protocol, self.family, self.incarnation,
+                self.transport_session, self.network_revision, self.route_revision,
+                self.request_attempt, self.stage, self.name_index, self.return_token)
         } else if self.protocol == 6 {
             format!("{base}:tcp:{:020}:{}:{:02}:{}", self.message_sequence,
                 self.stage, self.name_index, self.tcp_continuation)
         } else if self.stage == 1 { base }
         else { format!("{base}:{}:{:02}", self.stage, self.name_index) }
+    }
+
+    pub(crate) fn legacy_proxy_key(&self) -> Option<String> {
+        (self.proxy_flags & 1 != 0).then(|| format!(
+            "{:020}:{:020}:{:04}:proxy:{:020}:{}:{:02}:{:020}",
+            self.generation, self.token, self.owner, self.request_attempt,
+            self.stage, self.name_index, self.return_token))
+    }
+
+    pub(crate) fn storage_key_matches(&self, key: &str) -> bool {
+        self.key() == key || self.legacy_proxy_key().is_some_and(|legacy| legacy == key)
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {

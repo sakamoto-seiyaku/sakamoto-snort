@@ -126,6 +126,7 @@ typedef struct
   /* Selection belongs to this incarnation, including closing/config-off late
    * packets. It is not a cached DNS permission or a cross-flow association. */
   uint8_t root_dns_tcp_taken;
+  uint8_t vpn_dns_tcp_taken, vpn_dns_tcp_decided;
   product_lpi_state_t lpi;
   product_sni_state_t sni;
   /* key.protocol selects the independent lifetime/offset representation.
@@ -310,6 +311,8 @@ void product_flow_sni_stop (product_flow_entry_t *, unsigned);
 void product_flow_sni_observe (product_flow_entry_t *, const product_packet_facts_t *,
                                const uint8_t *, uint32_t);
 
+int product_flow_entry_select_vpn_dns_tcp(product_flow_runtime_t *, uint32_t slot,
+  uint64_t generation, uint64_t incarnation, int local);
 int product_flow_entry_take_root_dns_tcp(product_flow_runtime_t *, uint32_t slot,
   uint64_t generation, uint64_t incarnation);
 

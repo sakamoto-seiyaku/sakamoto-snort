@@ -943,3 +943,13 @@ int product_flow_entry_take_root_dns_tcp(product_flow_runtime_t *pool,uint32_t s
   if(!entry->in_use || !entry->linked || entry->incarnation!=incarnation || entry->key.protocol!=6)return 0;
   entry->root_dns_tcp_taken=1;return 1;
 }
+
+int product_flow_entry_select_vpn_dns_tcp(product_flow_runtime_t *pool,uint32_t slot,
+  uint64_t generation,uint64_t incarnation,int local)
+{
+  if(!pool || generation!=pool->stats.generation || slot>=pool->stats.capacity)return 0;
+  product_flow_entry_t *entry=&pool->slots[slot].entry;
+  if(!entry->in_use || !entry->linked || entry->incarnation!=incarnation || entry->key.protocol!=6)return 0;
+  if(entry->vpn_dns_tcp_decided)return entry->vpn_dns_tcp_taken==!!local;
+  entry->vpn_dns_tcp_decided=1;entry->vpn_dns_tcp_taken=!!local;return 1;
+}

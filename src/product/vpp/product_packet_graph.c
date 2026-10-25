@@ -4825,6 +4825,12 @@ product_packet_graph_dns_tcp_prepare (vlib_main_t *vm, u32 buffer_index,
   context->vm = vm; context->lease = lease; context->snapshot = snapshot; context->buffer_index = buffer_index;
   context->flow.entry = product_flow_entry_current (product_packet_graph_main.flow_pools[owner],
     &lease->assignment, identity.generation, identity.now_us, &context->flow.slot);
+  if(context->flow.entry && context->flow.entry->vpn_dns_tcp_taken &&
+      (lease->platform.provenance==PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
+       lease->platform.provenance==PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN))return;
+  if(snapshot->bank->dns.enabled && lease->platform.provenance==PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
+      (lease->facts.tcp_flags&0x17)==2 &&
+      (!context->flow.entry || !context->flow.entry->vpn_dns_tcp_decided))return;
   if (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN &&
       context->flow.entry && context->flow.entry->incarnation != identity.incarnation)
     { context->flow.entry = NULL; context->flow.slot = UINT32_MAX; }
@@ -4989,7 +4995,8 @@ product_packet_graph_policy_on_owner (
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);
   int root_tcp = result == PRODUCT_PACKET_OK &&
-    root_dns_tcp_capture (vm, buffer_index, lease, &snapshot, &observation);
+    (root_dns_tcp_capture(vm,buffer_index,lease,&snapshot,&observation) ||
+     vpn_dns_tcp_capture(vm,buffer_index,lease,&snapshot,&observation));
   if (result == PRODUCT_PACKET_OK && !root_tcp && observation.entry &&
       lease->facts.protocol == 6 &&
       (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_ROOT_NFQUEUE ||
