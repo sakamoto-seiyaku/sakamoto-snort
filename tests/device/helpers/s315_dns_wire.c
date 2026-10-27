@@ -1,4 +1,4 @@
-/* Read-only bounded wlan0/lo DNS wire witness. No Product calls or injection. */
+/* Read-only bounded physical Wi-Fi/lo DNS wire witness. No Product calls or injection. */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <linux/if_ether.h>
@@ -14,7 +14,8 @@
 static unsigned u16 (const unsigned char *p) { return p[0] * 256U + p[1]; }
 int main (int argc, char **argv) {
   if (argc < 5 || argc > 9 || getuid () != 0 ||
-      (strcmp (argv[1], "wlan0") && strcmp (argv[1], "lo") &&
+      (strcmp (argv[1], "lo") &&
+       (strncmp (argv[1], "wlan", 4) || !argv[1][4] || strspn (argv[1] + 4, "0123456789") != strlen (argv[1] + 4)) &&
        (strncmp (argv[1], "tun", 3) || !argv[1][3] || strspn (argv[1] + 3, "0123456789") != strlen (argv[1] + 3))) ||
       strncmp (argv[2], "/data/local/tmp/s315-wire-", 26)) return 2;
   unsigned char addresses[6][16] = {{0}}; int families[6];
@@ -27,7 +28,7 @@ int main (int argc, char **argv) {
     .sll_ifindex=(int)if_nametoindex(argv[1])};
   if (fd < 0 || !link.sll_ifindex || bind (fd, (void *)&link, sizeof(link))) { perror("wire bind");return 1; }
   setvbuf (stdout, NULL, _IOLBF, 0);
-  printf ("{\"kind\":\"ready\",\"interface\":\"%s\"}\n", argv[1]);
+  printf ("{\"kind\":\"ready\",\"interface\":\"%s\",\"ifindex\":%d}\n", argv[1], link.sll_ifindex);
   struct timespec began, now; if (clock_gettime(CLOCK_MONOTONIC,&began)) return 1;
   unsigned matched=0;size_t retained=0;const char *reason="requested";
   while (access(argv[2],F_OK)) {
@@ -81,6 +82,9 @@ int main (int argc, char **argv) {
   }
   struct {unsigned packets,dropped;} stats={0};socklen_t stats_size=sizeof(stats);
   int stats_ok=!getsockopt(fd,SOL_PACKET,PACKET_STATISTICS,&stats,&stats_size)&&stats_size==sizeof(stats);
-  close(fd);printf("{\"kind\":\"stopped\",\"reason\":\"%s\",\"matched\":%u,\"payload_bytes\":%zu,\"stats_ok\":%s,\"socket_packets\":%u,\"socket_drops\":%u}\n",
-    reason,matched,retained,stats_ok?"true":"false",stats.packets,stats.dropped);return 0;
+  close(fd);
+  if (clock_gettime(CLOCK_MONOTONIC,&now)) {perror("wire terminal clock");return 1;}
+  printf("{\"kind\":\"stopped\",\"reason\":\"%s\",\"matched\":%u,\"payload_bytes\":%zu,\"stats_ok\":%s,\"socket_packets\":%u,\"socket_drops\":%u,\"mono_ns\":%llu,\"timestamp_scope\":\"userspace_after_socket_close\"}\n",
+    reason,matched,retained,stats_ok?"true":"false",stats.packets,stats.dropped,
+    (unsigned long long)now.tv_sec*1000000000+(unsigned long long)now.tv_nsec);return 0;
 }

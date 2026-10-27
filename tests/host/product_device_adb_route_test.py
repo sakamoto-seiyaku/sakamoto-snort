@@ -26,6 +26,41 @@ def receive(stream):
 
 
 class RouteTest(unittest.TestCase):
+    def test_explicit_finite_budget_preserves_legacy_defaults(self):
+        legacy=route_module.AdbRoute(Path('/unused'),Path('/bin/true'))
+        self.assertEqual((legacy.max_connections,legacy.cleanup_budget,legacy.max_active),(4096,0,16))
+        expanded=route_module.AdbRoute(Path('/unused'),Path('/bin/true'),max_connections=32768,cleanup_connections=4096)
+        self.assertEqual((expanded.max_connections,expanded.cleanup_budget,expanded.max_active),(32768,4096,16))
+        for options in ({'max_connections':32769},{'cleanup_connections':4097},{'max_active':17}):
+            with self.subTest(options=options),self.assertRaises(AssertionError):
+                route_module.AdbRoute(Path('/unused'),Path('/bin/true'),**options)
+
+    def test_exhausted_main_reserves_cleanup_without_reset_or_replay(self):
+        listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(4);listener.settimeout(2)
+        self.addCleanup(listener.close);received=[];errors=[]
+        def serve():
+            try:
+                for _ in range(2):
+                    stream,_=listener.accept()
+                    with stream:received.append(receive(stream));stream.sendall(b'ack')
+            except BaseException as error:errors.append(error)
+        thread=threading.Thread(target=serve);thread.start();self.addCleanup(lambda:thread.join(timeout=3))
+        with self.assertRaisesRegex(AssertionError,'HOLD'):
+            with route_module.AdbRoute(self.output,Path('/bin/true'),listener.getsockname(),max_connections=1,cleanup_connections=1)as route:
+                self.assertEqual(self.exchange(route,b'main exactly once'),b'ack')
+                with socket.create_connection(route.endpoint,timeout=2)as client:self.assertEqual(client.recv(1),b'')
+                self.assertEqual(received,[b'main exactly once'])
+                route.cleanup_marker.write_text('cleanup\n')
+                self.assertEqual(self.exchange(route,b'cleanup exactly once'),b'ack')
+                route.cleanup_marker.unlink() # The phase and finite count cannot reset.
+                with socket.create_connection(route.endpoint,timeout=2)as client:self.assertEqual(client.recv(1),b'')
+        thread.join(timeout=2);self.assertFalse(errors)
+        self.assertEqual(received,[b'main exactly once',b'cleanup exactly once'])
+        receipt=json.loads((self.output/'receipt.json').read_text())
+        self.assertEqual((receipt['accepted'],receipt['cleanup_connections'],receipt['cleanup_started_at_connection']),(4,2,3))
+        self.assertEqual([row['phase']for row in receipt['errors']],['main','cleanup'])
+        self.assertEqual(receipt['remaining_sockets'],0);self.assertEqual(receipt['live_threads'],[])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='s314 route ')
         self.addCleanup(self.temp.cleanup)

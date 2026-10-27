@@ -333,7 +333,7 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .domain_lists = query->packet.domain_lists, .adapter_profile = owner->profile,
     .packet_uid = event->input.capture_present ? event->input.capture_uid : packet->uid_known ? packet->uid : UINT32_MAX,
     .route_revision = event->key.route_revision, .request_attempt = event->key.attempt,
-    .upstream_session = owner->current_upstream_session,
+    .upstream_session = event->cached ? 0 : owner->current_upstream_session,
     .transport_session = event->input.identity.transport_session,
     .underlay_epoch = owner->profile == 2 ? owner->current_binding.epoch : event->input.identity.underlay_epoch,
     .upstream_port = event->route.port, .upstream_family = event->route.family,
@@ -341,7 +341,7 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .reply_rcode = event->rcode, .client_udp_capacity = query->udp_capacity,
     .reply_capacity = event->client_capacity, .output_bytes = event->output_bytes,
     .proxy_flags = PRODUCT_DNS_PROXY_RECORD | (event->truncated ? PRODUCT_DNS_PROXY_TRUNCATED : 0) |
-      (event->response ? PRODUCT_DNS_PROXY_UPSTREAM_ANSWER : 0),
+      (event->response ? (event->cached ? PRODUCT_DNS_PROXY_CACHE_ANSWER : PRODUCT_DNS_PROXY_UPSTREAM_ANSWER) : 0),
     .return_token = event->delivery == 1 && event->output_bytes ? owner->last_reply_token : 0,
   };
   record.packet_availability = event->input.capture_present ? event->input.capture_availability : record.availability;
@@ -885,7 +885,7 @@ void product_root_dns_adapter_stop (vlib_main_t *vm)
       root_dns_owner_t *owner = &root_dns_owners[i];
       if (owner->replies) clib_panic ("Root DNS stop before native return reclamation");
       product_dns_proxy_close (owner->proxy); owner->proxy = NULL;
-      fprintf (stderr, "dns.proxy event=stop generation=%llu owner=%u transactions=0 upstream_sockets=0 raw_sockets=%u replies=%u raw_opened=%llu raw_closed=%llu returned=%llu\n",
+      fprintf (stderr, "dns.proxy event=stop generation=%llu owner=%u transactions=0 upstream_sockets=0 cache_entries=0 cache_bytes=0 raw_sockets=%u replies=%u raw_opened=%llu raw_closed=%llu returned=%llu\n",
         (unsigned long long) owner->generation, i, (owner->raw4 >= 0) + (owner->raw6 >= 0), owner->replies,
         (unsigned long long) owner->raw_opened, (unsigned long long) owner->raw_closed, (unsigned long long) owner->returned);
     }
@@ -1543,6 +1543,12 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
       if (owner->route.family) inet_ntop (owner->route.family == 4 ? AF_INET : AF_INET6,
         owner->route.address, address, sizeof (address));
       product_dns_proxy_resources_t core = product_dns_proxy_resources (owner->proxy);
+      vlib_cli_output(vm,"dns.cache owner=%u generation=%llu route_revision=%llu network_revision=%llu entries=%u entry_limit=512 high_water=%u bytes=%llu byte_limit=2097152 high_water_bytes=%llu hits=%llu misses=%llu evicted=%llu skipped=%llu",
+        i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,
+        (unsigned long long)owner->network_revision,core.cache_entries,core.cache_high_water,
+        (unsigned long long)core.cache_bytes,(unsigned long long)core.cache_high_water_bytes,
+        (unsigned long long)core.cache_hits,(unsigned long long)core.cache_misses,
+        (unsigned long long)core.cache_evictions,(unsigned long long)core.cache_skipped);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
       product_root_dns_tcp_status_t tcp=product_root_dns_tcp_io_status(owner->tcp_io);
       if(owner->profile==2) {

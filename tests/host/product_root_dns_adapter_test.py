@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
 parser.add_argument('--records')
 parser.add_argument('--evidence',type=Path)
-parser.add_argument('--case', choices=('all', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view'), default='all')
+parser.add_argument('--case', choices=('all', 'cache', 'cache-resource', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view', 'shutdown-prefix'), default='all')
 args = parser.parse_args()
 cache = Path(args.libraries[1]).resolve().parent / 'CMakeCache.txt'
 batch = re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$', cache.read_text(), re.M)
@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-root-dns-adapter-') as tmp:
         '-I'+str(directory), '-I'+str(ROOT/'src/product/vpp'), '-I'+str(ROOT/'src/product/include'),
         str(ROOT/'tests/host/product_root_dns_adapter_test.c'),
         str(ROOT/'src/product/vpp/product_packet.c'), str(ROOT/'src/product/vpp/product_flow_udp.c'),
-        *args.libraries, '-lm', '-o', str(binary)], check=True)
+        *args.libraries, '-Wl,--wrap=malloc', '-lm', '-o', str(binary)], check=True)
     command = [str(binary)]
     if args.case != 'all':
         command.append(args.case)

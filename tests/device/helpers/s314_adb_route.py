@@ -14,13 +14,17 @@ import time
 class AdbRoute:
     def __init__(self, output, client, upstream=('127.0.0.1', 5037), *,
                  connect_timeout=.5, attempts=6, max_active=16, max_connections=4096,
-                 connection_lifetime=65):
+                 connection_lifetime=65, cleanup_connections=0):
         self.output, self.client, self.upstream = Path(output), Path(client), upstream
         assert 0 < connect_timeout <= .5 and 1 <= attempts <= 6
-        assert 1 <= max_active <= 16 and 1 <= max_connections <= 4096
+        assert 1 <= max_active <= 16 and 1 <= max_connections <= 32768
+        assert 0 <= cleanup_connections <= 4096
         assert 0 < connection_lifetime <= 125
         self.connect_timeout, self.attempts = connect_timeout, attempts
         self.max_active, self.max_connections = max_active, max_connections
+        self.cleanup_budget, self.cleanup_used = cleanup_connections, 0
+        self.cleanup_marker = self.output/'cleanup.phase'
+        self.cleanup_started_at_connection = None
         self.connection_lifetime = connection_lifetime
         self.stop = threading.Event()
         self.closing = threading.Event()
@@ -177,14 +181,21 @@ class AdbRoute:
                 with self.lock:
                     self.accepted += 1
                     identifier = self.accepted
+                    if self.cleanup_started_at_connection is not None or(self.cleanup_budget and self.cleanup_marker.is_file()):
+                        if self.cleanup_started_at_connection is None:
+                            self.cleanup_started_at_connection = identifier
+                        self.cleanup_used += 1
+                    cleanup = self.cleanup_started_at_connection is not None
+                    capacity = self.cleanup_used <= self.cleanup_budget if cleanup else identifier <= self.max_connections
                     allowed = (address[0] == '127.0.0.1' and self.active < self.max_active
-                               and identifier <= self.max_connections)
+                               and capacity)
                     if allowed:
                         self.active += 1
                         self.peak_active = max(self.peak_active, self.active)
                         self.sockets.add(local)
                     else:
-                        self.errors.append(dict(connection=identifier, error='bounded route capacity exceeded'))
+                        self.errors.append(dict(connection=identifier, phase='cleanup'if cleanup else'main',
+                                                error='bounded route capacity exceeded'))
                 if not allowed:
                     self.release(local)
                     continue
@@ -275,6 +286,8 @@ class AdbRoute:
         receipt = dict(status='COMPLETE_TASK_LOCAL_ROUTE' if not alive and not remaining and not self.errors and not primary_error else 'HOLD',
                        endpoint=list(self.endpoint) if self.endpoint else None, upstream=list(self.upstream), accepted=self.accepted,
                        peak_active=self.peak_active, max_active=self.max_active, max_connections=self.max_connections,
+                       cleanup_connection_budget=self.cleanup_budget, cleanup_connections=self.cleanup_used,
+                       cleanup_started_at_connection=self.cleanup_started_at_connection,
                        connect_timeout=self.connect_timeout, max_connect_attempts=self.attempts,
                        connection_lifetime=self.connection_lifetime,
                        remaining_sockets=remaining, live_threads=alive, errors=self.errors,

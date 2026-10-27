@@ -101,6 +101,27 @@ class Peer(tcp.Peer):
 
 
 class Device(tcp.Device):
+    physical_interface='wlan0'
+
+    def select_physical_interface(self,label):
+        routes={family:self.save(label+f'-physical-route{family}.txt',self.root(
+            f'ip -{family} route get '+shlex.quote(endpoint)))for family,endpoint in(
+                (4,self.args.endpoint4),(6,self.args.endpoint6))}
+        selected=[re.search(r'\bdev (\S+)',route)for route in routes.values()]
+        assert all(selected) and len({item[1]for item in selected})==1,'selected peers use different physical interfaces'
+        interface=selected[0][1]
+        assert re.fullmatch(r'wlan\d+',interface),'selected peer is outside the physical Wi-Fi test path'
+        if self.witnesses:assert interface==self.physical_interface,'physical interface changed while collector is active'
+        self.physical_interface=interface
+        return interface
+
+    def pin_wire_interface(self,interface,rows):
+        ready,=[row for row in rows if row.get('kind')=='ready']
+        assert ready['interface']==interface and isinstance(ready['ifindex'],int)and ready['ifindex']>0
+        item=self.witnesses[interface]
+        assert item.setdefault('ifindex',ready['ifindex'])==ready['ifindex'],'owned collector binding changed'
+        return ready['ifindex']
+
     def __init__(self, args):
         super().__init__(args)
         self.capture_deadline=time.monotonic()+1200
@@ -365,6 +386,7 @@ class Device(tcp.Device):
             self.save(label+'-peer-acquisition.json',json.dumps(receipt,indent=2)+'\n')
 
     def wire_start(self):
+        self.select_physical_interface('wire-start')
         source=ROOT/'tests/device/helpers/s315_dns_wire.c';binary=self.out/'s315-wire'
         subprocess.run([self.args.cc,'-O2','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)],check=True)
         self.adb('push',binary,'/data/local/tmp/s315-wire');self.adb('shell','chmod','755','/data/local/tmp/s315-wire')
@@ -373,7 +395,7 @@ class Device(tcp.Device):
         subprocess.run([self.args.cc,'-O2','-Wall','-Wextra','-Werror',str(stale_source),'-o',str(stale_binary)],check=True)
         self.adb('push',stale_binary,'/data/local/tmp/s315-stale-return');self.adb('shell','chmod','755','/data/local/tmp/s315-stale-return')
         assert self.adb('shell','sha256sum','/data/local/tmp/s315-stale-return').split()[0]==digest(stale_binary)
-        for interface in ('wlan0','lo'):
+        for interface in (self.physical_interface,'lo'):
             stop='/data/local/tmp/s315-wire-'+interface+'.stop';log='/data/local/tmp/s315-wire-'+interface+'.jsonl'
             self.witnesses[interface]=dict(pid=None,start=None,uid=None,exe=None,stop=stop,log=log,
                 launch_pending=True)
@@ -389,13 +411,18 @@ class Device(tcp.Device):
             self.witnesses[interface].update(start=start,uid=uid,exe=rows[2])
             deadline=time.monotonic()+5
             while time.monotonic()<deadline:
-                if'"kind":"ready"'in self.adb('shell','cat',log,check=False):break
+                raw=self.adb('shell','cat',log,check=False)
+                if'"kind":"ready"'in raw:
+                    self.pin_wire_interface(interface,[json.loads(line)for line in raw.splitlines()if line.startswith('{')]);break
                 time.sleep(.1)
             else:raise AssertionError('owned wire witness did not start: '+interface)
 
-    def wire(self, label, interface='wlan0'):
+    def wire(self, label, interface=None):
+        interface=self.physical_interface if interface is None else interface
         raw=self.save(label+'-'+interface+'.jsonl',self.adb('shell','cat',self.witnesses[interface]['log']))
-        return [json.loads(line)for line in raw.splitlines()if line.startswith('{')]
+        rows=[json.loads(line)for line in raw.splitlines()if line.startswith('{')]
+        if any(row.get('kind')=='ready'for row in rows):self.pin_wire_interface(interface,rows)
+        return rows
 
     def observation(self,label):
         value=super().observation(label)
@@ -406,13 +433,21 @@ class Device(tcp.Device):
         assert value['health']['owners']==self.owners
         return value
 
-    def wire_coverage(self,label):
+    def wire_coverage(self,label,interfaces=None):
         result={}
-        for interface in self.witnesses:
+        selected=list(self.witnesses if interfaces is None else interfaces)
+        assert interfaces is None or(selected and set(selected)<=set(self.witnesses))
+        for interface in selected:
             rows=self.wire(label,interface)
             assert any(row.get('kind')=='ready'for row in rows)and not any(row.get('kind')=='stopped'for row in rows),'wire capture ended during episode'
             result[interface]=rows
         return result
+
+    def prepare_late_wire(self,label):
+        return self.wire_coverage(label+'-before-late-release')
+
+    def late_wire_coverage(self,label):
+        return self.wire_coverage(label,interfaces=[self.physical_interface])
 
     def forbid_udp_return(self,label,interface,before,source,reply):
         assert interface in self.witnesses
@@ -444,7 +479,7 @@ class Device(tcp.Device):
         # The ordinary stop closes the only writer. Read the actual committed
         # SQLite file independently; do not substitute the live pending view.
         local=self.binary(label+'-overall.sqlite3','files/observation/overall.sqlite3',limit=1024*1024*1024)
-        with sqlite3.connect(local.as_uri()+'?mode=ro',uri=True)as database:
+        with sqlite3.connect(local.as_uri()+'?mode=ro&immutable=1',uri=True)as database:
             assert database.execute('pragma integrity_check').fetchone()==('ok',)
             metadata=json.loads(database.execute("select value from observation where kind=0 and key='' ").fetchone()[0])
             assert metadata['dns_accepted']>=self.durable_target,metadata
@@ -677,7 +712,7 @@ def exchange(d,peer,result,label,address,wires,replies,*,local_rcodes=None,selec
         else:assert not peer.received(query,'tcp',selected_port,after=cursor)
     after=d.wire_coverage(label+'-after');wire={k:rows[len(before[k]):]for k,rows in after.items()}
     for query,reply in zip(wires,actual):
-        original_wire=[r for r in wire['wlan0']if r.get('kind')=='udp'and r['source_port']==source
+        original_wire=[r for r in wire[d.physical_interface]if r.get('kind')=='udp'and r['source_port']==source
             and r['destination_port']==53 and r['payload_hex']==query.hex()]
         assert bool(original_wire)==original,(label,'original underlay wire',original_wire)
         if not original:
@@ -734,7 +769,7 @@ def padded_resource(d,peer,result,label):
     assert receive_total(counters_after,'ingress_dns_drop_attempts')>receive_total(counters_before,'ingress_dns_drop_attempts')
     assert receive_total(counters_after,'ingress_envelope')>receive_total(counters_before,'ingress_envelope')
     wire_after=d.wire_coverage(label+'-wire-after')
-    wlan=wire_after['wlan0'][len(wire_before['wlan0']):]
+    wlan=wire_after[d.physical_interface][len(wire_before[d.physical_interface]):]
     escaped=[row for row in wlan if query_wire_prefix(row,query,ignore_id=True)
         and row['destination_port']in(53,53053)]
     returned=[row for row in wire_after['lo'][len(wire_before['lo']):]if row.get('kind')=='udp'
@@ -762,7 +797,7 @@ def padded_off_original(d,peer,result,label):
     assert receive_total(counters_after,'ingress_accepts')>receive_total(counters_before,'ingress_accepts')
     assert receive_total(counters_after,'ingress_envelope')>receive_total(counters_before,'ingress_envelope')
     wire_after=d.wire_coverage(label+'-wire-after')
-    wlan=wire_after['wlan0'][len(wire_before['wlan0']):]
+    wlan=wire_after[d.physical_interface][len(wire_before[d.physical_interface]):]
     original=[row for row in wlan if query_wire_prefix(row,query)
         and row['source_port']==source and row['destination_port']==53]
     assert original
@@ -787,7 +822,7 @@ def stale_return_confinement(d,result,label):
         time.sleep(.05)
     assert loop,'loopback-bound stale-address probe was not visible on lo'
     time.sleep(.3);after=d.wire_coverage(label+'-settled')
-    underlay=[row for row in after['wlan0'][len(before['wlan0']):]
+    underlay=[row for row in after[d.physical_interface][len(before[d.physical_interface]):]
         if row.get('kind')in('udp','udp_fragment_first')
         and ipaddress.ip_address(row['destination'])==ipaddress.ip_address(d.args.stale6)]
     assert not underlay,underlay
@@ -884,27 +919,87 @@ def assert_hot(rows):
     assert any(r['stage']==2 and r['query_policy_revision']<r['policy_revision']and r['actual_action']==2 and r['winner']for r in rows),rows
 
 
-def await_late_wire(d,label,before,writes):
+def record_late_release(d,label,gate):
+    """Keep a conservative host-clock release boundary before touching the gate."""
+    receipt=dict(status='RELEASE_INTENT',release_intent_monotonic=time.monotonic())
+    d.save(label+'-release-boundary.json',json.dumps(receipt,indent=2)+'\n')
+    try:
+        gate.touch()
+        receipt.update(status='GATE_RELEASED',release_done_monotonic=time.monotonic())
+    except BaseException as error:
+        receipt.update(status='HOLD_GATE_RELEASE',error=repr(error));raise
+    finally:d.save(label+'-release-boundary.json',json.dumps(receipt,indent=2)+'\n')
+    return receipt['release_intent_monotonic']
+
+
+def await_late_wire(d,label,before,writes,*,complete_coverage=True):
     """Observe the exact peer write at Device; send completion alone is insufficient."""
     assert writes
     with d.control_budget(2):
         deadline=d.capture_deadline;captures=[]
         while True:
             assert time.monotonic()<deadline,'actual late old resolver wire reply absent'
-            after=d.wire_coverage(label+'-capture-'+str(len(captures)))
+            try:after=d.late_wire_coverage(label+'-capture-'+str(len(captures)))
+            except BaseException as error:
+                d.save(label+'-arrival-observation.json',json.dumps(dict(status='HOLD_CAPTURE_EXCEPTION',
+                    generation=d.generation,writes=writes,captures=captures,error=repr(error),
+                    physical_only_arrival_boundary=True,deadline_monotonic=deadline,
+                    failed_monotonic=time.monotonic()),indent=2)+'\n')
+                raise
             observed=time.monotonic()
-            arrived=[row for row in after['wlan0'][len(before['wlan0']):]if row.get('kind')=='udp'
+            arrived=[row for row in after[d.physical_interface][len(before[d.physical_interface]):]if row.get('kind')=='udp'
                 and any(row['source']==write['resolver'][0]and row['source_port']==int(write['resolver'][1])
                     and row['destination']==write['peer'][0]and row['destination_port']==int(write['peer'][1])
                     and row['payload_hex']==write['reply_hex']for write in writes)]
-            captures.append(dict(monotonic=observed,wlan_rows=len(after['wlan0']),arrived=len(arrived)))
+            captures.append(dict(monotonic=observed,wlan_rows=len(after[d.physical_interface]),arrived=len(arrived)))
             status='HOLD_OBSERVER_DEADLINE'if observed>=deadline else'PASS'if arrived else'IN_PROGRESS'
             d.save(label+'-arrival-observation.json',json.dumps(dict(status=status,
-                generation=d.generation,writes=writes,captures=captures,arrived_exact=arrived),indent=2)+'\n')
+                generation=d.generation,writes=writes,captures=captures,arrived_exact=arrived,
+                physical_only_arrival_boundary=True,deadline_monotonic=deadline),indent=2)+'\n')
             assert observed<deadline,'late-wire observation deadline exhausted'
-            if arrived:return after,arrived
+            if arrived:break
             assert time.monotonic()<deadline,'actual late old resolver wire reply absent'
             time.sleep(.05)
+    # Complete return/fence coverage remains mandatory for default callers,
+    # under the surrounding episode budget after the physical-arrival scope.
+    # Root/VPN TCP callers do this after leaving their outer release-to-arrival
+    # two-second scope too, while retaining the same physical assertion.
+    if complete_coverage:after=d.wire_coverage(label+'-full-interval-after-arrival')
+    return after,arrived
+
+
+def late_peer_arrival(d,peer,label,query,gate,cursor,before):
+    """One shared Root/VPN TCP release-to-physical-arrival boundary."""
+    d.prepare_late_wire(label)
+    evidence=dict(status='HOLD',generation=d.generation,physical_arrival_bound_seconds=2)
+    with d.control_budget(2):
+        released=record_late_release(d,label,gate)
+        evidence['released_monotonic']=released
+        try:
+            while True:
+                with peer.lock:
+                    sent=[row for row in peer.messages if row.get('kind')=='exchange'and row['request']>cursor
+                        and bytes.fromhex(row['request_hex'])[2:]==query[2:]]
+                if sent:break
+                assert time.monotonic()<d.capture_deadline,'released old upstream reply did not actually send'
+                time.sleep(.01)
+            _,arrived=await_late_wire(d,label,before,sent,complete_coverage=False)
+            observed=time.monotonic()
+            assert observed-released<2
+            evidence.update(status='PASS_PHYSICAL_ARRIVAL',observed_monotonic=observed,writes=sent,arrived=arrived)
+        except BaseException as error:
+            evidence.update(status='HOLD_PHYSICAL_ARRIVAL',error=repr(error));raise
+        finally:
+            evidence['physical_scope_completed_monotonic']=time.monotonic()
+            d.save(label+'-lifecycle-observation.json',json.dumps(evidence,indent=2)+'\n')
+    try:
+        after=d.wire_coverage(label+'-full-interval-after-arrival')
+        evidence.update(status='PASS',full_coverage_interfaces=list(after),
+            full_coverage_completed_monotonic=time.monotonic())
+    except BaseException as error:
+        evidence.update(status='HOLD_FULL_INTERVAL_COVERAGE',error=repr(error));raise
+    finally:d.save(label+'-lifecycle-observation.json',json.dumps(evidence,indent=2)+'\n')
+    return evidence
 
 
 def hot_policy(d,peer,result,prefix):
@@ -936,7 +1031,7 @@ def hot_upstream(d,peer,result,prefix):
     observation=d.observation_matching(label+'-view-changed',lambda value:any(r['stage']==3 and r['proxy_result']==9 for r in selected(value)))
     rows=selected(observation);d.expected_durable.extend(rows)
     assert any(r['stage']==1 and r['policy_revision']==int(old['activeRevision'])for r in rows),rows
-    gate.touch();d.verify_saved_source(label)
+    d.prepare_late_wire(label+'-late');record_late_release(d,label+'-late',gate);d.verify_saved_source(label)
     client=d.client(label,nonce);item,=client['dnsExchanges']
     if item.get('replyHex'):legal_reply(bytes.fromhex(item['replyHex']),query,rcode=2)
     else:assert item.get('timedOut'),client
@@ -973,7 +1068,7 @@ def system_unknown(d,peer,result,label):
     assert len(received)==1 and int(received[0]['resolver'][1])==selected_port,received
     after=d.wire_coverage(label+'-after');request=bytes.fromhex(received[0]['request_hex'])
     assert any(r.get('kind')=='udp'and r['destination_port']==selected_port and bytes.fromhex(r['payload_hex'])==request
-        for r in after['wlan0'][len(before['wlan0']):])
+        for r in after[d.physical_interface][len(before[d.physical_interface]):])
     d.expected_durable.extend(rows)
     result['cases'].append(dict(status='PASS',label=label,generation=d.generation,
         source='ordinary App Android DnsResolver.rawQuery IPC; native packet caller remains Unknown',client=client,records=rows,peer=received))
@@ -1039,7 +1134,7 @@ def arm_cancellation(d,peer,label):
 def settled_cancellation(d,peer,result,pending):
     label=pending['label'];client=d.client(label,pending['nonce'])
     assert client['dnsExchanges'][0].get('timedOut')and not client['dnsExchanges'][0].get('replyHex'),client
-    pending['gate'].touch();deadline=time.monotonic()+2
+    d.prepare_late_wire(label+'-late');record_late_release(d,label+'-late',pending['gate']);deadline=time.monotonic()+2
     while True:
         with peer.lock:
             completed=[r for r in peer.messages if r.get('kind')=='exchange'and r['request']>pending['cursor']

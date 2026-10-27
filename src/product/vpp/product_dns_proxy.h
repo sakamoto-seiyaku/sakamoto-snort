@@ -35,6 +35,7 @@ typedef enum {
   PRODUCT_DNS_PROXY_STOPPED,
   PRODUCT_DNS_PROXY_VIEW_CHANGED,
   PRODUCT_DNS_PROXY_NO_REPLY_IDENTITY,
+  PRODUCT_DNS_PROXY_CACHE,
 } product_dns_proxy_result_t;
 
 typedef struct {
@@ -69,7 +70,7 @@ typedef struct {
   product_dns_proxy_route_t route;
   uint32_t result, client_capacity, output_bytes;
   uint16_t rcode;
-  uint8_t stage, transport, truncated, delivery;
+  uint8_t stage, transport, truncated, delivery, cached;
 } product_dns_proxy_event_t;
 
 typedef struct {
@@ -89,6 +90,8 @@ typedef struct {
   uint64_t owned_bytes, high_water_bytes, stale, completed, cancelled, capacity;
   uint32_t active, high_water;
   uint8_t accepting;
+  uint64_t cache_bytes, cache_high_water_bytes, cache_hits, cache_misses, cache_evictions, cache_skipped;
+  uint32_t cache_entries, cache_high_water;
 } product_dns_proxy_resources_t;
 
 /* Owner-local complete-message interface. No VPP/NFQ/HEV buffer or protected

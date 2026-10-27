@@ -172,6 +172,14 @@ impl DnsRecord {
 
     fn valid_proxy(&self) -> bool {
         let admission_resource = self.proxy_flags & 8 != 0;
+        // A cache answer can pass complete correlation and then fail its
+        // output allocation. Its local SERVFAIL still retains the actual
+        // cached response provenance through error and delivery records.
+        let cached_output_resource = matches!(self.stage, 3 | 4)
+            && self.proxy_result == 6 && self.reply_rcode == 2
+            && self.coverage == 1 && self.correlation == 1
+            && self.matched_requests == 1 && self.candidate_count != 0
+            && self.chain_status == 0 && self.query_flags & 0x8000 != 0;
         // A selected HEV TCP session remains local after replacement is OFF.
         // Its later messages can have no selected upstream and still produce
         // real query/error/delivery observations. Keep that absence explicit.
@@ -189,8 +197,8 @@ impl DnsRecord {
         let common = self.generation != 0 && self.token != 0 && self.owner < 62 && matches!(self.adapter_profile, 1 | 2)
             && matches!(self.family,4|6) && matches!(self.protocol,6|17) && self.resolver_port == 53
             && self.route_revision != 0
-            && self.proxy_result <= 10
-            && self.proxy_flags & !15 == 0 && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
+            && self.proxy_result <= 11
+            && self.proxy_flags & !31 == 0 && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
             && self.coverage >= 1 && self.coverage <= 5 && self.codec_peak_bytes <= 512*1024
             && self.caller <= 1 && self.availability & !15 == 0 && self.packet_availability & !15 == 0
             && (self.caller == 1) == (self.availability & 9 == 9 && self.uid != u32::MAX)
@@ -214,6 +222,10 @@ impl DnsRecord {
             && self.declared_action <= 2 && self.actual_action <= 2 && self.mode <= 1
             && (self.winner == 0 || (self.policy_generation == self.generation && self.policy_revision != 0
                 && self.actual_action == if self.mode == 1 {1} else {self.declared_action}))
+            && (self.proxy_flags & 16 == 0 || (self.proxy_flags & 12 == 0 && self.upstream_session == 0
+                && ((matches!(self.stage, 2 | 4) && matches!(self.proxy_result, 2 | 11))
+                    || cached_output_resource)))
+            && (self.proxy_result != 11 || self.proxy_flags & 16 != 0)
             && self.return_declared_action <= 2 && self.return_actual_action <= 2 && self.return_mode <= 1
             && (self.return_winner == 0 || (self.return_policy_generation == self.generation && self.return_policy_revision != 0))
             && (self.return_provenance == 0 || self.return_provenance == if self.adapter_profile == 1 {5} else {3});

@@ -180,13 +180,26 @@ class Device(support.Device):
         return self.local_adb_recorder
 
     def close_trace(self):
+        errors=[]
+        ui_path=getattr(self,'ui_capture_path',None)
+        if ui_path:
+            try:
+                assert re.fullmatch(r'/data/local/tmp/s313-ui-\d+\.xml',ui_path)
+                self.adb('shell','rm','-f',ui_path)
+                self.ui_capture_path=None
+                self.ui_capture_ready=False
+                self.save('ui-capture-cleanup.json',json.dumps(dict(status='PASS_EXACT_OWNED_UI_XML_RETIRED',path=ui_path),indent=2)+'\n')
+            except BaseException as error:errors.append(error)
         recorder=getattr(self,'adb_trace',None) or getattr(self,'local_adb_recorder',None)
         if recorder:
             # Closing already-owned work must survive an expired case clock,
             # while still honoring an explicit reserved cleanup phase.
             deadline=getattr(self,'cleanup_deadline',None)
             budget=deadline-time.monotonic() if deadline is not None else 30
-            recorder.close(budget)
+            try:recorder.close(budget)
+            except BaseException as error:errors.append(error)
+        if len(errors)==1:raise errors[0]
+        if errors:raise BaseExceptionGroup('owned UI capture and trace cleanup failed',errors)
 
     def budget_timeout(self, maximum):
         deadline=getattr(self,'capture_deadline',None)
@@ -227,6 +240,10 @@ class Device(support.Device):
         return selected
 
     def adb(self, *command, check=True):
+        ui_dump=command==('shell','uiautomator','dump','/sdcard/s312-ui.xml')
+        if command==('shell','cat','/sdcard/s312-ui.xml'):
+            assert getattr(self,'ui_capture_path',None)and getattr(self,'ui_capture_ready',False),'UI read requires this runner\'s acknowledged fresh capture'
+            command=('shell','cat',self.ui_capture_path)
         if self.adb_trace and self.adb_trace.handles(command):
             return self.adb_trace.run(command, getattr(self, 'capture_deadline', None), check)
         # A WSL transport failure is not remote-operation completion. Only
@@ -236,13 +253,15 @@ class Device(support.Device):
         # File captures use the binary exec-out service, avoiding shell-v2's
         # interactive close handshake for large UI/JSON observations. This is
         # the same repository wrapper and existing server, with exact bytes.
-        ui_dump=command==('shell','uiautomator','dump','/sdcard/s312-ui.xml')
         if ui_dump:
-            # Bound the remote Java helper too. Leave a full second before the
-            # local deadline so a timed-out bridge is not mistaken for exit.
+            # AOSP's normal idle wait alone permits ten seconds. Preserve a
+            # separate bounded transport margin and never reuse an older XML.
             deadline=getattr(self,'capture_deadline',None)
-            assert deadline and deadline-time.monotonic()>=9,'insufficient remaining UI capture/cleanup budget'
-            command=('shell','timeout','8','uiautomator','dump','/sdcard/s312-ui.xml')
+            assert deadline and deadline-time.monotonic()>=18,'insufficient remaining UI capture/cleanup budget'
+            if not getattr(self,'ui_capture_path',None):self.ui_capture_path='/data/local/tmp/s313-ui-'+str(time.monotonic_ns())+'.xml'
+            self.ui_capture_ready=False
+            self.adb('shell','rm','-f',self.ui_capture_path)
+            command=('shell','timeout','15','uiautomator','dump',self.ui_capture_path)
         proc_tables_read = command == ('shell', 'su', '-c', shlex.quote(
             'cat /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6'))
         if proc_tables_read:
@@ -267,7 +286,7 @@ class Device(support.Device):
                 # A single stalled read must not consume the ordinary App's
                 # 60s active-socket hold. Preserve every failed partial read;
                 # only this side-effect-free capture may be retried.
-                timeout=10
+                timeout=17 if ui_dump else 10
                 if deadline:
                     remaining=deadline-time.monotonic()
                     if remaining<1:raise TimeoutError('insufficient remaining budget to start an external client')
@@ -282,6 +301,9 @@ class Device(support.Device):
                     else:recorder.operation_deadline=previous
                 value=(stdout+stderr).decode(errors='replace').replace('\r','')
                 if check and code:raise RuntimeError(value)
+                if ui_dump and 'UI hierchary dumped to: '+self.ui_capture_path not in value:
+                    raise RuntimeError('fresh owned UI capture was not acknowledged: '+value)
+                if ui_dump:self.ui_capture_ready=True
                 return value
             except subprocess.TimeoutExpired:
                 if not read or attempt==2: raise
@@ -393,7 +415,8 @@ class Device(support.Device):
             result = super().stop(label)
             log = (self.out / (label + '-stop.log')).read_text()
             processes=(self.out/(label+'-processes-after.txt')).read_text()
-            assert not any('uiautomator'in line and '/sdcard/s312-ui.xml'in line for line in processes.splitlines()),'owned UI capture process remains'
+            ui_path=getattr(self,'ui_capture_path',None)
+            assert not any(ui_path and 'uiautomator'in line and ui_path in line for line in processes.splitlines()),'owned UI capture process remains'
             for owner in range(self.owners):
                 assert re.search(rf'dns event=stop generation={self.generation} owner={owner} .*tcp_active=0 tcp_owned_bytes=0', log)
                 if self.profile=='vpn':
@@ -533,7 +556,7 @@ class Device(support.Device):
         processes=self.save('witness-process-after.txt', self.root('ps -A -o PID,UID,ARGS'))
         assert not any(line.split() and line.split()[0]==str(self.witness_pid) for line in processes.splitlines()), 'owned TCP witness PID remains after stop acknowledgement'
         self.adb('shell', 'rm', '-f', '/data/local/tmp/s313-wire', '/data/local/tmp/s313-wire.stop',
-            '/data/local/tmp/s313-wire.jsonl', '/data/local/tmp/s313-rules.txt', '/sdcard/s312-ui.xml')
+            '/data/local/tmp/s313-wire.jsonl', '/data/local/tmp/s313-rules.txt')
         self.witness_pid = None
 
 

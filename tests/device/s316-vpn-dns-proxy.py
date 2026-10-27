@@ -201,7 +201,7 @@ def exchange(d, peer, result, label, address, query, reply, *, rcode=None, expec
     assert len(stream) == int(tcp_retry), stream
     after = d.wire_coverage(label+'-after')
     wire = {k: rows[len(before[k]):] for k, rows in after.items()}
-    original_wire = [r for r in wire['wlan0'] if r.get('kind') == 'udp'
+    original_wire = [r for r in wire[d.physical_interface] if r.get('kind') == 'udp'
                      and r['destination'] == address and r['destination_port'] == 53 and r['payload_hex'] == query.hex()]
     assert bool(original_wire) == original, original_wire
     returns = [r for r in wire[d.tun_interface] if r.get('kind') == 'udp' and r['source_port'] == 53
@@ -327,7 +327,7 @@ def same_socket_toggle(d, peer, result, owners, family):
         chosen = 53 if original else d.args.upstream_port
         assert len(peer.received(q, port=chosen, after=cursor)) == 1
         assert not peer.received(q, port=d.args.upstream_port if original else 53, after=cursor)
-        wire = [row for row in after['wlan0'][len(before['wlan0']):] if row.get('kind') == 'udp'
+        wire = [row for row in after[d.physical_interface][len(before[d.physical_interface]):] if row.get('kind') == 'udp'
                 and row['destination'] == address and row['destination_port'] == 53 and row['payload_hex'] == q.hex()]
         assert bool(wire) == original, wire
         returned = [row for row in after[d.tun_interface][len(before[d.tun_interface]):]
@@ -382,7 +382,7 @@ def vpn_capacity(d, peer, result, owners):
         assert returned
         for row in returned: legal_return(row, q, r, d.args.endpoint4, source, client['local'])
         assert not any(row.get('kind') == 'udp' and row['destination_port'] == 53 and row['payload_hex'] == q.hex()
-                       for row in after['wlan0'][len(before['wlan0']):])
+                       for row in after[d.physical_interface][len(before[d.physical_interface]):])
     settled = d.proxy_ready(label+'-settled'); assert all(row['transactions'] == row['replies'] == '0' for row in settled), settled
     result['cases'].append(dict(status='PASS', label=label, generation=d.generation, owners=owners,
         source='65 distinct queries on one actual Java DatagramSocket, hashing to one actual owner', source_port=source,
@@ -434,7 +434,7 @@ def stop_and_late(d, peer, result, run, owners):
     d.rules(label+'-fresh-allow'); d.upstream(label+'-fresh-selected', d.args.endpoint4); d.proxy_ready(label+'-fresh-ready')
     fresh_before = d.wire_coverage(label+'-fresh-before-old-release')
     d.forbid_udp_return(label,d.tun_interface,fresh_before[d.tun_interface],source,reply)
-    gate.touch(); deadline = time.monotonic()+3
+    d.prepare_late_wire(label+'-late');shared.record_late_release(d,label+'-late',gate);deadline=time.monotonic()+3
     while True:
         with peer.lock:
             sent = [row for row in peer.messages if row['kind'] == 'exchange' and row['request'] > cursor

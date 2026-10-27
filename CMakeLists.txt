@@ -85,6 +85,26 @@ target_link_libraries(sakamoto-product-dns-proxy-test PRIVATE sakamoto_product_d
 target_compile_options(sakamoto-product-dns-proxy-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-hev-stage-cache-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/hev_stage_cache_test.py")
 add_test(NAME sakamoto-product-dns-proxy-test COMMAND sakamoto-product-dns-proxy-test)
+add_executable(sakamoto-product-dns-cache-test tests/host/product_dns_cache_test.c)
+target_link_libraries(sakamoto-product-dns-cache-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-cache-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-cache-test COMMAND sakamoto-product-dns-cache-test)
+add_executable(sakamoto-product-dns-cache-names-test tests/host/product_dns_cache_names_test.c)
+target_link_libraries(sakamoto-product-dns-cache-names-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-cache-names-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-cache-names-test COMMAND sakamoto-product-dns-cache-names-test)
+foreach(cache_case compression fallback)
+  add_executable(sakamoto-product-dns-cache-${cache_case}-test tests/host/product_dns_cache_${cache_case}_test.c)
+  target_link_libraries(sakamoto-product-dns-cache-${cache_case}-test PRIVATE sakamoto_product_dns sakamoto_dns_wire)
+  target_compile_options(sakamoto-product-dns-cache-${cache_case}-test PRIVATE -Wall -Wextra -Werror)
+  add_test(NAME sakamoto-product-dns-cache-${cache_case}-test COMMAND sakamoto-product-dns-cache-${cache_case}-test)
+endforeach()
+add_executable(sakamoto-product-dns-cache-allocation-test tests/host/product_dns_cache_allocation_test.c)
+target_link_libraries(sakamoto-product-dns-cache-allocation-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-cache-allocation-test PRIVATE -Wall -Wextra -Werror)
+target_link_options(sakamoto-product-dns-cache-allocation-test PRIVATE
+  -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free)
+add_test(NAME sakamoto-product-dns-cache-allocation-test COMMAND sakamoto-product-dns-cache-allocation-test)
 add_executable(sakamoto-product-root-dns-io-test tests/host/product_root_dns_io_test.c
   src/product/vpp/product_root_dns_io.c)
 target_link_libraries(sakamoto-product-root-dns-io-test PRIVATE sakamoto_product_dns)
@@ -111,10 +131,18 @@ add_test(NAME sakamoto-product-vpn-stopped-tcp-wire-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_device_vpn_tcp_stop_wire_test.py")
 add_test(NAME sakamoto-product-dns-readiness-contract
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_readiness_test.py")
+add_test(NAME sakamoto-product-dns-history-qualification-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_history_qualification_test.py")
+add_test(NAME sakamoto-product-dns-dispatch-qualification-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_dispatch_qualification_test.py")
 add_test(NAME sakamoto-product-root-dns-adapter-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
     $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire>)
+add_test(NAME sakamoto-product-dns-cache-adapter-test
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
+    $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>
+    $<TARGET_FILE:sakamoto_product_domains> $<TARGET_FILE:sakamoto_dns_wire> --case cache)
 add_test(NAME sakamoto-product-root-dns-tcp-adapter-test
   COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_root_dns_adapter_test.py"
     $<TARGET_FILE:sakamoto_product_dns> $<TARGET_FILE:sakamoto_product_l4_policy>

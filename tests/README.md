@@ -17,6 +17,19 @@ The removed C++ daemon/model is not a fixture or implementation reference.
 Device operations must use [`dev/adb`](../dev/adb) and an explicitly scoped device.
 Host PASS is not Product/device/release PASS.
 
+The [S319 observation shutdown regression](evidence/s319_shutdown_prefix.py)
+generates actual Adapter QUERY/STOPPED records and exercises the real C transport,
+consumer close and SQLite reopen with explicit existing Host dependencies and a
+persistent Product Cargo cache. Its five native shutdown methods are ignored by
+ordinary `cargo test`; use the dependency-qualified invocation in the
+[S319 evidence record](../docs/testing/2026-10-27_S319_DNS_ANSWER_CACHE.md#reproduction-and-retained-evidence).
+
+The [S319 allocation-history regression](evidence/s319_cache_resource.py) uses
+the same explicit Host dependency arguments. It injects actual Adapter `malloc`
+failures across Root/VPN, UDP/TCP and both address families, then validates all
+120 decoded records through normal SQLite close/reopen. Its integration method
+is also ignored by ordinary `cargo test`; use the documented runner.
+
 POC source, historical recipes and reference-tool retirement are classified in
 the [experiment catalog](../experiments/README.md). Its checks inspect paths and
 guards only; they do not run historical experiments.

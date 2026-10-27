@@ -75,16 +75,28 @@ class Device(root.Device):
   # VPN Direct allocates a different outer source port. Match the original
   # resolver destination across the complete ON interval instead.
   for fence in self.tcp_route_fences:
-   item=self.witnesses['wlan0']
+   item=self.witnesses[self.physical_interface]
    assert {key:item[key]for key in('pid','start','uid','exe')}==fence['witness']
-   end=fence.get('stop_boundary_rows',fence.get('end_rows',len(rows)))
+   stop_scope=fence if 'stop_boundary_rows'in fence else None
+   if stop_scope is None and 'end_rows'not in fence:
+    # These fences intentionally cover every source port to this resolver.
+    # Prior queries share the pending query's proved generation-wide Stop
+    # interval, including its one exact old App terminal control.
+    candidates=[other for other in self.tcp_route_fences if 'stop_boundary_rows'in other
+     and other['generation']==fence['generation']and other['witness']==fence['witness']
+     and ipaddress.ip_address(other['resolver'])==ipaddress.ip_address(fence['resolver'])
+     and fence['baseline_rows']<=other['stop_boundary_rows']]
+    assert len(candidates)<=1,'ambiguous shared Stop boundary'
+    if candidates:stop_scope=candidates[0]
+   end=stop_scope['stop_boundary_rows']if stop_scope is not None else fence.get('end_rows',len(rows))
    escaped=[r for r in rows[fence['baseline_rows']:end]if r.get('kind')=='tcp'
     and r['destination_port']==53 and ipaddress.ip_address(r['destination'])==ipaddress.ip_address(fence['resolver'])]
    assert not escaped,(fence,escaped)
    terminal=[]
-   if 'stop_boundary_rows'in fence:terminal=qualify_stopped_tcp_controls(rows[end:],fence.get('stopped_local',{}))
+   if stop_scope is not None:terminal=qualify_stopped_tcp_controls(rows[end:],stop_scope.get('stopped_local',{}))
    self.save(fence['label']+'-original-tcp-fence.json',json.dumps(dict(status='PASS',fence=fence,
     full_rows_through=len(rows),strict_on_rows_through=end,qualified_old_terminal_controls=terminal,
+    stopped_scope_from=stop_scope['label']if stop_scope is not None else None,
     interval='strict ordinary ON prefix; explicit stopped local identity qualifies only one exact payload-free old App terminal control, without a cross-clock causal claim'),indent=2)+'\n')
  def native_original_tcp_absent(self,label,pid,expected_start,resolver,source):
   assert isinstance(pid,int)and pid>0
@@ -112,11 +124,12 @@ class Device(root.Device):
    native_socket_inodes=sorted(native),original_resolver_tcp_rows=selected,old_app_socket=app[0])
   self.save(label+'-native-sockets.json',json.dumps(report,indent=2)+'\n');return report
  def close_on_route_fences(self,label):
-  rows=self.wire_coverage(label)['wlan0']
+  rows=self.wire_coverage(label)[self.physical_interface]
   for fence in self.tcp_route_fences:fence.setdefault('end_rows',len(rows))
- def wire(self,label,interface='wlan0'):
+ def wire(self,label,interface=None):
+  interface=self.physical_interface if interface is None else interface
   rows=super().wire(label,interface)
-  if interface=='wlan0':self.verify_tcp_route_fences(rows)
+  if interface==self.physical_interface:self.verify_tcp_route_fences(rows)
   return rows
  def forbid_tcp_return(self,label,before,source,reply=None):
   interface=self.tun_interface;item=self.witnesses[interface]
@@ -131,10 +144,10 @@ class Device(root.Device):
    else:
     reply=bytes.fromhex(fence['reply_hex']);assert struct.pack('!H',len(reply))+reply not in stream(relevant,53,fence['source']),(fence,relevant)
    self.save(fence['label']+'-vpn-return-fence.json',json.dumps(dict(status='PASS',fence=fence,rows_through=len(rows),scope='same exact owned TUN witness through this sample; final sample bounded by collector Stop'),indent=2)+'\n')
- def wire_coverage(self,label):
-  rows=super().wire_coverage(label)
+ def wire_coverage(self,label,interfaces=None):
+  rows=super().wire_coverage(label,interfaces=interfaces)
   for interface,item in self.witnesses.items():
-   self.verify_vpn_tcp_fences(interface,rows[interface],{k:item[k]for k in('pid','start','uid','exe')})
+   if interface in rows:self.verify_vpn_tcp_fences(interface,rows[interface],{k:item[k]for k in('pid','start','uid','exe')})
   return rows
  def wire_stop(self,interfaces=None,*,defer_files=False):
   identities={name:{k:item[k]for k in('pid','start','uid','exe')}for name,item in self.witnesses.items()if interfaces is None or name in interfaces}
@@ -247,15 +260,13 @@ def start_run(d,owners):
 
 def preserve_sqlite_history(d,label,report):
  baseline=d.sqlite_baselines[-1];path=d.out/(label+'-overall.sqlite3');metadata,rows=sqlite_snapshot(path)
- assert metadata['dns_rejected']==baseline['metadata']['dns_rejected'],(baseline['metadata'],metadata)
- assert metadata['dns_evicted']==baseline['metadata']['dns_evicted']
- for key,value in baseline['rows'].items():assert rows.get(key)==value,('historical key/value changed',key)
- added={k:v for k,v in rows.items()if k not in baseline['rows']}
- assert all(':proxy2:'in k for k,v in added.items()if json.loads(v)['record']['proxy_flags']&1)
- report['history_conservation']=dict(status='PASS',before_sha256=digest(baseline['path']),
-  before_rows=len(baseline['rows']),after_rows=len(rows),old_key_and_raw_value_bytes_exact=len(baseline['rows']),
-  old_present_received_clocks_exact=sum(json.loads(v).get('received_clock')is not None for v in baseline['rows'].values()),
-  dns_rejected_before=baseline['metadata']['dns_rejected'],dns_rejected_after=metadata['dns_rejected'],dns_rejected_delta=0)
+ spec=importlib.util.spec_from_file_location('s319_exact_normal_retention',ROOT/'tests/device/helpers/s319_dns_retention.py')
+ retention=importlib.util.module_from_spec(spec);spec.loader.exec_module(retention)
+ history=retention.qualify_history(baseline['metadata'],baseline['rows'],metadata,rows)
+ history.update(before_sha256=digest(baseline['path']),after_sha256=digest(path),
+  dns_rejected_before=baseline['metadata']['dns_rejected'],dns_rejected_after=metadata['dns_rejected'],dns_rejected_delta=0,
+  old_present_received_clocks_exact=sum(json.loads(v).get('received_clock')is not None for k,v in baseline['rows'].items()if k in rows))
+ report['history_conservation']=history
  d.save(label+'-sqlite-readback.json',json.dumps(report,indent=2)+'\n');return report
 
 def smoke(d,peer,result,owners):
@@ -360,26 +371,32 @@ def paired_exchange(d,peer,result,label,resolver,queries,replies,*,rcodes=None,o
         for r in delivered:
             assert r['caller']==1 and r['uid']==d.uid and r['delivery']==2 and r['reply_capacity']==65535
             assert r['message_sequence']==r['token']and r['return_provenance']==3 and r['return_policy_revision']>0
-        for query,count in zip(queries,peer_counts or [1]*len(queries)):
-            received=peer.received(query,after=cursor)
-            allowed=count if isinstance(count,tuple)else(count,)
-            assert len(received)in allowed,(label,received,count)
-            if isinstance(count,tuple):
-                assert hot and count==(1,2)
-                assert all(bytes.fromhex(r['request_hex'])[2:]==query[2:]for r in received)
-                assert len({r['request_hex']for r in received})==1
-                assert len({tuple(r['peer'])for r in received})==len({tuple(r['resolver'])for r in received})==1
+        scoped_dispatch=getattr(d,'qualify_peer_dispatches',None)
+        received_by_question=[peer.received(query,after=cursor)for query in queries]
+        if scoped_dispatch is None:
+            for query,received,count in zip(queries,received_by_question,peer_counts or [1]*len(queries)):
+                allowed=count if isinstance(count,tuple)else(count,)
+                assert len(received)in allowed,(label,received,count)
+                if isinstance(count,tuple):
+                    assert hot and count==(1,2)
+                    assert all(bytes.fromhex(r['request_hex'])[2:]==query[2:]for r in received)
+                    assert len({r['request_hex']for r in received})==1
+                    assert len({tuple(r['peer'])for r in received})==len({tuple(r['resolver'])for r in received})==1
         if hot:
             assert len([r for r in records if r['stage']==1])==len(queries)
             assert len([r for r in records if r['stage']==4])==len(queries)
             assert not any(r['stage']==3 for r in records)
         wires=d.wire_coverage(label+'-after');wire={k:v[len(before[k]):]for k,v in wires.items()}
-        assert not any(r.get('kind')=='tcp'and r['destination_port']==53 and ipaddress.ip_address(r['destination'])==ipaddress.ip_address(resolver) for r in wire['wlan0'])
+        dispatch_qualifications=scoped_dispatch(label,queries,records,received_by_question,wire,
+            peer_counts or [1]*len(queries))if scoped_dispatch else None
+        assert not any(r.get('kind')=='tcp'and r['destination_port']==53 and ipaddress.ip_address(r['destination'])==ipaddress.ip_address(resolver) for r in wire[d.physical_interface])
         assert stream(wire[d.tun_interface],53,source)==b''.join(struct.pack('!H',len(r))+r for r in actual)
         d.expected_durable.extend(records)
         case=dict(status='PASS',label=label,generation=d.generation,source_port=source,queries=[q.hex()for q in queries],
             replies=[q.hex()for q in actual],records=records,options=options or{},same_socket=True,
             original_tcp53_absent_from_underlay=True,peer_counts=peer_counts or [1]*len(queries))
+        if dispatch_qualifications is not None:
+            case.update(dispatch_qualifications=dispatch_qualifications,peer_count_scope='S319 qualified logical dispatches; raw datagrams retained')
         if publication:case['hot_policy_publication']=publication
         if hot:
             case['gated_upstream']=[dict(receipts=peer.received(q,after=cursor),
@@ -428,23 +445,12 @@ def tcp_records(d,value,queries,source):
 
 
 def late_arrival(d,peer,label,query,gate,cursor,before):
-    with d.control_budget(2):
-        released=time.monotonic();gate.touch()
-        while True:
-            with peer.lock:
-                sent=[r for r in peer.messages if r.get('kind')=='exchange'and r['request']>cursor
-                    and bytes.fromhex(r['request_hex'])[2:]==query[2:]]
-            if sent:break
-            assert time.monotonic()<d.capture_deadline,'released old upstream reply did not actually send'
-            time.sleep(.01)
-        after,arrived=shared.await_late_wire(d,label,before,sent)
-        assert time.monotonic()-released<2
-        return dict(released_monotonic=released,observed_monotonic=time.monotonic(),writes=sent,arrived=arrived)
+    return shared.late_peer_arrival(d,peer,label,query,gate,cursor,before)
 
 
-def single_positive(d,peer,result,label,resolver):
+def single_positive(d,peer,result,label,resolver,*,options=None):
     query=d.question(label);reply,_=fixtures.answer(query,'ordinary');peer.register(query,reply)
-    return paired_exchange(d,peer,result,label,resolver,[query],[reply],rcodes=[0])
+    return paired_exchange(d,peer,result,label,resolver,[query],[reply],rcodes=[0],options=options)
 
 
 def lifecycle(d,peer,result,owners):
@@ -537,7 +543,7 @@ def capacity(d,peer,result,owners):
         after=d.wire_coverage(label+'-after')
         assert stream(after[d.tun_interface][len(before[d.tun_interface]):],53,source)==b''.join(struct.pack('!H',len(r))+r for r in answers)
         assert not any(r.get('kind')=='tcp'and r['destination_port']==53 and ipaddress.ip_address(r['destination'])==ipaddress.ip_address('1.1.1.1')
-            for r in after['wlan0'][len(before['wlan0']):])
+            for r in after[d.physical_interface][len(before[d.physical_interface]):])
         for query in queries:d.required_durable.append(dict(generation=d.generation,id=int.from_bytes(query[:2],'big'),source=source,proxy=True,stages=[1,3,4]))
         settled=d.proxy_ready(label+'-settled');assert all(r['transactions']==r['replies']=='0'for r in settled)
         native=d.cli(label+'-tcp-bounds','show product dns proxy')
@@ -573,7 +579,8 @@ def finish_run(d,result,label,*,pending=False):
  run['sqlite_after_stop']=preserve_sqlite_history(d,label,d.durable_readback(label));return run
 
 
-def stop_late(d,peer,result,owners):
+def stop_late(d,peer,result,owners,*,tcp_options=None,initial_delay=0):
+    assert 0<=initial_delay<=UI_TCP_PRE_SEND_MS
     label=f'n{owners}-pending-stop-oldgen';d.rules(label+'-allow');d.upstream(label+'-upstream',d.args.endpoint4);d.proxy_ready(label+'-ready')
     query=d.question(label);reply,_=fixtures.answer(query,'ordinary');gate=d.out/(label+'.gate')
     peer.register(query,reply,gate=gate,gate_seconds=120)
@@ -587,16 +594,16 @@ def stop_late(d,peer,result,owners):
     native_pid=int(native[0][0]);native_stat=d.save(label+'-native-identity-before-probe.txt',d.root(f'cat /proc/{native_pid}/stat'))
     native_start=native_stat.rsplit(') ',1)[1].split()[19]
     d.prepare_stop_capture(label)
-    nonce=d.launch_tcp(label,'1.1.1.1',source,[query],pipeline=True,split=True)
+    nonce=d.launch_tcp(label,'1.1.1.1',source,[query],pipeline=True,split=True,options=tcp_options)
     try:
-        d.await_peer_query(peer,label,query,after=cursor)
+        d.await_peer_query(peer,label,query,after=cursor,initial_delay=initial_delay)
         pending_raw=d.cli(label+'-pending-local','show product dns proxy')
         pending=[props(line.replace(' ','\n'))for line in pending_raw.splitlines()if'dns.proxy owner='in line]
         local=[props(line.replace(' ','\n'))for line in pending_raw.splitlines()if'dns.vpn_tcp owner='in line]
         assert len(pending)==owners and sum(int(row['transactions'])for row in pending)==1,pending
         assert sum(int(row['clients'])for row in local)==1 and sum(int(row['pending'])for row in local)==1,local
         native_sockets=d.native_original_tcp_absent(label,native_pid,native_start,'1.1.1.1',source)
-        prefix=d.wire(label+'-strict-pre-stop','wlan0')
+        prefix=d.wire(label+'-strict-pre-stop',d.physical_interface)
         route_fence,=[f for f in d.tcp_route_fences if f['label']==label]
         route_fence['stop_boundary_rows']=len(prefix)
         d.required_durable.append(dict(generation=old,id=int.from_bytes(query[:2],'big'),source=source,proxy=True,stages=[1,3]))
@@ -622,7 +629,7 @@ def stop_late(d,peer,result,owners):
         d.forbid_tcp_return(label+'-new-tun-old-source',restarted,source)
         d.upstream(label+'-newgen-upstream',d.args.endpoint4);d.proxy_ready(label+'-newgen-ready')
         arrival=late_arrival(d,peer,label+'-late',query,gate,cursor,before)
-        fresh=single_positive(d,peer,result,f'n{owners}-newgen-after-late','1.1.1.1')
+        fresh=single_positive(d,peer,result,f'n{owners}-newgen-after-late','1.1.1.1',options=tcp_options)
         result['cases'].append(dict(status='PASS',label=label,generation=old,new_generation=d.generation,source_port=source,
             query_hex=query.hex(),client=client,records=records,late=arrival,fresh_positive=fresh['label'],
             stopped_local_wire_identity=old_identity,pending_local_status=pending,native_socket_snapshot=native_sockets,
@@ -683,7 +690,7 @@ def toggle(d,peer,result,owners):
             off_client=d.wait(off_label+'-client','files/product-state/t12-'+off_nonce+'.json',
                 lambda c:c.get('phase')=='finished',timeout=10,json_value=True)
             off_after=d.wire_coverage(off_label+'-after')
-            original=[r for r in off_after['wlan0'][len(off_before['wlan0']):]if r.get('kind')=='tcp'
+            original=[r for r in off_after[d.physical_interface][len(off_before[d.physical_interface]):]if r.get('kind')=='tcp'
                 and r['destination_port']==53 and r['flags']&2
                 and ipaddress.ip_address(r['destination'])==ipaddress.ip_address(resolver)]
             assert original and not peer.received(off_query,after=off_cursor),(original,off_client)

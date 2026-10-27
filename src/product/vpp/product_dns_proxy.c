@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include "product_dns_cache.inc"
 
 typedef struct {
   product_dns_proxy_event_t event;
@@ -21,13 +22,23 @@ struct product_dns_proxy {
   void *context;
   proxy_request_t requests[PRODUCT_DNS_PROXY_TRANSACTIONS];
   product_dns_proxy_resources_t resources;
+  dns_cache_t cache;
   uint64_t other_bytes;
   uint64_t id_deadline[65536];
   uint16_t next_id;
 };
 
 product_dns_proxy_resources_t product_dns_proxy_resources (const product_dns_proxy_t *proxy)
-{ return proxy ? proxy->resources : (product_dns_proxy_resources_t) {0}; }
+{
+  if (!proxy) return (product_dns_proxy_resources_t) {0};
+  product_dns_proxy_resources_t result = proxy->resources;
+  result.cache_bytes = sizeof (proxy->cache) + proxy->cache.bytes;
+  result.cache_high_water_bytes = sizeof (proxy->cache) + proxy->cache.high_water_bytes;
+  result.cache_entries = proxy->cache.count; result.cache_high_water = proxy->cache.high_water;
+  result.cache_hits = proxy->cache.hits; result.cache_misses = proxy->cache.misses;
+  result.cache_evictions = proxy->cache.evictions; result.cache_skipped = proxy->cache.skipped;
+  return result;
+}
 
 void product_dns_proxy_other_bytes (product_dns_proxy_t *proxy, uint64_t bytes)
 { if (proxy) proxy->other_bytes = bytes; }
@@ -117,6 +128,7 @@ void product_dns_proxy_fail (product_dns_proxy_t *proxy, const product_dns_proxy
 void product_dns_proxy_advance (product_dns_proxy_t *proxy, uint64_t now, uint64_t network, uint64_t route)
 {
   if (!proxy) return;
+  cache_prune (&proxy->cache, now, network, route);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
     {
       proxy_request_t *request = &proxy->requests[i];
@@ -144,6 +156,7 @@ void product_dns_proxy_stop (product_dns_proxy_t *proxy, uint64_t now)
 {
   if (!proxy) return;
   proxy->resources.accepting = 0;
+  cache_clear (&proxy->cache);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
     if (proxy->requests[i].wire)
       finish_failure (proxy, &proxy->requests[i], now, PRODUCT_DNS_PROXY_STOPPED, 0);
@@ -160,7 +173,7 @@ product_dns_proxy_t *product_dns_proxy_open (uint64_t generation,
   if (getrandom (&proxy->next_id, sizeof (proxy->next_id), GRND_NONBLOCK) != sizeof (proxy->next_id))
     { free (proxy); return NULL; }
   proxy->resources.accepting = !!route->enabled;
-  proxy->resources.owned_bytes = proxy->resources.high_water_bytes = sizeof (*proxy);
+  proxy->resources.owned_bytes = proxy->resources.high_water_bytes = sizeof (*proxy) - sizeof (proxy->cache);
   return proxy;
 }
 
@@ -278,7 +291,11 @@ void product_dns_proxy_answer (product_dns_proxy_t *proxy, const product_dns_pro
         {
           product_dns_proxy_event_t event = request->event;
           event.input.identity.now_us = now_us; event.stage = 2;
-          event.policy = snapshot.identity; event.result = PRODUCT_DNS_PROXY_UPSTREAM;
+          event.policy = snapshot.identity;
+          event.result = event.cached ? PRODUCT_DNS_PROXY_CACHE : PRODUCT_DNS_PROXY_UPSTREAM;
+          if (!event.cached)
+            cache_store (&proxy->cache, request->wire, request->length, wire, length, transport,
+              now_us, key->network_revision, key->route_revision, &response);
           event.rcode = response.rcode; event.response = &response; event.transport = transport;
           if (!product_dns_response_match (snapshot.view, &snapshot.context.packet, &response,
                 PRODUCT_L4_POLICY_POSITION_ALL, &event.match))
@@ -428,6 +445,35 @@ int product_dns_proxy_submit (product_dns_proxy_t *proxy, const product_dns_prox
               proxy->resources.high_water = proxy->resources.active;
             if (proxy->resources.owned_bytes > proxy->resources.high_water_bytes)
               proxy->resources.high_water_bytes = proxy->resources.owned_bytes;
+            dns_cache_entry_t *cached = cache_lookup (&proxy->cache, wire, length,
+              input->identity.now_us, event.key.network_revision, event.key.route_revision);
+            if (cached)
+              {
+                size_t answer_length = cached->answer_length;
+                uint8_t *answer = malloc (answer_length);
+                if (!answer) { finish_failure (proxy, request, input->identity.now_us, PRODUCT_DNS_PROXY_CAPACITY, 1); return 1; }
+                memcpy (answer, cached->data + cached->query_length, answer_length);
+                uint32_t lifetime;
+                /* Only TTL words in the previously validated owned wire
+                 * change. Complete correlation/policy parsing follows below. */
+                uint64_t age = input->identity.now_us - cached->inserted;
+                uint32_t elapsed = age / UINT64_C(1000000) + !!(age % UINT64_C(1000000));
+                int valid = cache_answer_ttls (answer, answer_length, elapsed, NULL, answer, &lifetime);
+                if (valid)
+                  {
+                    answer[0] = copy[0]; answer[1] = copy[1];
+                    request->event.cached = 1; request->event.transport = cached->transport;
+                    product_dns_proxy_answer (proxy, &event.key, cached->transport, answer,
+                      answer_length, input->identity.now_us);
+                  }
+                free (answer);
+                if (!request->wire) return 1; /* completed or failed normally */
+                /* Invalid retained data cannot leave a cache-only obligation.
+                 * Retire it and use the ordinary current-view upstream path. */
+                cache_drop (&proxy->cache, cached, 0);
+                --proxy->cache.hits; ++proxy->cache.misses;
+                request->event.cached = 0; request->event.transport = PRODUCT_DNS_PROXY_UDP;
+              }
             int sent = proxy->callbacks.send (proxy->context, &event.key,
               PRODUCT_DNS_PROXY_UDP, copy, length, request->deadline);
             if (sent != 1) finish_failure (proxy, request, input->identity.now_us, PRODUCT_DNS_PROXY_SERVFAIL, 1);

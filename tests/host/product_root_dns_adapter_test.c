@@ -21,6 +21,19 @@
 #include "product_packet_completion.h"
 #include "sakamoto_product_observation.h"
 
+/* A single real malloc failure, armed only at the public request/answer
+ * boundary. Equal wire lengths distinguish cache scratch from output by
+ * allocation order; the checks below require the actual emitted semantics. */
+void *__real_malloc(size_t);
+static size_t fault_bytes;
+static unsigned fault_nth, fault_matches, fault_failures;
+void *__wrap_malloc(size_t bytes) {
+ if(fault_nth&&bytes==fault_bytes&&++fault_matches==fault_nth) {
+  fault_nth=0;++fault_failures;return NULL;
+ }
+ return __real_malloc(bytes);
+}
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -363,12 +376,36 @@ static void finish(unsigned deny,unsigned write_failure) {
 }
 static void consume(void) {assert(root_dns_intercept(&worker,0,&lease,&snapshot,&flow));assert(lease.terminal_intent==PRODUCT_PACKET_INTENT_DROP_RUNTIME);}
 static void reset_terminal(void) {lease.terminal_intent=lease.terminal_count=0;lease.runtime_drop_reason=0;++lease.origin_obligation_id;++now_us;}
-static void answer(unsigned rcode) {
+static void answer_ttl(unsigned rcode,unsigned ttl) {
  uint8_t wire[sizeof(question)+16];memcpy(wire,last_wire,sizeof(question));wire[2]=0x81;wire[3]=0x80|rcode;wire[7]=1;
- memcpy(wire+sizeof(question),(uint8_t[]){0xc0,12,0,1,0,1,0,0,0,30,0,4,192,0,2,9},16);
+ memcpy(wire+sizeof(question),(uint8_t[]){0xc0,12,0,1,0,1,0,0,0,0,0,4,192,0,2,9},16);
+ wire[sizeof(question)+9]=ttl;
  root_dns_owners[0].current_upstream_session=last_cookie;root_dns_io_answer(&root_dns_owners[0],&last_key,last_transport,wire,sizeof(wire),++now_us);root_dns_owners[0].current_upstream_session=0;
 }
+/* Transport cancellation/fault tests require an actual new upstream request.
+ * Explicit TTL0 keeps that prerequisite after answer caching is enabled. */
+static void answer(unsigned rcode) { answer_ttl(rcode,0); }
 static void close_owner(void) {while(pending())finish(0,0);product_root_dns_adapter_stop(&worker);assert(!root_dns_owner_count&&!watches);}
+static void cache_records(void) {
+ start_profile=1;
+ for(unsigned family=4;family<=6;family+=2) {
+  initialize(77,family);unsigned before=sends;consume();answer_ttl(0,30);assert(pending());finish(0,0);
+  assert(sends==before+1 && product_dns_proxy_resources(root_dns_owners[0].proxy).cache_entries==1);
+  reset_terminal();unsigned at=lease.facts.transport_offset+8;
+  buffers[0].data[at]=0xab;buffers[0].data[at+1]=0xcd;
+  consume();assert(sends==before+1 && pending());
+  unsigned returned=pending(),ip=family==4?20:40;
+  assert(buffers[returned].data[ip+8]==0xab && buffers[returned].data[ip+9]==0xcd);
+  const product_dns_observation_record_t *r=&records[record_count-1];
+  assert(r->stage==2 && r->proxy_result==PRODUCT_DNS_PROXY_CACHE && r->upstream_session==0);
+  assert(r->proxy_flags== (PRODUCT_DNS_PROXY_RECORD|PRODUCT_DNS_PROXY_CACHE_ANSWER));
+  finish(0,0);r=&records[record_count-1];
+  assert(r->stage==4 && r->delivery==PRODUCT_DNS_DELIVERY_KERNEL_ACCEPTED && r->id==0xabcd);
+  assert(r->proxy_flags&PRODUCT_DNS_PROXY_CACHE_ANSWER);
+  close_owner();assert(raw_created==raw_closed);
+ }
+ puts("Source-linked Root IPv4/IPv6 cached data: current request identity, normal return and cache source PASS");
+}
 static void crossover(void) {
  for(unsigned family=4;family<=6;family+=2)for(unsigned replied=0;replied<2;++replied){
   initialize(77,family);bank.dns.enabled=0;++bank.dns_revision;
@@ -824,8 +861,160 @@ static void vpn_tcp_off_records(int current_view) {
  puts("VPN selected TCP OFF: real no-upstream query/error/delivery observations, no dispatch and historical facts retained: PASS");
 }
 
+static void cache_resource_query(int protocol,u64 token,const uint8_t *wire) {
+ if(protocol==17) {
+  reset_terminal();memcpy(buffers[0].data+lease.facts.transport_offset+8,wire,sizeof(question));consume();
+ } else if(start_profile==2)
+  product_root_dns_vpn_tcp_query(&worker,77,71,token,wire,sizeof(question));
+ else root_dns_tcp_query(&root_dns_owners[0],901,token,wire,sizeof(question),++now_us);
+}
+static void cache_resource_finish(int protocol,u64 token) {
+ if(protocol==6&&start_profile==1)root_dns_tcp_delivered(&root_dns_owners[0],token,1);
+ else if(protocol==6)product_root_dns_vpn_tcp_done(&worker,77,71,token,1);
+ else if(start_profile==1){assert(pending());finish(0,0);}
+ else {
+  unsigned index=pending();assert(index);vlib_main_t tun_io={2};
+  product_packet_completion_frame_t completion={.obligation=admitted_obligation[index],
+   .terminal_intent=PRODUCT_PACKET_INTENT_PASS_ADAPTER};
+  product_packet_lease_t returning={.platform=admitted_platform[index]};
+  product_packet_graph_policy_evaluation_t policy={.generation=77,.revision=7,.snapshot_hash=789,
+   .declared_action=1,.actual_action=1};
+  root_dns_return_policy(&worker,index,&returning,&policy);
+  product_root_dns_vpn_reply_complete(&tun_io,index,&completion,PRODUCT_DNS_DELIVERY_KERNEL_ACCEPTED);
+  vlib_buffer_free(&worker,&index,1);submitted[index]=0;
+  product_root_dns_vpn_reply_freed(&tun_io,index,&completion);
+  product_root_dns_adapter_expire(&worker,++now_us);
+ }
+}
+static void cache_resource_records(void) {
+ for(start_profile=1;start_profile<=2;++start_profile)
+  for(unsigned family=4;family<=6;family+=2)
+   for(int protocol=17;protocol>=6;protocol-=11) {
+    unsigned first=record_count,before=sends;
+    vpn_tcp_fixture_enabled=start_profile==2&&protocol==6;tcp_reply_accept=1;
+    initialize(77,family);buffers[0].data[0]=family==4?0x45:0x60;
+    uint64_t baseline_bytes=product_dns_proxy_resources(root_dns_owners[0].proxy).owned_bytes;
+    if(start_profile==2) {
+     assert(!product_root_dns_vpn_authorized(&worker,77,last_cookie,0,99,9,1));
+     lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+    }
+    if(protocol==6) {
+     lease.facts.protocol=6;lease.facts.l4_header_length=lease.facts.transport_length=20;
+     lease.facts.tcp_flags=2;lease.facts.tcp_sequence=0x12345678;
+     if(start_profile==2)assert(vpn_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+     else {
+      lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+      memset(buffers[0].data,0,sizeof(buffers[0].data));unsigned at=family==4?20:40;
+      buffers[0].current_length=at+20;buffers[0].data[0]=family==4?0x45:0x60;
+      buffers[0].data[family==4?9:6]=6;buffers[0].data[at+3]=53;buffers[0].data[at+13]=2;
+      assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+      root_dns_tcp_binding_t *binding=&root_dns_owners[0].tcp_bindings[0];
+      product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40000,.resolver_port=53,.syn_sequence=0x12345678};
+      memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+      memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+      assert(root_dns_tcp_accepted(&root_dns_owners[0],901,&endpoint));
+     }
+    }
+    uint8_t wire[sizeof(question)];memcpy(wire,question,sizeof(wire));
+    for(unsigned scenario=0;scenario<5;++scenario) {
+     u64 token=(start_profile==1?UINT64_C(1)<<63:0)|(100+scenario);
+     unsigned start=record_count,failed=fault_failures;
+     wire[1]=(uint8_t)(0x34+scenario);
+     /* The last case is an uncached question, with only output allocation
+      * armed after the genuine upstream request has already been sent. */
+     if(scenario==4)wire[13]='z';
+     fault_bytes=sizeof(question)+16;fault_matches=0;
+     fault_nth=scenario==2?1:scenario==3?2:0;
+     cache_resource_query(protocol,token,wire);
+     if(scenario==0||scenario==4) {
+      assert(sends==before+1+(scenario==4));
+      if(scenario==4)fault_nth=1;
+      answer_ttl(0,30);
+     } else assert(sends==before+1);
+     assert(!fault_nth&&fault_failures==failed+(scenario>=2));
+     assert(record_count==start+2);
+     const product_dns_observation_record_t *r=&records[record_count-1];
+     assert(r->stage==(scenario>=2?3:2));
+     assert(r->proxy_result==(scenario>=2?PRODUCT_DNS_PROXY_CAPACITY:scenario==1?PRODUCT_DNS_PROXY_CACHE:PRODUCT_DNS_PROXY_UPSTREAM));
+     unsigned expected_flags=PRODUCT_DNS_PROXY_RECORD|
+      (scenario==1||scenario==3?PRODUCT_DNS_PROXY_CACHE_ANSWER:scenario==0||scenario==4?PRODUCT_DNS_PROXY_UPSTREAM_ANSWER:0);
+     assert(r->proxy_flags==expected_flags&&r->reply_rcode==(scenario>=2?2:0));
+     assert(r->id==((uint16_t)wire[0]<<8|wire[1]));
+     cache_resource_finish(protocol,token);
+     assert(record_count==start+3&&records[record_count-1].stage==4);
+     assert(records[record_count-1].proxy_flags==expected_flags);
+     assert(records[record_count-1].proxy_result==r->proxy_result);
+     product_dns_proxy_resources_t resources=product_dns_proxy_resources(root_dns_owners[0].proxy);
+     assert(!resources.active&&resources.owned_bytes==baseline_bytes&&resources.cache_entries>=1);
+    }
+    assert(record_count==first+15);close_owner();assert(raw_created==raw_closed);
+   }
+ start_profile=1;vpn_tcp_fixture_enabled=0;tcp_reply_accept=0;
+ assert(fault_failures==24);
+ puts("Root/VPN UDP/TCP dual-stack real cache scratch/output and upstream output malloc failures: PASS");
+}
+
+static void shutdown_prefix_records(void) {
+ for(start_profile=1;start_profile<=2;++start_profile)
+  for(unsigned family=4;family<=6;family+=2)
+   for(int protocol=17;protocol>=6;protocol-=11) {
+    unsigned first=record_count,before=sends;
+    vpn_tcp_fixture_enabled=start_profile==2&&protocol==6;
+    initialize(77,family);
+    buffers[0].data[0]=family==4?0x45:0x60;
+    if(start_profile==2) {
+     assert(!product_root_dns_vpn_authorized(&worker,77,last_cookie,0,99,9,1));
+     lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+    }
+    if(protocol==17)consume();
+    else {
+     lease.facts.protocol=6;lease.facts.l4_header_length=lease.facts.transport_length=20;
+     lease.facts.tcp_flags=2;lease.facts.tcp_sequence=0x12345678;
+     if(start_profile==2) {
+      assert(vpn_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+      product_root_dns_vpn_tcp_query(&worker,77,71,13,question,sizeof(question));
+     } else {
+      lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+      memset(buffers[0].data,0,sizeof(buffers[0].data));unsigned at=family==4?20:40;
+      buffers[0].current_length=at+20;buffers[0].data[0]=family==4?0x45:0x60;
+      buffers[0].data[family==4?9:6]=6;buffers[0].data[at+3]=53;buffers[0].data[at+13]=2;
+      assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+      root_dns_owner_t *owner=&root_dns_owners[0];root_dns_tcp_binding_t *binding=&owner->tcp_bindings[0];
+      product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40000,.resolver_port=53,.syn_sequence=0x12345678};
+      memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+      memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+      assert(root_dns_tcp_accepted(owner,901,&endpoint));
+      root_dns_tcp_query(owner,901,UINT64_C(1)<<63|13,question,sizeof(question),++now_us);
+     }
+    }
+    assert(sends==before+1&&product_dns_proxy_resources(root_dns_owners[0].proxy).active==1);
+    product_dns_proxy_key_t key=last_key;
+    product_root_dns_adapter_quiesce(&worker);
+    assert(record_count==first+2);
+    const product_dns_observation_record_t *query=&records[first],*stopped=&records[first+1];
+    assert(query->stage==1&&stopped->stage==3&&stopped->proxy_result==PRODUCT_DNS_PROXY_STOPPED);
+    assert(query->token==stopped->token&&query->incarnation==stopped->incarnation&&query->source_port==stopped->source_port);
+    assert(query->protocol==protocol&&stopped->adapter_profile==start_profile&&stopped->family==family);
+    assert(!product_dns_proxy_resources(root_dns_owners[0].proxy).active&&!pending());
+    unsigned count=record_count;product_dns_proxy_answer(root_dns_owners[0].proxy,&key,1,last_wire,last_length,++now_us);
+    assert(record_count==count&&!pending());close_owner();
+   }
+ start_profile=1;vpn_tcp_fixture_enabled=0;
+ puts("Root/VPN UDP/TCP dual-stack pending Stop: exact QUERY/STOPPED identity, no delivery or late replay: PASS");
+}
+
 int main(int argc,char **argv) {
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+ if(argc>1&&!strcmp(argv[1],"cache-resource")) {
+  cache_resource_records();assert(record_count==120);
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  printf("Root/VPN allocation normal records=%u\n",record_count);return 0;
+ }
+ if(argc>1&&!strcmp(argv[1],"shutdown-prefix")) {
+  shutdown_prefix_records();assert(record_count==16);
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  printf("Root/VPN STOP normal records=%u\n",record_count);return 0;
+ }
  if(argc>1&&(!strcmp(argv[1],"vpn-tcp-off")||!strcmp(argv[1],"vpn-tcp-view"))) {
   vpn_tcp_off_records(!strcmp(argv[1],"vpn-tcp-view"));
   if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
@@ -836,6 +1025,7 @@ int main(int argc,char **argv) {
   if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
   printf("Root TCP normal records=%u\n",record_count);return 0;
  }
+ if(argc>1&&!strcmp(argv[1],"cache")){cache_records();return 0;}
  if(argc>1&&!strcmp(argv[1],"tcp-unknown")){tcp_unknown_caller();return 0;}
  if(argc>1&&!strcmp(argv[1],"idle-health")){root_idle_health();return 0;}
  if(argc>1&&!strcmp(argv[1],"vpn-authority")){vpn_authority();return 0;}

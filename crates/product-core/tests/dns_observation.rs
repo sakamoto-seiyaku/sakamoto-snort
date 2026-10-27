@@ -2,6 +2,75 @@ use sakamoto_product_core::dns_observation::DnsRecord;
 use sakamoto_product_core::observation_store::ObservationStore;
 
 #[test]
+#[ignore = "requires source-linked Root/VPN real malloc-failure Adapter records"]
+fn source_linked_cache_resource_failures_survive_decode_and_sqlite_reopen() {
+    let wire = std::fs::read(std::env::var("SAKAMOTO_DNS_CACHE_RESOURCE_RECORDS").unwrap()).unwrap();
+    assert_eq!(wire.len(), 120 * 704);
+    let decoded: Vec<_> = wire.chunks_exact(704).map(DnsRecord::decode).collect();
+    let records: Vec<_> = decoded.iter().filter_map(Clone::clone).collect();
+    let root = std::env::var_os("SAKAMOTO_DNS_CODEC_EVIDENCE_DIR")
+        .map(std::path::PathBuf::from).unwrap_or_else(|| test_root("cache-resource"));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap().as_micros() as u64;
+    store.consume_dns(&records, now).unwrap();
+    store.close().unwrap();drop(store);
+    let mut restored = ObservationStore::open(&path).unwrap();
+    let snapshot = restored.query();
+    std::fs::write(root.join("reopened.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "wire_records": 120, "decode_rejected_indices": decoded.iter().enumerate()
+            .filter_map(|(index, record)| record.is_none().then_some(index)).collect::<Vec<_>>(),
+        "after": snapshot,
+    })).unwrap()).unwrap();
+    assert_eq!(records.len(), 120, "every actual Adapter record must decode, including cached-output CAPACITY");
+    assert_eq!(snapshot["dns"]["accepted"], 120);
+    assert_eq!(snapshot["dns"]["rejected"], 0);
+    let rows = snapshot["dns"]["recent"].as_object().unwrap();
+    assert_eq!(rows.len(), 120);
+    for record in &records {
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(rows.values().filter(|row| row["record"] == value).count(), 1);
+    }
+    for profile in [1, 2] { for family in [4, 6] { for protocol in [6, 17] {
+        let scoped: Vec<_> = records.iter().filter(|record| record.adapter_profile == profile
+            && record.family == family && record.protocol == protocol).collect();
+        assert_eq!(scoped.len(), 15);
+        assert_eq!(scoped.iter().filter(|record| record.proxy_flags == 17
+            && record.proxy_result == 6 && matches!(record.stage, 3 | 4)
+            && record.reply_rcode == 2 && record.upstream_session == 0).count(), 2);
+    } } }
+    // Cache provenance only permits the precise local output failure. Other
+    // error results, source mixing and absent response facts remain invalid.
+    let cached_error = records.iter().find(|record| record.proxy_flags == 17
+        && record.stage == 3 && record.proxy_result == 6).unwrap();
+    for change in 0..10 {
+        let mut invalid = cached_error.clone();
+        match change {
+            0 => invalid.stage = 1,
+            1 => invalid.proxy_flags |= 4,
+            2 => invalid.proxy_flags |= 8,
+            3 => invalid.upstream_session = 1,
+            4 => invalid.proxy_result = 7,
+            5 => invalid.reply_rcode = 0,
+            6 => invalid.correlation = 0,
+            7 => invalid.matched_requests = 0,
+            8 => invalid.query_flags &= !0x8000,
+            _ => invalid.candidate_count = 0,
+        }
+        assert!(!invalid.valid(), "invalid cached-resource scope {change} must be rejected");
+    }
+    // A conflicting replay cannot replace the persisted resource failure.
+    let mut conflict = cached_error.clone();conflict.name = "changed.example".into();
+    assert!(conflict.valid());restored.consume_dns(&[conflict], now + 1).unwrap();
+    assert_eq!(restored.query()["dns"]["recent"], snapshot["dns"]["recent"]);
+    assert_eq!(restored.query()["dns"]["rejected"], 1);
+    restored.close().unwrap();
+}
+
+#[test]
 #[ignore = "requires source-linked VPN TCP Adapter OFF records"]
 fn selected_local_tcp_without_upstream_survives_decode_and_sqlite_reopen() {
     let wire = std::fs::read(std::env::var("SAKAMOTO_DNS_VPN_TCP_OFF_RECORDS").unwrap()).unwrap();
@@ -547,4 +616,61 @@ fn vpn_proxy_stages_preserve_normal_sqlite_history_and_return_provenance() {
     let reopened = ObservationStore::open(&path).unwrap();
     assert_eq!(reopened.query()["dns"]["accepted"], 8);
     drop(reopened); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cached_answers_preserve_source_current_policy_and_normal_sqlite_reopen() {
+    let root = test_root("cache-source");
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut records = Vec::new();
+    for profile in 1..=2 {
+        for protocol in [17, 6] {
+            let mut record = proxy_query(20 + records.len() as u64, protocol, profile);
+            record.stage = 2;
+            record.direction = 1;
+            record.query_flags = 0x8180;
+            record.query_token = record.token;
+            record.proxy_flags = 17;
+            record.proxy_result = 11;
+            record.upstream_session = 0; // The cached request did not create a new resolver socket.
+            record.query_policy_generation = 77;
+            record.query_policy_revision = 8;
+            record.query_policy_hash = 100;
+            record.policy_revision = 10;
+            record.output_bytes = 45;
+            record.delivery = if protocol == 6 { 8 } else { 1 };
+            assert!(record.valid());
+            let mut invalid = record.clone();
+            invalid.upstream_session = 99;
+            assert!(!invalid.valid());
+            invalid = record.clone(); invalid.proxy_flags |= 4;
+            assert!(!invalid.valid());
+            invalid = record.clone(); invalid.proxy_flags = 1;
+            assert!(!invalid.valid());
+            records.push(record);
+        }
+    }
+    let mut denied = records[0].clone();
+    denied.token = 30; denied.query_token = 30; denied.request_attempt = 18;
+    denied.proxy_result = 2; denied.reply_rcode = 5;
+    denied.policy_revision = 11; denied.winner = 319;
+    denied.actual_action = 2; denied.declared_action = 2;
+    assert!(denied.valid());
+    records.push(denied);
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();
+    store.consume_dns(&records, 61_000_000).unwrap();
+    store.close().unwrap(); drop(store);
+    let mut reopened = ObservationStore::open(&path).unwrap();
+    let result = reopened.query();
+    assert_eq!(result["dns"]["accepted"], 5);
+    assert_eq!(result["dns"]["rejected"], 0);
+    let rows = result["dns"]["recent"].as_object().unwrap();
+    assert_eq!(rows.len(), records.len());
+    for record in records {
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(rows.values().filter(|row| row["record"] == value).count(), 1);
+    }
+    reopened.close().unwrap();
 }

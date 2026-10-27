@@ -46,6 +46,8 @@ mod live {
         query_requested: u64,
         query_completed: u64,
         reply: Arc<serde_json::Value>,
+        #[cfg(test)]
+        shutdown_capture_hook: Option<Box<dyn FnOnce() + Send>>,
     }
     type Control = Arc<(Mutex<Command>, Condvar)>;
 
@@ -197,10 +199,12 @@ mod live {
                         return;
                     }
                     let mut coverage_reported = false;
+                    let mut shutdown_remaining: Option<Vec<u32>> = None;
+                    let mut transport_ended = false;
                     'consume: loop {
                         let (mutex, cv) = &*worker_control;
                         let mut command = mutex.lock().unwrap();
-                        while command.paused && !command.stop {
+                        while command.paused && !command.stop && !transport_ended {
                             command.parked = true;
                             cv.notify_all();
                             drop(command);
@@ -216,7 +220,25 @@ mod live {
                         }
                         command.parked = false;
                         cv.notify_all();
-                        if command.stop {
+                        if (command.stop || transport_ended) && shutdown_remaining.is_none() {
+                            // A disconnect cannot prove producer quiescence.
+                            // Preserve the already published prefix, without
+                            // following later writes or waiting for an empty
+                            // queue. Occupancy is sampled by the sole consumer;
+                            // published/consumed counters are not a snapshot.
+                            unsafe { product_observation_transport_status(handle, &mut health) };
+                            let channels = &health.channels[..(health.owners * 2) as usize];
+                            if channels.iter().any(|c| c.occupancy > c.capacity) {
+                                worker_state.error = Some("invalid_shutdown_occupancy".into());
+                                break;
+                            }
+                            shutdown_remaining = Some(channels.iter().map(|c| c.occupancy).collect());
+                            #[cfg(test)]
+                            if let Some(hook) = command.shutdown_capture_hook.take() {
+                                hook();
+                            }
+                        }
+                        if shutdown_remaining.as_ref().is_some_and(|n| n.iter().all(|n| *n == 0)) {
                             break;
                         }
                         drop(command);
@@ -226,12 +248,20 @@ mod live {
                         let mut records = Vec::new();
                         let mut dns_records = Vec::new();
                         for channel in 0..health.owners * 2 {
-                            for _ in 0..128 {
+                            let limit = shutdown_remaining.as_ref()
+                                .map_or(128, |n| n[channel as usize].min(128));
+                            for _ in 0..limit {
                                 let mut raw = RawRecord([0; 704]);
                                 let rv = unsafe {
                                     product_observation_receive(handle, channel, &mut raw, 704)
                                 };
                                 if rv == 0 {
+                                    if let Some(remaining) = &mut shutdown_remaining {
+                                        // Never retry a missing captured item.
+                                        // The final coverage gap remains real.
+                                        worker_state.error = Some("shutdown_prefix_unavailable".into());
+                                        remaining[channel as usize] = 0;
+                                    }
                                     break;
                                 }
                                 if rv < 0 {
@@ -239,6 +269,9 @@ mod live {
                                     s.error = Some("invalid_channel_record".into());
                                     s.overview.incomplete = true;
                                     break 'consume;
+                                }
+                                if let Some(remaining) = &mut shutdown_remaining {
+                                    remaining[channel as usize] -= 1;
                                 }
                                 work = true;
                                 if raw.0[3] == 16 {
@@ -313,12 +346,15 @@ mod live {
                                 }
                             }
                         }
-                        if !work {
+                        if !work && shutdown_remaining.is_none() {
                             worker_state.waits += 1;
                             let timeout =
                                 store.as_ref().map_or(-1, ObservationStore::wait_timeout_ms);
                             if unsafe { product_observation_wait(handle, timeout) } < 0 {
-                                break;
+                                // Peer closure may race the empty check in
+                                // C's wait. Capture the published prefix on the
+                                // next pass, as for an explicit disconnect.
+                                transport_ended = true;
                             }
                         }
                     }
@@ -1048,6 +1084,245 @@ mod live {
         }
 
         #[test]
+        #[ignore = "requires the actual Product C producer and observation poll gate"]
+        fn native_shutdown_preserves_stopped_dns_at_producer_disconnect() {
+            let root = std::env::temp_dir().join(format!("s319-peer-close-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let directory = std::path::PathBuf::from(std::env::var("SAKAMOTO_SHUTDOWN_WAIT_DIR").unwrap());
+            std::fs::create_dir(&directory).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            service.pause(true);
+            std::fs::write(directory.join("arm"), b"ARM\n").unwrap();
+            service.pause(false);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !directory.join("ready").is_file() {
+                assert!(Instant::now() < deadline, "actual C poll boundary not reached");
+                thread::sleep(Duration::from_millis(1));
+            }
+            writeln!(input, "dns-proxy {}", std::env::var("SAKAMOTO_DNS_STOP_PREFIX_RECORDS").unwrap()).unwrap();
+            input.flush().unwrap(); line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "DNS-PROXY 16");
+            writeln!(input, "status").unwrap(); input.flush().unwrap();
+            let mut status = Vec::new();
+            for _ in 0..4 {
+                line.clear(); output.read_line(&mut line).unwrap();
+                status.push(line.trim().to_owned());
+            }
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            // Both the real queue publication and peer close happen after
+            // C's empty check but before its actual poll. Drop is not requested.
+            std::fs::write(directory.join("release"), b"RELEASE\n").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let final_view = loop {
+                let view = service.snapshot();
+                if view["live"] == false { break view; }
+                assert!(Instant::now() < deadline, "producer-disconnect consumer did not finish");
+                thread::sleep(Duration::from_millis(1));
+            };
+            drop(service);
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            let after = restored.query(); drop(restored);
+            let poll: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(directory.join("poll-result.json")).unwrap()).unwrap();
+            if let Ok(destination) = std::env::var("SAKAMOTO_SHUTDOWN_EVIDENCE_DIR") {
+                std::fs::write(Path::new(&destination).join("producer-disconnect.json"),
+                    serde_json::to_vec_pretty(&serde_json::json!({
+                        "after": after, "final_view": final_view,
+                        "producer_channel_status_before_exit": status, "actual_poll": poll,
+                        "producer_exited_before_release": true,
+                    })).unwrap()).unwrap();
+            }
+            std::fs::remove_dir_all(root).unwrap();
+            let channel: Vec<_> = status[0].split_whitespace().collect();
+            assert_eq!(channel[3], "16"); assert_eq!(channel[5], "0"); assert_eq!(channel[6], "16");
+            assert_eq!(poll["nfds"], 6); assert_ne!(poll["socket_revents"], 0);
+            assert_eq!(after["dns"]["accepted"], 16, "published STOPPED pairs lost on peer close");
+            assert_eq!(after["dns"]["rejected"], 0);
+            assert_eq!(after["dns"]["recent"].as_object().unwrap().len(), 16);
+            assert_eq!(after["coverage"]["incomplete"], true);
+        }
+
+        #[test]
+        #[ignore = "requires the actual pinned-VPP Product C producer executable"]
+        fn native_shutdown_preserves_published_dns_and_flow_prefix() {
+            let fixture = std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap();
+            let mut failures = Vec::new();
+            for (command, expected_dns, profile) in [
+                ("dns-reply", 7_u64, 1),
+                ("dns-tcp", 11, 1),
+                ("dns-vpn-tcp", 11, 2),
+            ] {
+                let root = std::env::temp_dir().join(format!(
+                    "s319-stop-prefix-{}-{command}", std::process::id()));
+                std::fs::create_dir(&root).unwrap();
+                let mut child = Command::new(&fixture).arg(root.join("api.obs"))
+                    .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+                let mut input = child.stdin.take().unwrap();
+                let mut output = BufReader::new(child.stdout.take().unwrap());
+                let mut line = String::new();
+                output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+                let service = ObservationService::start(
+                    &root.join("api"), 77, &root.join("overall.json")).unwrap();
+                line.clear(); output.read_line(&mut line).unwrap();
+                assert_eq!(line.trim(), "CONNECTED");
+                service.pause(true);
+                for (request, response) in [
+                    (command.to_owned(), format!("{} {expected_dns}",
+                        if command == "dns-reply" { "DNS-REPLY" } else { "DNS-TCP" })),
+                    ("emit 0 260 456 1 10 0".into(), "EMITTED 260".into()),
+                    ("emit 2 129 456 1 10 0".into(), "EMITTED 129".into()),
+                ] {
+                    writeln!(input, "{request}").unwrap(); input.flush().unwrap();
+                    line.clear(); output.read_line(&mut line).unwrap();
+                    assert_eq!(line.trim(), response);
+                }
+                let before = service.snapshot();
+                assert_eq!(before["dns_received"], 0);
+                assert_eq!(before["overview"]["accepted"], 0);
+                let started = Instant::now();
+                drop(service);
+                let elapsed = started.elapsed();
+                // The producer remains alive until the consumer has joined;
+                // shutdown must not wait for producer exit or future records.
+                assert!(child.try_wait().unwrap().is_none());
+                writeln!(input, "quit").unwrap(); input.flush().unwrap();
+                assert!(child.wait().unwrap().success());
+                let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+                let after = restored.query();
+                drop(restored);
+                if let Ok(directory) = std::env::var("SAKAMOTO_SHUTDOWN_EVIDENCE_DIR") {
+                    std::fs::write(Path::new(&directory).join(format!("{command}.json")),
+                        serde_json::to_vec_pretty(&serde_json::json!({
+                            "before": before, "after": after,
+                            "drop_elapsed_us": elapsed.as_micros(),
+                            "producer_alive_after_consumer_join": true,
+                        })).unwrap()).unwrap();
+                }
+                let rows = after["dns"]["recent"].as_object().unwrap();
+                let qualified = after["dns"]["accepted"] == expected_dns
+                    && after["dns"]["rejected"] == 0 && rows.len() == expected_dns as usize
+                    && rows.values().all(|row| row["record"]["adapter_profile"] == profile)
+                    && after["packets"] == serde_json::json!([389, 0])
+                    && after["coverage"]["incomplete"] == true;
+                if !qualified { failures.push(format!("{command}: {after}")); }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+            assert!(failures.is_empty(), "published prefix lost on shutdown: {failures:?}");
+        }
+
+        #[test]
+        #[ignore = "requires the actual pinned-VPP Product C producer executable"]
+        fn native_shutdown_preserves_source_linked_stopped_dns_records() {
+            let root = std::env::temp_dir().join(format!("s319-stopped-dns-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            service.pause(true);
+            writeln!(input, "dns-proxy {}", std::env::var("SAKAMOTO_DNS_STOP_PREFIX_RECORDS").unwrap()).unwrap();
+            input.flush().unwrap(); line.clear(); output.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "DNS-PROXY 16");
+            assert_eq!(service.snapshot()["dns_received"], 0);
+            drop(service);
+            assert!(child.try_wait().unwrap().is_none());
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            let after = restored.query(); drop(restored);
+            if let Ok(directory) = std::env::var("SAKAMOTO_SHUTDOWN_EVIDENCE_DIR") {
+                std::fs::write(Path::new(&directory).join("actual-stopped-records.json"),
+                    serde_json::to_vec_pretty(&after).unwrap()).unwrap();
+            }
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(after["dns"]["accepted"], 16);
+            assert_eq!(after["dns"]["rejected"], 0);
+            let rows = after["dns"]["recent"].as_object().unwrap();
+            assert_eq!(rows.len(), 16);
+            for profile in [1, 2] { for family in [4, 6] { for protocol in [6, 17] {
+                let scoped: Vec<_> = rows.values().map(|r| &r["record"]).filter(|r|
+                    r["adapter_profile"] == profile && r["family"] == family
+                        && r["protocol"] == protocol).collect();
+                assert_eq!(scoped.len(), 2, "exact QUERY/STOPPED pair per Adapter/transport/family");
+                let query = scoped.iter().find(|r| r["stage"] == 1).unwrap();
+                let stopped = scoped.iter().find(|r| r["stage"] == 3).unwrap();
+                assert_eq!(stopped["proxy_result"], 8);
+                for field in ["generation", "owner", "token", "incarnation", "id", "source_port",
+                    "transport_session", "network_revision", "route_revision", "request_attempt"] {
+                    assert_eq!(query[field], stopped[field], "stopped record changed {field}");
+                }
+            } } }
+            assert_eq!(after["coverage"]["incomplete"], true);
+        }
+
+        #[test]
+        #[ignore = "requires the actual pinned-VPP Product C producer executable"]
+        fn native_shutdown_does_not_follow_future_producer_writes() {
+            let root = std::env::temp_dir().join(format!("s319-stop-future-{}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            let mut child = Command::new(std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap())
+                .arg(root.join("api.obs")).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "LISTEN");
+            let service = ObservationService::start(&root.join("api"), 77, &root.join("overall.json")).unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "CONNECTED");
+            service.pause(true);
+            writeln!(input, "emit 0 260 456 1 10 0").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "EMITTED 260");
+            let (captured, ready) = mpsc::channel();
+            let (release, proceed) = mpsc::channel();
+            service.control.0.lock().unwrap().shutdown_capture_hook = Some(Box::new(move || {
+                captured.send(()).unwrap();
+                proceed.recv_timeout(Duration::from_secs(5)).unwrap();
+            }));
+            let closer = thread::spawn(move || drop(service));
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            writeln!(input, "emit 0 129 456 261 10 0").unwrap(); input.flush().unwrap();
+            line.clear(); output.read_line(&mut line).unwrap(); assert_eq!(line.trim(), "EMITTED 129");
+            release.send(()).unwrap(); closer.join().unwrap();
+            assert!(child.try_wait().unwrap().is_none());
+            writeln!(input, "status").unwrap(); input.flush().unwrap();
+            let mut status = Vec::new();
+            for _ in 0..4 {
+                line.clear(); output.read_line(&mut line).unwrap();
+                status.push(line.trim().to_owned());
+            }
+            writeln!(input, "quit").unwrap(); input.flush().unwrap();
+            assert!(child.wait().unwrap().success());
+            let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
+            let after = restored.query(); drop(restored);
+            if let Ok(directory) = std::env::var("SAKAMOTO_SHUTDOWN_EVIDENCE_DIR") {
+                std::fs::write(Path::new(&directory).join("future-prefix.json"),
+                    serde_json::to_vec_pretty(&serde_json::json!({
+                        "after": after, "producer_channel_status": status,
+                        "producer_alive_after_consumer_join": true,
+                    })).unwrap()).unwrap();
+            }
+            std::fs::remove_dir_all(root).unwrap();
+            let channel: Vec<_> = status[0].split_whitespace().collect();
+            assert_eq!(channel[2], "389", "all initial and later writes actually attempted");
+            assert_eq!(channel[3], "389", "all writes actually published");
+            assert_eq!(channel[5], "260", "only the initially captured prefix consumed");
+            assert_eq!(channel[6], "129", "future writes remain queued");
+            assert_eq!(after["packets"], serde_json::json!([260, 0]));
+            assert_eq!(after["coverage"]["incomplete"], true);
+        }
+
+        #[test]
         #[ignore = "requires the actual pinned-VPP Product C producer executable"]
         fn native_shutdown_with_unseen_queued_flow_preserves_a_coverage_gap() {
             let fixture = std::env::var("SAKAMOTO_OBSERVATION_PRODUCER").unwrap();
@@ -1082,11 +1357,11 @@ mod live {
             input.flush().unwrap();
             assert!(child.wait().unwrap().success());
             let restored = ObservationStore::open(&root.join("overall.json")).unwrap();
-            assert_eq!(restored.query()["packets"], serde_json::json!([0, 0]));
+            assert_eq!(restored.query()["packets"], serde_json::json!([1, 0]));
             let incomplete = restored.query()["coverage"]["incomplete"].clone();
             drop(restored);
             std::fs::remove_dir_all(root).unwrap();
-            assert_eq!(incomplete, true, "unseen queue was abandoned during stop");
+            assert_eq!(incomplete, true, "producer can publish beyond the captured prefix");
         }
 
         #[test]

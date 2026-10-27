@@ -1,0 +1,36 @@
+{
+  "scope": "One exact actual post-Stop payload-free oldApp control clippedfrom S319VPNN3g2861; strictprefixprovedseparately,representedzeroRowsforfocusedsharedscopereplay. Booleanfactsderivefrompinnedindependentprerequisites.",
+  "original_classification": "build-output/s319-dns-cache-20261026/coordination/lifecycle2861-overlapping-warm-fence-classification.json",
+  "original_classification_sha256": "7de19249ec0a77d7c9c2ad7222da643dcb7ae7332329abd4031f4d1551da753c",
+  "old_generation": 2861,
+  "prior_warm_source": 20000,
+  "stopped_identity": {
+    "source": "10.111.0.2",
+    "source_port": 20001,
+    "resolver": "1.1.1.1",
+    "sequence": 412654057,
+    "acknowledgement": 6511,
+    "pending_query_proved": true,
+    "native_original_tcp_fd_absent": true,
+    "normal_stop_resource_zero": true,
+    "app_finished_no_reply": true,
+    "normal_sqlite_query_stopped": true
+  },
+  "wlan": [
+    {
+      "kind": "tcp",
+      "interface": "wlan0",
+      "source": "10.111.0.2",
+      "destination": "1.1.1.1",
+      "source_port": 20001,
+      "destination_port": 53,
+      "packet_type": 4,
+      "payload_hex": "",
+      "packet_hex": "45000028e4d54000400649880a6f0002010101014e210035189899e90000196f5014ffff89170000",
+      "mono_ns": 3934314291945290,
+      "timestamp_scope": "userspace_after_recv",
+      "sequence": 412654057,
+      "flags": 20
+    }
+  ]
+}

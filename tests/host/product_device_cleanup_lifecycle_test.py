@@ -39,6 +39,24 @@ class StalledReader(Reader):
     def wait(self, timeout): raise subprocess.TimeoutExpired(['adb','tail'],timeout)
 
 class CleanupLifecycleTest(unittest.TestCase):
+    def test_physical_observer_uses_both_peer_routes_and_rejects_interface_change(self):
+        for interface in ('wlan0','wlan1'):
+            with self.subTest(interface=interface):
+                device=s315.Device.__new__(s315.Device)
+                device.args=types.SimpleNamespace(endpoint4='192.168.4.5',endpoint6='fd76:d462:c4e3::1')
+                device.witnesses={};device.save=lambda _,value:value
+                device.root=lambda command:'peer dev '+interface+' src '+('192.168.4.151'if '-4'in command else'fd76:d462:c4e3::2')
+                self.assertEqual(device.select_physical_interface('initial'),interface)
+                device.witnesses={interface:{}}
+                self.assertEqual(device.select_physical_interface('same-collector'),interface)
+                device.root=lambda _: 'peer dev '+('wlan0'if interface=='wlan1'else'wlan1')+' src 192.168.4.151'
+                with self.assertRaisesRegex(AssertionError,'changed while collector'):
+                    device.select_physical_interface('changed')
+        device.witnesses={}
+        device.root=lambda command:'peer dev '+('wlan0'if '-4'in command else'wlan1')+' src 192.168.4.151'
+        with self.assertRaisesRegex(AssertionError,'different physical interfaces'):
+            device.select_physical_interface('mixed-family')
+
     def test_full_matrix_reaches_capacity_after_both_client_capacities(self):
         class Device:
             args=types.SimpleNamespace(endpoint4='192.168.4.5',endpoint6='fd76:d462:c4e3::1')
@@ -210,6 +228,7 @@ class CleanupLifecycleTest(unittest.TestCase):
             device.adb=lambda *args,**_: 'hash' if 'sha256sum' in args else ''
             calls=[]
             def root(command):
+                if command.startswith('ip -'):return 'peer dev wlan0 src 192.168.4.151'
                 calls.append(command)
                 if len(calls)==1:return '77\n'
                 raise subprocess.TimeoutExpired(['adb','identity'],5)
@@ -227,7 +246,7 @@ class CleanupLifecycleTest(unittest.TestCase):
             device.witnesses={}
             device.save=lambda name,value: ((device.out/name).write_text(value),value)[1]
             device.adb=lambda *args,**_: 'hash' if 'sha256sum' in args else ''
-            device.root=lambda _: (_ for _ in ()).throw(subprocess.TimeoutExpired(['adb','wire-launch'],5))
+            device.root=lambda command: 'peer dev wlan0 src 192.168.4.151'if command.startswith('ip -')else (_ for _ in ()).throw(subprocess.TimeoutExpired(['adb','wire-launch'],5))
             with patch.object(s315.subprocess,'run'),patch.object(s315,'digest',return_value='hash'):
                 with self.assertRaises(subprocess.TimeoutExpired): device.wire_start()
             pending=device.witnesses['wlan0']
@@ -589,5 +608,70 @@ class CleanupLifecycleTest(unittest.TestCase):
             self.assertEqual(receipt['local_pid'],91)
             self.assertTrue(receipt['reader_alive'])
             self.assertIn('cleanup exhausted',receipt['cleanup_error'])
+
+class StopPreparationAcquisition(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.cache=load('s319_stop_acquisition','tests/device/s319-dns-cache.py')
+
+    def exercise_stop_path(self, cache_path, deadline=100):
+        cache=self.cache
+        class ReachedPendingInspection(Exception): pass
+        clock=types.SimpleNamespace(now=0.0)
+        with tempfile.TemporaryDirectory(prefix='dns-stop-acquisition-')as temporary:
+            out=Path(temporary)
+            device=types.SimpleNamespace(out=out,base='/owned/',uid=12632,generation=80,
+                args=types.SimpleNamespace(profile='vpn',endpoint4='192.0.2.1'),capture_deadline=deadline)
+            device.rules=device.upstream=device.proxy_ready=lambda *_:None
+            device.question=lambda _:cache.fixtures.question(1,'pending.test',1)
+            device.reserve_source_port=lambda _:20000
+            device.wire_coverage=lambda _:{'wlan0':[],'lo':[],'tun0':[]}
+            device.forbid_original_tcp=lambda *_:None
+            device.root=lambda command:('42 12632 /owned/libvpp_runtime.so -c /owned/startup.conf\n'
+                if command.startswith('ps ')else'42 (vpp) '+' '.join(['0']*30)+'\n')
+            def save(name,value):
+                (out/name).write_text(value);return value
+            device.save=save
+            device.prepare_stop_capture=lambda _:setattr(device,'reader_prepared',True)
+            def launch(*_,**options):
+                self.assertTrue(device.reader_prepared)
+                device.launch_options=options.get('options');return 'owned-probe'
+            device.launch_tcp=launch
+            device.await_peer_query=types.MethodType(cache.root.shared.Device.await_peer_query,device)
+            def pending(*_):raise ReachedPendingInspection()
+            device.cli=pending
+            peer=types.SimpleNamespace(register=lambda *_args,**_options:None,cursor=lambda:0,
+                received=lambda *_args,**_options:[{'request':1}]if clock.now>=(3 if cache_path else 0)else[])
+            result={};outcome=None
+            with patch.object(cache.root.shared.time,'monotonic',side_effect=lambda:clock.now), \
+                 patch.object(cache.root.shared.time,'sleep',side_effect=lambda seconds:setattr(clock,'now',clock.now+seconds)), \
+                 patch.object(cache,'exchange',return_value=None):
+                try:
+                    if cache_path:cache.stop_late(device,peer,result,1)
+                    else:cache.previous.stop_late(device,peer,result,1)
+                except ReachedPendingInspection:outcome='reached_pending_inspection'
+                except AssertionError:outcome='acquisition_expired'
+            receipt=json.loads((out/'n1-pending-stop-oldgen-peer-acquisition.json').read_text())
+            return outcome,clock.now,receipt,device.launch_options,device.capture_deadline
+
+    def test_s319_stop_acquires_after_the_declared_three_second_precomplete_write(self):
+        outcome,elapsed,receipt,options,deadline=self.exercise_stop_path(True)
+        self.assertEqual(outcome,'reached_pending_inspection')
+        self.assertGreaterEqual(elapsed,3);self.assertLess(elapsed,5)
+        self.assertEqual(receipt['pre_send_delay_ms'],3000)
+        self.assertEqual(options,self.cache.previous.UI_TCP_WRITE_OPTIONS)
+        self.assertEqual(deadline,100)
+
+    def test_existing_s318_no_precomplete_delay_keeps_two_second_acquisition(self):
+        outcome,elapsed,receipt,options,deadline=self.exercise_stop_path(False)
+        self.assertEqual(outcome,'reached_pending_inspection');self.assertEqual(elapsed,0)
+        self.assertEqual(receipt['pre_send_delay_ms'],0);self.assertEqual(receipt['deadline_monotonic'],2)
+        self.assertIsNone(options);self.assertEqual(deadline,100)
+
+    def test_short_matrix_budget_still_clips_declared_precomplete_delay(self):
+        outcome,elapsed,receipt,_,deadline=self.exercise_stop_path(True,2.5)
+        self.assertEqual(outcome,'acquisition_expired');self.assertAlmostEqual(elapsed,2.5)
+        self.assertEqual(receipt['deadline_monotonic'],2.5);self.assertEqual(deadline,2.5)
+
 
 if __name__ == '__main__': unittest.main()
