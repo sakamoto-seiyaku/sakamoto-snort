@@ -78,7 +78,7 @@ profiles and enables policy qualification counters; it makes no performance clai
 The evidence root is
 [`build-output/s320-dns-coalescing-20261027`](../../build-output/s320-dns-coalescing-20261027/).
 Its final source/artifact/evidence map is in the
-[final source seal](../../build-output/s320-dns-coalescing-20261027/coordination/s320-max-fast-20261029/implement-owner-r1/final-source-seal-v2/manifest.json).
+[final source seal](../../build-output/s320-dns-coalescing-20261027/coordination/s320-max-fast-20261029/implement-owner-r1/final-source-seal-v3/manifest.json).
 The reviewed safety-v2 package remains immutable. Earlier
 R1/R2a/R3 results keep their original artifacts and source ZIPs; they are not
 relabeled as executions of R4.
@@ -229,6 +229,6 @@ exact whitespace delta to the tested source.
 
 The exact scoped commit, S320-only tracker write and protected readback, and
 actual OS-temp handoff with its identical durable copy are recorded in the
-[delivery receipt](../../build-output/s320-dns-coalescing-20261027/coordination/s320-max-fast-20261029/implement-owner-r1/delivery-receipt.json).
+[delivery receipt](../../build-output/s320-dns-coalescing-20261027/coordination/s320-max-fast-20261029/implement-owner-r1/delivery-final-receipt.json).
 This record qualifies S320's stated scope; it does not complete the remaining DNS
 tickets or broaden the limits above.
