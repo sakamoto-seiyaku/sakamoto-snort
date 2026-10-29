@@ -372,9 +372,23 @@ typedef product_config_metadata {
     vl_api_product_source_metadata_t rules[256];
     vl_api_product_source_metadata_t lists[64];
 };
+typedef product_dns_endpoint {
+    u32 transport; u32 family; u32 port; u32 reserved;
+    u8 address[16]; u8 identity[256];
+};
+typedef product_dns_route {
+    u32 count; u32 reserved; u32 candidates[8];
+};
+typedef product_dns_exception {
+    u32 match; u32 target; u32 route; u32 length; u8 name[256];
+};
 typedef product_dns_config {
     u32 enabled; u32 family; u32 port; u32 reserved;
     u8 address[16];
+    u32 endpoint_count; u32 route_count; u32 exception_count; u32 reserved2;
+    vl_api_product_dns_endpoint_t endpoints[8];
+    vl_api_product_dns_route_t routes[8];
+    vl_api_product_dns_exception_t exceptions[32];
 };
 
 define product_core_rule_config {

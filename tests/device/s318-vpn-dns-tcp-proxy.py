@@ -211,6 +211,7 @@ class Device(root.Device):
   absent=self.root('for p in '+stop+' '+log+'; do if [ -e "$p" ]; then echo PRESENT:$p; fi; done');assert not absent.strip()
   item=dict(pid=None,start=None,uid=None,exe=remote,stop=stop,log=log,launch_pending=True);self.witnesses[interface]=item
   addresses=[self.args.endpoint4,self.args.endpoint6,'1.1.1.1','2606:4700:4700::1111']
+  addresses+=getattr(self,'extra_wire_addresses',[]);assert len(addresses)<=12
   pid=int(self.save('wire-'+interface+'-start.txt',self.root(remote+' '+interface+' '+stop+' '+' '.join(addresses)+' > '+log+' 2>&1 < /dev/null & echo $!')).strip());item.update(pid=pid,launch_pending=False)
   raw=self.save('wire-'+interface+'-identity.txt',self.root(f'cat /proc/{pid}/stat; grep "^Uid:" /proc/{pid}/status; readlink /proc/{pid}/exe'))
   lines=raw.splitlines();assert len(lines)==3 and lines[2]==remote

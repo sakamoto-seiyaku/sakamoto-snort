@@ -173,7 +173,7 @@ static int product_packet_graph_accepting(void) {return 1;}
 static void product_flow_expiry_changed(vlib_main_t *vm) {assert(vm==&worker);}
 static void product_observation_dns(vlib_main_t *vm,const product_dns_observation_record_t *record) {
  assert(vm==&worker&&record_count<4096);records[record_count]=*record;
- records[record_count].length=sizeof(*record);records[record_count].version=PRODUCT_OBSERVATION_VERSION;
+ records[record_count].length=product_dns_observation_wire_bytes(record);records[record_count].version=product_dns_observation_wire_version(record);
  records[record_count].flags=PRODUCT_OBSERVATION_DNS;records[record_count].mono_us=now_us;
  records[record_count].activity_utc_us=(uint64_t)time(NULL)*1000000;++record_count;
 }
@@ -562,6 +562,21 @@ static void vpn_authority(void)
  assert(product_root_dns_adapter_ready()&&!root_dns_owners[0].last_error);
  assert(product_root_dns_vpn_authorized(&worker,77,first,0,98,9,1)<0);
  assert(product_root_dns_adapter_ready());close_owner();start_profile=1;
+ for(unsigned change=0;change<2;++change) {
+  start_profile=2;initialize(80+change,4);
+  u64 old=last_cookie;
+  if(change)++network.revision;
+  else {++bank.dns_revision;bank.dns.address[3]=54;}
+  /* The ordinary broker callback is delivered before an owner timer/file
+   * event gets a chance to refresh this newly authoritative view. */
+  assert(product_root_dns_vpn_authorized(&worker,80+change,old,0,98,9,1)<0);
+  assert(last_cookie!=old && !fixture_io.authorized && !product_root_dns_adapter_ready());
+  assert(root_dns_owners[0].route_revision==bank.dns_revision
+    && root_dns_owners[0].network_revision==network.revision);
+  assert(!product_root_dns_vpn_authorized(&worker,80+change,last_cookie,0,99,9,1));
+  assert(product_root_dns_adapter_ready());close_owner();
+ }
+ start_profile=1;
  puts("VPN effective route: pending/denied protect not ready; success ready and stale generation rejected PASS");
 }
 static void vpn_returns(void)
@@ -1011,6 +1026,48 @@ static void coalescing_setup(unsigned family,int protocol) {
   }
  }
 }
+
+static void ordered_routing_records(void) {
+ for(start_profile=1;start_profile<=2;++start_profile)
+  for(unsigned family=4;family<=6;family+=2)
+   for(int protocol=17;protocol>=6;protocol-=11) {
+    coalescing_setup(family,protocol);
+    bank.dns=(product_dns_proxy_route_t){.enabled=1,.family=4,.port=15353,.address={198,51,100,53},
+      .endpoint_count=2,.route_count=1,
+      .endpoints={{.transport=1,.family=4,.port=15353,.address={198,51,100,53},.identity="primary.test"},
+        {.transport=1,.family=4,.port=15354,.address={198,51,100,54},.identity="backup.test"}},
+      .routes={{.count=2,.candidates={0,1}}}};
+    ++bank.dns_revision;product_root_dns_adapter_expire(&worker,++now_us);
+    if(start_profile==2)assert(!product_root_dns_vpn_authorized(&worker,77,last_cookie,0,99,9,1));
+    unsigned first=record_count,before=sends;
+    u64 token=(start_profile==1?UINT64_C(1)<<63:0)|13;
+    cache_resource_query(protocol,token,question);
+    assert(sends==before+1 && record_count==first+2 && last_key.resolver_id==1);
+    u64 primary=last_key.attempt;now_us+=PRODUCT_DNS_PROXY_ATTEMPT_US;
+    product_root_dns_adapter_expire(&worker,now_us);
+    assert(sends==before+2 && record_count==first+4 && last_key.resolver_id==2);
+    assert(last_key.resolver_port==15354 && last_key.resolver_address[3]==54);
+    u64 backup=last_key.attempt;assert(backup!=primary);
+    answer(0);cache_resource_finish(protocol,token);
+    assert(record_count==first+6);
+    const unsigned stages[]={1,5,5,5,2,4},resolvers[]={1,1,1,2,2,2};
+    for(unsigned i=0;i<6;++i) {
+      const product_dns_observation_record_t *record=&records[first+i];
+      assert(record->stage==stages[i] && record->resolver_id==resolvers[i] && record->resolution_route==0);
+      assert(record->length==720 && record->version==9 && record->adapter_profile==start_profile
+        && record->protocol==protocol && record->family==family && record->uid==10123 && record->caller==1);
+      assert(record->token==records[first].token && record->request_attempt==records[first].request_attempt);
+      assert(record->upstream_attempt==(i==0?0:i<3?primary:backup));
+      if(record->stage==5)assert(record->proxy_result==(i==2?14:12) && !record->actual_action
+        && !record->declared_action && !record->delivery && !record->policy_generation && !record->upstream_session);
+    }
+    assert(!product_dns_proxy_resources(root_dns_owners[0].proxy).active && !pending());
+    close_owner();assert(raw_created==raw_closed);
+   }
+ start_profile=1;vpn_tcp_fixture_enabled=0;tcp_reply_accept=0;
+ assert(record_count==48);
+ puts("Root/VPN UDP/TCP dual-stack ordered attempts: 48 actual normal view/timeout/delivery records PASS");
+}
 static product_dns_proxy_key_t record_key(const product_dns_observation_record_t *r) {
  return(product_dns_proxy_key_t){.generation=r->generation,.token=r->token,.incarnation=r->incarnation,
   .attempt=r->request_attempt,.network_revision=r->network_revision,.route_revision=r->route_revision};
@@ -1226,29 +1283,38 @@ static void shutdown_prefix_records(void) {
 
 int main(int argc,char **argv) {
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+ if(argc>1&&!strcmp(argv[1],"routing")) {
+  ordered_routing_records();
+  if(argc>2){
+   FILE *out=fopen(argv[2],"wb");assert(out);
+   for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);
+   assert(!fclose(out));
+  }
+  return 0;
+ }
  if(argc>1&&!strcmp(argv[1],"coalescing")) {
   coalescing_records();coalescing_independent_app_channels();
-  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
   printf("Root/VPN coalescing normal records=%u\n",record_count);return 0;
  }
  if(argc>1&&!strcmp(argv[1],"cache-resource")) {
   cache_resource_records();assert(record_count==120);
-  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
   printf("Root/VPN allocation normal records=%u\n",record_count);return 0;
  }
  if(argc>1&&!strcmp(argv[1],"shutdown-prefix")) {
   shutdown_prefix_records();assert(record_count==16);
-  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
   printf("Root/VPN STOP normal records=%u\n",record_count);return 0;
  }
  if(argc>1&&(!strcmp(argv[1],"vpn-tcp-off")||!strcmp(argv[1],"vpn-tcp-view"))) {
   vpn_tcp_off_records(!strcmp(argv[1],"vpn-tcp-view"));
-  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
   printf("VPN TCP OFF normal records=%u\n",record_count);return 0;
  }
  if(argc>1&&!strcmp(argv[1],"tcp-proxy")){
   tcp_proxy_identity();
-  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);for(unsigned i=0;i<record_count;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
   printf("Root TCP normal records=%u\n",record_count);return 0;
  }
  if(argc>1&&!strcmp(argv[1],"cache")){cache_records();return 0;}
@@ -1318,6 +1384,6 @@ int main(int argc,char **argv) {
  product_root_dns_adapter_quiesce(&worker);while(pending())finish(0,0);product_root_dns_adapter_stop(&worker);
  assert(raw_created==raw_closed&&!root_dns_owners[0].replies);
  product_domains_destroy(bank.domains);
- if(argc>1){FILE *out=fopen(argv[1],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),semantic_records,out)==semantic_records);assert(!fclose(out));}
+ if(argc>1){FILE *out=fopen(argv[1],"wb");assert(out);for(unsigned i=0;i<semantic_records;++i)assert(fwrite(&records[i],1,records[i].length,out)==records[i].length);assert(!fclose(out));}
  printf("Root DNS actual Adapter wire/verdict/return/policy/capacity/cancel/stop/stale fixture: PASS records=%u semantic_export=%u\n",record_count,semantic_records);
 }

@@ -96,11 +96,32 @@ typedef struct {
     sakamoto_product_source_metadata_t lists[SAKAMOTO_DOMAIN_MAX_LISTS];
 } sakamoto_product_config_metadata_t;
 
-/* Explicit ordinary upstream selection. Disabled replacement defaults to all
- * zero; a previously selected numeric endpoint may also remain while off. */
+#define SAKAMOTO_DNS_MAX_ENDPOINTS 8U
+#define SAKAMOTO_DNS_MAX_ROUTES 8U
+#define SAKAMOTO_DNS_MAX_EXCEPTIONS 32U
+typedef struct {
+    uint32_t transport, family, port, reserved;
+    uint8_t address[16], identity[256];
+} sakamoto_product_dns_endpoint_t;
+typedef struct {
+    uint32_t count, reserved;
+    uint32_t candidates[SAKAMOTO_DNS_MAX_ENDPOINTS];
+} sakamoto_product_dns_route_t;
+typedef struct {
+    uint32_t match, target, route, length; /* target: 0 original, 1 route */
+    uint8_t name[256];
+} sakamoto_product_dns_exception_t;
+
+/* VPP-owned bounded ordinary resolution program. The prefix remains the
+ * single-upstream representation and projects the default route's first
+ * endpoint for existing readers. Endpoint identity and connection IP differ. */
 typedef struct {
     uint32_t enabled, family, port, reserved;
     uint8_t address[16];
+    uint32_t endpoint_count, route_count, exception_count, reserved2;
+    sakamoto_product_dns_endpoint_t endpoints[SAKAMOTO_DNS_MAX_ENDPOINTS];
+    sakamoto_product_dns_route_t routes[SAKAMOTO_DNS_MAX_ROUTES];
+    sakamoto_product_dns_exception_t exceptions[SAKAMOTO_DNS_MAX_EXCEPTIONS];
 } sakamoto_product_dns_config_t;
 
 typedef struct {

@@ -124,7 +124,7 @@ static unsigned record_count;
 static void product_observation_dns(vlib_main_t *v,const product_dns_observation_record_t *record)
 {
  assert(v==&vm && record_count<256);records[record_count]=*record;
- records[record_count].length=sizeof(*record);records[record_count].version=PRODUCT_OBSERVATION_VERSION;
+ records[record_count].length=product_dns_observation_wire_bytes(record);records[record_count].version=product_dns_observation_wire_version(record);
  records[record_count].flags=PRODUCT_OBSERVATION_DNS;++record_count;
 }
 """

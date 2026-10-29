@@ -234,7 +234,13 @@ static void opaque_options_and_full_question_or_view_differences_do_not_join(voi
   else if(variant==11)input.context.packet.destination_address[0]=1;
   snapshot.context.packet=input.context.packet;snapshot.network_revision=input.identity.network_revision;snapshot.route_revision=input.route_revision;
   assert(product_dns_proxy_submit(proxy,&input,q,length,&snapshot));
-  assert(sends==2&&!replies&&product_dns_proxy_resources(proxy).active==2&&product_dns_proxy_resources(proxy).exchanges==2);
+  if(variant==6 || variant==7) {
+   /* S321: a newly authoritative network/resolver view retires the old
+    * request with SERVFAIL; it still must never join the new exchange. */
+   assert(sends==2 && replies==1 && received_codes[0]==2 && reply_events[0].result==PRODUCT_DNS_PROXY_VIEW_CHANGED);
+   assert(product_dns_proxy_resources(proxy).active==1 && product_dns_proxy_resources(proxy).exchanges==1
+    && !product_dns_proxy_resources(proxy).coalesced);
+  } else assert(sends==2&&!replies&&product_dns_proxy_resources(proxy).active==2&&product_dns_proxy_resources(proxy).exchanges==2);
   if(variant==4||variant==5)assert(!memcmp(sent+2,q+2,length-2));
   product_dns_proxy_close(proxy);assert(cancellations==2);
  }

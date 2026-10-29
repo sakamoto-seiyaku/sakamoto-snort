@@ -4,8 +4,23 @@
 #define DNS_CACHE_ENTRIES 512U
 #define DNS_CACHE_BYTES (2U * 1024U * 1024U)
 typedef struct {
+  uint64_t network, route, underlay;
+  uint32_t resolution_route, resolver_id, family, port, network_context;
+  uint8_t address[16], profile, network_context_known;
+} dns_cache_view_t;
+static int cache_same_view (const dns_cache_view_t *a, const dns_cache_view_t *b)
+{
+  return a->network == b->network && a->route == b->route && a->underlay == b->underlay &&
+    a->resolution_route == b->resolution_route && a->resolver_id == b->resolver_id &&
+    a->family == b->family && a->port == b->port && a->profile == b->profile &&
+    a->network_context_known == b->network_context_known &&
+    (!a->network_context_known || a->network_context == b->network_context) &&
+    !memcmp (a->address, b->address, 16);
+}
+typedef struct {
   uint8_t *data;
-  uint64_t network, route, inserted, used;
+  dns_cache_view_t view;
+  uint64_t inserted, used;
   uint32_t lifetime;
   uint16_t query_length, answer_length;
   uint8_t transport;
@@ -239,28 +254,29 @@ static void cache_prune (dns_cache_t *cache, uint64_t now, uint64_t network, uin
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
     {
       dns_cache_entry_t *e = &cache->entries[i];
-      if (e->data && (e->network != network || e->route != route || cache_expired (e, now)))
+      if (e->data && (e->view.network != network || e->view.route != route || cache_expired (e, now)))
         cache_drop (cache, e, 1);
     }
 }
 static dns_cache_entry_t *cache_lookup (dns_cache_t *cache, const uint8_t *query, size_t length,
-  uint64_t now, uint64_t network, uint64_t route)
+  uint64_t now, const dns_cache_view_t *view)
 {
   size_t end;
-  cache_prune (cache, now, network, route);
+  cache_prune (cache, now, view->network, view->route);
   if (cache->serial == UINT64_MAX) { cache_clear (cache); cache->serial = 0; }
   if (!cache_question (query, length, &end)) { ++cache->skipped; return NULL; }
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
     {
       dns_cache_entry_t *e = &cache->entries[i];
-      if (e->data && e->query_length == length && !memcmp (e->data + 2, query + 2, length - 2))
+      if (e->data && cache_same_view (&e->view, view) && e->query_length == length &&
+          !memcmp (e->data + 2, query + 2, length - 2))
         { e->used = ++cache->serial; ++cache->hits; return e; }
     }
   ++cache->misses; return NULL;
 }
 static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_length,
   const uint8_t *answer, size_t answer_length, unsigned transport, uint64_t now,
-  uint64_t network, uint64_t route, const product_dns_response_t *response)
+  const dns_cache_view_t *view, const product_dns_response_t *response)
 {
   size_t end;
   if (!cache_question (query, query_length, &end) || answer_length < end ||
@@ -273,12 +289,13 @@ static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_
    * memory throughout insertion, not just the final container state. */
   if (!cache_answer_ttls (answer, answer_length, 0, response, NULL, &lifetime))
     { ++cache->skipped; return; }
-  cache_prune (cache, now, network, route);
+  cache_prune (cache, now, view->network, view->route);
   if (cache->serial == UINT64_MAX) { cache_clear (cache); cache->serial = 0; }
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
     {
       dns_cache_entry_t *e = &cache->entries[i];
-      if (e->data && e->query_length == query_length && !memcmp (e->data + 2, query + 2, query_length - 2))
+      if (e->data && cache_same_view (&e->view, view) && e->query_length == query_length &&
+          !memcmp (e->data + 2, query + 2, query_length - 2))
         cache_drop (cache, e, 0);
     }
   while (cache->count == DNS_CACHE_ENTRIES || cache->bytes + bytes > DNS_CACHE_BYTES - sizeof (*cache))
@@ -297,7 +314,7 @@ static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
     if (!cache->entries[i].data)
       {
-        cache->entries[i] = (dns_cache_entry_t) {.data = copy, .network = network, .route = route,
+        cache->entries[i] = (dns_cache_entry_t) {.data = copy, .view = *view,
           .inserted = now, .used = ++cache->serial, .lifetime = lifetime, .query_length = query_length,
           .answer_length = answer_length, .transport = transport};
         ++cache->count; cache->bytes += bytes;

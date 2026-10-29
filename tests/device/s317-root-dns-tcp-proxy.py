@@ -158,6 +158,8 @@ class Device(shared.Device):
         self.adb('push',binary,remote);self.adb('shell','chmod','755',remote)
         assert self.adb('shell','sha256sum',remote).split()[0]==digest(binary)
         addresses=[self.args.endpoint4,self.args.endpoint6,'1.1.1.1','2606:4700:4700::1111','127.0.0.1','::1']
+        addresses+=getattr(self,'extra_wire_addresses',[])
+        assert len(addresses)<=12
         for interface in (self.physical_interface,'lo'):
             stop=remote+'-'+interface+'.stop';log=remote+'-'+interface+'.jsonl'
             command=remote+' '+interface+' '+stop+' '+' '.join(map(shlex.quote,addresses))+' > '+log+' 2>&1 < /dev/null & echo $!'

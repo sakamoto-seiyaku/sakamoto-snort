@@ -19,12 +19,12 @@ _Static_assert(S317_WIRE_PACKET_LIMIT > 0 && S317_WIRE_PACKET_LIMIT <= 16384,
 
 static unsigned u16 (const unsigned char *p) { return p[0] * 256U + p[1]; }
 int main (int argc, char **argv) {
-  if (argc < 5 || argc > 9 || getuid () != 0 ||
+  if (argc < 5 || argc > 15 || getuid () != 0 ||
       (strcmp (argv[1], "lo") &&
        (strncmp (argv[1], "wlan", 4) || !argv[1][4] || strspn (argv[1] + 4, "0123456789") != strlen (argv[1] + 4)) &&
        (strncmp (argv[1], "tun", 3) || !argv[1][3] || strspn (argv[1] + 3, "0123456789") != strlen (argv[1] + 3))) ||
       strncmp (argv[2], "/data/local/tmp/s317-wire-", 26)) return 2;
-  unsigned char addresses[6][16] = {{0}}; int families[6];
+  unsigned char addresses[12][16] = {{0}}; int families[12];
   for (int i = 3; i < argc; ++i) {
     families[i-3] = strchr (argv[i], ':') ? AF_INET6 : AF_INET;
     if (inet_pton (families[i-3], argv[i], addresses[i-3]) != 1) return 2;
@@ -62,11 +62,14 @@ int main (int argc, char **argv) {
     }else continue;
     if(protocol!=6&&protocol!=17)continue;
     unsigned sport=u16(packet+header),dport=u16(packet+header+2);
-    if(sport!=53&&dport!=53&&sport!=53053&&dport!=53053&&sport!=53054&&dport!=53054&&
+    if(sport!=53&&dport!=53&&sport!=5353&&dport!=5353&&sport!=53053&&dport!=53053&&sport!=53054&&dport!=53054&&
        !(sport>=15353&&sport<15415)&&!(dport>=15353&&dport<15415))continue;
     unsigned selected=0;
     for(int i=3;i<argc;++i)if(families[i-3]==(int)family&&
       (!memcmp(source,addresses[i-3],family==AF_INET?4:16)||!memcmp(destination,addresses[i-3],family==AF_INET?4:16)))selected=1;
+    /* mDNS responders may use scoped link-local unicast sources, independent
+     * of the ordinary DNS fixture's configured unicast endpoint addresses. */
+    if(protocol==17&&(sport==5353||dport==5353))selected=1;
     if(!selected)continue;
     if(protocol==6&&total<header+20)continue;
     size_t transport=protocol==17?8:(packet[header+12]>>4)*4U;

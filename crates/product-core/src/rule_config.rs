@@ -154,6 +154,28 @@ impl Default for ConfigMetadata {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DnsEndpoint {
+    pub transport: u32, pub family: u32, pub port: u32, pub reserved: u32,
+    pub address: [u8; 16], pub identity: [u8; 256],
+}
+impl Default for DnsEndpoint {
+    fn default() -> Self { Self {transport:0,family:0,port:0,reserved:0,address:[0;16],identity:[0;256]} }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DnsRoute {
+    pub count: u32, pub reserved: u32, pub candidates: [u32; 8],
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DnsException {
+    pub match_kind: u32, pub target: u32, pub route: u32, pub length: u32, pub name: [u8; 256],
+}
+impl Default for DnsException {
+    fn default() -> Self { Self {match_kind:0,target:0,route:0,length:0,name:[0;256]} }
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DnsConfig {
     pub enabled: u32,
@@ -161,6 +183,8 @@ pub struct DnsConfig {
     pub port: u32,
     pub reserved: u32,
     pub address: [u8; 16],
+    pub endpoint_count: u32, pub route_count: u32, pub exception_count: u32, pub reserved2: u32,
+    pub endpoints: [DnsEndpoint; 8], pub routes: [DnsRoute; 8], pub exceptions: [DnsException; 32],
 }
 
 #[repr(C)]
@@ -537,13 +561,17 @@ mod tests {
     #[test]
     fn fixed_width_online_contract_retains_full_unsigned_rule_version() {
         assert_eq!(std::mem::size_of::<ConfigRule>(), 40);
+        assert_eq!(std::mem::size_of::<DnsEndpoint>(), 288);
+        assert_eq!(std::mem::size_of::<DnsRoute>(), 40);
+        assert_eq!(std::mem::size_of::<DnsException>(), 272);
+        assert_eq!(std::mem::size_of::<DnsConfig>(), 11376);
         assert_eq!(
             std::mem::size_of::<RuleConfigRequest>(),
-            64 + 184 * MAX_CONFIG_RULES + 8976 + 68616 + 61440 + 32
+            64 + 184 * MAX_CONFIG_RULES + 8976 + 68616 + 61440 + 11376
         );
         assert_eq!(
             std::mem::size_of::<RuleConfigStatus>(),
-            112 + 192 * MAX_CONFIG_RULES + 8976 + 68616 + 61440 + 64
+            112 + 192 * MAX_CONFIG_RULES + 8976 + 68616 + 61440 + 2 * 11376
         );
         let status = RuleConfigStatus {
             saved_rule_version: 0xfedc_ba98_7654_0001,

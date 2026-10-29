@@ -85,7 +85,8 @@ static void root_dns_publish_ready (root_dns_owner_t *owner)
    * starts. Current-view equality is checked by root_dns_owner_current. */
   int prepared = !owner->stopping && owner->route_revision &&
     (!owner->route.enabled || (owner->proxy && owner->io && (owner->profile==2 || product_root_dns_tcp_io_status(owner->tcp_io).accepting) &&
-      (io.udp_state == PRODUCT_ROOT_DNS_UDP_AUTHORIZED || io.udp_state == PRODUCT_ROOT_DNS_UDP_IDLE)));
+      (owner->route.endpoint_count || io.udp_state == PRODUCT_ROOT_DNS_UDP_AUTHORIZED ||
+       io.udp_state == PRODUCT_ROOT_DNS_UDP_IDLE)));
   __atomic_store_n (&owner->ready, prepared, __ATOMIC_RELEASE);
 }
 
@@ -302,7 +303,8 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
   const product_dns_query_t *query = &event->query;
   const product_l4_policy_packet_t *packet = &event->input.context.packet;
   int matched = event->match.evaluation == PRODUCT_L4_POLICY_EVALUATION_MATCH;
-  u8 actual = matched ? event->match.actual_action : event->stage == 3 && !event->response ? 0 : PRODUCT_L4_POLICY_ACTION_ALLOW;
+  u8 actual = matched ? event->match.actual_action :
+    (event->stage == 3 || event->stage == 5) && !event->response ? 0 : PRODUCT_L4_POLICY_ACTION_ALLOW;
   product_dns_observation_record_t record = {
     .generation = owner->generation, .token = event->input.token,
     .incarnation = event->input.identity.incarnation, .slot = event->input.slot,
@@ -334,9 +336,9 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .domain_lists = query->packet.domain_lists, .adapter_profile = owner->profile,
     .packet_uid = event->input.capture_present ? event->input.capture_uid : packet->uid_known ? packet->uid : UINT32_MAX,
     .route_revision = event->key.route_revision, .request_attempt = event->key.attempt,
-    .upstream_session = event->cached ? 0 : owner->current_upstream_session,
+    .upstream_session = event->cached || event->stage == 5 ? 0 : owner->current_upstream_session,
     .transport_session = event->input.identity.transport_session,
-    .underlay_epoch = owner->profile == 2 ? owner->current_binding.epoch : event->input.identity.underlay_epoch,
+    .underlay_epoch = owner->profile == 2 && event->stage != 5 ? owner->current_binding.epoch : event->input.identity.underlay_epoch,
     .upstream_port = event->route.port, .upstream_family = event->route.family,
     .upstream_transport = event->transport, .proxy_result = event->result,
     .reply_rcode = event->rcode, .client_udp_capacity = query->udp_capacity,
@@ -344,6 +346,8 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .proxy_flags = PRODUCT_DNS_PROXY_RECORD | (event->truncated ? PRODUCT_DNS_PROXY_TRUNCATED : 0) |
       (event->response ? (event->cached ? PRODUCT_DNS_PROXY_CACHE_ANSWER : PRODUCT_DNS_PROXY_UPSTREAM_ANSWER) : 0),
     .return_token = event->delivery == 1 && event->output_bytes ? owner->last_reply_token : 0,
+    .upstream_attempt = event->upstream_attempt,
+    .resolution_route = event->resolution_route, .resolver_id = event->resolver_id,
   };
   record.packet_availability = event->input.capture_present ? event->input.capture_availability : record.availability;
   if (packet->protocol == 6) record.message_sequence = event->input.token;
@@ -1393,6 +1397,10 @@ int product_root_dns_vpn_authorized (vlib_main_t *vm, uint64_t generation,
   if (index >= root_dns_owner_count) return -1;
   root_dns_owner_t *owner = &root_dns_owners[index];
   if (owner->profile != 2 || generation != owner->generation || owner->stopping) return -1;
+  /* A broker completion can arrive before the scheduled owner event. Refresh
+   * the authoritative route/network first, retiring the old cookie before it
+   * could connect a socket under a replacement view. */
+  root_dns_sync (owner, root_dns_now (vm));
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_SOCKETS; ++i)
     if (owner->vpn_bindings[i].cookie == cookie) {
       owner->vpn_bindings[i].epoch = error ? 0 : epoch;
@@ -1578,6 +1586,22 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
       if (owner->route.family) inet_ntop (owner->route.family == 4 ? AF_INET : AF_INET6,
         owner->route.address, address, sizeof (address));
       product_dns_proxy_resources_t core = product_dns_proxy_resources (owner->proxy);
+      vlib_cli_output(vm,"dns.routing owner=%u generation=%llu route_revision=%llu network_revision=%llu endpoints=%u endpoint_limit=%u routes=%u route_limit=%u exceptions=%u exception_limit=%u failed_attempts=%llu failovers=%llu total_deadline_us=%llu attempt_deadline_us=%llu cooldown_initial_us=5000000 cooldown_max_us=30000000",
+        i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,
+        (unsigned long long)owner->network_revision,owner->route.endpoint_count,SAKAMOTO_DNS_MAX_ENDPOINTS,
+        owner->route.route_count,SAKAMOTO_DNS_MAX_ROUTES,owner->route.exception_count,SAKAMOTO_DNS_MAX_EXCEPTIONS,
+        (unsigned long long)core.failed_attempts,(unsigned long long)core.failovers,
+        (unsigned long long)PRODUCT_DNS_REQUEST_US,(unsigned long long)PRODUCT_DNS_PROXY_ATTEMPT_US);
+      for(unsigned resolver=0;resolver<owner->route.endpoint_count;++resolver) {
+        const sakamoto_product_dns_endpoint_t *endpoint=&owner->route.endpoints[resolver];
+        char selected[INET6_ADDRSTRLEN]="unselected";
+        inet_ntop(endpoint->family==4?AF_INET:AF_INET6,endpoint->address,selected,sizeof(selected));
+        vlib_cli_output(vm,"dns.resolver owner=%u generation=%llu route_revision=%llu resolver_id=%u identity=%s family=%u address=%s port=%u transport=%u failures=%u cooldown_until_us=%llu probing=%u",
+          i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,resolver+1,
+          endpoint->identity,endpoint->family,selected,endpoint->port,endpoint->transport,
+          core.health[resolver].failures,(unsigned long long)core.health[resolver].cooldown_until,
+          core.health[resolver].probing);
+      }
       vlib_cli_output(vm,"dns.cache owner=%u generation=%llu route_revision=%llu network_revision=%llu entries=%u entry_limit=512 high_water=%u bytes=%llu byte_limit=2097152 high_water_bytes=%llu hits=%llu misses=%llu evicted=%llu skipped=%llu",
         i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,
         (unsigned long long)owner->network_revision,core.cache_entries,core.cache_high_water,

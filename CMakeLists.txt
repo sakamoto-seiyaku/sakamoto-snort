@@ -85,6 +85,10 @@ target_link_libraries(sakamoto-product-dns-proxy-test PRIVATE sakamoto_product_d
 target_compile_options(sakamoto-product-dns-proxy-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-hev-stage-cache-test COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/hev_stage_cache_test.py")
 add_test(NAME sakamoto-product-dns-proxy-test COMMAND sakamoto-product-dns-proxy-test)
+add_executable(sakamoto-product-dns-routing-test tests/host/product_dns_routing_test.c)
+target_link_libraries(sakamoto-product-dns-routing-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-routing-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-routing-test COMMAND sakamoto-product-dns-routing-test)
 add_executable(sakamoto-product-dns-coalescing-test tests/host/product_dns_coalescing_test.c)
 target_link_libraries(sakamoto-product-dns-coalescing-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-coalescing-test PRIVATE -Wall -Wextra -Werror)
@@ -120,6 +124,11 @@ add_executable(sakamoto-product-root-dns-io-test tests/host/product_root_dns_io_
 target_link_libraries(sakamoto-product-root-dns-io-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-root-dns-io-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-root-dns-io-test COMMAND sakamoto-product-root-dns-io-test)
+add_executable(sakamoto-product-dns-routing-io-test tests/host/product_dns_routing_io_test.c
+  src/product/vpp/product_root_dns_io.c)
+target_link_libraries(sakamoto-product-dns-routing-io-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-routing-io-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-routing-io-test COMMAND sakamoto-product-dns-routing-io-test)
 add_executable(sakamoto-product-root-dns-tcp-io-test tests/host/product_root_dns_tcp_io_test.c
   src/product/vpp/product_root_dns_tcp_io.c)
 target_link_libraries(sakamoto-product-root-dns-tcp-io-test PRIVATE sakamoto_product_dns)

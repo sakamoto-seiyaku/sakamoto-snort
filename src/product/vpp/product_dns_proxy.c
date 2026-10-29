@@ -11,12 +11,15 @@ typedef struct {
   product_dns_proxy_key_t key;
   uint8_t *wire;
   size_t length;
-  uint64_t deadline, retry_at, underlay_epoch;
+  uint64_t deadline, total_deadline, retry_at, underlay_epoch;
   uint32_t network_context_id;
   uint16_t resolver_port;
   uint8_t resolver_address[16], family, profile, network_context_known;
   uint32_t waiters;
-  uint8_t transport, retried, waiting_tcp, stored, answering;
+  uint32_t resolution_route, position, resolver_id;
+  sakamoto_product_dns_endpoint_t endpoint;
+  dns_cache_view_t view;
+  uint8_t transport, retried, waiting_tcp, stored, answering, probe, retirement_owed, attempt_started;
 } proxy_exchange_t;
 typedef struct {
   product_dns_proxy_event_t event;
@@ -25,7 +28,8 @@ typedef struct {
 } proxy_request_t;
 
 struct product_dns_proxy {
-  uint64_t generation, next_attempt;
+  uint64_t generation, next_attempt, network_revision, route_revision;
+  uint8_t view_known;
   product_dns_proxy_route_t route;
   product_dns_proxy_callbacks_t callbacks;
   void *context;
@@ -54,13 +58,146 @@ void product_dns_proxy_other_bytes (product_dns_proxy_t *proxy, uint64_t bytes)
 { if (proxy) proxy->other_bytes = bytes; }
 
 static void error_reply (product_dns_proxy_t *, product_dns_proxy_event_t *);
+static void next_candidate (product_dns_proxy_t *, proxy_exchange_t *, uint64_t, int);
+static int reserve_id (product_dns_proxy_t *, uint64_t, uint16_t *);
+
+static sakamoto_product_dns_endpoint_t legacy_endpoint (const product_dns_proxy_route_t *config)
+{
+  sakamoto_product_dns_endpoint_t endpoint = {.transport = PRODUCT_DNS_PROXY_UDP,
+    .family = config->family, .port = config->port};
+  memcpy (endpoint.address, config->address, 16);
+  return endpoint;
+}
+
+static int local_resolver (const product_l4_policy_packet_t *packet)
+{
+  const uint8_t *a = packet->destination_address;
+  if (packet->family == 4)
+    return a[0] == 10 || a[0] == 127 || (a[0] == 172 && a[1] >= 16 && a[1] <= 31) ||
+      (a[0] == 192 && a[1] == 168) || (a[0] == 169 && a[1] == 254);
+  if (packet->family == 6)
+    return (a[0] & 0xfe) == 0xfc || (a[0] == 0xfe && (a[1] & 0xc0) == 0x80) ||
+      !memcmp (a, (uint8_t[16]) {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1}, 16);
+  return 0;
+}
+
+/* Match whole labels against the actual query. Escaped/binary names cannot
+ * accidentally become configured dotted names. Exact beats every suffix. */
+static uint32_t resolution_route (const product_dns_proxy_route_t *config,
+  const product_dns_proxy_input_t *input, const product_dns_query_t *query)
+{
+  const sakamoto_product_dns_exception_t *selected = NULL;
+  size_t length = strlen (query->name);
+  for (unsigned i = 0; i < config->exception_count; ++i)
+    {
+      const sakamoto_product_dns_exception_t *e = &config->exceptions[i];
+      if (length < e->length || (!e->match && length != e->length) ||
+          (length > e->length && query->name[length - e->length - 1] != '.')) continue;
+      if (length > e->length)
+        {
+          size_t boundary = length - e->length - 1, escapes = 0;
+          while (boundary && query->name[--boundary] == '\\') ++escapes;
+          if (escapes & 1U) continue;
+        }
+      int equal = 1;
+      for (unsigned j = 0; j < e->length; ++j)
+        {
+          unsigned c = (uint8_t) query->name[length - e->length + j];
+          if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+          if (c != e->name[j]) { equal = 0; break; }
+        }
+      if (equal && (!selected || e->match < selected->match ||
+            (e->match == selected->match && e->length > selected->length))) selected = e;
+    }
+  if (selected) return selected->target ? selected->route : UINT32_MAX;
+  /* Preserve explicitly addressed local resolvers; this says nothing about
+   * undiscovered internal names or a network's search-domain list. */
+  return local_resolver (&input->context.packet) ? UINT32_MAX : 0;
+}
+
+static sakamoto_product_dns_endpoint_t first_endpoint (const product_dns_proxy_route_t *config,
+  const product_dns_proxy_input_t *input, uint32_t route, uint32_t *resolver_id)
+{
+  *resolver_id = 0;
+  if (route == UINT32_MAX)
+    {
+      sakamoto_product_dns_endpoint_t endpoint = {.transport = PRODUCT_DNS_PROXY_UDP,
+        .family = input->context.packet.family, .port = input->context.packet.destination_port};
+      memcpy (endpoint.address, input->context.packet.destination_address, 16);
+      return endpoint;
+    }
+  if (!config->endpoint_count) return legacy_endpoint (config);
+  unsigned index = config->routes[route].candidates[0];
+  *resolver_id = index + 1;
+  return config->endpoints[index];
+}
+
+static dns_cache_view_t cache_view (const proxy_exchange_t *exchange)
+{
+  dns_cache_view_t view = {.network = exchange->key.network_revision, .route = exchange->key.route_revision,
+    .underlay = exchange->underlay_epoch, .resolution_route = exchange->resolution_route,
+    .resolver_id = exchange->resolver_id, .family = exchange->endpoint.family, .port = exchange->endpoint.port,
+    .profile = exchange->profile, .network_context_known = exchange->network_context_known,
+    .network_context = exchange->network_context_id};
+  memcpy (view.address, exchange->endpoint.address, 16);
+  return view;
+}
+
+static void select_endpoint (product_dns_proxy_t *proxy, proxy_exchange_t *exchange, unsigned position)
+{
+  exchange->position = position;
+  if (exchange->resolution_route != UINT32_MAX && proxy->route.endpoint_count)
+    {
+      unsigned index = proxy->route.routes[exchange->resolution_route].candidates[position];
+      exchange->endpoint = proxy->route.endpoints[index]; exchange->resolver_id = index + 1;
+    }
+  exchange->transport = exchange->endpoint.transport;
+  exchange->view = cache_view (exchange);
+  exchange->key.resolver_id = exchange->resolver_id;
+  exchange->key.resolution_route = exchange->resolution_route;
+  exchange->key.resolver_family = exchange->endpoint.family;
+  exchange->key.resolver_port = exchange->endpoint.port;
+  memcpy (exchange->key.resolver_address, exchange->endpoint.address, 16);
+}
+
+static void event_endpoint (product_dns_proxy_event_t *event, const proxy_exchange_t *exchange)
+{
+  event->route = exchange->endpoint; event->resolution_route = exchange->resolution_route;
+  event->resolver_id = exchange->resolver_id;
+  event->upstream_attempt = !event->cached && exchange->attempt_started &&
+    (exchange->resolver_id || exchange->resolution_route == UINT32_MAX) ? exchange->key.attempt : 0;
+}
+
+static int observe_attempt (product_dns_proxy_t *proxy, proxy_exchange_t *exchange, uint64_t now, unsigned result)
+{
+  if (!proxy->route.endpoint_count || !proxy->callbacks.observe) return 1;
+  product_dns_proxy_key_t key = exchange->key;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
+    if (proxy->requests[i].exchange == exchange && !memcmp (&exchange->key, &key, sizeof (key)))
+      {
+        product_dns_proxy_event_t event = proxy->requests[i].event;
+        event.cached = 0; event_endpoint (&event, exchange);
+        event.stage = 5; event.result = result; event.transport = exchange->transport;
+        event.input.identity.now_us = now; event.rcode = 0; event.delivery = event.truncated = 0;
+        event.output_bytes = 0; event.response = NULL;
+        event.match = (product_l4_policy_match_result_t) {0}; event.policy = (product_dns_policy_identity_t) {0};
+        proxy->callbacks.observe (proxy->context, &event);
+      }
+  return exchange->wire && !memcmp (&exchange->key, &key, sizeof (key));
+}
 
 static proxy_request_t *find_request (product_dns_proxy_t *proxy, const product_dns_proxy_key_t *key)
 {
   if (!proxy || !key) return NULL;
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
-    if (proxy->requests[i].exchange && !memcmp (&proxy->requests[i].event.key, key, sizeof (*key)))
-      return &proxy->requests[i];
+    if (proxy->requests[i].exchange)
+      {
+        const product_dns_proxy_key_t *owned = &proxy->requests[i].event.key;
+        if (owned->generation == key->generation && owned->token == key->token &&
+            owned->incarnation == key->incarnation && owned->attempt == key->attempt &&
+            owned->network_revision == key->network_revision && owned->route_revision == key->route_revision)
+          return &proxy->requests[i];
+      }
   ++proxy->resources.stale;
   return NULL;
 }
@@ -75,6 +212,13 @@ static proxy_exchange_t *find_exchange (product_dns_proxy_t *proxy, const produc
   return NULL;
 }
 
+static void retire_attempt (product_dns_proxy_t *proxy, proxy_exchange_t *exchange)
+{
+  if (!exchange->retirement_owed) return;
+  exchange->retirement_owed = 0;
+  if (proxy->callbacks.cancel) proxy->callbacks.cancel (proxy->context, &exchange->key);
+}
+
 static void release_request (product_dns_proxy_t *proxy, proxy_request_t *request)
 {
   proxy_exchange_t *exchange = request->exchange;
@@ -83,12 +227,13 @@ static void release_request (product_dns_proxy_t *proxy, proxy_request_t *reques
    * its last independent waiter settles, even if its first caller cancels. */
   memset (request, 0, sizeof (*request));
   if (--exchange->waiters) return;
-  product_dns_proxy_key_t key = exchange->key;
+  if (exchange->probe && exchange->resolver_id)
+    proxy->resources.health[exchange->resolver_id - 1].probing = 0;
+  retire_attempt (proxy, exchange);
   uint8_t *wire = exchange->wire;
   proxy->resources.owned_bytes -= exchange->length;
   memset (exchange, 0, sizeof (*exchange));
   --proxy->resources.exchanges;
-  if (proxy->callbacks.cancel) proxy->callbacks.cancel (proxy->context, &key);
   free (wire);
 }
 
@@ -96,6 +241,7 @@ static void finish_failure (product_dns_proxy_t *proxy, proxy_request_t *request
   uint64_t now, unsigned result, int reply)
 {
   product_dns_proxy_event_t event = request->event;
+  event_endpoint (&event, request->exchange);
   event.transport = request->exchange->transport;
   event.input.identity.now_us = now; event.stage = 3; event.result = result; event.rcode = 2;
   event.match = (product_l4_policy_match_result_t) {0}; event.policy = (product_dns_policy_identity_t) {0};
@@ -158,15 +304,136 @@ static void fail_exchange (product_dns_proxy_t *proxy, proxy_exchange_t *exchang
       finish_failure (proxy, &proxy->requests[i], now, result, 1);
 }
 
+static int choose_candidate (product_dns_proxy_t *proxy, proxy_exchange_t *exchange,
+  unsigned start, uint64_t now, dns_cache_entry_t **cached)
+{
+  unsigned count = exchange->resolution_route == UINT32_MAX || !proxy->route.endpoint_count
+    ? 1 : proxy->route.routes[exchange->resolution_route].count;
+  *cached = NULL;
+  for (unsigned position = start; position < count; ++position)
+    {
+      proxy_exchange_t candidate = *exchange;
+      select_endpoint (proxy, &candidate, position);
+      *cached = cache_lookup (&proxy->cache, candidate.wire, candidate.length, now, &candidate.view);
+      if (*cached) { *exchange = candidate; return 1; }
+      if (candidate.resolver_id)
+        {
+          const product_dns_proxy_health_t *health = &proxy->resources.health[candidate.resolver_id - 1];
+          if (health->cooldown_until > now || health->probing) continue;
+        }
+      *exchange = candidate; return 1;
+    }
+  return 0;
+}
+
+static int cached_exchange (product_dns_proxy_t *proxy, proxy_exchange_t *exchange,
+  dns_cache_entry_t *cached, uint64_t now)
+{
+  size_t length = cached->answer_length;
+  uint8_t *answer = malloc (length);
+  if (!answer) { fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_CAPACITY); return 1; }
+  memcpy (answer, cached->data + cached->query_length, length);
+  uint64_t age = now - cached->inserted;
+  uint32_t elapsed = age / UINT64_C(1000000) + !!(age % UINT64_C(1000000)), lifetime;
+  int valid = cache_answer_ttls (answer, length, elapsed, NULL, answer, &lifetime);
+  if (valid)
+    {
+      answer[0] = exchange->wire[0]; answer[1] = exchange->wire[1];
+      exchange->transport = cached->transport;
+      for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
+        if (proxy->requests[i].exchange == exchange) proxy->requests[i].event.cached = 1;
+      product_dns_proxy_key_t key = exchange->key;
+      product_dns_proxy_answer (proxy, &key, cached->transport, answer, length, now);
+      free (answer);
+      if (!exchange->wire || memcmp (&exchange->key, &key, sizeof (key))) return 1;
+    }
+  else free (answer);
+  cache_drop (&proxy->cache, cached, 0);
+  --proxy->cache.hits; ++proxy->cache.misses;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
+    if (proxy->requests[i].exchange == exchange) proxy->requests[i].event.cached = 0;
+  exchange->transport = exchange->endpoint.transport;
+  return 0;
+}
+
+static void send_candidate (product_dns_proxy_t *proxy, proxy_exchange_t *exchange, uint64_t now)
+{
+  if (exchange->resolver_id)
+    {
+      const product_dns_proxy_health_t *health = &proxy->resources.health[exchange->resolver_id - 1];
+      if (health->cooldown_until > now || (health->probing && !exchange->probe))
+        { next_candidate (proxy, exchange, now, 0); return; }
+    }
+  if (exchange->resolver_id && proxy->resources.health[exchange->resolver_id - 1].failures)
+    {
+      proxy->resources.health[exchange->resolver_id - 1].probing = 1;
+      exchange->probe = 1;
+    }
+  exchange->retirement_owed = 1;
+  if (!exchange->attempt_started)
+    {
+      exchange->attempt_started = 1;
+      if (!observe_attempt (proxy, exchange, now, PRODUCT_DNS_PROXY_ATTEMPT)) return;
+    }
+  int result = proxy->callbacks.send (proxy->context, &exchange->key, exchange->transport,
+    exchange->wire, exchange->length, exchange->deadline);
+  exchange->waiting_tcp = exchange->transport == PRODUCT_DNS_PROXY_TCP && result == 0;
+  if (result < 0) next_candidate (proxy, exchange, now, PRODUCT_DNS_PROXY_ATTEMPT_FAILED);
+  else if (!result && exchange->transport == PRODUCT_DNS_PROXY_UDP)
+    { ++proxy->resources.capacity; fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_CAPACITY); }
+}
+
+static void next_candidate (product_dns_proxy_t *proxy, proxy_exchange_t *exchange, uint64_t now, int fault)
+{
+  if (fault)
+    {
+      ++proxy->resources.failed_attempts;
+      if (exchange->resolver_id)
+        {
+          product_dns_proxy_health_t *health = &proxy->resources.health[exchange->resolver_id - 1];
+          if (health->failures < 4) ++health->failures;
+          uint64_t cooldown = health->failures < 4 ? UINT64_C(5000000) << (health->failures - 1) : UINT64_C(30000000);
+          health->cooldown_until = now > UINT64_MAX - cooldown ? UINT64_MAX : now + cooldown;
+          health->probing = 0;
+        }
+      if (!observe_attempt (proxy, exchange, now, fault)) return;
+    }
+  if (exchange->probe && exchange->resolver_id)
+    proxy->resources.health[exchange->resolver_id - 1].probing = 0;
+  exchange->probe = 0; exchange->answering = 0;
+  retire_attempt (proxy, exchange);
+  dns_cache_entry_t *cached;
+  if (now >= exchange->total_deadline || proxy->next_attempt == UINT64_MAX ||
+      !choose_candidate (proxy, exchange, exchange->position + 1, now, &cached))
+    { fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_SERVFAIL); return; }
+  uint16_t id;
+  if (!reserve_id (proxy, now, &id))
+    { ++proxy->resources.capacity; fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_CAPACITY); return; }
+  exchange->key.attempt = ++proxy->next_attempt;
+  exchange->retirement_owed = 1;
+  exchange->attempt_started = 0;
+  exchange->wire[0] = id >> 8; exchange->wire[1] = id;
+  exchange->deadline = exchange->total_deadline - now < PRODUCT_DNS_PROXY_ATTEMPT_US
+    ? exchange->total_deadline : now + PRODUCT_DNS_PROXY_ATTEMPT_US;
+  exchange->retry_at = now + PRODUCT_DNS_PROXY_RETRY_US;
+  exchange->retried = exchange->waiting_tcp = exchange->stored = 0;
+  ++proxy->resources.failovers;
+  if (cached && cached_exchange (proxy, exchange, cached, now)) return;
+  send_candidate (proxy, exchange, now);
+}
+
 void product_dns_proxy_fail (product_dns_proxy_t *proxy, const product_dns_proxy_key_t *key, uint64_t now)
 {
   proxy_exchange_t *exchange = find_exchange (proxy, key);
-  if (exchange) fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_SERVFAIL);
+  if (exchange) next_candidate (proxy, exchange, now, PRODUCT_DNS_PROXY_ATTEMPT_FAILED);
 }
 
 void product_dns_proxy_advance (product_dns_proxy_t *proxy, uint64_t now, uint64_t network, uint64_t route)
 {
   if (!proxy) return;
+  if (proxy->view_known && (proxy->network_revision != network || proxy->route_revision != route))
+    memset (proxy->resources.health, 0, sizeof (proxy->resources.health));
+  proxy->network_revision = network; proxy->route_revision = route; proxy->view_known = 1;
   cache_prune (&proxy->cache, now, network, route);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
     {
@@ -174,28 +441,25 @@ void product_dns_proxy_advance (product_dns_proxy_t *proxy, uint64_t now, uint64
       if (!request->exchange) continue;
       if (request->event.key.network_revision != network || request->event.key.route_revision != route)
         { finish_failure (proxy, request, now, PRODUCT_DNS_PROXY_VIEW_CHANGED, 1); continue; }
-      if (request->deadline <= now)
-        finish_failure (proxy, request, now, PRODUCT_DNS_PROXY_SERVFAIL, 1);
     }
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
     {
       proxy_exchange_t *exchange = &proxy->exchanges[i];
       if (!exchange->wire) continue;
       if (exchange->deadline <= now)
-        { fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_SERVFAIL); continue; }
+        { next_candidate (proxy, exchange, now, PRODUCT_DNS_PROXY_ATTEMPT_TIMEOUT); continue; }
       int send = 0;
       if (exchange->transport == PRODUCT_DNS_PROXY_UDP && !exchange->retried && exchange->retry_at <= now)
         { exchange->retried = 1; send = 1; }
       if (exchange->waiting_tcp) send = 1;
       if (send)
         {
-          int result = proxy->callbacks.send (proxy->context, &exchange->key,
-            exchange->transport, exchange->wire, exchange->length, exchange->deadline);
-          exchange->waiting_tcp = exchange->transport == PRODUCT_DNS_PROXY_TCP && result == 0;
-          if (result < 0 || (!result && exchange->transport == PRODUCT_DNS_PROXY_UDP))
-            fail_exchange (proxy, exchange, now, PRODUCT_DNS_PROXY_SERVFAIL);
+          send_candidate (proxy, exchange, now);
         }
     }
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
+    if (proxy->requests[i].exchange && proxy->requests[i].deadline <= now)
+      finish_failure (proxy, &proxy->requests[i], now, PRODUCT_DNS_PROXY_SERVFAIL, 1);
 }
 
 void product_dns_proxy_stop (product_dns_proxy_t *proxy, uint64_t now)
@@ -293,7 +557,9 @@ static void error_reply (product_dns_proxy_t *proxy, product_dns_proxy_event_t *
 
 static int reserve_id (product_dns_proxy_t *proxy, uint64_t now, uint16_t *id)
 {
-  if (now > UINT64_MAX - PRODUCT_DNS_PROXY_ATTEMPT_US - PRODUCT_DNS_REQUEST_US) return 0;
+  uint64_t lifetime = proxy->route.endpoint_count ? 2U * PRODUCT_DNS_REQUEST_US
+    : PRODUCT_DNS_PROXY_ATTEMPT_US + PRODUCT_DNS_REQUEST_US;
+  if (now > UINT64_MAX - lifetime) return 0;
   for (unsigned i = 0; i < 65536; ++i)
     {
       uint16_t candidate = proxy->next_id++;
@@ -301,7 +567,7 @@ static int reserve_id (product_dns_proxy_t *proxy, uint64_t now, uint16_t *id)
       /* A completed/cancelled ID remains unavailable for the entire bounded
        * request window after its original attempt deadline. Reuse never
        * aliases an active request, even after the 16-bit counter wraps. */
-      proxy->id_deadline[candidate] = now + PRODUCT_DNS_PROXY_ATTEMPT_US + PRODUCT_DNS_REQUEST_US;
+      proxy->id_deadline[candidate] = now + lifetime;
       *id = candidate; return 1;
     }
   return 0;
@@ -310,12 +576,12 @@ static int reserve_id (product_dns_proxy_t *proxy, uint64_t now, uint16_t *id)
 static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
   unsigned transport, const uint8_t *wire, size_t length, uint64_t now_us)
 {
+  if (!request || !proxy->callbacks.acquire) return;
   const product_dns_proxy_key_t *key = &request->event.key;
-  if (!request || !wire || !proxy->callbacks.acquire) return;
   if (request->deadline <= now_us)
     { finish_failure (proxy, request, now_us, PRODUCT_DNS_PROXY_SERVFAIL, 1); return; }
-  if (length < 12 || length > PRODUCT_DNS_MESSAGE_MAX)
-    { finish_failure (proxy, request, now_us, PRODUCT_DNS_PROXY_SERVFAIL, 1); return; }
+  if (!wire || length < 12 || length > PRODUCT_DNS_MESSAGE_MAX)
+    { next_candidate (proxy, request->exchange, now_us, PRODUCT_DNS_PROXY_ATTEMPT_INVALID); return; }
     {
       if (transport != request->exchange->transport) return;
       product_dns_proxy_snapshot_t snapshot = {0};
@@ -335,25 +601,28 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
           response.question.coverage == PRODUCT_DNS_COPY_GAP && (response.question.flags & 0x0200))
         {
           request->exchange->transport = PRODUCT_DNS_PROXY_TCP;
-          int sent = proxy->callbacks.send (proxy->context, &request->exchange->key, PRODUCT_DNS_PROXY_TCP,
-            request->exchange->wire, request->exchange->length, request->exchange->deadline);
-          request->exchange->waiting_tcp = sent == 0;
           if (proxy->callbacks.release) proxy->callbacks.release (proxy->context, &snapshot);
-          if (sent < 0) fail_exchange (proxy, request->exchange, now_us, PRODUCT_DNS_PROXY_SERVFAIL);
+          send_candidate (proxy, request->exchange, now_us);
           return;
         }
       if (response.correlation == PRODUCT_DNS_CORRELATED &&
           response.question.coverage == PRODUCT_DNS_QUERY_COMPLETE)
         {
           product_dns_proxy_event_t event = request->event;
+          event_endpoint (&event, request->exchange);
           event.input.identity.now_us = now_us; event.stage = 2;
           event.policy = snapshot.identity;
           event.result = event.cached ? PRODUCT_DNS_PROXY_CACHE : PRODUCT_DNS_PROXY_UPSTREAM;
+          if (!event.cached && request->exchange->resolver_id)
+            {
+              proxy->resources.health[request->exchange->resolver_id - 1] = (product_dns_proxy_health_t) {0};
+              request->exchange->probe = 0;
+            }
           if (!event.cached && !request->exchange->stored)
             {
               request->exchange->stored = 1;
               cache_store (&proxy->cache, request->exchange->wire, request->exchange->length, wire, length,
-                transport, now_us, key->network_revision, key->route_revision, &response);
+                transport, now_us, &request->exchange->view, &response);
             }
           event.rcode = response.rcode; event.response = &response; event.transport = transport;
           if (!product_dns_response_match (snapshot.view, &snapshot.context.packet, &response,
@@ -407,6 +676,16 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
                 }
             }
         }
+      else
+        {
+          if (proxy->callbacks.release) proxy->callbacks.release (proxy->context, &snapshot);
+          /* Retained data can fail the mature codec after its lightweight
+           * TTL walk. cached_exchange drops it and starts this candidate's
+           * real request; it is not a resolver failure or a terminal reply. */
+          if (!request->event.cached)
+            next_candidate (proxy, request->exchange, now_us, PRODUCT_DNS_PROXY_ATTEMPT_INVALID);
+          return;
+        }
       if (proxy->callbacks.release) proxy->callbacks.release (proxy->context, &snapshot);
       return;
     }
@@ -418,7 +697,7 @@ void product_dns_proxy_answer (product_dns_proxy_t *proxy, const product_dns_pro
   proxy_exchange_t *exchange = find_exchange (proxy, key);
   if (!exchange || exchange->answering) return;
   if (exchange->deadline <= now_us)
-    { fail_exchange (proxy, exchange, now_us, PRODUCT_DNS_PROXY_SERVFAIL); return; }
+    { next_candidate (proxy, exchange, now_us, PRODUCT_DNS_PROXY_ATTEMPT_TIMEOUT); return; }
   product_dns_proxy_key_t expected = exchange->key;
   exchange->answering = 1;
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
@@ -433,13 +712,14 @@ static int prepare_request (const product_dns_proxy_input_t *input, const uint8_
   uint64_t attempt, product_dns_proxy_event_t *out)
 {
   product_dns_proxy_event_t event = {
-    .input = *input, .route = *route, .query_policy = snapshot->identity,
+    .input = *input, .query_policy = snapshot->identity,
     .policy = snapshot->identity, .client_capacity = 512, .stage = 1,
     .transport = PRODUCT_DNS_PROXY_UDP,
     .key = {.generation = input->identity.generation, .token = input->token,
       .incarnation = input->identity.incarnation, .attempt = attempt,
       .network_revision = input->identity.network_revision, .route_revision = input->route_revision},
   };
+  event.route = first_endpoint (route, input, 0, &event.resolver_id);
   event.input.context.domains = NULL;
   product_dns_inspect_query (wire, length, &snapshot->context, &event.query);
   event.client_capacity = event.query.udp_capacity < PRODUCT_DNS_PROXY_REPLY_BYTES
@@ -465,6 +745,8 @@ static int prepare_request (const product_dns_proxy_input_t *input, const uint8_
       event.rcode = event.result == PRODUCT_DNS_PROXY_NOTIMP ? 4 : 1;
       *out = event; return 1;
     }
+  event.resolution_route = resolution_route (route, input, &event.query);
+  event.route = first_endpoint (route, input, event.resolution_route, &event.resolver_id);
   if (product_l4_policy_match (snapshot->view, &event.query.packet, &event.match))
     { event.stage = 3; event.result = PRODUCT_DNS_PROXY_SERVFAIL; event.rcode = 2; *out = event; return 1; }
   event.policy.winner = event.query_policy.winner = event.match.rule_id;
@@ -495,6 +777,17 @@ int product_dns_proxy_submit (product_dns_proxy_t *proxy, const product_dns_prox
 {
   if (!proxy || !input || !snapshot || !snapshot->view || !proxy->resources.accepting || !proxy->route.enabled ||
       !input->token || input->identity.generation != proxy->generation) return 0;
+  if (snapshot->identity.generation != proxy->generation ||
+      snapshot->network_revision != input->identity.network_revision || snapshot->route_revision != input->route_revision)
+    return product_dns_proxy_unavailable (input, wire, length, snapshot, &proxy->route,
+      &proxy->callbacks, proxy->context, PRODUCT_DNS_PROXY_VIEW_CHANGED);
+  if (proxy->view_known && (proxy->network_revision != input->identity.network_revision ||
+      proxy->route_revision != input->route_revision))
+    product_dns_proxy_advance (proxy, input->identity.now_us, input->identity.network_revision, input->route_revision);
+  else {
+    proxy->network_revision = input->identity.network_revision; proxy->route_revision = input->route_revision;
+    proxy->view_known = 1;
+  }
   if (proxy->next_attempt == UINT64_MAX)
     return product_dns_proxy_unavailable (input, wire, length, snapshot, &proxy->route,
       &proxy->callbacks, proxy->context, PRODUCT_DNS_PROXY_CAPACITY);
@@ -506,121 +799,85 @@ int product_dns_proxy_submit (product_dns_proxy_t *proxy, const product_dns_prox
       if (event.result == PRODUCT_DNS_PROXY_CAPACITY) ++proxy->resources.capacity;
       error_reply (proxy, &event); return 1;
     }
+  const uint64_t scratch = PRODUCT_DNS_CODEC_BYTES + 2U * PRODUCT_DNS_MESSAGE_MAX +
+    sizeof (product_dns_response_t) + 2U * sizeof (product_dns_proxy_event_t);
+  if (input->identity.now_us > UINT64_MAX - 2U * PRODUCT_DNS_REQUEST_US ||
+      proxy->other_bytes > PRODUCT_DNS_WORK_BYTES - scratch ||
+      proxy->resources.owned_bytes > PRODUCT_DNS_WORK_BYTES - scratch - proxy->other_bytes ||
+      length > PRODUCT_DNS_WORK_BYTES - scratch - proxy->other_bytes - proxy->resources.owned_bytes)
+    goto capacity;
+
+  proxy_exchange_t selected = {.key = event.key, .wire = (uint8_t *) wire, .length = length,
+    .deadline = input->identity.now_us + PRODUCT_DNS_PROXY_ATTEMPT_US,
+    .total_deadline = input->identity.now_us + PRODUCT_DNS_REQUEST_US,
+    .retry_at = input->identity.now_us + PRODUCT_DNS_PROXY_RETRY_US,
+    .underlay_epoch = input->identity.underlay_epoch, .profile = input->identity.profile,
+    .family = input->context.packet.family, .resolver_port = input->context.packet.destination_port,
+    .network_context_known = input->context.packet.network_context_known,
+    .network_context_id = input->context.packet.network_context_id,
+    .resolution_route = event.resolution_route, .resolver_id = event.resolver_id, .endpoint = event.route};
+  memcpy (selected.resolver_address, input->context.packet.destination_address, 16);
+  dns_cache_entry_t *cached;
+  if (!choose_candidate (proxy, &selected, 0, input->identity.now_us, &cached))
     {
       if (proxy->callbacks.observe) proxy->callbacks.observe (proxy->context, &event);
-      const uint64_t scratch = PRODUCT_DNS_CODEC_BYTES + 2U * PRODUCT_DNS_MESSAGE_MAX +
-        sizeof (product_dns_response_t) + 2U * sizeof (product_dns_proxy_event_t);
-      if (input->identity.now_us > UINT64_MAX - PRODUCT_DNS_PROXY_ATTEMPT_US ||
-          proxy->other_bytes > PRODUCT_DNS_WORK_BYTES - scratch ||
-          proxy->resources.owned_bytes > PRODUCT_DNS_WORK_BYTES - scratch - proxy->other_bytes ||
-          length > PRODUCT_DNS_WORK_BYTES - scratch - proxy->other_bytes - proxy->resources.owned_bytes)
-        goto capacity;
-      proxy_exchange_t *shared = NULL, *free_exchange = NULL;
-      size_t question_end;
-      int reusable = cache_question (wire, length, &question_end);
-      for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
-        {
-          proxy_exchange_t *exchange = &proxy->exchanges[i];
-          if (!exchange->wire) { if (!free_exchange) free_exchange = exchange; continue; }
-          if (reusable && !exchange->answering && exchange->deadline > input->identity.now_us &&
-              exchange->underlay_epoch == input->identity.underlay_epoch &&
-              exchange->profile == input->identity.profile &&
-              exchange->family == input->context.packet.family &&
-              exchange->resolver_port == input->context.packet.destination_port &&
-              !memcmp (exchange->resolver_address, input->context.packet.destination_address, 16) &&
-              exchange->network_context_known == input->context.packet.network_context_known &&
-              (!exchange->network_context_known ||
-                exchange->network_context_id == input->context.packet.network_context_id) &&
-              exchange->key.network_revision == event.key.network_revision &&
-              exchange->key.route_revision == event.key.route_revision && exchange->length == length &&
-              !memcmp (exchange->wire + 2, wire + 2, length - 2))
-            { shared = exchange; break; }
-        }
-      if (!shared && !free_exchange) goto capacity;
-      for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
-        if (!proxy->requests[i].exchange)
-          {
-            proxy_request_t *request = &proxy->requests[i];
-            request->event = event;
-            request->deadline = input->identity.now_us + PRODUCT_DNS_PROXY_ATTEMPT_US;
-            if (shared)
-              {
-                request->exchange = shared; ++shared->waiters; ++proxy->resources.coalesced;
-                /* A later waiter retains its own deadline, but joins only
-                 * the remaining original candidate lifetime. No query, UDP
-                 * retry, TCP continuation or transport timer is extended. */
-                ++proxy->resources.active;
-                if (proxy->resources.active > proxy->resources.high_water)
-                  proxy->resources.high_water = proxy->resources.active;
-                return 1;
-              }
-            uint16_t upstream_id;
-            if (!reserve_id (proxy, input->identity.now_us, &upstream_id)) goto capacity;
-            uint8_t *copy = malloc (length);
-            if (!copy) goto capacity;
-            memcpy (copy, wire, length);
-            copy[0] = upstream_id >> 8; copy[1] = upstream_id;
-            proxy_exchange_t *exchange = free_exchange;
-            *exchange = (proxy_exchange_t) {.key = event.key, .wire = copy, .length = length,
-              .deadline = request->deadline,
-              .retry_at = input->identity.now_us + PRODUCT_DNS_PROXY_RETRY_US,
-              .underlay_epoch = input->identity.underlay_epoch, .profile = input->identity.profile,
-              .family = input->context.packet.family, .resolver_port = input->context.packet.destination_port,
-              .network_context_known = input->context.packet.network_context_known,
-              .network_context_id = input->context.packet.network_context_id,
-              .waiters = 1, .transport = PRODUCT_DNS_PROXY_UDP};
-            memcpy (exchange->resolver_address, input->context.packet.destination_address, 16);
-            request->exchange = exchange;
-            ++proxy->resources.exchanges;
-            if (proxy->resources.exchanges > proxy->resources.exchange_high_water)
-              proxy->resources.exchange_high_water = proxy->resources.exchanges;
-            ++proxy->resources.active; proxy->resources.owned_bytes += length;
-            if (proxy->resources.active > proxy->resources.high_water)
-              proxy->resources.high_water = proxy->resources.active;
-            if (proxy->resources.owned_bytes > proxy->resources.high_water_bytes)
-              proxy->resources.high_water_bytes = proxy->resources.owned_bytes;
-            dns_cache_entry_t *cached = cache_lookup (&proxy->cache, wire, length,
-              input->identity.now_us, event.key.network_revision, event.key.route_revision);
-            if (cached)
-              {
-                size_t answer_length = cached->answer_length;
-                uint8_t *answer = malloc (answer_length);
-                if (!answer) { finish_failure (proxy, request, input->identity.now_us, PRODUCT_DNS_PROXY_CAPACITY, 1); return 1; }
-                memcpy (answer, cached->data + cached->query_length, answer_length);
-                uint32_t lifetime;
-                /* Only TTL words in the previously validated owned wire
-                 * change. Complete correlation/policy parsing follows below. */
-                uint64_t age = input->identity.now_us - cached->inserted;
-                uint32_t elapsed = age / UINT64_C(1000000) + !!(age % UINT64_C(1000000));
-                int valid = cache_answer_ttls (answer, answer_length, elapsed, NULL, answer, &lifetime);
-                if (valid)
-                  {
-                    answer[0] = copy[0]; answer[1] = copy[1];
-                    request->event.cached = 1; exchange->transport = cached->transport;
-                    product_dns_proxy_answer (proxy, &event.key, cached->transport, answer,
-                      answer_length, input->identity.now_us);
-                  }
-                free (answer);
-                /* A synchronous completion callback can submit a new request
-                 * into this slot. The old wire and exchange are already gone;
-                 * only the original attempt may continue the cache fallback. */
-                if (!request->exchange || memcmp (&request->event.key, &event.key, sizeof (event.key)))
-                  return 1;
-                /* Invalid retained data cannot leave a cache-only obligation.
-                 * Retire it and use the ordinary current-view upstream path. */
-                cache_drop (&proxy->cache, cached, 0);
-                --proxy->cache.hits; ++proxy->cache.misses;
-                request->event.cached = 0; exchange->transport = PRODUCT_DNS_PROXY_UDP;
-              }
-            int sent = proxy->callbacks.send (proxy->context, &event.key,
-              PRODUCT_DNS_PROXY_UDP, copy, length, request->deadline);
-            if (sent != 1) finish_failure (proxy, request, input->identity.now_us, PRODUCT_DNS_PROXY_SERVFAIL, 1);
-            return 1;
-          }
-capacity:
-      ++proxy->resources.capacity;
-      event.stage = 3; event.result = PRODUCT_DNS_PROXY_CAPACITY; event.rcode = 2;
-      error_reply (proxy, &event);
-      return 1;
+      event.stage = 3; event.result = PRODUCT_DNS_PROXY_SERVFAIL; event.rcode = 2;
+      event.match = (product_l4_policy_match_result_t) {0}; event.policy = (product_dns_policy_identity_t) {0};
+      error_reply (proxy, &event); return 1;
     }
+  event_endpoint (&event, &selected); event.key = selected.key; event.upstream_attempt = 0;
+  if (proxy->callbacks.observe) proxy->callbacks.observe (proxy->context, &event);
+
+  proxy_exchange_t *shared = NULL, *free_exchange = NULL;
+  size_t question_end;
+  int reusable = !cached && cache_question (wire, length, &question_end);
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_TRANSACTIONS; ++i)
+    {
+      proxy_exchange_t *exchange = &proxy->exchanges[i];
+      if (!exchange->wire) { if (!free_exchange) free_exchange = exchange; continue; }
+      if (reusable && !exchange->answering && exchange->deadline > input->identity.now_us &&
+          exchange->family == selected.family && exchange->resolver_port == selected.resolver_port &&
+          !memcmp (exchange->resolver_address, selected.resolver_address, 16) &&
+          cache_same_view (&exchange->view, &selected.view) && exchange->length == length &&
+          !memcmp (exchange->wire + 2, wire + 2, length - 2))
+        { shared = exchange; break; }
+    }
+  if (!shared && !free_exchange) goto capacity_observed;
+  proxy_request_t *request = NULL;
+  for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
+    if (!proxy->requests[i].exchange) { request = &proxy->requests[i]; break; }
+  if (!request) goto capacity_observed;
+
+  if (!shared)
+    {
+      uint16_t upstream_id;
+      if (!reserve_id (proxy, input->identity.now_us, &upstream_id)) goto capacity_observed;
+      uint8_t *copy = malloc (length);
+      if (!copy) goto capacity_observed;
+      memcpy (copy, wire, length); copy[0] = upstream_id >> 8; copy[1] = upstream_id;
+      *free_exchange = selected; free_exchange->wire = copy; free_exchange->retirement_owed = 1;
+      shared = free_exchange;
+      ++proxy->resources.exchanges; proxy->resources.owned_bytes += length;
+      if (proxy->resources.exchanges > proxy->resources.exchange_high_water)
+        proxy->resources.exchange_high_water = proxy->resources.exchanges;
+      if (proxy->resources.owned_bytes > proxy->resources.high_water_bytes)
+        proxy->resources.high_water_bytes = proxy->resources.owned_bytes;
+    }
+  else ++proxy->resources.coalesced;
+  *request = (proxy_request_t) {.event = event, .exchange = shared,
+    .deadline = input->identity.now_us + PRODUCT_DNS_REQUEST_US};
+  ++shared->waiters; ++proxy->resources.active;
+  if (proxy->resources.active > proxy->resources.high_water) proxy->resources.high_water = proxy->resources.active;
+  if (shared != free_exchange) return 1;
+  if (cached && cached_exchange (proxy, shared, cached, input->identity.now_us)) return 1;
+  send_candidate (proxy, shared, input->identity.now_us);
+  return 1;
+
+capacity:
+  if (proxy->callbacks.observe) proxy->callbacks.observe (proxy->context, &event);
+capacity_observed:
+  ++proxy->resources.capacity;
+  event.stage = 3; event.result = PRODUCT_DNS_PROXY_CAPACITY; event.rcode = 2;
+  error_reply (proxy, &event);
+  return 1;
 }

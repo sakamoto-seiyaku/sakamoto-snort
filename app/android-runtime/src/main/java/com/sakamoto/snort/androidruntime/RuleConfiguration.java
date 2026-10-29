@@ -62,11 +62,15 @@ public final class RuleConfiguration {
     public static final int MAX_ACTIVE_RULES = 128;
     private static final int COMPLETE_REPLY_HEADER_WORDS = 13;
     private static final int SOURCE_WORD = 18, DESTINATION_WORD = 22;
+    public static final int DNS_ENDPOINT_WORDS = 72, DNS_ROUTE_WORDS = 10, DNS_EXCEPTION_WORDS = 68;
+    public static final int DNS_MAX_ENDPOINTS = 8, DNS_MAX_ROUTES = 8, DNS_MAX_EXCEPTIONS = 32;
+    public static final int DNS_CONFIG_WORDS = 12 + 8*DNS_ENDPOINT_WORDS + 8*DNS_ROUTE_WORDS + 32*DNS_EXCEPTION_WORDS;
 
     /** Explicit numeric ordinary upstream; the existing VPP source transaction
      * remains the only saved setting. No hostname or bootstrap lookup occurs. */
     public static long[] dnsWire(String text) {
         if (text == null) throw new IllegalArgumentException("DNS upstream required");
+        if (text.trim().startsWith("upstream ")) return dnsRoutesWire(text);
         long[] wire = new long[8]; wire[0] = -3;
         String[] fields = text.trim().split("\\s+");
         if (fields.length == 1 && fields[0].equals("off")) return wire;
@@ -82,6 +86,85 @@ public final class RuleConfiguration {
         if (wire[3]==0 || wire[3]>65535) throw new IllegalArgumentException("invalid DNS port");
         for (int i=0;i<16;++i) wire[4+i/4]|=(address[i]&255L)<<(24-(i%4)*8);
         return wire;
+    }
+
+    /** Request text for the same VPP transaction as the single-upstream form.
+     * Endpoint identity is separate from its explicit numeric connection IP;
+     * this ordinary profile never performs a hostname/bootstrap lookup. */
+    private static long[] dnsRoutesWire(String text) {
+        java.util.ArrayList<long[]> endpoints = new java.util.ArrayList<>();
+        java.util.ArrayList<long[]> routes = new java.util.ArrayList<>();
+        java.util.ArrayList<long[]> exceptions = new java.util.ArrayList<>();
+        java.util.HashSet<String> scopes = new java.util.HashSet<>();
+        for (String line : text.split("[\\r\\n]+")) {
+            String[] f = line.trim().split("\\s+");
+            if (f[0].equals("upstream")) {
+                if (f.length != 6 || endpoints.size() >= DNS_MAX_ENDPOINTS
+                        || unsigned32(f[1]) != endpoints.size()
+                        || !(f[2].equals("udp") || f[2].equals("tcp")))
+                    throw new IllegalArgumentException("upstream <index> <udp|tcp> <identity> <connection IP> <port>");
+                long[] single = dnsWire("udp " + f[4] + " " + f[5]);
+                long[] endpoint = new long[DNS_ENDPOINT_WORDS];
+                endpoint[0] = f[2].equals("udp") ? 1 : 2;
+                endpoint[1] = single[2]; endpoint[2] = single[3];
+                System.arraycopy(single, 4, endpoint, 4, 4);
+                String identity;
+                if (f[3].contains(":")) { ipv6(f[3]); identity = f[3].toLowerCase(java.util.Locale.ROOT); }
+                else if (f[3].matches("[0-9.]+")) { ipv4(f[3]); identity = f[3]; }
+                else identity = dnsName(f[3]);
+                dnsString(endpoint, 8, identity);
+                endpoints.add(endpoint);
+            } else if (f[0].equals("route")) {
+                if (f.length < 3 || f.length > 10 || routes.size() >= DNS_MAX_ROUTES
+                        || unsigned32(f[1]) != routes.size())
+                    throw new IllegalArgumentException("route <index> <ordered upstream indices>");
+                long[] route = new long[DNS_ROUTE_WORDS]; route[0] = f.length - 2;
+                java.util.HashSet<Long> seen = new java.util.HashSet<>();
+                for (int i = 2; i < f.length; ++i) {
+                    long index = unsigned32(f[i]);
+                    if (index >= endpoints.size() || !seen.add(index))
+                        throw new IllegalArgumentException("unknown or duplicate DNS upstream");
+                    route[i] = index;
+                }
+                routes.add(route);
+            } else if (f[0].equals("exception")) {
+                if (exceptions.size() >= DNS_MAX_EXCEPTIONS || (f.length != 4 && f.length != 5))
+                    throw new IllegalArgumentException("exception <exact|descendants> <name> <original|route index>");
+                String name = dnsName(f[2]);
+                int match = f[1].equals("exact") ? 0 : f[1].equals("descendants") ? 1 : -1;
+                if (match < 0 || !scopes.add(match + ":" + name))
+                    throw new IllegalArgumentException("duplicate DNS exception scope");
+                long[] exception = new long[DNS_EXCEPTION_WORDS];
+                exception[0] = match; exception[3] = name.length();
+                if (f.length == 4 && f[3].equals("original")) exception[1] = 0;
+                else if (f.length == 5 && f[3].equals("route") && unsigned32(f[4]) < routes.size()) {
+                    exception[1] = 1; exception[2] = unsigned32(f[4]);
+                } else throw new IllegalArgumentException("unknown DNS exception route");
+                dnsString(exception, 4, name); exceptions.add(exception);
+            } else throw new IllegalArgumentException("unknown DNS configuration line");
+        }
+        if (endpoints.isEmpty() || routes.isEmpty()) throw new IllegalArgumentException("DNS default route required");
+        long[] wire = new long[5 + DNS_ENDPOINT_WORDS*endpoints.size()
+                + DNS_ROUTE_WORDS*routes.size() + DNS_EXCEPTION_WORDS*exceptions.size()];
+        wire[0] = -4; wire[1] = 1; wire[2] = endpoints.size(); wire[3] = routes.size(); wire[4] = exceptions.size();
+        int at = 5;
+        for (java.util.ArrayList<long[]> entries : java.util.Arrays.asList(endpoints, routes, exceptions))
+            for (long[] entry : entries) { System.arraycopy(entry, 0, wire, at, entry.length); at += entry.length; }
+        return wire;
+    }
+
+    private static void dnsString(long[] wire, int at, String text) {
+        for (int i = 0; i < text.length(); ++i) wire[at+i/4] |= (long)text.charAt(i) << (24-(i%4)*8);
+    }
+
+    private static String dnsName(String text) {
+        String name = text.toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".")) name = name.substring(0, name.length()-1);
+        if (name.isEmpty() || name.length() > 253) throw new IllegalArgumentException("DNS name length");
+        for (String label : name.split("\\.", -1))
+            if (label.isEmpty() || label.length() > 63 || !label.matches("[a-z0-9_-]+"))
+                throw new IllegalArgumentException("use DNS ASCII labels");
+        return name;
     }
 
     /** Request-only numeric text. No hostname lookup and no second saved model. */
@@ -232,7 +315,7 @@ public final class RuleConfiguration {
         public final int groupCount, edgeCount, bindingCount;
         public final int domainListCount, domainEntryCount;
         private final long[] values;
-        private final int dnsAt;
+        private final int dnsAt, dnsStride;
         public CompleteStatus(long[] reply) {
             if (reply == null || reply.length < COMPLETE_REPLY_HEADER_WORDS) throw new IllegalArgumentException("invalid complete reply");
             count = (int) reply[9]; activeCount = (int) reply[10];
@@ -256,7 +339,8 @@ public final class RuleConfiguration {
                 lists = reply[domainAt]; entries = reply[domainAt+1];
                 if (lists < 0 || lists > 64 || entries < 0 || entries > 256 ||
                     (reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries &&
-                     reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries + 16))
+                     reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries + 16 &&
+                     reply.length != domainAt + 2 + DOMAIN_ENTRY_WORDS*entries + 2*DNS_CONFIG_WORDS))
                     throw new IllegalArgumentException("invalid domain reply size");
                 sourceEnd=domainAt+2+DOMAIN_ENTRY_WORDS*(int)entries;
                 for (int i = 0; i < entries; ++i) {
@@ -267,14 +351,17 @@ public final class RuleConfiguration {
                         if (reply[at+j] < 0 || reply[at+j] > 0xffffffffL) throw new IllegalArgumentException("invalid name word");
                 }
             }
-            dnsAt=reply.length == sourceEnd+16 ? sourceEnd : -1;
+            dnsStride=reply.length == sourceEnd+2*DNS_CONFIG_WORDS ? DNS_CONFIG_WORDS : 8;
+            dnsAt=(reply.length == sourceEnd+16 || dnsStride==DNS_CONFIG_WORDS) ? sourceEnd : -1;
             if (dnsAt>=0) for (int i=0;i<2;++i) {
-                int at=dnsAt+i*8;
-                for (int j=0;j<8;++j)
+                int at=dnsAt+i*dnsStride;
+                for (int j=0;j<dnsStride;++j)
                     if (reply[at+j]<0 || reply[at+j]>0xffffffffL) throw new IllegalArgumentException("invalid DNS status word");
                 if (reply[at]>1 || (reply[at+1]!=0 && reply[at+1]!=4 && reply[at+1]!=6)
                         || reply[at+2]>65535 || reply[at+3]!=0)
                     throw new IllegalArgumentException("invalid DNS status");
+                if(dnsStride==DNS_CONFIG_WORDS && (reply[at+8]>8 || reply[at+9]>8 || reply[at+10]>32 || reply[at+11]!=0))
+                    throw new IllegalArgumentException("invalid DNS configuration status counts");
             }
             domainListCount = (int)lists; domainEntryCount = (int)entries;
             values = reply.clone(); transportCode = reply[0]; generation = reply[1];
@@ -330,15 +417,63 @@ public final class RuleConfiguration {
             }
             String[] dnsNames={"dns", "dns.active"};
             for (int i=0;i<2;++i) {
-                int offset=dnsAt<0 ? -1 : dnsAt+i*8;
+                int offset=dnsAt<0 ? -1 : dnsAt+i*dnsStride;
                 out.append(dnsNames[i]).append(".enabled=").append(offset<0 ? 0 : values[offset]).append('\n');
                 out.append(dnsNames[i]).append(".family=").append(offset<0 ? 0 : values[offset+1]).append('\n');
                 out.append(dnsNames[i]).append(".port=").append(offset<0 ? 0 : values[offset+2]).append('\n');
                 out.append(dnsNames[i]).append(".address=");
                 for (int j=0;j<4;++j) out.append(String.format(java.util.Locale.ROOT,"%08x",offset<0 ? 0 : values[offset+4+j]));
                 out.append('\n');
+                if(offset>=0 && dnsStride==DNS_CONFIG_WORDS) dnsProperties(out,dnsNames[i],values,offset);
             }
             return out.toString();
+        }
+    }
+
+    private static String dnsText(long[] words,int at,int bytes) {
+        StringBuilder text=new StringBuilder();
+        for(int i=0;i<bytes;++i) {
+            char c=(char)((words[at+i/4] >>> (24-(i%4)*8)) & 255);
+            if(c==0) break;
+            if(c<33 || c>126) throw new IllegalArgumentException("invalid DNS status text");
+            text.append(c);
+        }
+        return text.toString();
+    }
+    private static void dnsProperties(StringBuilder out,String name,long[] words,int base) {
+        int endpoints=(int)words[base+8],routes=(int)words[base+9],exceptions=(int)words[base+10];
+        out.append(name).append(".endpointCount=").append(endpoints).append('\n');
+        out.append(name).append(".routeCount=").append(routes).append('\n');
+        out.append(name).append(".exceptionCount=").append(exceptions).append('\n');
+        for(int i=0;i<endpoints;++i) {
+            int at=base+12+i*DNS_ENDPOINT_WORDS;
+            String prefix=name+".endpoint."+i;
+            out.append(prefix).append(".transport=").append(words[at]).append('\n');
+            out.append(prefix).append(".family=").append(words[at+1]).append('\n');
+            out.append(prefix).append(".port=").append(words[at+2]).append('\n');
+            out.append(prefix).append(".address=");
+            for(int j=0;j<4;++j) out.append(String.format(java.util.Locale.ROOT,"%08x",words[at+4+j]));
+            out.append('\n').append(prefix).append(".identity=").append(dnsText(words,at+8,256)).append('\n');
+        }
+        int routeBase=base+12+8*DNS_ENDPOINT_WORDS;
+        for(int i=0;i<routes;++i) {
+            int at=routeBase+i*DNS_ROUTE_WORDS;
+            if(words[at]<1 || words[at]>8) throw new IllegalArgumentException("invalid DNS route status count");
+            out.append(name).append(".route.").append(i).append(".candidates=");
+            for(int j=0;j<words[at];++j) {
+                if(words[at+2+j]>=endpoints) throw new IllegalArgumentException("invalid DNS candidate status");
+                if(j!=0) out.append(','); out.append(words[at+2+j]);
+            }
+            out.append('\n');
+        }
+        int exceptionBase=routeBase+8*DNS_ROUTE_WORDS;
+        for(int i=0;i<exceptions;++i) {
+            int at=exceptionBase+i*DNS_EXCEPTION_WORDS;
+            String prefix=name+".exception."+i;
+            out.append(prefix).append(".match=").append(words[at]).append('\n');
+            out.append(prefix).append(".target=").append(words[at+1]).append('\n');
+            out.append(prefix).append(".route=").append(words[at+2]).append('\n');
+            out.append(prefix).append(".name=").append(dnsText(words,at+4,256)).append('\n');
         }
     }
 

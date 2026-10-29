@@ -15,7 +15,7 @@
     (68 + 8 * SAKAMOTO_RULE_CONFIG_MAX_IDENTITIES + 180 * SAKAMOTO_RULE_CONFIG_MAX_RULES +         \
      4 * SAKAMOTO_RULE_CONFIG_MAX_GROUPS + 12 * SAKAMOTO_RULE_CONFIG_MAX_EDGES +                   \
      20 * SAKAMOTO_RULE_CONFIG_MAX_BINDINGS + 8 + 268 * SAKAMOTO_DOMAIN_MAX_ENTRIES + \
-     sizeof(sakamoto_product_config_metadata_t))
+     sizeof(sakamoto_product_config_metadata_t) + sizeof(sakamoto_product_dns_config_t) - 32U)
 struct product_rule_config {
     char *path;
     sakamoto_product_rule_config_status_t state;
@@ -60,7 +60,7 @@ static uint64_t get(const uint8_t **at, unsigned width) {
             F(destination_port_last) F(reserved)
 static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     uint8_t *at = bytes;
-    memcpy(at, "SKRULE07", 8);
+    memcpy(at, "SKRULE08", 8);
     at += 8;
     put(&at, config->state.saved_revision, 8);
     put(&at, config->state.count, 4);
@@ -121,6 +121,23 @@ static size_t encode(const product_rule_config_t *config, uint8_t *bytes) {
     const sakamoto_product_dns_config_t *dns = &config->state.dns;
     put(&at,dns->enabled,4); put(&at,dns->family,4); put(&at,dns->port,4); put(&at,dns->reserved,4);
     memcpy(at,dns->address,16); at+=16;
+    put(&at,dns->endpoint_count,4); put(&at,dns->route_count,4);
+    put(&at,dns->exception_count,4); put(&at,dns->reserved2,4);
+    for (unsigned i=0; i<dns->endpoint_count; ++i) {
+        const sakamoto_product_dns_endpoint_t *e=&dns->endpoints[i];
+        put(&at,e->transport,4); put(&at,e->family,4); put(&at,e->port,4); put(&at,e->reserved,4);
+        memcpy(at,e->address,16); at+=16; memcpy(at,e->identity,256); at+=256;
+    }
+    for (unsigned i=0; i<dns->route_count; ++i) {
+        const sakamoto_product_dns_route_t *r=&dns->routes[i];
+        put(&at,r->count,4); put(&at,r->reserved,4);
+        for (unsigned j=0;j<SAKAMOTO_DNS_MAX_ENDPOINTS;++j) put(&at,r->candidates[j],4);
+    }
+    for (unsigned i=0; i<dns->exception_count; ++i) {
+        const sakamoto_product_dns_exception_t *e=&dns->exceptions[i];
+        put(&at,e->match,4); put(&at,e->target,4); put(&at,e->route,4); put(&at,e->length,4);
+        memcpy(at,e->name,256); at+=256;
+    }
     return (size_t)(at - bytes);
 }
 static void project(sakamoto_product_rule_config_status_t *s) {
@@ -406,7 +423,8 @@ static uint32_t validate_domains(sakamoto_product_rule_config_status_t *state) {
     return 0;
 }
 static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t length) {
-    int v7 = length >= 8 && !memcmp(bytes, "SKRULE07", 8);
+    int v8 = length >= 8 && !memcmp(bytes, "SKRULE08", 8);
+    int v7 = v8 || (length >= 8 && !memcmp(bytes, "SKRULE07", 8));
     int v6 = v7 || (length >= 8 && !memcmp(bytes, "SKRULE06", 8));
     int v5 = v6 || (length >= 8 && !memcmp(bytes, "SKRULE05", 8));
     int v4 = v5 || (length >= 8 && !memcmp(bytes, "SKRULE04", 8));
@@ -501,7 +519,9 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
     if (domain_error) return domain_error;
     if (v6) {
         size_t metadata_bytes = 192U * (c->state.count + c->state.domains.list_count);
-        if ((size_t)(bytes + length - at) != metadata_bytes + (v7 ? 32U : 0U)) return SAKAMOTO_RULE_CONFIG_INVALID;
+        size_t remaining=(size_t)(bytes+length-at);
+        if (v8 ? remaining < metadata_bytes+48U : remaining != metadata_bytes+(v7?32U:0U))
+            return SAKAMOTO_RULE_CONFIG_INVALID;
         for (unsigned kind = 0; kind < 2; ++kind) {
             unsigned count = kind ? c->state.domains.list_count : c->state.count;
             sakamoto_product_source_metadata_t *entries = kind ?
@@ -517,6 +537,30 @@ static uint32_t decode(product_rule_config_t *c, const uint8_t *bytes, size_t le
         c->state.dns.enabled=get(&at,4); c->state.dns.family=get(&at,4);
         c->state.dns.port=get(&at,4); c->state.dns.reserved=get(&at,4);
         memcpy(c->state.dns.address,at,16); at+=16;
+        if (v8) {
+            sakamoto_product_dns_config_t *dns=&c->state.dns;
+            dns->endpoint_count=get(&at,4); dns->route_count=get(&at,4);
+            dns->exception_count=get(&at,4); dns->reserved2=get(&at,4);
+            if (dns->endpoint_count>SAKAMOTO_DNS_MAX_ENDPOINTS || dns->route_count>SAKAMOTO_DNS_MAX_ROUTES ||
+                dns->exception_count>SAKAMOTO_DNS_MAX_EXCEPTIONS || (size_t)(bytes+length-at) !=
+                288U*dns->endpoint_count+40U*dns->route_count+272U*dns->exception_count)
+                return SAKAMOTO_RULE_CONFIG_INVALID;
+            for (unsigned i=0;i<dns->endpoint_count;++i) {
+                sakamoto_product_dns_endpoint_t *e=&dns->endpoints[i];
+                e->transport=get(&at,4); e->family=get(&at,4); e->port=get(&at,4); e->reserved=get(&at,4);
+                memcpy(e->address,at,16); at+=16; memcpy(e->identity,at,256); at+=256;
+            }
+            for (unsigned i=0;i<dns->route_count;++i) {
+                sakamoto_product_dns_route_t *r=&dns->routes[i];
+                r->count=get(&at,4); r->reserved=get(&at,4);
+                for (unsigned j=0;j<SAKAMOTO_DNS_MAX_ENDPOINTS;++j) r->candidates[j]=get(&at,4);
+            }
+            for (unsigned i=0;i<dns->exception_count;++i) {
+                sakamoto_product_dns_exception_t *e=&dns->exceptions[i];
+                e->match=get(&at,4); e->target=get(&at,4); e->route=get(&at,4); e->length=get(&at,4);
+                memcpy(e->name,at,256); at+=256;
+            }
+        }
         if (!product_dns_route_valid(&c->state.dns)) return SAKAMOTO_RULE_CONFIG_INVALID;
     }
     if (at != bytes + length)

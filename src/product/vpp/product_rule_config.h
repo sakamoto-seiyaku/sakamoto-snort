@@ -13,8 +13,9 @@
  * to the complete snapshot; failure leaves ownership with this compiler. */
 typedef struct product_rule_config product_rule_config_t;
 
-#define PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT (2U * 1024U * 1024U)
-/* Conservative complete policy storage overlap for the current two-worker
+#define PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT (2176U * 1024U)
+/* Conservative complete policy storage overlap, including the bounded DNS
+ * endpoint/route/exception source and saved/active request/status copies.
  * runtime: compiler views/sources, saved/candidate configuration, serialization,
  * request/status adaptation, and both caller-local empty views/query scratch.
  * Excludes existing thread-stack reservation, API transport pools and allocator

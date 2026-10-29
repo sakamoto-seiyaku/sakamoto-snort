@@ -99,7 +99,7 @@ typedef struct {
   product_dns_name_t names[PRODUCT_DNS_NAMES];
 } product_dns_response_t;
 _Static_assert(sizeof(product_dns_owner_t) + sizeof(product_dns_response_t) +
-  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 704U <= PRODUCT_DNS_WORK_BYTES,
+  sizeof(product_dns_query_t) + PRODUCT_DNS_CODEC_BYTES + 2U * 720U <= PRODUCT_DNS_WORK_BYTES,
   "DNS retained state and synchronous wire/observation work fit the owner budget");
 
 /* Owner-local original-path observations. No datagram, codec borrow or policy

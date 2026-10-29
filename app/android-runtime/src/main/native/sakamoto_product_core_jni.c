@@ -6,6 +6,7 @@
 #include "sakamoto_product_core_ffi.h"
 
 #include <inttypes.h>
+#include <arpa/inet.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,7 +135,32 @@ enum {
     COMPLETE_REPLY_HEADER_WORDS = 13,
     COMPLETE_SOURCE_WORD = 18,
     COMPLETE_DESTINATION_WORD = 22,
+    DNS_ENDPOINT_WORDS = 72, DNS_ROUTE_WORDS = 10, DNS_EXCEPTION_WORDS = 68,
+    DNS_CONFIG_WORDS = 12 + 8*DNS_ENDPOINT_WORDS + 8*DNS_ROUTE_WORDS + 32*DNS_EXCEPTION_WORDS,
 };
+
+/* The Java words use host-order numbers and big-endian packed byte strings.
+ * All representation widths and offsets are fixed by the shared C ABI. */
+_Static_assert(sizeof(sakamoto_product_dns_config_t)==4U*DNS_CONFIG_WORDS,"DNS config word layout");
+static void dns_word_strings(uint32_t words[DNS_CONFIG_WORDS]) {
+    for(unsigned j=0;j<4;++j) words[4+j]=htonl(words[4+j]);
+    for(unsigned i=0;i<8;++i) for(unsigned j=4;j<DNS_ENDPOINT_WORDS;++j)
+        words[12+i*DNS_ENDPOINT_WORDS+j]=htonl(words[12+i*DNS_ENDPOINT_WORDS+j]);
+    unsigned exceptions=12+8*DNS_ENDPOINT_WORDS+8*DNS_ROUTE_WORDS;
+    for(unsigned i=0;i<32;++i) for(unsigned j=4;j<DNS_EXCEPTION_WORDS;++j)
+        words[exceptions+i*DNS_EXCEPTION_WORDS+j]=htonl(words[exceptions+i*DNS_EXCEPTION_WORDS+j]);
+}
+static int dns_read_words(JNIEnv *env,jlongArray fields,jsize offset,unsigned count,uint32_t *out) {
+    jlong words[DNS_ENDPOINT_WORDS];
+    if(count>DNS_ENDPOINT_WORDS) return 0;
+    (*env)->GetLongArrayRegion(env,fields,offset,count,words);
+    if((*env)->ExceptionCheck(env)) return 0;
+    for(unsigned i=0;i<count;++i) {
+        if(words[i]<0 || (uint64_t)words[i]>UINT32_MAX) return 0;
+        out[i]=words[i];
+    }
+    return 1;
+}
 
 JNIEXPORT jlongArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleConfig(
@@ -165,6 +191,26 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
             request.dns.enabled=values[1]; request.dns.family=values[2]; request.dns.port=values[3];
             for (unsigned i=0;i<16;++i)
                 request.dns.address[i]=(uint64_t)values[4+i/4]>>(24-(i%4)*8);
+            valid=1; rule_count=0;
+        } else if (marker == -4) {
+            uint32_t header[4], words[DNS_CONFIG_WORDS]={0};
+            if(operation!=SAKAMOTO_RULE_CONFIG_DNS_UPSTREAM || length<5 ||
+                !dns_read_words(env,fields,1,4,header) || header[0]>1 || !header[1] || header[1]>8 ||
+                !header[2] || header[2]>8 || header[3]>32 || length != (jsize)(5+
+                    header[1]*DNS_ENDPOINT_WORDS+header[2]*DNS_ROUTE_WORDS+header[3]*DNS_EXCEPTION_WORDS)) return NULL;
+            words[0]=header[0]; words[8]=header[1]; words[9]=header[2]; words[10]=header[3];
+            jsize offset=5;
+            unsigned counts[3]={header[1],header[2],header[3]}, widths[3]={DNS_ENDPOINT_WORDS,DNS_ROUTE_WORDS,DNS_EXCEPTION_WORDS};
+            unsigned bases[3]={12,12+8*DNS_ENDPOINT_WORDS,12+8*DNS_ENDPOINT_WORDS+8*DNS_ROUTE_WORDS};
+            for(unsigned kind=0;kind<3;++kind) for(unsigned i=0;i<counts[kind];++i) {
+                if(!dns_read_words(env,fields,offset,widths[kind],words+bases[kind]+i*widths[kind])) return NULL;
+                offset+=widths[kind];
+            }
+            dns_word_strings(words); memcpy(&request.dns,words,sizeof(request.dns));
+            unsigned first=request.dns.routes[0].candidates[0];
+            if(first>=request.dns.endpoint_count) return NULL;
+            request.dns.family=request.dns.endpoints[first].family; request.dns.port=request.dns.endpoints[first].port;
+            memcpy(request.dns.address,request.dns.endpoints[first].address,16);
             valid=1; rule_count=0;
         } else if (marker == -1 || marker == -2) {
             jlong header[7] = {0};
@@ -284,7 +330,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
         (*env)->NewLongArray(env, COMPLETE_REPLY_HEADER_WORDS + COMPLETE_RULE_WORDS * status.count +
                                       status.active_count + 3 + status.graph.group_count +
                                       3*status.graph.edge_count + 5*status.graph.binding_count +
-                                      2 + DOMAIN_ENTRY_WORDS*status.domains.entry_count + 16);
+                                      2 + DOMAIN_ENTRY_WORDS*status.domains.entry_count + 2*DNS_CONFIG_WORDS);
     if (!result)
         return NULL;
     (*env)->SetLongArrayRegion(env, result, 0, COMPLETE_REPLY_HEADER_WORDS, header);
@@ -353,9 +399,10 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeCompleteRuleCo
     }
     const sakamoto_product_dns_config_t *dns[2]={&status.dns,&status.active_dns};
     for (unsigned i=0;i<2;++i) {
-        jlong values[8]={dns[i]->enabled,dns[i]->family,dns[i]->port,dns[i]->reserved};
-        for (unsigned j=0;j<16;++j) values[4+j/4]|=(jlong)dns[i]->address[j]<<(24-(j%4)*8);
-        (*env)->SetLongArrayRegion(env,result,at,8,values); at+=8;
+        uint32_t words[DNS_CONFIG_WORDS]; jlong values[DNS_CONFIG_WORDS];
+        memcpy(words,dns[i],sizeof(words)); dns_word_strings(words);
+        for(unsigned j=0;j<DNS_CONFIG_WORDS;++j) values[j]=words[j];
+        (*env)->SetLongArrayRegion(env,result,at,DNS_CONFIG_WORDS,values); at+=DNS_CONFIG_WORDS;
     }
     return result;
 }

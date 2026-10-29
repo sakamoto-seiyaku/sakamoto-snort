@@ -108,6 +108,7 @@ graph_type = "typedef struct {\n" + "\n".join(members) + "\n} product_packet_gra
 prefix = r'''
 #define SAKAMOTO_PRODUCT_HOST_EVIDENCE 1
 #define SAKAMOTO_PRODUCT_POLICY_QUALIFICATION_COUNTERS 1
+#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <linux/netfilter.h>

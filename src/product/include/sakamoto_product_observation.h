@@ -6,6 +6,8 @@
 #include "sakamoto_product_limits.h"
 
 #define PRODUCT_OBSERVATION_VERSION 8
+#define PRODUCT_DNS_OBSERVATION_VERSION 9
+#define PRODUCT_DNS_OBSERVATION_LEGACY_BYTES 704U
 /* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
 #define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
 #define PRODUCT_OBSERVATION_CHANNELS (2 * PRODUCT_OBSERVATION_OWNERS)
@@ -15,7 +17,7 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 704
+#define PRODUCT_OBSERVATION_MAX_RECORD 720
 #define PRODUCT_DNS_PROXY_RECORD 1U
 #define PRODUCT_DNS_PROXY_TRUNCATED 2U
 #define PRODUCT_DNS_PROXY_UPSTREAM_ANSWER 4U
@@ -105,10 +107,23 @@ typedef struct {
   uint64_t return_policy_generation, return_policy_revision, return_policy_hash, return_winner;
   uint8_t return_declared_action, return_actual_action, return_mode, return_provenance;
   uint32_t return_packet_uid;
+  uint64_t upstream_attempt;
+  uint32_t resolution_route, resolver_id;
 } product_dns_observation_record_t;
-_Static_assert (sizeof (product_dns_observation_record_t) == 704, "DNS observation ABI");
+_Static_assert (sizeof (product_dns_observation_record_t) == 720, "DNS observation ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, return_token) == 656, "DNS return identity ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, upstream_attempt) == 704, "DNS resolver view ABI");
+static inline uint16_t product_dns_observation_wire_bytes (const product_dns_observation_record_t *record)
+{
+  return record->upstream_attempt || record->resolution_route || record->resolver_id || record->stage == 5
+    ? sizeof (*record) : PRODUCT_DNS_OBSERVATION_LEGACY_BYTES;
+}
+static inline uint8_t product_dns_observation_wire_version (const product_dns_observation_record_t *record)
+{
+  return product_dns_observation_wire_bytes (record) == PRODUCT_DNS_OBSERVATION_LEGACY_BYTES
+    ? PRODUCT_OBSERVATION_VERSION : PRODUCT_DNS_OBSERVATION_VERSION;
+}
 
 typedef struct {
   uint64_t attempted, published, full, oversize, consumed, notify_errors;

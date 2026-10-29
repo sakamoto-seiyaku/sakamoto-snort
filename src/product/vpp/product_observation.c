@@ -62,15 +62,15 @@ void product_observation_dns (vlib_main_t *vm, const product_dns_observation_rec
   if (!transport || !input || owner >= PRODUCT_OBSERVATION_OWNERS ||
       input->generation != owners[owner].generation) return;
   product_dns_observation_record_t record = *input;
-  record.length = sizeof (record);
-  record.version = PRODUCT_OBSERVATION_VERSION;
+  record.length = product_dns_observation_wire_bytes (&record);
+  record.version = product_dns_observation_wire_version (&record);
   record.flags = PRODUCT_OBSERVATION_DNS;
   record.owner = owner;
   record.mono_us = (uint64_t) (vlib_time_now (vm) * 1000000.0);
   struct timespec wall;
   if (!clock_gettime (CLOCK_REALTIME, &wall))
     record.activity_utc_us = (uint64_t) wall.tv_sec * 1000000U + wall.tv_nsec / 1000U;
-  (void) product_observation_publish (transport, owner * 2, &record, sizeof (record));
+  (void) product_observation_publish (transport, owner * 2, &record, record.length);
 }
 
 static void remove_pending (observation_owner_t *o, uint32_t slot) {

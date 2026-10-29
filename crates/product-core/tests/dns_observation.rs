@@ -2,6 +2,67 @@ use sakamoto_product_core::dns_observation::DnsRecord;
 use sakamoto_product_core::observation_store::ObservationStore;
 
 #[test]
+fn resolver_attempts_keep_full_view_and_failure_identity_through_sqlite_reopen() {
+    // A worked v9 normal-owner record: one known App's primary timeout.
+    // Offsets are the published C wire ABI, independent of its producer.
+    let mut wire = vec![0u8; 720];
+    wire[..2].copy_from_slice(&720u16.to_le_bytes()); wire[2] = 9; wire[3] = 16;
+    for (offset, value) in [(8,77u64),(16,13),(24,8),(32,3_000_100),(40,61_000_000),
+        (480,13),(488,77),(496,1),(504,123),(520,5),(552-8,8),(592,7),(600,1),(704,70_001)] {
+        wire[offset..offset+8].copy_from_slice(&value.to_le_bytes());
+    }
+    wire[80..84].copy_from_slice(&10123u32.to_le_bytes());
+    wire[84..88].copy_from_slice(&u32::MAX.to_le_bytes());
+    wire[96..100].copy_from_slice(&3u32.to_le_bytes());
+    for (offset,value) in [(100,0x1234u16),(102,0x0100),(104,1),(106,1),(108,40000),
+        (110,53),(112,11),(632,15353),(640,512),(642,512)] {
+        wire[offset..offset+2].copy_from_slice(&value.to_le_bytes());
+    }
+    wire[114..126].copy_from_slice(&[4,17,3,9,1,1,0,0,0,1,5,0]);
+    wire[128..132].copy_from_slice(&[192,0,2,2]); wire[144..148].copy_from_slice(&[1,1,1,1]);
+    wire[224..235].copy_from_slice(b"example.com"); wire[559] = 9; wire[570] = 1;
+    wire[572..576].copy_from_slice(&10123u32.to_le_bytes());
+    wire[616..620].copy_from_slice(&[192,0,2,53]); wire[634..638].copy_from_slice(&[4,1,14,0]);
+    wire[648..652].copy_from_slice(&1u32.to_le_bytes());
+    wire[716..720].copy_from_slice(&1u32.to_le_bytes());
+    let timeout = DnsRecord::decode(&wire).expect("ordinary primary attempt timeout must decode");
+    let mut started_wire = wire.clone(); started_wire[636] = 12;
+    let started = DnsRecord::decode(&started_wire).unwrap();
+    let mut backup_wire = started_wire.clone(); backup_wire[619] = 54;
+    backup_wire[632..634].copy_from_slice(&15354u16.to_le_bytes());
+    backup_wire[704..712].copy_from_slice(&70_002u64.to_le_bytes());
+    backup_wire[716..720].copy_from_slice(&2u32.to_le_bytes());
+    let backup = DnsRecord::decode(&backup_wire).unwrap();
+    let records = [started, timeout, backup];
+    let expected: Vec<_> = records.iter().map(|record|serde_json::to_value(record).unwrap()).collect();
+    assert_eq!(expected[1]["upstream_attempt"],70_001);
+    assert_eq!(expected[1]["resolver_id"],1); assert_eq!(expected[2]["resolver_id"],2);
+    let root = test_root("resolver-attempts"); std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut store = ObservationStore::open(&path).unwrap(); store.begin_generation(77).unwrap();
+    store.consume_dns(&records,61_000_000).unwrap();
+    assert_eq!(store.query()["dns"]["accepted"],3); assert_eq!(store.query()["dns"]["rejected"],0);
+    store.close().unwrap(); drop(store);
+    let mut reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["dns"]["retained_count"],3);
+    reopened.close().unwrap(); drop(reopened);
+    let database = rusqlite::Connection::open_with_flags(path.with_extension("sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let integrity: String = database.query_row("PRAGMA integrity_check",[],|row|row.get(0)).unwrap();
+    assert_eq!(integrity,"ok");
+    let mut statement = database.prepare("SELECT key,value FROM observation WHERE kind=20").unwrap();
+    let rows: Vec<(String,Vec<u8>)> = statement.query_map([],|row|Ok((row.get(0)?,row.get(1)?)))
+        .unwrap().map(Result::unwrap).collect();
+    assert_eq!(rows.len(),3);
+    for (key,value) in rows {
+        assert!(key.len()<=192);
+        let record = serde_json::from_slice::<serde_json::Value>(&value).unwrap()["record"].clone();
+        assert_eq!(expected.iter().filter(|candidate|**candidate==record).count(),1);
+    }
+    drop(statement); drop(database); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 #[ignore = "requires source-linked coalescing Root/VPN Adapter observations"]
 fn coalesced_waiters_keep_independent_identity_policy_and_terminal_records_after_reopen() {
     let wire = std::fs::read(std::env::var("SAKAMOTO_DNS_COALESCING_RECORDS").unwrap()).unwrap();

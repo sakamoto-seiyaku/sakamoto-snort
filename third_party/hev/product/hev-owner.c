@@ -389,8 +389,18 @@ static void session_task(void *opaque)
   }
   if (!owner->stats.running || session->closing || session->broker_state != 2)
     goto finished;
-  if (connect(transport->base.fd, (struct sockaddr *)&destination,
-              destination_length)) {
+  int mdns = family == AF_INET
+    ? ((struct sockaddr_in *)&destination)->sin_port == htons(5353) &&
+      ((struct sockaddr_in *)&destination)->sin_addr.s_addr == htonl(0xe00000fb)
+    : ((struct sockaddr_in6 *)&destination)->sin6_port == htons(5353) &&
+      !memcmp(&((struct sockaddr_in6 *)&destination)->sin6_addr,
+        (unsigned char[]){0xff,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0xfb},16);
+  /* A multicast responder uses its own unicast source. Retain this admitted
+   * session, broker and ordinary packet policy without connecting to one
+   * peer or treating mDNS as a DNS resolver transaction. */
+  if (mdns ? hev_socks5_session_udp_direct_mdns(transport,
+        (struct sockaddr *)&destination,destination_length)
+      : connect(transport->base.fd, (struct sockaddr *)&destination,destination_length)) {
     connect_failure(session, errno);
     goto finished;
   }

@@ -1,0 +1,206 @@
+--- a/src/hev-socks5-session-udp.h
++++ b/src/hev-socks5-session-udp.h
+@@ -12,6 +12,7 @@
+ 
+ #include <hev-socks5-client-udp.h>
+ #include <hev-task-mutex.h>
++#include <sys/socket.h>
+ 
+ #include "hev-socks5-session.h"
+ 
+@@ -39,6 +40,10 @@
+     unsigned int direct_frame_limit;
+     /* Actual ready datagrams submitted by the most recent Direct send call. */
+     unsigned int direct_send_requested;
++    struct sockaddr_storage direct_destination;
++    socklen_t direct_destination_length;
++    unsigned char direct_local_address[16];
++    unsigned int direct_network_scope;
+ };
+ 
+ struct _HevSocks5SessionUDPClass
+@@ -62,6 +67,10 @@
+  * send/receive only after successful broker completion and Direct connect. */
+ HevSocks5SessionUDP *hev_socks5_session_udp_direct_new (
+     struct udp_pcb *pcb, HevTaskMutex *mutex, unsigned int frame_limit);
++/* Retain the existing queue/fd/owner for mDNS multicast. Called only after
++ * successful platform authorization; no DNS parser, resolver or policy bypass. */
++int hev_socks5_session_udp_direct_mdns (HevSocks5SessionUDP *self,
++    const struct sockaddr *destination, socklen_t length);
+ /* send consumes a successful prefix of 1..8 datagrams (scalar builds: 1).
+  * receive consumes one datagram. Zero = would block/no work, -1 = terminal
+  * socket failure: the caller closes the session, without retrying its queue.
+--- a/src/hev-socks5-session-udp.c
++++ b/src/hev-socks5-session-udp.c
+@@ -246,6 +246,74 @@
+     self->direct_frame_limit = frame_limit;
+     udp_recv (pcb, udp_recv_handler, self);
+     return self;
++}
++
++int
++hev_socks5_session_udp_direct_mdns (HevSocks5SessionUDP *self,
++    const struct sockaddr *destination, socklen_t length)
++{
++    int fd = self->base.fd, enabled = 1;
++    struct sockaddr_storage local = { 0 };
++    struct sockaddr disconnect = { .sa_family = AF_UNSPEC };
++    socklen_t local_length = sizeof (local);
++    static const unsigned char group6[16] = { 0xff,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0xfb };
++    if (fd < 0 || !self->direct_frame_limit || !destination ||
++        !((destination->sa_family == AF_INET && length == sizeof (struct sockaddr_in) &&
++           ((const struct sockaddr_in *) destination)->sin_port == htons (5353) &&
++           ((const struct sockaddr_in *) destination)->sin_addr.s_addr == htonl (0xe00000fb)) ||
++          (destination->sa_family == AF_INET6 && length == sizeof (struct sockaddr_in6) &&
++           ((const struct sockaddr_in6 *) destination)->sin6_port == htons (5353) &&
++           !memcmp (&((const struct sockaddr_in6 *) destination)->sin6_addr, group6, 16))))
++        { errno = EINVAL; return -1; }
++    /* Resolve only the existing authorized socket's selected local network.
++     * UDP connect/disconnect sends no packet and creates no extra descriptor.
++     * A wildcard5353 receiver must reject its own return to the virtual App
++     * address, even when the real responder and DNS bytes are identical. */
++    if (connect (fd, destination, length) ||
++        getsockname (fd, (void *) &local, &local_length) ||
++        connect (fd, &disconnect, sizeof (disconnect))) return -1;
++    if (destination->sa_family == AF_INET) {
++        const struct sockaddr_in *to = (const void *) destination;
++        const struct sockaddr_in *selected = (const void *) &local;
++        struct ip_mreq membership = { .imr_multiaddr = to->sin_addr,
++                                     .imr_interface = selected->sin_addr };
++        unsigned char ttl = 255;
++        memcpy (self->direct_local_address, &selected->sin_addr, 4);
++        if (setsockopt (fd, IPPROTO_IP, IP_PKTINFO, &enabled, sizeof (enabled)) ||
++            setsockopt (fd, IPPROTO_IP, IP_MULTICAST_IF, &selected->sin_addr, sizeof (selected->sin_addr)) ||
++            setsockopt (fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof (ttl))) return -1;
++        if (self->pcb->remote_port == 5353) {
++            struct sockaddr_in binding = { .sin_family = AF_INET, .sin_port = htons (5353) };
++            if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof (enabled)) ||
++                bind (fd, (const void *) &binding, sizeof (binding)) ||
++                setsockopt (fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &membership, sizeof (membership))) return -1;
++        }
++    } else {
++        const struct sockaddr_in6 *to = (const void *) destination;
++        const struct sockaddr_in6 *selected = (const void *) &local;
++        struct ipv6_mreq membership = { .ipv6mr_multiaddr = to->sin6_addr };
++        socklen_t size = sizeof (membership.ipv6mr_interface);
++        int hops = 255;
++        if (getsockopt (fd, IPPROTO_IPV6, IPV6_MULTICAST_IF, &membership.ipv6mr_interface, &size)) return -1;
++        if (!membership.ipv6mr_interface) membership.ipv6mr_interface = selected->sin6_scope_id;
++        memcpy (self->direct_local_address, &selected->sin6_addr, 16);
++        self->direct_network_scope = membership.ipv6mr_interface;
++        if (setsockopt (fd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &enabled, sizeof (enabled)) ||
++            setsockopt (fd, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hops, sizeof (hops)) ||
++            (membership.ipv6mr_interface && setsockopt (fd, IPPROTO_IPV6, IPV6_MULTICAST_IF,
++                &membership.ipv6mr_interface, sizeof (membership.ipv6mr_interface)))) return -1;
++        if (self->pcb->remote_port == 5353) {
++            struct sockaddr_in6 binding = { .sin6_family = AF_INET6, .sin6_port = htons (5353) };
++            if (setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof (enabled)) ||
++                bind (fd, (const void *) &binding, sizeof (binding)) ||
++                setsockopt (fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &membership, sizeof (membership))) return -1;
++        }
++    }
++    memcpy (&self->direct_destination, destination, length);
++    if (destination->sa_family == AF_INET6 && self->direct_network_scope)
++        ((struct sockaddr_in6 *) &self->direct_destination)->sin6_scope_id = self->direct_network_scope;
++    self->direct_destination_length = length;
++    return 0;
+ }
+ 
+ int
+@@ -277,6 +345,10 @@
+         if (p) {
+             if (!count) { errno = EMSGSIZE; return -1; }
+             break;
++        }
++        if (self->direct_destination_length) {
++            messages[count].msg_hdr.msg_name = &self->direct_destination;
++            messages[count].msg_hdr.msg_namelen = self->direct_destination_length;
+         }
+         messages[count].msg_hdr.msg_iov = spans + first;
+         messages[count++].msg_hdr.msg_iovlen = span_count - first;
+@@ -330,6 +402,13 @@
+ {
+     struct iovec span = { scratch, capacity };
+     struct msghdr msg = { 0 };
++    struct sockaddr_storage peer = { 0 };
++    union {
++        struct cmsghdr alignment;
++        unsigned char bytes[CMSG_SPACE (sizeof (struct in_pktinfo)) +
++                            CMSG_SPACE (sizeof (struct in6_pktinfo))];
++    } control;
++    ip_addr_t source = self->pcb->local_ip;
+     struct pbuf *packet;
+     ssize_t result;
+ 
+@@ -338,6 +417,12 @@
+         return -1;
+     msg.msg_iov = &span;
+     msg.msg_iovlen = 1;
++    if (self->direct_destination_length) {
++        msg.msg_name = &peer;
++        msg.msg_namelen = sizeof (peer);
++        msg.msg_control = control.bytes;
++        msg.msg_controllen = sizeof (control.bytes);
++    }
+     result = recvmsg (self->base.fd, &msg, MSG_DONTWAIT | MSG_TRUNC);
+     if (result < 0) {
+         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+@@ -348,14 +433,56 @@
+         *output_result = ERR_BUF;
+         return 1;
+     }
++    if (self->direct_destination_length) {
++        int valid = 0, network = 0;
++        if (!(msg.msg_flags & MSG_CTRUNC))
++            for (struct cmsghdr *item = CMSG_FIRSTHDR (&msg); item; item = CMSG_NXTHDR (&msg, item)) {
++                if (self->direct_destination.ss_family == AF_INET && item->cmsg_level == IPPROTO_IP &&
++                    item->cmsg_type == IP_PKTINFO && item->cmsg_len >= CMSG_LEN (sizeof (struct in_pktinfo))) {
++                    struct in_pktinfo info;
++                    memcpy (&info, CMSG_DATA (item), sizeof (info));
++                    network = info.ipi_addr.s_addr == htonl (0xe00000fb) ||
++                        !memcmp (&info.ipi_addr, self->direct_local_address, 4);
++                } else if (self->direct_destination.ss_family == AF_INET6 && item->cmsg_level == IPPROTO_IPV6 &&
++                    item->cmsg_type == IPV6_PKTINFO && item->cmsg_len >= CMSG_LEN (sizeof (struct in6_pktinfo))) {
++                    struct in6_pktinfo info;
++                    static const unsigned char group[16] = { 0xff,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0xfb };
++                    memcpy (&info, CMSG_DATA (item), sizeof (info));
++                    network = (!memcmp (&info.ipi6_addr, group, 16) ||
++                        !memcmp (&info.ipi6_addr, self->direct_local_address, 16)) &&
++                        (!self->direct_network_scope || info.ipi6_ifindex == self->direct_network_scope);
++                }
++            }
++        if (peer.ss_family == AF_INET && msg.msg_namelen == sizeof (struct sockaddr_in) &&
++            self->direct_destination.ss_family == AF_INET) {
++            const struct sockaddr_in *from = (const void *) &peer;
++            uint32_t address = ntohl (from->sin_addr.s_addr);
++            valid = from->sin_port == htons (5353) && address && address < 0xe0000000;
++            IP_SET_TYPE_VAL (source, IPADDR_TYPE_V4);
++            ip_2_ip4 (&source)->addr = from->sin_addr.s_addr;
++        }
++#if LWIP_IPV6
++        else if (peer.ss_family == AF_INET6 && msg.msg_namelen == sizeof (struct sockaddr_in6) &&
++                 self->direct_destination.ss_family == AF_INET6) {
++            const struct sockaddr_in6 *from = (const void *) &peer;
++            valid = from->sin6_port == htons (5353) && !IN6_IS_ADDR_UNSPECIFIED (&from->sin6_addr) &&
++                !IN6_IS_ADDR_MULTICAST (&from->sin6_addr);
++            IP_SET_TYPE_VAL (source, IPADDR_TYPE_V6);
++            memcpy (ip_2_ip6 (&source)->addr, &from->sin6_addr, 16);
++        }
++#endif
++        if (!valid || !network) { *output_result = ERR_VAL; return 1; }
++    }
+     packet = pbuf_alloc_reference (scratch, result, PBUF_REF);
+     if (!packet) {
+         *output_result = ERR_MEM;
+         return 1;
+     }
+     hev_task_mutex_lock (self->mutex);
+-    *output_result = udp_sendfrom (self->pcb, packet, &self->pcb->local_ip,
+-                                   self->pcb->local_port);
++    u8_t ttl = self->pcb->ttl;
++    if (self->direct_destination_length) self->pcb->ttl = 255;
++    *output_result = udp_sendfrom (self->pcb, packet, &source, self->pcb->local_port);
++    self->pcb->ttl = ttl;
+     hev_task_mutex_unlock (self->mutex);
+     pbuf_free (packet);
+     return 1;

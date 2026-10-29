@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
 parser.add_argument('--records')
 parser.add_argument('--evidence',type=Path)
-parser.add_argument('--case', choices=('all', 'coalescing', 'cache', 'cache-resource', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view', 'shutdown-prefix'), default='all')
+parser.add_argument('--case', choices=('all', 'routing', 'coalescing', 'cache', 'cache-resource', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view', 'shutdown-prefix'), default='all')
 args = parser.parse_args()
 cache = Path(args.libraries[1]).resolve().parent / 'CMakeCache.txt'
 batch = re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$', cache.read_text(), re.M)

@@ -25,6 +25,7 @@
 #include "product_core.api_enum.h"
 #include "product_core.api_types.h"
 #include "sakamoto_product_abi.h"
+#include "sakamoto_product_dns_config_copy.h"
 #include "product_core_identity.h"
 #include "product_l4_policy.h"
 #include "product_packet_graph.h"
@@ -804,9 +805,7 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
   sakamoto_product_rule_config_request_t *request = &scratch->request;
   sakamoto_product_rule_config_status_t *status = &scratch->status;
   request->schema = ntohl (mp->schema);
-  request->dns.enabled = ntohl (mp->dns.enabled); request->dns.family = ntohl (mp->dns.family);
-  request->dns.port = ntohl (mp->dns.port); request->dns.reserved = ntohl (mp->dns.reserved);
-  memcpy (request->dns.address, mp->dns.address, sizeof request->dns.address);
+  SAKAMOTO_DNS_CONFIG_COPY(request->dns, mp->dns, ntohl);
   request->operation = ntohl (mp->operation);
   request->expected_saved_revision = clib_net_to_host_u64 (mp->expected_saved_revision);
 #define FROM_RULE(field) request->rule.field = ntohl (mp->rule.field)
@@ -888,12 +887,8 @@ vl_api_product_core_rule_config_t_handler (vl_api_product_core_rule_config_t *mp
     vlib_process_signal_event (pcm->vlib_main,
                                product_core_start_adapters_node.index, 1, 0);
   REPLY_MACRO2_ZERO (VL_API_PRODUCT_CORE_RULE_CONFIG_REPLY, ({
-    rmp->dns.enabled = htonl (status->dns.enabled); rmp->dns.family = htonl (status->dns.family);
-    rmp->dns.port = htonl (status->dns.port); rmp->dns.reserved = htonl (status->dns.reserved);
-    memcpy (rmp->dns.address, status->dns.address, sizeof status->dns.address);
-    rmp->active_dns.enabled = htonl (status->active_dns.enabled); rmp->active_dns.family = htonl (status->active_dns.family);
-    rmp->active_dns.port = htonl (status->active_dns.port); rmp->active_dns.reserved = htonl (status->active_dns.reserved);
-    memcpy (rmp->active_dns.address, status->active_dns.address, sizeof status->active_dns.address);
+    SAKAMOTO_DNS_CONFIG_COPY(rmp->dns, status->dns, htonl);
+    SAKAMOTO_DNS_CONFIG_COPY(rmp->active_dns, status->active_dns, htonl);
     rmp->retval = htonl (rv);
     rmp->generation = clib_host_to_net_u64 (pcm->generation);
     rmp->saved_revision = clib_host_to_net_u64 (status->saved_revision);

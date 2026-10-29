@@ -68,6 +68,9 @@ pub struct DnsRecord {
     #[serde(default)] pub route_revision: u64,
     #[serde(default)] pub request_attempt: u64,
     #[serde(default)] pub upstream_session: u64,
+    #[serde(default, skip_serializing_if = "zero_u64")] pub upstream_attempt: u64,
+    #[serde(default, skip_serializing_if = "zero_u32")] pub resolution_route: u32,
+    #[serde(default, skip_serializing_if = "zero_u32")] pub resolver_id: u32,
     #[serde(default)] pub upstream_address: [u8; 16],
     #[serde(default)] pub upstream_port: u16,
     #[serde(default)] pub upstream_family: u8,
@@ -90,10 +93,14 @@ pub struct DnsRecord {
     #[serde(default)] pub return_packet_uid: u32,
 }
 
+fn zero_u64(value: &u64) -> bool { *value == 0 }
+fn zero_u32(value: &u32) -> bool { *value == 0 }
+
 impl DnsRecord {
     pub fn valid(&self) -> bool {
         if self.proxy_flags & 1 != 0 { return self.valid_proxy(); }
         if self.route_revision != 0 || self.request_attempt != 0 || self.upstream_session != 0
+            || self.upstream_attempt != 0 || self.resolution_route != 0 || self.resolver_id != 0
             || self.upstream_address != [0;16] || self.upstream_port != 0 || self.upstream_family != 0
             || self.upstream_transport != 0 || self.proxy_result != 0 || self.reply_rcode != 0
             || self.client_udp_capacity != 0 || self.reply_capacity != 0 || self.output_bytes != 0
@@ -197,7 +204,9 @@ impl DnsRecord {
         let common = self.generation != 0 && self.token != 0 && self.owner < 62 && matches!(self.adapter_profile, 1 | 2)
             && matches!(self.family,4|6) && matches!(self.protocol,6|17) && self.resolver_port == 53
             && self.route_revision != 0
-            && self.proxy_result <= 11
+            && self.proxy_result <= 15 && (self.proxy_result < 12 || self.stage == 5)
+            && self.resolver_id <= 8 && (self.resolution_route < 8 || self.resolution_route == u32::MAX)
+            && (self.resolution_route != u32::MAX || self.resolver_id == 0)
             && self.proxy_flags & !31 == 0 && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
             && self.coverage >= 1 && self.coverage <= 5 && self.codec_peak_bytes <= 512*1024
             && self.caller <= 1 && self.availability & !15 == 0 && self.packet_availability & !15 == 0
@@ -214,15 +223,26 @@ impl DnsRecord {
                 else { self.message_sequence == 0 })
             && self.tcp_sequence == 0 && self.tcp_continuation == 0
             && (self.delivery != 8 || (self.protocol == 6 && self.stage != 4))
-            && matches!(self.stage,1..=4)
+            && matches!(self.stage,1..=5)
             && (if self.stage == 1 { self.direction == 3 && self.query_flags & 0x8000 == 0 && self.query_token == 0 }
                 else if self.stage == 2 { self.direction == 1 && self.query_flags & 0x8000 != 0 && self.query_token == self.token }
                 else if self.stage == 3 { self.direction == 3 && self.query_token == self.token }
-                else { self.direction == 1 && self.query_flags & 0x8000 != 0 && self.query_token == self.token && self.return_token != 0 })
+                else if self.stage == 4 { self.direction == 1 && self.query_flags & 0x8000 != 0 && self.query_token == self.token && self.return_token != 0 }
+                else { self.direction == 3 && self.query_flags & 0x8000 == 0 && self.query_token == self.token
+                    && (12..=15).contains(&self.proxy_result) && self.upstream_attempt != 0
+                    && self.coverage == 1 && self.delivery == 0 && self.reply_rcode == 0 && self.rcode == 0
+                    && self.proxy_flags == 1 && self.upstream_session == 0 && self.output_bytes == 0
+                    && self.candidate_count == 0 && self.matched_requests == 0 && self.correlation == 0
+                    && self.return_token == 0 && self.policy_generation == 0 && self.policy_revision == 0
+                    && self.policy_hash == 0 && self.winner == 0 && self.actual_action == 0 && self.declared_action == 0
+                    && self.mode == 0 && self.return_policy_generation == 0 && self.return_policy_revision == 0
+                    && self.return_policy_hash == 0 && self.return_winner == 0 && self.return_declared_action == 0
+                    && self.return_actual_action == 0 && self.return_mode == 0 && self.return_provenance == 0
+                    && self.return_packet_uid == 0 })
             && self.declared_action <= 2 && self.actual_action <= 2 && self.mode <= 1
             && (self.winner == 0 || (self.policy_generation == self.generation && self.policy_revision != 0
                 && self.actual_action == if self.mode == 1 {1} else {self.declared_action}))
-            && (self.proxy_flags & 16 == 0 || (self.proxy_flags & 12 == 0 && self.upstream_session == 0
+            && (self.proxy_flags & 16 == 0 || (self.proxy_flags & 12 == 0 && self.upstream_session == 0 && self.upstream_attempt == 0
                 && ((matches!(self.stage, 2 | 4) && matches!(self.proxy_result, 2 | 11))
                     || cached_output_resource)))
             && (self.proxy_result != 11 || self.proxy_flags & 16 != 0)
@@ -259,10 +279,11 @@ impl DnsRecord {
             // tokens need not be globally disjoint from TUN/NFQUEUE tokens.
             // Hex scope components keep the complete key below the existing
             // 192-byte store limit, including every u64 at its maximum value.
-            format!("{base}:proxy2:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{}:{:x}:{:x}",
+            let key = format!("{base}:proxy2:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{}:{:x}:{:x}",
                 self.adapter_profile, self.protocol, self.family, self.incarnation,
                 self.transport_session, self.network_revision, self.route_revision,
-                self.request_attempt, self.stage, self.name_index, self.return_token)
+                self.request_attempt, self.stage, self.name_index, self.return_token);
+            if self.stage == 5 { format!("{key}:a:{:x}:{:x}",self.upstream_attempt,self.proxy_result) } else { key }
         } else if self.protocol == 6 {
             format!("{base}:tcp:{:020}:{}:{:02}:{}", self.message_sequence,
                 self.stage, self.name_index, self.tcp_continuation)
@@ -271,7 +292,7 @@ impl DnsRecord {
     }
 
     pub(crate) fn legacy_proxy_key(&self) -> Option<String> {
-        (self.proxy_flags & 1 != 0).then(|| format!(
+        (self.proxy_flags & 1 != 0 && self.stage != 5).then(|| format!(
             "{:020}:{:020}:{:04}:proxy:{:020}:{}:{:02}:{:020}",
             self.generation, self.token, self.owner, self.request_attempt,
             self.stage, self.name_index, self.return_token))
@@ -282,7 +303,7 @@ impl DnsRecord {
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8)
+        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8 | 9)
             || data[6..8] != [0, 0] {
             return None;
         }
@@ -292,7 +313,8 @@ impl DnsRecord {
         let extended = data[2] >= 6;
         let tcp_extended = data[2] >= 7;
         let proxy_extended = data[2] >= 8;
-        let expected = if proxy_extended {704} else if tcp_extended { 592 } else if extended { 576 } else { 480 };
+        let routing_extended = data[2] >= 9;
+        let expected = if routing_extended {720} else if proxy_extended {704} else if tcp_extended { 592 } else if extended { 576 } else { 480 };
         if u16_at(0) != expected || data.len() < expected as usize
             || (tcp_extended && data[590..592] != [0, 0])
             || (extended && data[571] != 0)
@@ -349,6 +371,9 @@ impl DnsRecord {
             route_revision: if proxy_extended {u64_at(592)} else {0},
             request_attempt: if proxy_extended {u64_at(600)} else {0},
             upstream_session: if proxy_extended {u64_at(608)} else {0},
+            upstream_attempt: if routing_extended {u64_at(704)} else {0},
+            resolution_route: if routing_extended {u32_at(712)} else {0},
+            resolver_id: if routing_extended {u32_at(716)} else {0},
             upstream_address: if proxy_extended {data[616..632].try_into().ok()?} else {[0;16]},
             upstream_port: if proxy_extended {u16_at(632)} else {0},
             upstream_family: if proxy_extended {data[634]} else {0},

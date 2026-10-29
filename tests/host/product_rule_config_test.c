@@ -1276,7 +1276,77 @@ static void dns_upstream_uses_saved_and_active_configuration(void) {
     unlink(path); rmdir(directory);
 }
 
+static void ordered_dns_configuration_survives_reopen(void) {
+    fprintf(stderr,"ordered DNS config compile peak=%u limit=%u\n",
+            product_rule_config_compile_peak_bytes(), PRODUCT_RULE_CONFIG_COMPILE_MEMORY_LIMIT);
+    char directory[] = "/tmp/product-dns-routes-XXXXXX";
+    assert(mkdtemp(directory));
+    char path[256]; snprintf(path,sizeof(path),"%s/rules.conf",directory);
+    product_rule_config_t *config=product_rule_config_open(path);
+    static runtime_t runtime;
+    assert(config && !product_rule_config_activate(config,publish,&runtime));
+    static sakamoto_product_rule_config_request_t request;
+    static sakamoto_product_rule_config_status_t status;
+    request=(sakamoto_product_rule_config_request_t){.schema=1,.operation=4,.expected_saved_revision=1,
+        .dns={.enabled=1,.family=4,.port=53,.address={192,0,2,53},
+            .endpoint_count=2,.route_count=1,
+            .endpoints={{.transport=1,.family=4,.port=53,.address={192,0,2,53},.identity="primary.test"},
+                {.transport=1,.family=4,.port=53,.address={192,0,2,54},.identity="backup.test"}},
+            .routes={{.count=2,.candidates={0,1}}}}};
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==2 && status.active_revision==2);
+    assert(!memcmp(&status.active_dns,&request.dns,sizeof(request.dns)));
+    product_rule_config_close(config);
+    config=product_rule_config_open(path);
+    product_rule_config_query(config,&status);
+    assert(!status.save_error && status.saved_revision==2);
+    assert(!memcmp(&status.dns,&request.dns,sizeof(request.dns)));
+    assert(!product_rule_config_activate(config,publish,&runtime));
+    request.expected_saved_revision=2;
+    request.dns.exception_count=2;
+    request.dns.exceptions[0]=(sakamoto_product_dns_exception_t){.match=0,.target=1,.route=0,
+        .length=12,.name="private.test"};
+    request.dns.exceptions[1]=(sakamoto_product_dns_exception_t){.match=0,.target=0,
+        .length=12,.name="private.test"};
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==2 && status.active_revision==2 && !status.dns.exception_count);
+    request.dns.exception_count=SAKAMOTO_DNS_MAX_EXCEPTIONS+1;
+    assert(product_rule_config_replace(config,&request,publish,&runtime)==SAKAMOTO_RULE_CONFIG_INVALID);
+    request.dns=(sakamoto_product_dns_config_t){.enabled=1,.family=4,.port=15353,.address={192,0,2,53},
+        .endpoint_count=8,.route_count=8,.exception_count=32};
+    for(unsigned i=0;i<8;++i) {
+        request.dns.endpoints[i]=(sakamoto_product_dns_endpoint_t){.transport=1+i%2,.family=4,
+            .port=15353+i,.address={192,0,2,53+i}};
+        snprintf((char *)request.dns.endpoints[i].identity,256,"endpoint-%u.test",i);
+        request.dns.routes[i].count=8;
+        for(unsigned j=0;j<8;++j)request.dns.routes[i].candidates[j]=(i+j)%8;
+    }
+    for(unsigned i=0;i<32;++i) {
+        sakamoto_product_dns_exception_t *exception=&request.dns.exceptions[i];
+        exception->match=i%2;exception->target=i%3!=0;exception->route=exception->target?i%8:0;
+        exception->length=snprintf((char *)exception->name,256,"scope-%u.test",i);
+    }
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_close(config);config=product_rule_config_open(path);
+    product_rule_config_query(config,&status);
+    assert(!status.save_error && status.saved_revision==3);
+    assert(!memcmp(&status.dns,&request.dns,sizeof(request.dns)));
+    assert(!product_rule_config_activate(config,publish,&runtime));
+    request.expected_saved_revision=3;request.dns.enabled=0;
+    assert(!product_rule_config_replace(config,&request,publish,&runtime));
+    product_rule_config_close(config);config=product_rule_config_open(path);
+    assert(!product_rule_config_activate(config,publish,&runtime));
+    product_rule_config_query(config,&status);
+    assert(status.saved_revision==4 && status.active_revision==4 && !status.active_dns.enabled);
+    assert(!memcmp(&status.active_dns,&request.dns,sizeof(request.dns)));
+    product_rule_config_close(config); product_domains_destroy(runtime.domains); runtime.domains=NULL;
+    unlink(path); rmdir(directory);
+}
+
 int main(void) {
+    ordered_dns_configuration_survives_reopen();
     dns_upstream_uses_saved_and_active_configuration();
     imported_metadata_roundtrip_and_identity();
     domain_saved_active_failure_retry();
