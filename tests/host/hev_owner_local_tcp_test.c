@@ -11,10 +11,17 @@ typedef struct {
   uint64_t generation, session;
   uint32_t seq, ack;
   unsigned family, broker_calls, outputs, source, done, failed;
-  uint64_t completed[128];
+  uint64_t completed[129], failed_tokens[129];
   uint8_t received[131074];size_t received_length;
   uint8_t packet[10000]; size_t length;
 } fixture_t;
+static unsigned fail_output_malloc;
+void *__real_malloc(size_t);
+void *__wrap_malloc(size_t bytes)
+{
+ if(fail_output_malloc && bytes==65537) {--fail_output_malloc;return NULL;}
+ return __real_malloc(bytes);
+}
 static uint16_t get16(const uint8_t *p) { return (uint16_t)p[0]<<8|p[1]; }
 static uint32_t get32(const uint8_t *p) { return (uint32_t)get16(p)<<16|get16(p+2); }
 static void put16(uint8_t *p,unsigned x) { p[0]=x>>8;p[1]=x; }
@@ -25,7 +32,8 @@ static uint16_t checksum(uint32_t s) { while(s>>16)s=(s&65535)+(s>>16);return ~s
 static void done(void *opaque,uint64_t generation,uint64_t session,uint64_t token,int success)
 {
  fixture_t *f=opaque;assert(generation==f->generation && session && token);
- if(success){assert(f->done<128);f->completed[f->done++]=token;}else ++f->failed;
+ if(success){assert(f->done<129);f->completed[f->done++]=token;}
+ else {assert(f->failed<129);f->failed_tokens[f->failed++]=token;}
 }
 static int broker(void *opaque,uint64_t gen,uint64_t session,int fd)
 { fixture_t *f=opaque;(void)gen;(void)session;(void)fd;++f->broker_calls;return 0; }
@@ -69,7 +77,9 @@ static void send_bytes(fixture_t *f,const uint8_t *data,size_t length)
 }
 static void flush(fixture_t *f,unsigned count)
 {
- for(unsigned i=0;i<64 && f->done<count;++i) {
+ /* One output can require one owner step/ACK; retain the existing slack for
+  * large frames while allowing a real 128-message batch to make progress. */
+ for(unsigned i=0;i<count+64 && f->done<count;++i) {
   hev_owner_step(f->owner,16,10000);
   assert(inject(f,16,NULL,0)==HEV_OWNER_INPUT_ACCEPTED);
  }
@@ -94,27 +104,106 @@ int main(int argc,char **argv)
  uint8_t frame[sizeof(q)+2];put16(frame,sizeof(q));memcpy(frame+2,q,sizeof(q));
  uint8_t readback[65535];size_t length=0;uint64_t session=0,first=0,second=0;
  hev_owner_binding_t binding={.underlay_epoch=99,.network_context=7,.context_known=1};
- if(!strcmp(mode,"pending") || !strcmp(mode,"bytes")) {
-  unsigned wanted=!strcmp(mode,"pending")?129:40;
+ int pending_mode=!strncmp(mode,"pending",7);
+ if(pending_mode || !strcmp(mode,"bytes") || !strcmp(mode,"malloc") || !strcmp(mode,"abandon")) {
+  unsigned wanted=pending_mode?129:(!strcmp(mode,"malloc") || !strcmp(mode,"abandon"))?2:40;
   uint8_t requests[129*sizeof(frame)];
   for(unsigned i=0;i<wanted;++i)memcpy(requests+i*sizeof(frame),frame,sizeof(frame));
   send_bytes(&f,requests,wanted*sizeof(frame));
   uint8_t answer[65535];memset(answer,0xa5,sizeof(answer));memcpy(answer,q,sizeof(q));answer[2]=0x81;answer[3]=0x80;
-  unsigned admitted=0;
+  uint64_t pending_tokens[128];unsigned admitted=0;
   for(unsigned i=0;i<wanted;++i) {
    uint64_t token;
    int got=hev_owner_local_tcp_next(f.owner,f.generation,&session,&token,readback,sizeof(readback),&length);
-   if(i==128) {assert(got==-1);break;}
+   if(i==128) {assert(got==0);break;}
    assert(got==1 && length==sizeof(q) && !memcmp(readback,q,length));
+   if(pending_mode || !strcmp(mode,"malloc") || !strcmp(mode,"abandon"))pending_tokens[i]=token;
    if(!strcmp(mode,"bytes")) {
     int result=hev_owner_local_tcp_reply(f.owner,f.generation,session,token,answer,sizeof(answer),&binding);
     if(!result)++admitted;
+    else {
+     assert(result==-2);
+     uint8_t small[sizeof(q)];memcpy(small,q,sizeof(q));small[2]=0x81;small[3]=0x80;
+     assert(!hev_owner_local_tcp_reply(f.owner,f.generation,session,token,small,sizeof(small),&binding));
+    }
    }
   }
   s=hev_owner_snapshot(f.owner);
   assert(s.local_tcp_bytes<=HEV_OWNER_LOCAL_TCP_BYTES);
-  if(!strcmp(mode,"pending"))assert(s.local_tcp_pending==128 && s.local_tcp_pending_peak==128);
-  else assert(admitted>1 && admitted<40 && s.local_tcp_outputs==admitted && s.local_tcp_pending==40-admitted);
+  if(pending_mode) {
+   assert(s.sessions==1 && s.local_tcp_pending==128 && s.local_tcp_pending_peak==128 && !f.failed);
+   if(!strcmp(mode,"pending-rst") || !strcmp(mode,"pending-stop")) {
+    if(!strcmp(mode,"pending-rst")) {
+     assert(inject(&f,20,NULL,0)==HEV_OWNER_INPUT_ACCEPTED);
+     hev_owner_step(f.owner,64,10000);
+    } else { hev_owner_quiesce(f.owner);hev_owner_step(f.owner,64,10000); }
+    s=hev_owner_snapshot(f.owner);
+    assert(!s.sessions && !s.local_tcp_pending && !s.local_tcp_outputs && f.failed==128 && !f.done);
+    for(unsigned i=0;i<128;++i) {
+     unsigned matches=0;for(unsigned j=0;j<128;++j)matches+=pending_tokens[i]==f.failed_tokens[j];
+     assert(matches==1);
+    }
+    hev_owner_quiesce(f.owner);hev_owner_step(f.owner,64,10000);s=hev_owner_snapshot(f.owner);
+    assert(s.stopped && !s.sessions && !s.sockets && !s.pbufs && !s.local_tcp_bytes);
+    assert(!hev_owner_destroy(f.owner));
+    printf("IPv%u local TCP %s exact pending termination and clean Stop PASS\n",f.family,mode);return 0;
+   }
+   uint8_t small[sizeof(q)];memcpy(small,q,sizeof(q));small[2]=0x81;small[3]=0x80;
+   assert(inject(&f,17,NULL,0)==HEV_OWNER_INPUT_ACCEPTED);++f.seq;
+   for(unsigned i=0;i<128;++i)
+    assert(!hev_owner_local_tcp_reply(f.owner,f.generation,session,pending_tokens[i],small,sizeof(small),&binding));
+   flush(&f,128);
+   assert(hev_owner_local_tcp_next(f.owner,f.generation,&session,&first,readback,sizeof(readback),&length)==1);
+   assert(length==sizeof(q) && !memcmp(readback,q,length));
+   assert(!hev_owner_local_tcp_reply(f.owner,f.generation,session,first,small,sizeof(small),&binding));
+   flush(&f,129);
+   assert(!f.failed && f.received_length==129*sizeof(frame));
+   for(unsigned i=0;i<129;++i) {
+    assert(get16(f.received+i*sizeof(frame))==sizeof(small));
+    assert(!memcmp(f.received+i*sizeof(frame)+2,small,sizeof(small)));
+   }
+  }
+  else if(!strcmp(mode,"abandon")) {
+   assert(hev_owner_local_tcp_abandon(f.owner,f.generation+1,session,pending_tokens[0])==-1);
+   assert(hev_owner_local_tcp_abandon(f.owner,f.generation,session+1,pending_tokens[0])==-1);
+   assert(!hev_owner_local_tcp_abandon(f.owner,f.generation,session,pending_tokens[0]));
+   assert(hev_owner_local_tcp_abandon(f.owner,f.generation,session,pending_tokens[0])==-1);
+   assert(f.failed==1 && f.failed_tokens[0]==pending_tokens[0] && hev_owner_snapshot(f.owner).local_tcp_pending==1);
+   uint8_t small[sizeof(q)];memcpy(small,q,sizeof(q));small[2]=0x81;small[3]=0x80;
+   assert(!hev_owner_local_tcp_reply(f.owner,f.generation,session,pending_tokens[1],small,sizeof(small),&binding));
+   flush(&f,1);assert(f.done==1 && f.failed==1 && f.received_length==sizeof(frame));
+   assert(!memcmp(f.received+2,small,sizeof(small)));
+  } else if(!strcmp(mode,"malloc")) {
+   fail_output_malloc=1;
+   assert(hev_owner_local_tcp_reply(f.owner,f.generation,session,pending_tokens[0],answer,sizeof(answer),&binding)==-2);
+   assert(!fail_output_malloc && hev_owner_snapshot(f.owner).local_tcp_pending==2);
+   uint8_t small[sizeof(q)];memcpy(small,q,sizeof(q));small[2]=0x81;small[3]=0x80;
+   for(unsigned i=0;i<2;++i)
+    assert(!hev_owner_local_tcp_reply(f.owner,f.generation,session,pending_tokens[i],small,sizeof(small),&binding));
+   flush(&f,2);assert(!f.failed && f.received_length==2*sizeof(frame));
+   for(unsigned i=0;i<2;++i)assert(!memcmp(f.received+i*sizeof(frame)+2,small,sizeof(small)));
+  } else {
+   assert(admitted>1 && admitted<40 && s.local_tcp_outputs==40 && !s.local_tcp_pending);
+   uint8_t small[sizeof(q)];memcpy(small,q,sizeof(q));small[2]=0x81;small[3]=0x80;
+   size_t offset=0,total=(size_t)admitted*(sizeof(answer)+2)+(40-admitted)*(sizeof(small)+2);
+   for(unsigned i=0;i<20000 && f.done<40;++i) {
+    hev_owner_step(f.owner,16,10000);
+    for(size_t j=0;j<f.received_length;++j,++offset) {
+     size_t pos;uint8_t expected;
+     if(offset<(size_t)admitted*(sizeof(answer)+2)) {
+      pos=offset%(sizeof(answer)+2);
+      expected=pos<2?0xff:answer[pos-2];
+     } else {
+      pos=(offset-(size_t)admitted*(sizeof(answer)+2))%(sizeof(small)+2);
+      expected=pos==0?0:pos==1?sizeof(small):small[pos-2];
+     }
+     assert(f.received[j]==expected);
+    }
+    f.received_length=0;
+    assert(inject(&f,16,NULL,0)==HEV_OWNER_INPUT_ACCEPTED);
+   }
+   assert(f.done==40 && !f.failed && offset==total);
+  }
  } else {
   send_bytes(&f,frame,1);assert(!hev_owner_local_tcp_next(f.owner,f.generation,&session,&first,readback,sizeof(readback),&length));
   uint8_t tail[2*sizeof(frame)-1];memcpy(tail,frame+1,sizeof(frame)-1);memcpy(tail+sizeof(frame)-1,frame,sizeof(frame));tail[sizeof(frame)-1+15]='b';

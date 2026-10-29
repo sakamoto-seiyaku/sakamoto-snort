@@ -536,7 +536,7 @@ def main():
         if d.witnesses: finish('wire', lambda _: d.wire_stop())
         if (d.active or d.stop_owed) and getattr(d, 'stop_retry_authorized', True): finish('stop', lambda _: d.stop('failure-cleanup'))
         elif d.active or d.stop_owed: errors.append('runtime stop is fenced pending remote completion')
-        if d.reader: finish('reader', lambda _: d.settle_reader('failure-cleanup'))
+        if d.reader or getattr(d,'prepared_stop_capture',None): finish('reader', lambda _: d.settle_reader('failure-cleanup'))
         if peer:
             def close_peer(deadline):
                 peer.cleanup_deadline = deadline; peer.close()

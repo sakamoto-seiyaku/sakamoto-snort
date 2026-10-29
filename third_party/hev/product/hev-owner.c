@@ -27,6 +27,7 @@ typedef struct {
   uint8_t *wire;
   size_t length, written, acked;
   hev_owner_binding_t binding;
+  uint8_t inline_wire[HEV_OWNER_LOCAL_TCP_INLINE_BYTES];
 } local_tcp_output_t;
 
 typedef struct owner_session {
@@ -63,7 +64,7 @@ struct hev_owner {
   hev_owner_input_context_t input_context;
   hev_owner_input_result_t input_result;
   uint64_t session_serial, event_serial, output_serial, next_tcp_timer;
-  uint64_t local_token, local_order;
+  uint64_t local_token, local_order, local_cursor;
   local_tcp_output_t local_outputs[HEV_OWNER_LOCAL_TCP_PENDING];
   pthread_t thread;
   unsigned char *scratch;
@@ -856,7 +857,8 @@ static err_t create_tcp_session(u8_t id, struct tcp_pcb_listen *listener,
   int local = !!(owner->input_facts.availability & HEV_OWNER_LOCAL_TCP);
   if (local) {
     if (owner->stats.local_tcp_sessions >= HEV_OWNER_LOCAL_TCP_CLIENTS ||
-        owner->stats.local_tcp_bytes + sizeof(local_tcp_t) > HEV_OWNER_LOCAL_TCP_BYTES) {
+        owner->stats.local_tcp_bytes + sizeof(local_tcp_t) > HEV_OWNER_LOCAL_TCP_BYTES -
+          HEV_OWNER_LOCAL_TCP_PENDING * HEV_OWNER_LOCAL_TCP_INLINE_BYTES) {
       failure(owner,HEV_OWNER_FAULT_SESSION_CAPACITY,0,ENOBUFS);
       free(session); goto rejected;
     }

@@ -2,6 +2,76 @@ use sakamoto_product_core::dns_observation::DnsRecord;
 use sakamoto_product_core::observation_store::ObservationStore;
 
 #[test]
+#[ignore = "requires source-linked coalescing Root/VPN Adapter observations"]
+fn coalesced_waiters_keep_independent_identity_policy_and_terminal_records_after_reopen() {
+    let wire = std::fs::read(std::env::var("SAKAMOTO_DNS_COALESCING_RECORDS").unwrap()).unwrap();
+    // 64 shared lifecycle groups produce344 records, and8 independent reliable
+    // App/channel groups produce48. No diagnostic query-limit increase is used.
+    assert_eq!(wire.len(), 392 * 704);
+    let decoded: Vec<_> = wire.chunks_exact(704).map(DnsRecord::decode).collect();
+    let records: Vec<_> = decoded.iter().filter_map(Clone::clone).collect();
+    let root = std::path::PathBuf::from(std::env::var_os("SAKAMOTO_DNS_COALESCING_EVIDENCE_DIR").unwrap());
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("decoded-input-records.json"), serde_json::to_vec_pretty(&records).unwrap()).unwrap();
+    let path = root.join("observation.json");
+    let mut store = ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+    store.consume_dns(&records, now).unwrap();store.close().unwrap();drop(store);
+    let mut reopened = ObservationStore::open(&path).unwrap();
+    let snapshot = reopened.query();
+    std::fs::write(root.join("reopened.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "wire_records":392,"decode_rejected_indices":decoded.iter().enumerate()
+            .filter_map(|(index,record)|record.is_none().then_some(index)).collect::<Vec<_>>(),
+        "after":snapshot,
+    })).unwrap()).unwrap();
+    assert_eq!(records.len(),392,"all actual independent waiter observations must decode");
+    assert_eq!(snapshot["dns"]["accepted"],392);
+    assert_eq!(snapshot["dns"]["rejected"],0,"independent requests must not overwrite or conflict");
+    assert_eq!(snapshot["dns"]["retained_count"],392);
+    assert_eq!(snapshot["dns"]["retained_limit"],4096);
+    assert_eq!(snapshot["dns"]["query_limit"],128);
+    assert_eq!(snapshot["dns"]["query_truncated"],true);
+    let recent = snapshot["dns"]["recent"].as_object().unwrap();assert_eq!(recent.len(),128);
+    for row in recent.values() {
+        assert_eq!(records.iter().filter(|record|serde_json::to_value(record).unwrap()==row["record"]).count(),1);
+    }
+    for profile in [1,2] {for family in [4,6] {for protocol in [6,17] {
+        let scoped:Vec<_>=records.iter().filter(|r|r.adapter_profile==profile&&r.family==family&&r.protocol==protocol).collect();
+        assert_eq!(scoped.len(),49);
+        let other_app:Vec<_>=scoped.iter().filter(|r|r.uid==10124).collect();assert_eq!(other_app.len(),3);
+        for r in &other_app {assert_eq!(r.caller,1);assert_eq!(r.id,0xabcd);assert_eq!(r.source_port,40001);
+            assert_eq!(r.incarnation,9);assert_eq!(r.packet_uid,10124);assert_eq!(r.packet_availability,9);}
+        let peer=scoped.iter().find(|r|r.stage==2&&r.uid==10124).unwrap();
+        assert_eq!(peer.proxy_result,1);assert_eq!(peer.reply_rcode,0);assert_eq!(peer.proxy_flags,5);
+        let refused=scoped.iter().find(|r|r.stage==2&&r.uid==10123&&r.source_port==40000
+            &&r.policy_revision==4&&r.query_policy_revision==3&&r.winner==320
+            &&r.proxy_result==2&&r.id==0x1234&&r.mono_us==peer.mono_us).unwrap();
+        assert_eq!(refused.reply_rcode,5);assert_eq!(refused.proxy_flags,5);
+        assert_ne!(refused.token,peer.token);
+        if protocol==6||profile==2 {assert_ne!(refused.transport_session,peer.transport_session);}
+        assert_eq!(scoped.iter().filter(|r|r.stage==3&&r.proxy_result==8).count(),2);
+        assert_eq!(scoped.iter().filter(|r|r.stage==3&&r.proxy_result==7).count(),3);
+        assert_eq!(scoped.iter().filter(|r|r.stage==3&&r.proxy_result==9).count(),2);
+        assert_eq!(scoped.iter().filter(|r|r.stage==3&&r.proxy_result==3).count(),2);
+    }}}
+    reopened.close().unwrap();drop(reopened);
+    std::fs::copy(root.join("observation.sqlite3"),root.join("positive.sqlite3")).unwrap();
+    let mut reopened=ObservationStore::open(&path).unwrap();
+    // Exact replay is idempotent. A conflicting existing token cannot replace
+    // the original caller or its actual policy/delivery result.
+    reopened.consume_dns(&records,now+1).unwrap();
+    assert_eq!(reopened.query()["dns"]["accepted"],392);
+    assert_eq!(reopened.query()["dns"]["retained_count"],392);
+    let mut conflict=records.iter().find(|r|r.uid==10124&&r.stage==2).unwrap().clone();
+    conflict.name="conflicting.example".into();assert!(conflict.valid());
+    reopened.consume_dns(&[conflict],now+2).unwrap();
+    assert_eq!(reopened.query()["dns"]["rejected"],1);
+    assert_eq!(reopened.query()["dns"]["recent"],snapshot["dns"]["recent"]);
+    reopened.close().unwrap();
+}
+
+#[test]
 #[ignore = "requires source-linked Root/VPN real malloc-failure Adapter records"]
 fn source_linked_cache_resource_failures_survive_decode_and_sqlite_reopen() {
     let wire = std::fs::read(std::env::var("SAKAMOTO_DNS_CACHE_RESOURCE_RECORDS").unwrap()).unwrap();

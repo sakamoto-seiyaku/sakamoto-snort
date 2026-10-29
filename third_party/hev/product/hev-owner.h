@@ -204,10 +204,14 @@ int hev_owner_local_udp_reply_context(hev_owner_t *, uint64_t generation, uint64
 #define HEV_OWNER_LOCAL_TCP_CLIENTS 8U
 #define HEV_OWNER_LOCAL_TCP_PENDING 128U
 #define HEV_OWNER_LOCAL_TCP_BYTES (2U * 1024U * 1024U)
+#define HEV_OWNER_LOCAL_TCP_INLINE_BYTES 512U
 int hev_owner_local_tcp_next(hev_owner_t *, uint64_t generation, uint64_t *session,
   uint64_t *token, uint8_t *message, size_t capacity, size_t *length);
+/* 0=queued, -1=stale/closed/invalid, -2=output resource shortage; -2 keeps
+ * the exact pending token for a small fallback. Inline storage is budgeted. */
 int hev_owner_local_tcp_reply(hev_owner_t *, uint64_t generation, uint64_t session,
   uint64_t token, const uint8_t *, size_t, const hev_owner_binding_t *);
+int hev_owner_local_tcp_abandon(hev_owner_t *, uint64_t generation, uint64_t session, uint64_t token);
 uint64_t hev_owner_local_tcp_reservation(const hev_owner_t *);
 hev_owner_step_result_t hev_owner_step (hev_owner_t *owner,
                                        uint32_t quanta, uint32_t max_us);

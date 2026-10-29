@@ -8,8 +8,11 @@ import time
 
 
 class Peer:
-    def __init__(self, addresses, out, deadline, port=53054):
+    def __init__(self, addresses, out, deadline, port=53054, *, transports=('udp', 'tcp')):
         self.out, self.deadline, self.port = out, deadline, port
+        self.transports = tuple(transports)
+        assert self.transports and len(set(self.transports)) == len(self.transports)
+        assert all(transport in ('udp', 'tcp') for transport in self.transports)
         self.lock = threading.RLock()
         self.messages, self.responses, self.connections, self.waiting = [], {}, {}, []
         self.sequence = self.connection_sequence = 0
@@ -22,13 +25,14 @@ class Peer:
             for address in addresses:
                 family = socket.AF_INET6 if ':' in address else socket.AF_INET
                 for kind, protocol in ((socket.SOCK_DGRAM, 'udp'), (socket.SOCK_STREAM, 'listener')):
+                    if ('tcp' if protocol == 'listener' else protocol) not in self.transports: continue
                     channel = socket.socket(family, kind)
                     self.sockets.append(channel)
                     if family == socket.AF_INET6: channel.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
                     channel.bind((address, port)); channel.setblocking(False)
                     if protocol == 'listener': channel.listen(16)
                     self.selector.register(channel, selectors.EVENT_READ, protocol)
-            self.emit(dict(kind='ready', backend='Linux stdlib sockets', port=port,
+            self.emit(dict(kind='ready', backend='Linux stdlib sockets', port=port, transports=list(self.transports),
                            endpoints=[list(s.getsockname()) for s in self.sockets], relative_clock='monotonic'))
             self.thread = threading.Thread(target=self.run, name='s316-independent-peer')
             self.thread.start(); self.ready.set()
@@ -48,7 +52,7 @@ class Peer:
 
     def register(self, query, reply, *, protocol='udp', port=None, gate=None, delay=0, drop=False, split=False, gate_seconds=30):
         port = self.port if port is None else port
-        assert port == self.port and protocol in ('udp', 'tcp')
+        assert port == self.port and protocol in self.transports
         assert len(query) >= 2 and len(reply) <= 65535 and 0 <= delay <= 15000
         assert 1 <= gate_seconds <= 120 and (gate or gate_seconds == 30)
         with self.lock:
@@ -61,6 +65,7 @@ class Peer:
 
     def received(self, query, protocol='udp', port=None, *, after=0):
         port = self.port if port is None else port
+        assert protocol in self.transports
         with self.lock:
             if self.error: raise RuntimeError('independent peer failed') from self.error
             return [r for r in self.messages if r['kind'] == 'received' and r['protocol'] == protocol

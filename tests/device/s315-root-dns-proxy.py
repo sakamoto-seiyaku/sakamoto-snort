@@ -37,6 +37,14 @@ def grouped_timeout(error):
     return None
 
 
+def grouped_exception(error, kind):
+    if isinstance(error, kind): return error
+    if isinstance(error, BaseExceptionGroup):
+        for nested in error.exceptions:
+            if found:=grouped_exception(nested, kind): return found
+    return None
+
+
 class CleanupEnvelope:
     """Reserve finite, non-extending cleanup phases behind one Interface."""
     def __init__(self, seconds, phases):
@@ -154,22 +162,31 @@ class Device(tcp.Device):
 
     def settle_reader(self, label):
         reader=getattr(self,'reader',None)
-        if reader is None:return
-        receipt=dict(status='PASS',remote_completion='unknown')
+        capture=getattr(self,'prepared_stop_capture',None)
+        mismatch=bool(capture and capture.get('reader') is not reader)
+        owned=capture.get('reader') if capture else reader
+        if owned is None:
+            if mismatch:raise RuntimeError('prepared stop capture has no owned reader')
+            return
+        receipt=dict(status='HOLD' if mismatch else 'PASS',remote_completion='unknown',pid=owned.pid)
+        if mismatch:receipt['error']='prepared stop capture reader identity mismatch'
         try:
-            reader.wait(timeout=self.budget_timeout(5))
-            receipt['returncode']=reader.returncode
+            owned.wait(timeout=self.budget_timeout(5))
+            receipt['returncode']=owned.returncode
         except BaseException as error:
             receipt.update(status='HOLD',local_wait_error=repr(error))
             try:
-                reader.terminate(); reader.wait(timeout=self.budget_timeout(3))
-                receipt.update(termination_requested=True,returncode=reader.returncode)
+                owned.terminate(); owned.wait(timeout=self.budget_timeout(3))
+                receipt.update(termination_requested=True,returncode=owned.returncode)
             except BaseException as cleanup:
                 receipt['local_reap_error']=repr(cleanup)
                 self.save(label+'-reader-settlement.json',json.dumps(receipt,indent=2)+'\n')
                 raise
-        self.reader=None
+        if self.reader is owned:self.reader=None
+        if capture and capture.get('reader') is owned:
+            capture['log'].close();capture['errors'].close();self.prepared_stop_capture=None
         self.save(label+'-reader-settlement.json',json.dumps(receipt,indent=2)+'\n')
+        if mismatch:raise RuntimeError('prepared stop capture identity mismatch; owned capture reader reaped')
         if receipt['status']!='PASS':raise RuntimeError('reader reaped after unknown remote completion')
 
     def reconcile_stop_timeout(self, label):
@@ -543,6 +560,15 @@ class Device(tcp.Device):
     def stop(self, label):
         try:result=self.qualified_stop(label)
         except BaseException as error:
+            if grouped_exception(error,tcp.support.PreparedStopCaptureExpired):
+                # No Stop was sent. Retire the exact expired capture so the
+                # failure cleanup may create a fresh reader and stop safely.
+                try:self.settle_reader(label+'-expired-capture')
+                except BaseException as cleanup:
+                    self.stop_retry_authorized=False;self.stop_owed=True
+                    error.add_note('expired capture cleanup retained HOLD: '+repr(cleanup))
+                else:self.stop_retry_authorized=True;self.stop_owed=True
+                raise
             timeout=grouped_timeout(error)
             if not timeout:
                 self.stop_retry_authorized=False; self.stop_owed=True;raise
@@ -556,7 +582,10 @@ class Device(tcp.Device):
         self.stop_owed=False;self.active=False;return result
 
     def qualified_stop(self, label):
-        if self.reader:
+        capture=getattr(self,'prepared_stop_capture',None)
+        if capture:
+            self.validate_stop_capture(capture)
+        elif self.reader:
             # Retain the obligation independently of the STOPPED projection.
             # A failed prior stop must not abandon its owned local log reader.
             if self.reader.poll()is None:self.reader.terminate()
@@ -1312,7 +1341,7 @@ def main():
             finish_phase('stop',lambda _:device.stop('failure-cleanup'))
         elif device.active or device.stop_owed:
             cleanup.append('runtime: unresolved timed stop is fenced from replay')
-        if getattr(device,'reader',None):
+        if getattr(device,'reader',None) or getattr(device,'prepared_stop_capture',None):
             finish_phase('reader',lambda _:device.settle_reader('failure-cleanup'))
         if device.witnesses:
             finish_phase('wire',lambda _:device.wire_stop())

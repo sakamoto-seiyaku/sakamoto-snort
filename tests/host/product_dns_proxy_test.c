@@ -313,14 +313,17 @@ static void capacity_returns_failure_and_never_relabels_policy (void)
   product_dns_proxy_t *proxy=product_dns_proxy_open (81,&route,&callbacks,NULL);
   assert (proxy);
   unsigned before_sends=sends, before_replies=replies;
+  uint8_t distinct[sizeof(question)];memcpy(distinct,question,sizeof(distinct));
+  /* Exhaust distinct exchanges. Identical outstanding questions now share one
+   * exchange and exercise the independently bounded waiter limit elsewhere. */
   for (unsigned i=0;i<PRODUCT_DNS_PROXY_TRANSACTIONS;++i)
     {
-      input.token=i+1;
-      assert (product_dns_proxy_submit (proxy,&input,question,sizeof (question),&snapshot));
+      input.token=i+1;distinct[sizeof(distinct)-3]=(uint8_t)(i+1);
+      assert (product_dns_proxy_submit (proxy,&input,distinct,sizeof (distinct),&snapshot));
     }
   assert (sends==before_sends+PRODUCT_DNS_PROXY_TRANSACTIONS && replies==before_replies);
-  ++input.token;
-  assert (product_dns_proxy_submit (proxy,&input,question,sizeof (question),&snapshot));
+  ++input.token;distinct[sizeof(distinct)-3]=65;
+  assert (product_dns_proxy_submit (proxy,&input,distinct,sizeof (distinct),&snapshot));
   assert (replies==before_replies+1 && sends==before_sends+PRODUCT_DNS_PROXY_TRANSACTIONS);
   assert ((received[3]&15)==2 && completed.result==PRODUCT_DNS_PROXY_CAPACITY && !completed.match.rule_id);
   product_dns_proxy_resources_t resources=product_dns_proxy_resources (proxy);
@@ -330,14 +333,14 @@ static void capacity_returns_failure_and_never_relabels_policy (void)
     .source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX};
   assert (!product_l4_policy_compile (&view,&deny,1));
   ++input.token;
-  assert (product_dns_proxy_submit (proxy,&input,question,sizeof (question),&snapshot));
+  assert (product_dns_proxy_submit (proxy,&input,distinct,sizeof (distinct),&snapshot));
   assert (replies==before_replies+2 && completed.result==PRODUCT_DNS_PROXY_REFUSED && (received[3]&15)==5);
   assert (sends==before_sends+64 && product_dns_proxy_resources (proxy).capacity==1);
   product_dns_proxy_stop (proxy,200); product_dns_proxy_close (proxy);
   assert (!product_l4_policy_compile (&view,NULL,0));
   proxy=product_dns_proxy_open (81,&route,&callbacks,NULL);
   product_dns_proxy_other_bytes (proxy,PRODUCT_DNS_WORK_BYTES);
-  assert (product_dns_proxy_submit (proxy,&input,question,sizeof (question),&snapshot));
+  assert (product_dns_proxy_submit (proxy,&input,distinct,sizeof (distinct),&snapshot));
   assert (replies==before_replies+3 && completed.result==PRODUCT_DNS_PROXY_CAPACITY && sends==before_sends+64);
   assert (!product_dns_proxy_resources (proxy).active);
   product_dns_proxy_close (proxy);

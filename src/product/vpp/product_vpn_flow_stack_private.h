@@ -40,6 +40,8 @@ int product_vpn_flow_stack_local_tcp_next(product_vpn_flow_stack_t *, uint64_t g
   uint64_t *session, uint64_t *token, uint8_t *, size_t, size_t *);
 int product_vpn_flow_stack_local_tcp_reply(product_vpn_flow_stack_t *, uint64_t generation,
   uint64_t session, uint64_t token, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
+int product_vpn_flow_stack_local_tcp_abandon(product_vpn_flow_stack_t *, uint64_t generation,
+  uint64_t session, uint64_t token);
 uint64_t product_vpn_flow_stack_local_tcp_reservation(const product_vpn_flow_stack_t *);
 
 product_vpn_flow_stack_t *product_vpn_flow_stack_create(

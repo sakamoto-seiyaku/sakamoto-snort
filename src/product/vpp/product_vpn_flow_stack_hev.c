@@ -175,6 +175,9 @@ int product_vpn_flow_stack_local_tcp_reply(product_vpn_flow_stack_t *stack,uint6
   if(transport)binding=(hev_owner_binding_t){transport->underlay_epoch,transport->network_context,transport->context_known};
   return stack?hev_owner_local_tcp_reply(stack->owner,generation,session,token,message,length,&binding):-1;
 }
+int product_vpn_flow_stack_local_tcp_abandon(product_vpn_flow_stack_t *stack,uint64_t generation,
+  uint64_t session,uint64_t token)
+{ return stack?hev_owner_local_tcp_abandon(stack->owner,generation,session,token):-1; }
 int product_vpn_flow_stack_local_udp_reply_context(product_vpn_flow_stack_t *stack,
   uint64_t generation, uint64_t session, const uint8_t *message, size_t length,
   const product_vpn_flow_stack_transport_t *transport)

@@ -10,16 +10,32 @@ def _address(value):
     return str(ipaddress.ip_address(value))
 
 
-def qualify_udp_dispatches(query, received, wire, records):
+def peer_observation_gap(first, second):
+    # Preserve the producer's own clock and units; these observations are not
+    # exact send times and clocks from different backends cannot be mixed.
+    for field, result in (('received_mono_ms', 'peer_observation_gap_ms'),
+                          ('host_monotonic_ns', 'peer_observation_gap_ns')):
+        if field in first or field in second:
+            assert field in first and field in second
+            assert isinstance(first[field], int) and isinstance(second[field], int)
+            gap = second[field] - first[field]
+            assert gap >= 0, 'peer observation clock moved backwards'
+            return {result: gap, 'peer_observation_clock': field}
+    raise AssertionError('peer observation clock missing')
+
+
+def qualify_udp_dispatches(query, received, wire, records, *, expected_port=53053):
     groups = {}
     for row in received:
         assert row['kind'] == 'received' and row['protocol'] == 'udp'
+        assert row['resolver'][1] == expected_port
         request = bytes.fromhex(row['request_hex'])
         assert request[2:] == query[2:]
         groups.setdefault(request.hex(), []).append(row)
     relevant = [row for row in wire if row.get('kind') == 'udp'
-                and row['destination_port'] == 53053
+                and row['destination_port'] in {53053, 53054, expected_port}
                 and bytes.fromhex(row['payload_hex'])[2:] == query[2:]]
+    assert all(row['destination_port'] == expected_port for row in relevant), 'target Question escaped to another test port'
     assert all(row['payload_hex'] in groups for row in relevant), 'wire dispatch without a peer receipt'
     retries = []
     for request, rows in groups.items():
@@ -34,8 +50,7 @@ def qualify_udp_dispatches(query, received, wire, records):
                    and row['destination_port'] == first['resolver'][1] for row in outgoing)
         if len(rows) == 2:
             assert rows[1]['request'] > first['request']
-            peer_gap = rows[1]['received_mono_ms'] - first['received_mono_ms']
-            assert peer_gap >= 0, 'peer observation clock moved backwards'
+            peer_gap = peer_observation_gap(first, rows[1])
             clocks = [row['mono_ns'] for row in outgoing]
             assert all(row['timestamp_scope'] == 'userspace_after_recv' for row in outgoing)
             assert len(clocks) >= 2 and clocks == sorted(clocks)
@@ -65,7 +80,7 @@ def qualify_udp_dispatches(query, received, wire, records):
             elapsed = final['mono_us'] - initial[0]['mono_us']
             assert 1_500_000 <= elapsed < 3_000_000
             assert delivered[0]['mono_us'] >= final['mono_us']
-            retries.append(dict(request_hex=request, peer_observation_gap_ms=peer_gap,
+            retries.append(dict(request_hex=request, **peer_gap,
                                 sender_observation_gap_ns=gap, exact_send_times_unobserved=True,
                                 native_elapsed_us=elapsed, request_attempt=final['request_attempt'],
                                 token=final['token'], upstream_session=final['upstream_session']))

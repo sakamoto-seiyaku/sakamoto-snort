@@ -36,6 +36,8 @@ void product_vpn_flow_stack_driver_tcp_drain(vlib_main_t *);
 product_vpn_flow_stack_snapshot_t product_vpn_flow_stack_driver_tcp_status(unsigned owner);
 int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *, uint64_t generation, uint64_t session,
   uint64_t token, const uint8_t *, size_t, const product_vpn_flow_stack_transport_t *);
+int product_vpn_flow_stack_driver_tcp_abandon(vlib_main_t *, uint64_t generation,
+  uint64_t session, uint64_t token);
 uint64_t product_vpn_flow_stack_driver_dns_reservation(unsigned owner);
 int product_vpn_flow_stack_driver_dns_authorize(vlib_main_t *, uint64_t generation,
   uint64_t cookie, int fd);

@@ -1,6 +1,6 @@
 # Current mainline
 
-Baseline: 2026-10-27. This short implementation entry is not a release announcement; current task state belongs to Plane.
+Baseline: 2026-10-29. This short implementation entry is not a release announcement; current task state belongs to Plane.
 
 Accepted 2026-09-24: [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md) and the [unified rule specification](../product/UNIFIED_RULE_ENGINE_SPEC.md) define policy/configuration/observation behavior; they do not extend implementation claims.
 
@@ -15,7 +15,7 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 
 [S318](../testing/2026-10-26_S318_VPN_TCP_DNS_REPLACEMENT.md) adds optional VPN client TCP53 replacement before Direct through bounded local HEV/lwIP messages and the shared current-policy proxy. R4/R5 qualify78 groups/583 whole records in MAIN1656; R6 adds event/deadline-driven progress and19 scoped groups/92 whole records in separate MAIN301, including real pending Stop/new-TUN late fencing and N3 dual-stack progress. Original APK/all4861 members are restored at fresh BOTH2809; original HOLDs and deferred cache/encrypted-upstream/association scope remain explicit.
 
-[S319](../testing/2026-10-27_S319_DNS_ANSWER_CACHE.md) adds owner-local valid-answer data reuse with current policy, exact resolution-view keys, TTL/SOA aging and512-entry/2MiB limits. Its393 scoped groups/5643 whole records compose separate Root/VPN artifacts and MAINs, with normal4096 history, bounded shutdown-prefix and allocator-failure history regressions. Original APK/all4861 members are restored at fresh BOTH2867; original HOLDs and artifact limits remain explicit.
+[S319](../testing/2026-10-27_S319_DNS_ANSWER_CACHE.md) adds owner-local valid-answer data reuse with current policy, exact resolution-view keys, TTL/SOA aging and512-entry/2MiB limits. Its393 scoped groups/5643 whole records compose separate Root/VPN artifacts and MAINs, with normal4096 history, bounded shutdown-prefix and allocator-failure history regressions. Original APK/all4861 members are restored at fresh BOTH2867; original HOLDs and artifact limits remain explicit. [S320](../testing/2026-10-27_S320_DNS_COALESCING.md) adds simultaneous equivalent-query data sharing with independent current policy and delivery, 64 exchanges/128 waiters and bounded TCP backpressure. Current R4 qualifies52 groups/1448 whole target records in MAIN1844 across Root/VPN N1/N3 and both client transports/families, with pending Stop/late fences; earlier policy/cancellation/view captures retain their own artifact scopes and original HOLDs. Independent Standards/Spec and behavior/recovery checks passed on October 29. Original APK/all4861 members are restored at BOTH2904, with only the two generation fields changed.
 
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP

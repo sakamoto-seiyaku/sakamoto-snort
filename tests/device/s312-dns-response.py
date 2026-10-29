@@ -23,6 +23,10 @@ fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
 
 
+class PreparedStopCaptureMismatch(RuntimeError): pass
+class PreparedStopCaptureExpired(RuntimeError): pass
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -279,11 +283,13 @@ class Device:
                 'run-as',PKG,'timeout','20','tail','-n','+1','-f',
                 f'files/profiles/{self.profile}/vpp/logs/vpp-stdout.log'],stdout=log,stderr=errors)
         except BaseException:log.close();errors.close();raise
-        self.prepared_stop_capture=dict(label=label,path=path,log=log,errors=errors)
+        self.prepared_stop_capture=dict(label=label,path=path,log=log,errors=errors,reader=self.reader)
 
     def stop(self, label):
         if not getattr(self,'prepared_stop_capture',None):self.prepare_stop_capture(label)
-        capture=self.prepared_stop_capture;self.prepared_stop_capture=None
+        capture=self.prepared_stop_capture
+        reader=self.validate_stop_capture(capture)
+        self.prepared_stop_capture=None
         path=capture['path']
         with capture['log'] as log,capture['errors'] as errors:
             try:
@@ -295,10 +301,9 @@ class Device:
                 self.wait(label + '-stopped', 'files/runtime-state/snapshot.properties',
                     lambda c: c.get('state') == 'stopped' and c.get('mayBeActive') == 'false')
                 self.active = False
-                self.reader.wait(timeout=getattr(self,'budget_timeout',lambda value:value)(25))
-                assert self.reader.returncode in (0, 124, 143)
+                reader.wait(timeout=getattr(self,'budget_timeout',lambda value:value)(25))
+                assert reader.returncode in (0, 124, 143)
             finally:
-                reader = self.reader
                 settlement = dict(status='PASS', local_reader_started=reader is not None)
                 if reader is not None:
                     try:
@@ -308,7 +313,7 @@ class Device:
                         settlement['returncode'] = reader.returncode
                     except BaseException as error:
                         settlement.update(status='HOLD', cleanup_error=repr(error), remote_completion='unknown')
-                    if reader.poll() is not None:
+                    if reader.poll() is not None and self.reader is reader:
                         self.reader = None
                 self.save(label + '-stop-reader-settlement.json', json.dumps(settlement, indent=2)+'\n')
                 if path!=self.out/(label+'-stop.log'):
@@ -326,6 +331,14 @@ class Device:
         assert not any(len(parts := line.split()) >= 3 and Path(parts[2]).name == 'libvpp_runtime.so'
                        for line in processes.splitlines())
         return dict(stop_log_sha256=digest(path), process_absent=True)
+
+    def validate_stop_capture(self, capture):
+        reader=capture.get('reader')
+        if reader is None or reader is not self.reader:
+            raise PreparedStopCaptureMismatch('prepared stop capture reader identity mismatch')
+        if reader.poll() is not None:
+            raise PreparedStopCaptureExpired('prepared stop capture reader exited before Stop')
+        return reader
 
     def configure(self, label, variant='alias-drop', *, mode=0, subject=None, prefill_only=False):
         path = 'files/product-state/complete-rule-config.properties'

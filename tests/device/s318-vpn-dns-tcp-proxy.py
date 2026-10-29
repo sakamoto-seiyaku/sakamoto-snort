@@ -901,7 +901,7 @@ def main():
    except BaseException as error:cleanup.append(name+':'+repr(error))
   if d.witnesses or getattr(d,'deferred_wire_files',[]):phase('wire',lambda _:(d.wire_stop()if d.witnesses else None,d.settle_deferred_wire_files()))
   if(d.stop_owed or d.active)and getattr(d,'stop_retry_authorized',True):phase('stop',lambda _:d.stop('failure-cleanup'))
-  if d.reader:phase('reader',lambda _:d.settle_reader('final'))
+  if d.reader or getattr(d,'prepared_stop_capture',None):phase('reader',lambda _:d.settle_reader('final'))
   if peer:phase('peer',lambda deadline:(setattr(peer,'cleanup_deadline',deadline),peer.close()))
   phase('trace',lambda _:d.close_trace())
   if cleanup:result.update(cleanup_errors=cleanup,status='HOLD')

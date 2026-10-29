@@ -24,11 +24,12 @@ static void local_tcp_release(hev_owner_t *owner,local_tcp_output_t *o,int succe
 {
   uint64_t session=o->session,token=o->token;
   if(o->wire) {
-    owner->stats.local_tcp_bytes-=o->length;
+    if(o->wire!=o->inline_wire)owner->stats.local_tcp_bytes-=o->length;
     --owner->stats.local_tcp_outputs;
     if(success)++owner->stats.local_tcp_delivered;else ++owner->stats.local_tcp_failed;
   } else --owner->stats.local_tcp_pending;
-  free(o->wire);memset(o,0,sizeof(*o));
+  if(o->wire && o->wire!=o->inline_wire)free(o->wire);
+  memset(o,0,sizeof(*o));
   if(owner->config.local_tcp_done)
     owner->config.local_tcp_done(owner->config.opaque,owner->config.generation,session,token,success);
 }
@@ -63,7 +64,11 @@ static err_t local_tcp_sent(void *opaque,struct tcp_pcb *pcb,u16_t bytes)
 }
 static int local_tcp_timeout(owner_session_t *s)
 {
-  uint64_t next=s->local_tcp->used?s->local_tcp->partial_deadline:s->local_tcp->idle_deadline;
+  local_tcp_t *c=s->local_tcp;
+  int complete=c->used>=2 && c->used>=((size_t)(((unsigned)c->input[0]<<8)|c->input[1])+2);
+  /* A complete frame can wait for a bounded pending slot; it is not a
+   * partial frame and must not expire existing requests while backpressured. */
+  uint64_t next=c->used && !complete?c->partial_deadline:c->idle_deadline;
   for(unsigned i=0;i<HEV_OWNER_LOCAL_TCP_PENDING;++i)
     if(s->owner->local_outputs[i].session==s->id && s->owner->local_outputs[i].deadline<next)
       next=s->owner->local_outputs[i].deadline;
@@ -110,7 +115,7 @@ uint64_t hev_owner_local_tcp_reservation(const hev_owner_t *owner)
   /* Owned input/output copies plus worst-case lwIP COPY sndbuf per client.
    * The existing lwIP heap/pbuf/PCB budgets independently cap its allocations. */
   return owner?HEV_OWNER_LOCAL_TCP_BYTES+HEV_OWNER_LOCAL_TCP_CLIENTS*(uint64_t)TCP_SND_BUF+
-    sizeof(owner->local_outputs):0;
+    sizeof(owner->local_outputs)-HEV_OWNER_LOCAL_TCP_PENDING*(uint64_t)HEV_OWNER_LOCAL_TCP_INLINE_BYTES:0;
 }
 int hev_owner_local_tcp_next(hev_owner_t *owner,uint64_t generation,uint64_t *session,
   uint64_t *token,uint8_t *message,size_t capacity,size_t *length)
@@ -118,25 +123,40 @@ int hev_owner_local_tcp_next(hev_owner_t *owner,uint64_t generation,uint64_t *se
   owner_scope_t scope;
   if(!owner || generation!=owner->config.generation || !session || !token || !message || !length || enter(owner,&scope))return -1;
   int result=0;
+  local_tcp_output_t *free_output=NULL;
+  for(unsigned i=0;i<HEV_OWNER_LOCAL_TCP_PENDING;++i)
+    if(!owner->local_outputs[i].session){free_output=&owner->local_outputs[i];break;}
+  /* Choose the next ready session by its stable owner-local identity. A
+   * busy stream cannot repeatedly take slots freed by another stream. */
+  owner_session_t *next=NULL,*wrapped=NULL;
   for(owner_session_t *s=owner->sessions;s;s=s->next) {
     if(!s->local_tcp || s->closing || !owner->stats.running)continue;
     local_tcp_t *c=s->local_tcp;
     if(c->used<2)continue;
     size_t n=((unsigned)c->input[0]<<8)|c->input[1];
     if(c->used<n+2)continue;
-    if(n>capacity || owner->local_token==UINT64_MAX) {close_session(s,"local_tcp_read_capacity");result=-1;break;}
-    local_tcp_output_t *free_output=NULL;
-    for(unsigned i=0;i<HEV_OWNER_LOCAL_TCP_PENDING;++i)
-      if(!owner->local_outputs[i].session){free_output=&owner->local_outputs[i];break;}
-    if(!free_output){close_session(s,"local_tcp_pending_capacity");result=-1;break;}
-    *session=s->id;*token=++owner->local_token;*length=n;
-    memcpy(message,c->input+2,n);c->used-=n+2;memmove(c->input,c->input+n+2,c->used);
-    c->partial_deadline=c->used?now_ms()+10000:0;
-    *free_output=(local_tcp_output_t){.session=s->id,.token=*token,.deadline=now_ms()+10000};
-    ++owner->stats.local_tcp_pending;
-    if(owner->stats.local_tcp_pending>owner->stats.local_tcp_pending_peak)
-      owner->stats.local_tcp_pending_peak=owner->stats.local_tcp_pending;
-    ++owner->stats.local_tcp_frames;result=1;break;
+    if(!wrapped || s->id<wrapped->id)wrapped=s;
+    if(s->id>owner->local_cursor && (!next || s->id<next->id))next=s;
+  }
+  owner_session_t *s=next?next:wrapped;
+  /* Retain full frames in the bounded session inputs while no slot is free.
+   * The driver's normal ACK/step drain admits one when a slot is released. */
+  if(s && free_output) {
+    local_tcp_t *c=s->local_tcp;
+    size_t n=((unsigned)c->input[0]<<8)|c->input[1];
+    if(n>capacity || owner->local_token==UINT64_MAX) {
+      close_session(s,"local_tcp_read_capacity");result=-1;
+    } else {
+      *session=s->id;*token=++owner->local_token;*length=n;
+      memcpy(message,c->input+2,n);c->used-=n+2;memmove(c->input,c->input+n+2,c->used);
+      c->partial_deadline=c->used?now_ms()+10000:0;
+      *free_output=(local_tcp_output_t){.session=s->id,.token=*token,.deadline=now_ms()+10000};
+      owner->local_cursor=s->id;
+      ++owner->stats.local_tcp_pending;
+      if(owner->stats.local_tcp_pending>owner->stats.local_tcp_pending_peak)
+        owner->stats.local_tcp_pending_peak=owner->stats.local_tcp_pending;
+      ++owner->stats.local_tcp_frames;result=1;
+    }
   }
   leave(owner,&scope);return result;
 }
@@ -152,17 +172,36 @@ int hev_owner_local_tcp_reply(hev_owner_t *owner,uint64_t generation,uint64_t se
   for(unsigned i=0;i<HEV_OWNER_LOCAL_TCP_PENDING;++i) {
     local_tcp_output_t *o=&owner->local_outputs[i];
     if(o->session!=session || o->token!=token || o->wire || !owner->stats.running)continue;
-    if(owner->stats.local_tcp_bytes+length+2>HEV_OWNER_LOCAL_TCP_BYTES || owner->local_order==UINT64_MAX)break;
-    uint8_t *wire=malloc(length+2);if(!wire)break;
+    if(owner->local_order==UINT64_MAX){result=-2;break;}
+    uint8_t *wire=o->inline_wire;
+    if(length+2>sizeof(o->inline_wire)) {
+      if(owner->stats.local_tcp_bytes+length+2>HEV_OWNER_LOCAL_TCP_BYTES-
+          HEV_OWNER_LOCAL_TCP_PENDING*HEV_OWNER_LOCAL_TCP_INLINE_BYTES){result=-2;break;}
+      wire=malloc(length+2);if(!wire){result=-2;break;}
+    }
     wire[0]=length>>8;wire[1]=length;memcpy(wire+2,message,length);
     o->wire=wire;o->length=length+2;o->order=++owner->local_order;o->deadline=now_ms()+10000;
     if(binding)o->binding=*binding;
     --owner->stats.local_tcp_pending;++owner->stats.local_tcp_outputs;
     if(owner->stats.local_tcp_outputs>owner->stats.local_tcp_output_peak)
       owner->stats.local_tcp_output_peak=owner->stats.local_tcp_outputs;
-    owner->stats.local_tcp_bytes+=length+2;
+    if(wire!=o->inline_wire)owner->stats.local_tcp_bytes+=length+2;
     if(owner->stats.local_tcp_bytes>owner->stats.local_tcp_peak_bytes)owner->stats.local_tcp_peak_bytes=owner->stats.local_tcp_bytes;
     result=0;break;
+  }
+  leave(owner,&scope);return result;
+}
+
+int hev_owner_local_tcp_abandon(hev_owner_t *owner,uint64_t generation,uint64_t session,uint64_t token)
+{
+  owner_scope_t scope;
+  if(!owner || generation!=owner->config.generation || !session || !token || enter(owner,&scope))return -1;
+  int result=-1;
+  for(unsigned i=0;i<HEV_OWNER_LOCAL_TCP_PENDING;++i) {
+    local_tcp_output_t *o=&owner->local_outputs[i];
+    if(o->session==session && o->token==token && !o->wire) {
+      local_tcp_release(owner,o,0);result=0;break;
+    }
   }
   leave(owner,&scope);return result;
 }

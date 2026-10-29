@@ -450,6 +450,14 @@ int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *vm,uint64_t generation,
   int result=product_vpn_flow_stack_local_tcp_reply(owner->stack,generation,session,token,message,length,binding);
   schedule(vm);return result;
 }
+int product_vpn_flow_stack_driver_tcp_abandon(vlib_main_t *vm,uint64_t generation,uint64_t session,uint64_t token)
+{
+  if(!vm || !vm->thread_index || vlib_get_worker_index(vm->thread_index)>=active_owner_count())return -1;
+  product_vpn_stack_owner_t *owner=&owners[vlib_get_worker_index(vm->thread_index)];
+  if(!owner->stack)return -1;
+  int result=product_vpn_flow_stack_local_tcp_abandon(owner->stack,generation,session,token);
+  schedule(vm);return result;
+}
 int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *vm, uint64_t generation,
   uint64_t session, const uint8_t *message, size_t length, const product_vpn_flow_stack_transport_t *binding)
 {

@@ -99,7 +99,8 @@ def qualify(d,peer,result,label,resolver,q,a,cached,protocol):
   except AssertionError as error:wire_error=repr(error)
   requests=peer.received(q,after=cursor)
   after=d.wire_coverage(label+'-after');wire={k:v[len(before[k]):]for k,v in after.items()};interface=d.tun_interface if d.args.profile=='vpn'else'lo'
-  dispatches=base.dispatch_reader.qualify_udp_dispatches(q,requests,wire[d.physical_interface],records)
+  dispatches=base.dispatch_reader.qualify_udp_dispatches(q,requests,wire[d.physical_interface],records,
+   expected_port=d.args.upstream_port)
   check=dict(label=label,expected_upstream_requests=1 if cached else 2,actual_upstream_requests=dispatches['logical_dispatches'],
    actual_upstream_datagrams=len(requests),dispatch_qualification=dispatches,
    expected_cache_sources=[False,cached],actual_cache_sources=sources,cache_source_correct=sources==[False,cached],wire_correct=wire_error is None,wire_error=wire_error,peer_receipts=requests)
@@ -191,7 +192,7 @@ def main():
    except BaseException as error:cleanup.append(name+':'+repr(error))
   if d.witnesses or getattr(d,'deferred_wire_files',[]):phase('wire',lambda _:(d.wire_stop()if d.witnesses else None,d.settle_deferred_wire_files()))
   if(d.stop_owed or d.active)and getattr(d,'stop_retry_authorized',True):phase('stop',lambda _:d.stop('failure-cleanup'))
-  if d.reader:phase('reader',lambda _:d.settle_reader('final'))
+  if d.reader or getattr(d,'prepared_stop_capture',None):phase('reader',lambda _:d.settle_reader('final'))
   if peer:phase('peer',lambda deadline:(setattr(peer,'cleanup_deadline',deadline),peer.close()))
   phase('trace',lambda _:d.close_trace())
   if cleanup:result.update(cleanup_errors=cleanup,status='HOLD')

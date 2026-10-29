@@ -682,7 +682,7 @@ def main():
                 with envelope.phase(d,name)as deadline:action(deadline)
             except BaseException as error:cleanup.append(repr(error))
         if (d.stop_owed or d.active)and getattr(d,'stop_retry_authorized',True):phase('stop',lambda _:d.stop('failure-cleanup'))
-        if d.reader:phase('reader',lambda _:d.settle_reader('final'))
+        if d.reader or getattr(d,'prepared_stop_capture',None):phase('reader',lambda _:d.settle_reader('final'))
         if d.witnesses:phase('wire',lambda _:d.wire_stop())
         if peer:phase('peer',lambda deadline:(setattr(peer,'cleanup_deadline',deadline),peer.close()))
         phase('trace',lambda _:d.close_trace())

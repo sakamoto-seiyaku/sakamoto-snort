@@ -30,6 +30,13 @@ failures across Root/VPN, UDP/TCP and both address families, then validates all
 120 decoded records through normal SQLite close/reopen. Its integration method
 is also ignored by ordinary `cargo test`; use the documented runner.
 
+The [S320 coalescing record](../docs/testing/2026-10-27_S320_DNS_COALESCING.md)
+qualifies the public Core, real transport and controlled Adapter seams separately
+from ordinary App device evidence. Its [capacity reply regression](evidence/test_s320_capacity_reply.py)
+checks actual reply IDs, exact same-view cache ages and negative data/source
+mutations; the device runner retains complete normal histories and original
+failed attempts.
+
 POC source, historical recipes and reference-tool retirement are classified in
 the [experiment catalog](../experiments/README.md). Its checks inspect paths and
 guards only; they do not run historical experiments.

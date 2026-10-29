@@ -13,10 +13,16 @@
 typedef struct { int fd; unsigned events; uint64_t cookie; } watch_t;
 static watch_t watches[16];
 static product_root_dns_tcp_io_t *io;
-static uint64_t session, sessions[8], tokens[128], sequence;
+static uint64_t session, sessions[8], tokens[129], query_sessions[129], sequence;
 static unsigned accepted_count;
 static unsigned queries, deliveries, failures, ends;
 static unsigned mode;
+static unsigned fail_output_malloc;
+void *__real_malloc(size_t);
+void *__wrap_malloc(size_t bytes) {
+  if(fail_output_malloc && bytes==65537) { --fail_output_malloc;errno=ENOMEM;return NULL; }
+  return __real_malloc(bytes);
+}
 static int watch(void *ctx,int fd,unsigned events,uint64_t cookie) {
   (void)ctx; unsigned slot=16;
   for(unsigned i=0;i<16;++i)if(watches[i].events&&watches[i].fd==fd){slot=i;break;}
@@ -34,8 +40,10 @@ static int accepted(void *ctx,uint64_t id,const product_root_dns_tcp_endpoint_t 
   assert(accepted_count<8);sessions[accepted_count++]=id;session=id;return 1;
 }
 static void query(void *ctx,uint64_t id,uint64_t token,const uint8_t *data,size_t len,uint64_t now) {
-  (void)ctx;(void)now;assert(id==session&&len==3&&data[0]==0x12&&data[1]==0x34);
-  tokens[queries++]=token;
+  (void)ctx;(void)now;unsigned found=0;
+  for(unsigned i=0;i<accepted_count;++i)found|=id==sessions[i];
+  assert(found&&queries<129&&len==3&&data[0]==0x12&&data[1]==0x34);
+  tokens[queries]=token;query_sessions[queries++]=id;
   if(mode==2 || mode==6) {
     uint8_t answer[8000];memset(answer,0x63,sizeof(answer));
     answer[0]=0x12;answer[1]=0x34;answer[2]=data[2];
@@ -85,30 +93,179 @@ int main(int argc,char **argv) {
     assert(write(clients[7],frames,sizeof(frames))==sizeof(frames));
     for(unsigned tick=102;tick<106 && queries<40;++tick)pump(tick);
     assert(queries==40 && product_root_dns_tcp_io_status(io).pending==40);
-    uint8_t answer[65535];memset(answer,0x63,sizeof(answer));unsigned queued=0;
-    while(queued<40 && product_root_dns_tcp_io_reply(io,session,tokens[queued],answer,sizeof(answer),106))++queued;
+    uint8_t answer[65535];memset(answer,0x63,sizeof(answer));unsigned queued=0;int result=1;
+    while(queued<40 && (result=product_root_dns_tcp_io_reply(io,session,tokens[queued],answer,sizeof(answer),106))==1)++queued;
     s=product_root_dns_tcp_io_status(io);
-    assert(queued>0 && queued<40 && failures==queued && !deliveries);
-    assert(s.clients==7 && !s.pending && !s.outputs && s.capacity==1);
+    assert(queued>0 && queued<40 && result==-1 && !failures && !deliveries && !ends);
+    assert(s.clients==8 && s.pending==40-queued && s.outputs==queued && s.capacity==1);
     assert(s.high_water_bytes<=PRODUCT_ROOT_DNS_TCP_WORK_BYTES &&
       s.high_water_bytes>PRODUCT_ROOT_DNS_TCP_WORK_BYTES-sizeof(answer)-2);
-    product_root_dns_tcp_io_quiesce(io,107);pump(108);
+    for(unsigned i=queued;i<40;++i) {
+      uint8_t fallback[]={0x12,0x34,(uint8_t)i};
+      assert(product_root_dns_tcp_io_reply(io,session,tokens[i],fallback,sizeof(fallback),107)==1);
+    }
+    size_t total=(size_t)queued*(sizeof(answer)+2)+(40-queued)*5U,got=0;
+    uint8_t *received=malloc(total);assert(received);
+    for(unsigned tick=108;tick<20108 && got<total;++tick) {
+      pump(tick);ssize_t n=recv(clients[7],received+got,total-got,MSG_DONTWAIT);
+      if(n>0)got+=(size_t)n;else {
+        assert(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK));
+        struct pollfd ready={clients[7],POLLIN,0};assert(poll(&ready,1,100)>=0);
+      }
+    }
+    assert(got==total && deliveries==40 && !failures && !ends);
+    size_t at=0;for(unsigned i=0;i<queued;++i) {
+      assert(received[at]==0xff && received[at+1]==0xff);
+      assert(!memcmp(received+at+2,answer,sizeof(answer)));at+=sizeof(answer)+2;
+    }
+    for(unsigned i=queued;i<40;++i) {
+      uint8_t expected[]={0,3,0x12,0x34,(uint8_t)i};
+      assert(!memcmp(received+at,expected,sizeof(expected)));at+=sizeof(expected);
+    }
+    assert(at==total);free(received);
+    product_root_dns_tcp_io_quiesce(io,20108);pump(20109);
     s=product_root_dns_tcp_io_status(io);assert(!s.clients&&!s.sockets&&!s.pending&&!s.outputs&&ends==8);
     for(unsigned i=0;i<9;++i)close(clients[i]);
-    product_root_dns_tcp_io_close(io,109);for(unsigned i=0;i<16;++i)assert(!watches[i].events);
-    puts("Root TCP eight-client/ninth-reject and actual 2MiB output ceiling retire exact queued resources: PASS");return 0;
+    product_root_dns_tcp_io_close(io,20110);for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+    puts("Root TCP 2MiB ceiling preserves independent queued and fallback replies: PASS");return 0;
+  }
+  if(mode==12) {
+    assert(write(client,(uint8_t[]){0,3,0x12,0x34,1,0,3,0x12,0x34,2},10)==10);
+    pump(102);assert(queries==2 && !ends);
+    uint8_t large[65535];memset(large,0x63,sizeof(large));fail_output_malloc=1;
+    assert(product_root_dns_tcp_io_reply(io,session,tokens[0],large,sizeof(large),103)==-1);
+    product_root_dns_tcp_status_t s=product_root_dns_tcp_io_status(io);
+    assert(!fail_output_malloc && s.clients==1 && s.pending==2 && !ends && !deliveries);
+    assert(product_root_dns_tcp_io_reply(io,session,tokens[0],(uint8_t[]){0x12,0x34,0x81},3,104)==1);
+    assert(product_root_dns_tcp_io_reply(io,session,tokens[1],(uint8_t[]){0x12,0x34,0x82},3,104)==1);
+    pump(105);uint8_t reply[10];size_t got=0;
+    while(got<sizeof(reply)) {
+      ssize_t n=recv(client,reply+got,sizeof(reply)-got,0);assert(n>0);got+=(size_t)n;
+    }
+    assert(!memcmp(reply,(uint8_t[]){0,3,0x12,0x34,0x81,0,3,0x12,0x34,0x82},10));
+    assert(deliveries==2 && !failures && !ends);
+    close(client);pump(106);assert(ends==1);
+    product_root_dns_tcp_io_close(io,107);
+    for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+    puts("Root TCP one real output malloc failure preserves both independent replies: PASS");return 0;
+  }
+  if(mode==13) {
+    assert(write(client,(uint8_t[]){0,3,0x12,0x34,1,0,3,0x12,0x34,2},10)==10);
+    pump(102);assert(queries==2 && !ends);
+    assert(!product_root_dns_tcp_io_abandon(io,session+1,tokens[0],103));
+    assert(product_root_dns_tcp_io_abandon(io,session,tokens[0],103)==1);
+    assert(!product_root_dns_tcp_io_abandon(io,session,tokens[0],103));
+    assert(product_root_dns_tcp_io_status(io).pending==1 && !ends);
+    assert(product_root_dns_tcp_io_reply(io,session,tokens[1],(uint8_t[]){0x12,0x34,0x82},3,104)==1);
+    pump(105);uint8_t reply[5];assert(read(client,reply,sizeof(reply))==5);
+    assert(!memcmp(reply,(uint8_t[]){0,3,0x12,0x34,0x82},5));
+    assert(deliveries==1 && !failures && !ends && !product_root_dns_tcp_io_status(io).pending);
+    close(client);pump(106);assert(ends==1);
+    product_root_dns_tcp_io_close(io,107);
+    for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+    puts("Root TCP undeliverable token retires once without affecting another request: PASS");return 0;
   }
   if(mode==8) {
     uint8_t frames[129*5];for(unsigned i=0;i<129;++i)
       memcpy(frames+5*i,(uint8_t[]){0,3,0x12,0x34,(uint8_t)i},5);
     assert(write(client,frames,sizeof(frames))==sizeof(frames));
-    for(unsigned tick=102;tick<120 && !ends;++tick)pump(tick);
+    assert(!shutdown(client,SHUT_WR));
     product_root_dns_tcp_status_t s=product_root_dns_tcp_io_status(io);
-    assert(queries==128 && s.frames==128 && ends==1 && s.capacity==1);
-    assert(!s.clients&&!s.pending&&!s.outputs&&!deliveries&&!failures);
-    close(client);product_root_dns_tcp_io_close(io,121);
+    for(unsigned tick=102;tick<120 && !s.capacity && !ends;++tick) {
+      pump(tick);s=product_root_dns_tcp_io_status(io);
+    }
+    /* The complete 129th frame waits within the existing bounded input buffer;
+     * it must not close the stream or cancel the 128 accepted obligations. */
+    assert(queries==128 && s.frames==128 && !ends && s.clients==1 && s.pending==128);
+    assert(!s.outputs&&!deliveries&&!failures && s.capacity==1);
+    for(unsigned i=0;i<128;++i) {
+      uint8_t answer[]={0x12,0x34,(uint8_t)i};
+      assert(product_root_dns_tcp_io_reply(io,session,tokens[i],answer,sizeof(answer),120));
+    }
+    for(unsigned tick=121;tick<150 && queries<129;++tick)pump(tick);
+    assert(queries==129 && !ends && deliveries==128);
+    assert(product_root_dns_tcp_io_reply(io,session,tokens[128],(uint8_t[]){0x12,0x34,128},3,150));
+    uint8_t replies[129*5];size_t got=0;
+    for(unsigned tick=151;tick<250 && got<sizeof(replies);++tick) {
+      pump(tick);ssize_t n=recv(client,replies+got,sizeof(replies)-got,MSG_DONTWAIT);
+      if(n>0)got+=(size_t)n;else {
+        assert(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK));
+        struct pollfd ready={client,POLLIN,0};assert(poll(&ready,1,100)>=0);
+      }
+    }
+    assert(got==sizeof(replies) && deliveries==129 && ends==1 && !failures);
+    assert(!memcmp(replies,frames,sizeof(frames)));
+    close(client);pump(250);assert(ends==1);
+    product_root_dns_tcp_io_close(io,251);
     for(unsigned i=0;i<16;++i)assert(!watches[i].events);
-    puts("Root TCP 128 pending slots and 129th frame fail bounded, retiring every accepted request: PASS");return 0;
+    puts("Root TCP 128 pending obligations survive a bounded 129th frame and all 129 replies drain: PASS");return 0;
+  }
+  if(mode==9 || mode==11) {
+    uint8_t frames[129*5];for(unsigned i=0;i<129;++i)
+      memcpy(frames+5*i,(uint8_t[]){0,3,0x12,0x34,(uint8_t)i},5);
+    assert(write(client,frames,sizeof(frames))==sizeof(frames));
+    product_root_dns_tcp_status_t s=product_root_dns_tcp_io_status(io);
+    for(unsigned tick=102;tick<120 && !s.capacity && !ends;++tick) {
+      pump(tick);s=product_root_dns_tcp_io_status(io);
+    }
+    assert(queries==128 && s.pending==128 && s.clients==1 && s.capacity==1 && !ends);
+    assert(product_root_dns_tcp_io_deadline(io)>1000); /* No busy retry or false partial-frame expiry. */
+    pump(1000);s=product_root_dns_tcp_io_status(io);
+    assert(s.pending==128 && s.clients==1 && !ends);
+    if(mode==9) {
+      struct linger reset={1,0};assert(!setsockopt(client,SOL_SOCKET,SO_LINGER,&reset,sizeof(reset)));
+      close(client);pump(1001);s=product_root_dns_tcp_io_status(io);
+      assert(ends==1 && !s.clients && !s.pending && queries==128 && !deliveries);
+      product_root_dns_tcp_io_close(io,1002);
+      for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+      puts("Root TCP blocked full frame retains RST watch and retires accepted work once: PASS");return 0;
+    }
+    product_root_dns_tcp_io_quiesce(io,1001);
+    for(unsigned i=0;i<128;++i) {
+      uint8_t answer[]={0x12,0x34,(uint8_t)i};
+      assert(product_root_dns_tcp_io_reply(io,session,tokens[i],answer,sizeof(answer),1002));
+    }
+    uint8_t replies[128*5];size_t got=0;
+    for(unsigned tick=1003;tick<1100 && got<sizeof(replies);++tick) {
+      pump(tick);ssize_t n=recv(client,replies+got,sizeof(replies)-got,MSG_DONTWAIT);
+      if(n>0)got+=(size_t)n;else {
+        assert(n<0 && (errno==EAGAIN || errno==EWOULDBLOCK));
+        struct pollfd ready={client,POLLIN,0};assert(poll(&ready,1,100)>=0);
+      }
+    }
+    s=product_root_dns_tcp_io_status(io);
+    assert(got==sizeof(replies) && !memcmp(replies,frames,sizeof(replies)));
+    assert(queries==128 && deliveries==128 && ends==1 && !s.clients && !s.pending && !s.outputs && !s.sockets);
+    close(client);product_root_dns_tcp_io_close(io,1101);
+    for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+    puts("Root TCP Stop discards only unadmitted full frame and drains all accepted replies: PASS");return 0;
+  }
+  if(mode==10) {
+    uint8_t frames[128*5];for(unsigned i=0;i<128;++i)
+      memcpy(frames+5*i,(uint8_t[]){0,3,0x12,0x34,(uint8_t)i},5);
+    assert(write(client,frames,sizeof(frames))==sizeof(frames));
+    for(unsigned tick=102;tick<120 && queries<128;++tick)pump(tick);
+    assert(queries==128 && product_root_dns_tcp_io_status(io).pending==128);
+    int other=socket(AF_INET,SOCK_STREAM,0);assert(other>=0);
+    assert(!connect(other,(struct sockaddr*)&address,sizeof(address)));pump(120);
+    assert(accepted_count==2 && sessions[0]!=sessions[1]);
+    assert(write(other,(uint8_t[]){0,3,0x12,0x34,0x80},5)==5);
+    product_root_dns_tcp_status_t s=product_root_dns_tcp_io_status(io);
+    for(unsigned tick=121;tick<140 && !s.capacity;++tick) {
+      pump(tick);s=product_root_dns_tcp_io_status(io);
+    }
+    assert(s.capacity==1 && s.clients==2 && s.pending==128 && queries==128 && !ends);
+    assert(product_root_dns_tcp_io_reply(io,sessions[0],tokens[0],(uint8_t[]){0x12,0x34,0},3,140));
+    for(unsigned tick=141;tick<160 && queries<129;++tick)pump(tick);
+    assert(queries==129 && query_sessions[128]==sessions[1] && deliveries==1 && !ends);
+    assert(product_root_dns_tcp_io_reply(io,sessions[1],tokens[128],(uint8_t[]){0x12,0x34,0x80},3,160));
+    pump(161);uint8_t reply[5];assert(read(other,reply,sizeof(reply))==5);
+    assert(!memcmp(reply,(uint8_t[]){0,3,0x12,0x34,0x80},5));
+    close(other);close(client);pump(162);
+    s=product_root_dns_tcp_io_status(io);assert(ends==2 && !s.clients && !s.pending && !s.outputs);
+    product_root_dns_tcp_io_close(io,163);
+    for(unsigned i=0;i<16;++i)assert(!watches[i].events);
+    puts("Root TCP output slot freed by one client resumes a blocked different client: PASS");return 0;
   }
   if(mode==5) {
     assert(write(client,(uint8_t[]){0,3,0x12,0x34,1},5)==5);

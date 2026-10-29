@@ -16,7 +16,7 @@ typedef struct {
   int fd;
   uint64_t cookie, partial_deadline, idle_deadline, read_resume, write_resume;
   size_t used;
-  uint8_t eof;
+  uint8_t eof, backpressured;
   uint8_t input[PRODUCT_DNS_MESSAGE_MAX + 2U];
 } tcp_client_t;
 typedef struct {
@@ -25,12 +25,14 @@ typedef struct {
   size_t length, sent;
   uint64_t order;
   uint8_t active;
+  uint8_t inline_wire[PRODUCT_ROOT_DNS_TCP_INLINE_BYTES];
 } tcp_output_t;
 struct product_root_dns_tcp_io {
   uint64_t generation;
   uint8_t product_listener;
   uint64_t *sequence;
   uint64_t order;
+  unsigned resume_cursor;
   int listener[2];
   uint64_t listener_cookie[2];
   product_root_dns_tcp_callbacks_t callbacks;
@@ -54,17 +56,34 @@ static int watch_client(product_root_dns_tcp_io_t *io, tcp_client_t *client)
       { events |= PRODUCT_ROOT_DNS_WRITE; break; }
   return io->callbacks.watch(io->context, client->fd, events ? events | PRODUCT_ROOT_DNS_TCP_EDGE : 0, client->cookie);
 }
-static void release_output(product_root_dns_tcp_io_t *io, tcp_output_t *output, int success)
+static void resume_blocked(product_root_dns_tcp_io_t *io,uint64_t now)
+{
+  /* Each freed slot wakes one blocked client. Rotate so one busy stream
+   * cannot monopolize slots released by a different stream. */
+  for(unsigned offset=0;offset<PRODUCT_ROOT_DNS_TCP_CLIENTS;++offset) {
+    unsigned index=(io->resume_cursor+offset)%PRODUCT_ROOT_DNS_TCP_CLIENTS;
+    tcp_client_t *client=&io->clients[index];
+    if(client->fd>=0 && client->backpressured && !client->read_resume) {
+      client->read_resume=now+1;
+      io->resume_cursor=(index+1)%PRODUCT_ROOT_DNS_TCP_CLIENTS;
+      return;
+    }
+  }
+}
+static void release_output(product_root_dns_tcp_io_t *io, tcp_output_t *output, int success, uint64_t now)
 {
   uint64_t token=output->token;
   int queued=output->wire!=NULL;
-  io->status.allocated_bytes-=output->length;
-  free(output->wire); memset(output,0,sizeof(*output));
+  if(output->wire && output->wire!=output->inline_wire) {
+    io->status.allocated_bytes-=output->length;free(output->wire);
+  }
+  memset(output,0,sizeof(*output));
   if (queued) {
     --io->status.outputs;
     if (success) ++io->status.delivered; else ++io->status.write_failed;
     io->callbacks.delivered(io->context,token,success);
   } else --io->status.pending;
+  resume_blocked(io,now);
 }
 static void close_client(product_root_dns_tcp_io_t *io, tcp_client_t *client, uint64_t now)
 {
@@ -78,7 +97,7 @@ static void close_client(product_root_dns_tcp_io_t *io, tcp_client_t *client, ui
   io->callbacks.ended(io->context,session,now);
   for (unsigned i=0;i<PRODUCT_ROOT_DNS_TCP_OUTPUTS;++i)
     if (io->outputs[i].active && io->outputs[i].session==session)
-      release_output(io,&io->outputs[i],0);
+      release_output(io,&io->outputs[i],0,now);
 }
 static int arm_client(product_root_dns_tcp_io_t *io,tcp_client_t *client,uint64_t now)
 {
@@ -179,7 +198,7 @@ static void write_client(product_root_dns_tcp_io_t *io,tcp_client_t *client,uint
     if(n<=0){close_client(io,client,now);return;}
     written+=(size_t)n;next->sent+=(size_t)n;
     client->idle_deadline=now+PRODUCT_ROOT_DNS_IDLE_US;
-    if(next->sent==next->length)release_output(io,next,1);
+    if(next->sent==next->length)release_output(io,next,1,now);
     client->write_resume=now+1;
   }
   if(client->eof && !session_pending(io,client->cookie)) {close_client(io,client,now);return;}
@@ -195,10 +214,17 @@ static void read_client(product_root_dns_tcp_io_t *io,tcp_client_t *client,uint6
         tcp_output_t *request=NULL;
         for(unsigned i=0;i<PRODUCT_ROOT_DNS_TCP_OUTPUTS;++i)
           if(!io->outputs[i].active){request=&io->outputs[i];break;}
-        uint64_t serial=cookie(io);
-        if(!request || !serial) {
-          ++io->status.capacity;close_client(io,client,now);return;
+        if(!request) {
+          /* The full frame stays in the already bounded input buffer. Keep
+           * the edge-triggered watch for RST, and wake only when a slot is
+           * released; it is no longer an incomplete-frame timeout. */
+          if(!client->backpressured)++io->status.capacity;
+          client->backpressured=1;client->partial_deadline=0;client->read_resume=0;
+          arm_client(io,client,now);return;
         }
+        uint64_t serial=cookie(io);
+        if(!serial) { ++io->status.capacity;close_client(io,client,now);return; }
+        client->backpressured=0;
         uint64_t token=UINT64_C(0x8000000000000000)|serial;
         *request=(tcp_output_t){.active=1,.session=client->cookie,.token=token,
           .deadline=now+PRODUCT_DNS_REQUEST_US};
@@ -206,7 +232,7 @@ static void read_client(product_root_dns_tcp_io_t *io,tcp_client_t *client,uint6
         client->partial_deadline=0;client->idle_deadline=now+PRODUCT_ROOT_DNS_IDLE_US;
         io->callbacks.query(io->context,client->cookie,token,client->input+2,length,now);
         if(client->fd<0)return;
-        if(length<2 && request->active && !request->wire)release_output(io,request,0);
+        if(length<2 && request->active && !request->wire)release_output(io,request,0,now);
         client->used-=length+2;
         memmove(client->input,client->input+length+2,client->used);
         if(client->used)client->partial_deadline=now+PRODUCT_DNS_REQUEST_US;
@@ -306,7 +332,7 @@ void product_root_dns_tcp_io_quiesce(product_root_dns_tcp_io_t *io,uint64_t now)
   }
   for(unsigned i=0;i<PRODUCT_ROOT_DNS_TCP_CLIENTS;++i) {
     tcp_client_t *client=&io->clients[i];if(client->fd<0)continue;
-    client->eof=1;client->used=0;client->partial_deadline=0;client->read_resume=0;
+    client->eof=1;client->used=0;client->partial_deadline=0;client->read_resume=0;client->backpressured=0;
     client->write_resume=now;arm_client(io,client,now);
   }
 }
@@ -340,18 +366,34 @@ int product_root_dns_tcp_io_reply(product_root_dns_tcp_io_t *io,uint64_t session
     if(io->outputs[i].active && io->outputs[i].session==session && io->outputs[i].token==token)
       {request=&io->outputs[i];break;}
   if(!client || !request || request->wire){++io->status.stale;return 0;}
-  if(length+2>PRODUCT_ROOT_DNS_TCP_WORK_BYTES-io->status.allocated_bytes || io->order==UINT64_MAX) {
-    ++io->status.capacity;close_client(io,client,now);return 0;
+  if(io->order==UINT64_MAX) { ++io->status.capacity;return -1; }
+  uint8_t *copy=request->inline_wire;
+  if(length+2>sizeof(request->inline_wire)) {
+    if(length+2>PRODUCT_ROOT_DNS_TCP_WORK_BYTES-io->status.allocated_bytes) {
+      ++io->status.capacity;return -1;
+    }
+    copy=malloc(length+2);
+    if(!copy){++io->status.capacity;return -1;}
   }
-  uint8_t *copy=malloc(length+2);
-  if(!copy){++io->status.capacity;close_client(io,client,now);return 0;}
   copy[0]=length>>8;copy[1]=length;memcpy(copy+2,wire,length);
   request->wire=copy;request->length=length+2;request->order=++io->order;
   --io->status.pending;++io->status.outputs;
   if(io->status.outputs>io->status.high_water_outputs)io->status.high_water_outputs=io->status.outputs;
-  io->status.allocated_bytes+=length+2;
+  if(copy!=request->inline_wire)io->status.allocated_bytes+=length+2;
   if(io->status.allocated_bytes>io->status.high_water_bytes)io->status.high_water_bytes=io->status.allocated_bytes;
   client->write_resume=now+1;return arm_client(io,client,now);
+}
+int product_root_dns_tcp_io_abandon(product_root_dns_tcp_io_t *io,uint64_t session,
+  uint64_t token,uint64_t now)
+{
+  if(!io || !session || !token)return 0;
+  for(unsigned i=0;i<PRODUCT_ROOT_DNS_TCP_OUTPUTS;++i) {
+    tcp_output_t *request=&io->outputs[i];
+    if(request->active && request->session==session && request->token==token && !request->wire) {
+      release_output(io,request,0,now);return 1;
+    }
+  }
+  return 0;
 }
 void product_root_dns_tcp_io_expire(product_root_dns_tcp_io_t *io,uint64_t now)
 {

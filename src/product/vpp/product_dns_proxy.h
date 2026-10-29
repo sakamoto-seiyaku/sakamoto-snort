@@ -73,22 +73,33 @@ typedef struct {
   uint8_t stage, transport, truncated, delivery, cached;
 } product_dns_proxy_event_t;
 
+enum {
+  PRODUCT_DNS_REPLY_REJECTED = 0,
+  PRODUCT_DNS_REPLY_ACCEPTED = 1,
+  PRODUCT_DNS_REPLY_CAPACITY = -1,
+};
+
 typedef struct {
   /* One nonblocking attempt. A TCP capacity return of zero leaves bounded
    * work queued under its original deadline; -1 is a transport failure. */
   int (*send) (void *, const product_dns_proxy_key_t *, unsigned transport,
                const uint8_t *, size_t, uint64_t deadline);
   void (*cancel) (void *, const product_dns_proxy_key_t *);
+  /* Capacity is distinct from a stale/closed channel or transport error: it
+   * retains the exact token for one bounded SERVFAIL fallback. */
   int (*reply) (void *, const product_dns_proxy_event_t *, const uint8_t *, size_t);
   int (*acquire) (void *, const product_dns_proxy_input_t *, product_dns_proxy_snapshot_t *);
   void (*release) (void *, product_dns_proxy_snapshot_t *);
   void (*observe) (void *, const product_dns_proxy_event_t *);
+  /* Drop only this undeliverable transport obligation, if it still exists. */
+  void (*abandon) (void *, const product_dns_proxy_event_t *);
 } product_dns_proxy_callbacks_t;
 
 typedef struct product_dns_proxy product_dns_proxy_t;
 typedef struct {
   uint64_t owned_bytes, high_water_bytes, stale, completed, cancelled, capacity;
-  uint32_t active, high_water;
+  uint32_t active, high_water, exchanges, exchange_high_water;
+  uint64_t coalesced;
   uint8_t accepting;
   uint64_t cache_bytes, cache_high_water_bytes, cache_hits, cache_misses, cache_evictions, cache_skipped;
   uint32_t cache_entries, cache_high_water;

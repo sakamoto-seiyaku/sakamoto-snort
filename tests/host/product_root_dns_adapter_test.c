@@ -88,7 +88,17 @@ static uint8_t vpn_tcp_reply_wire[65535];
 static size_t vpn_tcp_reply_length;
 static u64 vpn_tcp_reply_token;
 static unsigned vpn_tcp_reply_count;
-static product_flow_entry_t entry;
+static product_flow_entry_t entry, second_entry;
+static unsigned dual_channels;
+static struct {u64 session,token;unsigned id,rcode;uint32_t uid;unsigned calls;} channel_replies[2];
+static void channel_reply(u64 session,u64 token,const uint8_t *wire,size_t length) {
+ if(!dual_channels)return;
+ unsigned i=session==72||session==902;assert(session==(i?72:71)||session==(i?902:901));
+ assert(length>=12&&!channel_replies[i].calls);
+ channel_replies[i].session=session;channel_replies[i].token=token;
+ channel_replies[i].id=(unsigned)wire[0]*256+wire[1];channel_replies[i].rcode=wire[3]&15;
+ channel_replies[i].uid=10123+i;++channel_replies[i].calls;
+}
 typedef struct {
  u64 generation, dns_revision;
  product_domains_t *domains;
@@ -155,7 +165,9 @@ static int product_vpn_tun_return_context(u64 generation,u64 token,u64 *inc,u64 
 }
 static void product_policy_snapshot_acquire(product_packet_graph_main_t *graph,product_policy_snapshot_t *out) {assert(graph==&product_packet_graph_main);*out=snapshot;}
 static void product_policy_snapshot_release(product_packet_graph_main_t *graph,product_policy_snapshot_t *out) {assert(graph==&product_packet_graph_main&&out->bank==&bank);}
-const product_flow_entry_t *product_flow_runtime_entry(const product_flow_runtime_t *pool,uint32_t slot) {(void)pool;assert(slot==3);return &entry;}
+const product_flow_entry_t *product_flow_runtime_entry(const product_flow_runtime_t *pool,uint32_t slot) {
+ (void)pool;if(dual_channels&&slot==4)return &second_entry;assert(slot==3);return &entry;
+}
 static int product_packet_graph_enabled(void) {return 1;}
 static int product_packet_graph_accepting(void) {return 1;}
 static void product_flow_expiry_changed(vlib_main_t *vm) {assert(vm==&worker);}
@@ -202,9 +214,9 @@ static product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local
  vlib_main_t *vm,const u8 *l3,size_t bytes,const product_platform_packet_facts_t *platform,
  u64 generation,u64 incarnation,u64 *session,u8 *message,size_t capacity,size_t *length)
 {
- assert(vm==&worker&&generation&&incarnation==8&&platform->provenance==PRODUCT_PACKET_PROVENANCE_VPN_TUN);
+ assert(vm==&worker&&generation&&(incarnation==8||(dual_channels&&incarnation==9))&&platform->provenance==PRODUCT_PACKET_PROVENANCE_VPN_TUN);
  size_t offset=(l3[0]>>4)==6?48:28; assert(bytes>=offset&&capacity>=bytes-offset);
- memcpy(message,l3+offset,bytes-offset);*length=bytes-offset;*session=71;return PRODUCT_VPN_FLOW_STACK_ACCEPTED;
+ memcpy(message,l3+offset,bytes-offset);*length=bytes-offset;*session=dual_channels&&incarnation==9?72:71;return PRODUCT_VPN_FLOW_STACK_ACCEPTED;
 }
 /* Controlled HEV local-TCP boundary. Actual framing/lwIP is exercised by
  * hev_owner_local_tcp_test and the ordinary Android App qualification. */
@@ -214,16 +226,19 @@ static product_vpn_flow_stack_input_result_t product_vpn_flow_stack_driver_local
  vlib_main_t *vm,const u8 *l3,size_t bytes,const product_platform_packet_facts_t *platform,
  u64 generation,u64 incarnation,u64 *session)
 { (void)vm;(void)l3;(void)bytes;(void)platform;(void)generation;(void)incarnation;
-  *session=vpn_tcp_fixture_enabled?71:0;
+  *session=vpn_tcp_fixture_enabled?(dual_channels&&incarnation==9?72:71):0;
   return vpn_tcp_fixture_enabled?PRODUCT_VPN_FLOW_STACK_ACCEPTED:PRODUCT_VPN_FLOW_STACK_NOT_RUNNING; }
 static void product_vpn_flow_stack_driver_tcp_drain(vlib_main_t *vm) { (void)vm; }
 static int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *vm,u64 generation,u64 session,u64 token,
  const u8 *wire,size_t length,const product_vpn_flow_stack_transport_t *binding)
 { (void)binding;
   if(!vpn_tcp_fixture_enabled)return -1;
-  assert(vm==&worker&&generation==77&&session==71&&length<=sizeof(vpn_tcp_reply_wire));
+  assert(vm==&worker&&generation==77&&(session==71||(dual_channels&&session==72))&&length<=sizeof(vpn_tcp_reply_wire));
+  channel_reply(session,token,wire,length);
   memcpy(vpn_tcp_reply_wire,wire,length);vpn_tcp_reply_length=length;
   vpn_tcp_reply_token=token;++vpn_tcp_reply_count;return 0; }
+static int product_vpn_flow_stack_driver_tcp_abandon(vlib_main_t *vm,u64 generation,u64 session,u64 token)
+{ (void)vm;(void)generation;(void)session;(void)token;return 0; }
 int product_root_dns_io_authorized(product_root_dns_io_t *io,u64 generation,u64 cookie,int success,u64 now)
 {
  assert(io==&fixture_io&&generation&&cookie&&now==now_us);
@@ -291,21 +306,26 @@ int product_root_dns_tcp_io_resume(product_root_dns_tcp_io_t *io,uint64_t now){a
 int product_root_dns_tcp_io_ready(product_root_dns_tcp_io_t *io,uint64_t generation,uint64_t cookie,int fd,unsigned events,uint64_t now){(void)io;(void)generation;(void)cookie;(void)fd;(void)events;(void)now;return 0;}
 int product_root_dns_tcp_io_reply(product_root_dns_tcp_io_t *io,uint64_t session,uint64_t token,const uint8_t *wire,size_t length,uint64_t now){
  assert(io&&session&&token&&length<=sizeof(tcp_reply_wire)&&now==now_us);
+ channel_reply(session,token,wire,length);
  memcpy(tcp_reply_wire,wire,length);tcp_reply_length=length;tcp_reply_token=token;++tcp_reply_count;return tcp_reply_accept;
 }
+int product_root_dns_tcp_io_abandon(product_root_dns_tcp_io_t *io,uint64_t session,uint64_t token,uint64_t now)
+{ (void)io;(void)session;(void)token;(void)now;return 0; }
 void product_root_dns_tcp_io_expire(product_root_dns_tcp_io_t *io,uint64_t now){(void)io;(void)now;}
 uint64_t product_root_dns_tcp_io_deadline(const product_root_dns_tcp_io_t *io){(void)io;return UINT64_MAX;}
 product_root_dns_tcp_status_t product_root_dns_tcp_io_status(const product_root_dns_tcp_io_t *io){return(product_root_dns_tcp_status_t){.accepting=io&&io->live,.clients=fixture_tcp_clients};}
 int product_flow_entry_take_root_dns_tcp(product_flow_runtime_t *pool,uint32_t slot,u64 generation,u64 incarnation) {
- (void)pool;assert(slot==3&&generation==product_packet_graph_main.generation&&incarnation==entry.incarnation);
- entry.root_dns_tcp_taken=1;return 1;
+ (void)pool;product_flow_entry_t *target=dual_channels&&slot==4?&second_entry:&entry;
+ assert((slot==3||(dual_channels&&slot==4))&&generation==product_packet_graph_main.generation&&incarnation==target->incarnation);
+ target->root_dns_tcp_taken=1;return 1;
 }
 int product_flow_entry_select_vpn_dns_tcp(product_flow_runtime_t *pool,uint32_t slot,
  u64 generation,u64 incarnation,int local)
 {
- (void)pool;assert(slot==3&&generation==product_packet_graph_main.generation&&incarnation==entry.incarnation);
- if(entry.vpn_dns_tcp_decided)return entry.vpn_dns_tcp_taken==!!local;
- entry.vpn_dns_tcp_decided=1;entry.vpn_dns_tcp_taken=!!local;return 1;
+ (void)pool;product_flow_entry_t *target=dual_channels&&slot==4?&second_entry:&entry;
+ assert((slot==3||(dual_channels&&slot==4))&&generation==product_packet_graph_main.generation&&incarnation==target->incarnation);
+ if(target->vpn_dns_tcp_decided)return target->vpn_dns_tcp_taken==!!local;
+ target->vpn_dns_tcp_decided=1;target->vpn_dns_tcp_taken=!!local;return 1;
 }
 static void product_packet_graph_set_platform_facts(vlib_buffer_t *buffer,const product_platform_packet_facts_t *platform,u64 generation) {
  product_buffer_platform_metadata_t metadata;memcpy(&metadata,buffer->opaque,sizeof(metadata));
@@ -327,13 +347,14 @@ void product_root_dns_adapter_expire(vlib_main_t *,uint64_t);
 static int product_vpn_flow_stack_driver_local_reply_context(vlib_main_t *vm,u64 generation,u64 session,
  const u8 *message,size_t length,const product_vpn_flow_stack_transport_t *binding)
 {
- (void)binding;assert(vm==&worker&&generation==product_packet_graph_main.generation&&session==71);
+ (void)binding;assert(vm==&worker&&generation==product_packet_graph_main.generation&&(session==71||(dual_channels&&session==72)));
+ if(dual_channels)channel_reply(session,0,message,length);
  if(!submit_allowed)return -1;
  u32 index;assert(vlib_buffer_alloc(vm,&index,1));
  buffers[index].current_length=length;memcpy(buffers[index].data,message,length);
  product_adapter_obligation_t obligation={.token=(UINT64_C(1)<<63)|index,
   .queue_generation=generation,.kind=PRODUCT_ADAPTER_OBLIGATION_VPN_TUN,.packet_id=1};
- product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN,.direction=1,.uid=10123,.availability=PRODUCT_PLATFORM_UID_KNOWN};
+ product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_FLOW_STACK_RETURN,.direction=1,.uid=dual_channels&&session==72?10124:10123,.availability=PRODUCT_PLATFORM_UID_KNOWN};
  product_root_dns_vpn_return_admit(vm,index,&obligation,&platform);
  assert(product_packet_graph_submit_external(vm,index,&platform,&obligation));return 0;
 }
@@ -939,6 +960,14 @@ static void cache_resource_records(void) {
      unsigned expected_flags=PRODUCT_DNS_PROXY_RECORD|
       (scenario==1||scenario==3?PRODUCT_DNS_PROXY_CACHE_ANSWER:scenario==0||scenario==4?PRODUCT_DNS_PROXY_UPSTREAM_ANSWER:0);
      assert(r->proxy_flags==expected_flags&&r->reply_rcode==(scenario>=2?2:0));
+     assert(r->actual_action==(scenario==2?0:PRODUCT_L4_POLICY_ACTION_ALLOW));
+     /* Scratch failure occurs before parsing/acquiring a current response;
+      * only the later output failures have actual response-policy facts. */
+     assert(!r->winner && r->policy_revision==(scenario==2?0:snapshot.identity.revision) &&
+       r->policy_hash==(scenario==2?0:snapshot.identity.snapshot_hash));
+     assert(r->output_bytes==(scenario>=2?sizeof(question):sizeof(question)+16));
+     assert(r->delivery==(protocol==6?PRODUCT_DNS_DELIVERY_SOCKET_QUEUED:PRODUCT_DNS_DELIVERY_GRAPH_ACCEPTED));
+     assert(r->direction==(scenario>=2?3:1));
      assert(r->id==((uint16_t)wire[0]<<8|wire[1]));
      cache_resource_finish(protocol,token);
      assert(record_count==start+3&&records[record_count-1].stage==4);
@@ -952,6 +981,198 @@ static void cache_resource_records(void) {
  start_profile=1;vpn_tcp_fixture_enabled=0;tcp_reply_accept=0;
  assert(fault_failures==24);
  puts("Root/VPN UDP/TCP dual-stack real cache scratch/output and upstream output malloc failures: PASS");
+}
+
+/* Exercise the existing real Adapter entry/return/normal observation ABI.
+ * Only VPP and platform/socket dependencies are controlled here; these are
+ * Host records, never ordinary Android App or real-kernel wire claims. */
+static void coalescing_setup(unsigned family,int protocol) {
+ vpn_tcp_fixture_enabled=start_profile==2&&protocol==6;tcp_reply_accept=1;
+ initialize(77,family);buffers[0].data[0]=family==4?0x45:0x60;
+ if(start_profile==2) {
+  assert(!product_root_dns_vpn_authorized(&worker,77,last_cookie,0,99,9,1));
+  lease.platform.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN;
+ }
+ if(protocol==6) {
+  lease.facts.protocol=6;lease.facts.l4_header_length=lease.facts.transport_length=20;
+  lease.facts.tcp_flags=2;lease.facts.tcp_sequence=0x12345678;
+  if(start_profile==2)assert(vpn_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+  else {
+   lease.platform.reserved=PRODUCT_PLATFORM_ADMISSION_DNS_REPLACEMENT_ACTIVE|PRODUCT_PLATFORM_ADMISSION_DNS_TCP_MARK_VALID;
+   memset(buffers[0].data,0,sizeof(buffers[0].data));unsigned at=family==4?20:40;
+   buffers[0].current_length=at+20;buffers[0].data[0]=family==4?0x45:0x60;
+   buffers[0].data[family==4?9:6]=6;buffers[0].data[at+3]=53;buffers[0].data[at+13]=2;
+   assert(root_dns_tcp_capture(&worker,0,&lease,&snapshot,&flow));
+   root_dns_tcp_binding_t *binding=&root_dns_owners[0].tcp_bindings[0];
+   product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40000,.resolver_port=53,.syn_sequence=0x12345678};
+   memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+   memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+   assert(root_dns_tcp_accepted(&root_dns_owners[0],901,&endpoint));
+  }
+ }
+}
+static product_dns_proxy_key_t record_key(const product_dns_observation_record_t *r) {
+ return(product_dns_proxy_key_t){.generation=r->generation,.token=r->token,.incarnation=r->incarnation,
+  .attempt=r->request_attempt,.network_revision=r->network_revision,.route_revision=r->route_revision};
+}
+/* Separate trusted App channels are created before either query. No live
+ * session changes its caller, and the one shared answer never carries policy. */
+static void coalescing_independent_app_channels(void) {
+ for(start_profile=1;start_profile<=2;++start_profile)
+  for(unsigned family=4;family<=6;family+=2)
+   for(int protocol=17;protocol>=6;protocol-=11) {
+    dual_channels=1;memset(channel_replies,0,sizeof(channel_replies));
+    assert(!product_l4_policy_compile(&bank.view,NULL,0));coalescing_setup(family,protocol);
+    second_entry=entry;second_entry.incarnation=9;second_entry.root_dns_tcp_taken=0;
+    second_entry.vpn_dns_tcp_decided=second_entry.vpn_dns_tcp_taken=0;
+    product_flow_entry_observation_t second_flow=flow;second_flow.entry=&second_entry;second_flow.slot=4;
+    product_packet_lease_t second_lease=lease;
+    /* A second SYN is a fresh original packet obligation. The first VPN SYN
+     * was already consumed; copying its terminal state is not a new input. */
+    second_lease.terminal_intent=second_lease.terminal_count=0;second_lease.runtime_drop_reason=0;
+    second_lease.platform.uid=10124;second_lease.facts.source_port=40001;
+    second_lease.facts.tcp_sequence=0x22345678;second_lease.origin_obligation_id+=5000;
+    if(protocol==6) {
+     if(start_profile==2)assert(vpn_dns_tcp_capture(&worker,0,&second_lease,&snapshot,&second_flow));
+     else {
+      assert(root_dns_tcp_capture(&worker,0,&second_lease,&snapshot,&second_flow));
+      root_dns_tcp_binding_t *binding=&root_dns_owners[0].tcp_bindings[1];
+      product_root_dns_tcp_endpoint_t endpoint={.family=family,.saved_syn=1,.source_port=40001,.resolver_port=53,.syn_sequence=0x22345678};
+      memcpy(endpoint.source_address,binding->input.context.packet.source_address,16);
+      memcpy(endpoint.resolver_address,binding->input.context.packet.destination_address,16);
+      assert(root_dns_tcp_accepted(&root_dns_owners[0],902,&endpoint));
+     }
+    }
+    unsigned first=record_count,before=sends,before_cancel=cancelled;
+    u64 prefix=start_profile==1?UINT64_C(1)<<63:0,first_token=prefix|500,second_token=prefix|501;
+    cache_resource_query(protocol,first_token,question);
+    uint8_t follow[sizeof(question)];memcpy(follow,question,sizeof(follow));follow[0]=0xab;follow[1]=0xcd;
+    if(protocol==17){
+     second_lease.terminal_intent=second_lease.terminal_count=0;
+     memcpy(buffers[0].data+second_lease.facts.transport_offset+8,follow,sizeof(follow));
+     assert(root_dns_intercept(&worker,0,&second_lease,&snapshot,&second_flow));
+    } else if(start_profile==2)product_root_dns_vpn_tcp_query(&worker,77,72,second_token,follow,sizeof(follow));
+    else root_dns_tcp_query(&root_dns_owners[0],902,second_token,follow,sizeof(follow),++now_us);
+    assert(record_count==first+2&&sends==before+1&&!pending());
+    product_dns_proxy_resources_t state=product_dns_proxy_resources(root_dns_owners[0].proxy);
+    assert(state.active==2&&state.exchanges==1&&!state.cache_entries);
+    assert(records[first].uid==10123&&records[first+1].uid==10124);
+    assert(records[first].source_port==40000&&records[first+1].source_port==40001);
+    if(protocol==6){assert(records[first].transport_session==(start_profile==1?901:71));
+     assert(records[first+1].transport_session==(start_profile==1?902:72));}
+    else if(start_profile==2)assert(records[first].transport_session==71&&records[first+1].transport_session==72);
+    product_l4_policy_rule_t deny={.uid=10123,.rule_id=320,.reason_id=320,.action=2,
+     .network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,.source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX};
+    assert(!product_l4_policy_compile(&bank.view,&deny,1));++snapshot.identity.revision;
+    answer_ttl(0,30);assert(cancelled==before_cancel+1&&sends==before+1);
+    if(protocol==6||start_profile==2){
+     for(unsigned i=0;i<2;++i){assert(channel_replies[i].calls==1);
+      assert(channel_replies[i].id==(i?0xabcd:0x1234)&&channel_replies[i].rcode==(i?0:5));
+      assert(channel_replies[i].uid==10123+i);
+      if(protocol==6)assert(channel_replies[i].token==(i?second_token:first_token));}
+    }
+    if(protocol==17){
+     for(unsigned i=0;i<2;++i){unsigned index=pending();assert(index&&admitted_platform[index].uid==10123+i);
+      if(start_profile==1){unsigned ip=family==4?20:40;const uint8_t *wire=buffers[index].data;
+       assert(((unsigned)wire[ip+2]*256+wire[ip+3])==40000+i);
+       assert(((unsigned)wire[ip+8]*256+wire[ip+9])==(i?0xabcd:0x1234));assert((wire[ip+11]&15)==(i?0:5));}
+      cache_resource_finish(protocol,0);}
+    } else if(start_profile==1){root_dns_tcp_delivered(&root_dns_owners[0],first_token,1);root_dns_tcp_delivered(&root_dns_owners[0],second_token,1);}
+    else{product_root_dns_vpn_tcp_done(&worker,77,71,first_token,1);product_root_dns_vpn_tcp_done(&worker,77,72,second_token,1);}
+    assert(record_count==first+6&&!pending());
+    unsigned stages[5]={0};
+    for(unsigned i=first;i<record_count;++i){const product_dns_observation_record_t *r=&records[i];unsigned app=r->id==0xabcd;
+     assert(r->id==(app?0xabcd:0x1234)&&r->uid==10123+app&&r->caller==1&&r->source_port==40000+app);
+     assert(r->incarnation==8+app&&r->adapter_profile==start_profile&&r->protocol==protocol&&r->family==family);
+     assert(r->token==records[first+app].token&&r->transport_session==records[first+app].transport_session);
+     /* Both independent channels were captured with known reliable SYN/input
+      * facts and no later Unknown capture; preserve those actual facts. */
+     if(r->packet_uid!=10123+app||r->packet_availability!=9)
+      fprintf(stderr,"cross-channel actual capture profile=%u protocol=%d id=%u packet_uid=%u availability=%u\n",
+       start_profile,protocol,r->id,r->packet_uid,r->packet_availability);
+     assert(r->packet_uid==10123+app&&r->packet_availability==9);
+     if(r->stage==2||r->stage==4){assert(r->query_token==r->token&&r->query_incarnation==r->incarnation);
+      assert(r->query_policy_revision==3&&r->policy_revision==4&&r->reply_rcode==(app?0:5));
+      assert(r->proxy_result==(app?PRODUCT_DNS_PROXY_UPSTREAM:PRODUCT_DNS_PROXY_REFUSED));}
+     if(r->stage==4)assert(r->delivery==2);
+     ++stages[r->stage];
+    }
+    assert(stages[1]==2&&stages[2]==2&&stages[4]==2);
+    assert(product_dns_proxy_resources(root_dns_owners[0].proxy).cache_entries==1);
+    close_owner();assert(raw_created==raw_closed);dual_channels=0;
+   }
+ start_profile=1;vpn_tcp_fixture_enabled=0;tcp_reply_accept=0;
+ puts("PASS8 controlled actual Adapter independent reliableApp/channel groups:10123 REFUSED/10124 allowed fromoneexchange aftercurrentpolicy publication");
+}
+
+static void coalescing_records(void) {
+ for(start_profile=1;start_profile<=2;++start_profile)
+  for(unsigned family=4;family<=6;family+=2)
+   for(int protocol=17;protocol>=6;protocol-=11)
+    for(unsigned scenario=0;scenario<8;++scenario) {
+     assert(!product_l4_policy_compile(&bank.view,NULL,0));coalescing_setup(family,protocol);
+     root_dns_owner_t *owner=&root_dns_owners[0];product_dns_proxy_t *proxy=owner->proxy;
+     uint64_t baseline_bytes=product_dns_proxy_resources(proxy).owned_bytes;
+     unsigned first=record_count,before=sends,before_cancel=cancelled;
+     uint8_t follow[sizeof(question)];memcpy(follow,question,sizeof(follow));follow[0]=0xab;follow[1]=0xcd;
+     const u64 prefix=start_profile==1?UINT64_C(1)<<63:0;
+     /* Each scenario is an independent controlled owner lifetime. Keep its
+      * TCP tokens unique in the combined normal-store evidence as well. */
+     const u64 token_first=prefix|(100+2*scenario),token_second=prefix|(101+2*scenario);
+     cache_resource_query(protocol,token_first,question);uint64_t original_deadline=last_deadline;
+     product_dns_proxy_key_t first_key=record_key(&records[first]);
+     cache_resource_query(protocol,token_second,follow);product_dns_proxy_key_t second_key=record_key(&records[first+1]);
+     assert(record_count==first+2&&sends==before+1&&!pending());
+     assert(records[first].stage==1&&records[first+1].stage==1&&first_key.token!=second_key.token);
+     product_dns_proxy_resources_t r=product_dns_proxy_resources(proxy);
+     assert(r.active==2&&r.exchanges==1&&r.coalesced==1&&r.cache_entries==0);
+     assert(r.owned_bytes==baseline_bytes+sizeof(question));
+     unsigned cancelled_waiters=0,outputs=2;
+     if(scenario==1){product_dns_proxy_cancel(proxy,&first_key,++now_us);cancelled_waiters=1;outputs=1;
+      assert(product_dns_proxy_resources(proxy).active==1&&cancelled==before_cancel);}
+     else if(scenario==2){product_dns_proxy_cancel(proxy,&first_key,++now_us);product_dns_proxy_cancel(proxy,&second_key,++now_us);
+      cancelled_waiters=2;outputs=0;}
+     else if(scenario==3){product_root_dns_adapter_quiesce(&worker);cancelled_waiters=2;outputs=0;}
+     else if(scenario==4){product_dns_proxy_advance(proxy,++now_us,5,4);}
+     else if(scenario==5){now_us=original_deadline;product_dns_proxy_advance(proxy,now_us,5,3);}
+     else if(scenario==6){product_l4_policy_rule_t deny={.uid=10123,.rule_id=320,.reason_id=320,.action=2,
+       .network_context_id=UINT32_MAX,.ifindex=UINT32_MAX,.source_port_last=UINT16_MAX,.destination_port_last=UINT16_MAX};
+      assert(!product_l4_policy_compile(&bank.view,&deny,1));++snapshot.identity.revision;}
+     else if(scenario==7){uint8_t tc[sizeof(question)];memcpy(tc,last_wire,sizeof(tc));tc[2]=0x83;tc[3]=0x80;
+      product_dns_proxy_answer(proxy,&last_key,1,tc,sizeof(tc),++now_us);
+      assert(sends==before+2&&last_transport==2&&last_deadline==original_deadline);}
+     if(scenario==0||scenario==1||scenario==6||scenario==7)answer_ttl(0,30);
+     assert(product_dns_proxy_resources(proxy).active==0&&product_dns_proxy_resources(proxy).exchanges==0);
+     assert(cancelled==before_cancel+1);
+     if(outputs){
+      if(scenario!=1)cache_resource_finish(protocol,token_first);
+      cache_resource_finish(protocol,token_second);
+     }
+     assert(!pending());r=product_dns_proxy_resources(proxy);
+     assert(r.owned_bytes==baseline_bytes&&r.cancelled==cancelled_waiters);
+     unsigned stages[5]={0},ids[2]={0};
+     for(unsigned i=first;i<record_count;++i){
+      const product_dns_observation_record_t *record=&records[i];assert(record->stage<5);++stages[record->stage];
+      assert(record->generation==77&&record->adapter_profile==start_profile&&record->family==family&&record->protocol==protocol);
+      assert(record->id==0x1234||record->id==0xabcd);++ids[record->id==0xabcd];
+      if(record->stage==2||record->stage==3){
+       assert(record->query_token==record->token&&record->query_incarnation==record->incarnation);
+       if(scenario==6){assert(record->proxy_result==PRODUCT_DNS_PROXY_REFUSED&&record->reply_rcode==5);
+        assert(record->policy_revision>record->query_policy_revision&&record->winner==320);}
+       if(scenario==4)assert(record->proxy_result==PRODUCT_DNS_PROXY_VIEW_CHANGED&&record->reply_rcode==2);
+       if(scenario==5)assert(record->proxy_result==PRODUCT_DNS_PROXY_SERVFAIL&&record->reply_rcode==2);
+      }
+     }
+     assert(stages[1]==2&&stages[4]==outputs&&stages[2]+stages[3]==2);
+     assert(ids[0]==(scenario==1?2U:outputs?3U:2U)&&ids[1]==(outputs?3U:2U));
+     unsigned completed=record_count;answer_ttl(0,30);product_dns_proxy_fail(proxy,&first_key,++now_us);
+     product_dns_proxy_cancel(proxy,&second_key,++now_us);
+     assert(record_count==completed&&!pending()&&cancelled==before_cancel+1);
+     assert(r.cache_entries==(scenario==0||scenario==1||scenario==6||scenario==7));
+     close_owner();assert(raw_created==raw_closed);
+    }
+ start_profile=1;vpn_tcp_fixture_enabled=0;tcp_reply_accept=0;
+ puts("PASS64 controlled Root/VPN Adapter dualstack UDP/TCP coalescing/currentpolicy/cancel/allcancel/Stop/view/strictcandidate/TC normal ABI groups");
 }
 
 static void shutdown_prefix_records(void) {
@@ -1005,6 +1226,11 @@ static void shutdown_prefix_records(void) {
 
 int main(int argc,char **argv) {
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
+ if(argc>1&&!strcmp(argv[1],"coalescing")) {
+  coalescing_records();coalescing_independent_app_channels();
+  if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}
+  printf("Root/VPN coalescing normal records=%u\n",record_count);return 0;
+ }
  if(argc>1&&!strcmp(argv[1],"cache-resource")) {
   cache_resource_records();assert(record_count==120);
   if(argc>2){FILE *out=fopen(argv[2],"wb");assert(out);assert(fwrite(records,sizeof(records[0]),record_count,out)==record_count);assert(!fclose(out));}

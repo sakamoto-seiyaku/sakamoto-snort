@@ -21,7 +21,8 @@ class UiState:
    assert isinstance(count,int)and count>=0,'S319 scoped logical count requires one exact expectation'
    identity=int.from_bytes(query[:2],'big')
    native=[row for row in records if row['id']==identity]
-   proof=dispatch_reader.qualify_udp_dispatches(query,received,wire[self.physical_interface],native)
+   proof=dispatch_reader.qualify_udp_dispatches(query,received,wire[self.physical_interface],native,
+    expected_port=getattr(self.args,'upstream_port',53053))
    assert proof['logical_dispatches']==count,(label,proof,count)
    proof.update(expected_logical_dispatches=count,peer_receipts=received)
    proofs.append(proof)
@@ -391,7 +392,8 @@ def exchange(d,peer,result,label,resolver,queries,replies,expected_requests,*,pr
     if cached:assert rows[0]['upstream_session']==0 and rows[0]['proxy_result']in(2,11)
   peer_rows=peer.received(queries[0],after=cursor)
   after=d.wire_coverage(label+'-after');wire={k:v[len(before[k]):]for k,v in after.items()}
-  dispatches=dispatch_reader.qualify_udp_dispatches(queries[0],peer_rows,wire[d.physical_interface],records)
+  dispatches=dispatch_reader.qualify_udp_dispatches(queries[0],peer_rows,wire[d.physical_interface],records,
+   expected_port=d.args.upstream_port)
   check=dict(label=label,expected_upstream_requests=expected_requests,actual_upstream_requests=dispatches['logical_dispatches'],
    actual_upstream_datagrams=len(peer_rows),peer_receipts=peer_rows,dispatch_qualification=dispatches)
   result.setdefault('cache_checks',[]).append(check);assert dispatches['logical_dispatches']==expected_requests,check
@@ -530,7 +532,8 @@ def batch_exchange(d,peer,result,label,resolver,queries,answers,tcp_retry=False)
   after=d.wire_coverage(label+'-after');wire={k:v[len(before[k]):]for k,v in after.items()};dispatches=[]
   for q in queries:
    identity=int.from_bytes(q[:2],'big');native=[row for row in records if row['id']==identity]
-   qualified=dispatch_reader.qualify_udp_dispatches(q,peer.received(q,after=cursor),wire[d.physical_interface],native)
+   qualified=dispatch_reader.qualify_udp_dispatches(q,peer.received(q,after=cursor),wire[d.physical_interface],native,
+    expected_port=d.args.upstream_port)
    assert qualified['logical_dispatches']==1,qualified
    dispatches.append(qualified)
    assert len(peer.received(q,'tcp',after=cursor))==int(tcp_retry)
@@ -583,9 +586,10 @@ def main():
  for k in('endpoint4','endpoint6'):parser.add_argument('--'+k,required=True)
  parser.add_argument('--profile',choices=('root','vpn'),default='vpn')
  parser.add_argument('--owners',choices=('1','3'),default='1');parser.add_argument('--trace',action='store_true');parser.add_argument('--installed',action='store_true')
+ parser.add_argument('--upstream-port',type=int,choices=(53053,53054),default=53053)
  parser.add_argument('--matrix',choices=('smoke','semantics','policy','capacity','stop-late','view'),default='smoke');parser.add_argument('--replace-preserved',type=Path)
  parser.add_argument('--cc',default='/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang')
- args=parser.parse_args();args.upstream_port=53053
+ args=parser.parse_args()
 
  for k in('apk','stage','backup','output'):setattr(args,k,getattr(args,k).resolve())
  args.output.mkdir(parents=True,exist_ok=False)
@@ -593,7 +597,9 @@ def main():
  result=dict(status='HOLD',task='SAKAMOTO-319',apk_sha256=digest(args.apk),source_sha256=digest(Path(__file__)),cases=[],runs=[],started_monotonic_ns=time.monotonic_ns())
  d=(Device if args.profile=='vpn'else RootDevice)(args);d.capture_deadline=time.monotonic()+900;peer=None
  try:
-  peer=root.Peer([args.endpoint4,args.endpoint6],args.output,d.capture_deadline);assert [r['ports']for r in peer.messages if r.get('kind')=='ready']==[[53053]]
+  peer=root.Peer([args.endpoint4,args.endpoint6],args.output,d.capture_deadline)
+  ready=[r for r in peer.messages if r.get('kind')=='ready'];assert len(ready)==1,ready
+  assert ready[0].get('ports',[ready[0].get('port')])==[args.upstream_port],ready
   result['native']=d.install();d.wire_start();owners=int(args.owners);d.owners=owners
   result['runs'].append(start_run(d,owners))
   if args.profile=='root':
@@ -625,7 +631,7 @@ def main():
    except BaseException as error:cleanup.append(name+':'+repr(error))
   if d.witnesses or getattr(d,'deferred_wire_files',[]):phase('wire',lambda _:(d.wire_stop()if d.witnesses else None,d.settle_deferred_wire_files()))
   if(d.stop_owed or d.active)and getattr(d,'stop_retry_authorized',True):phase('stop',lambda _:d.stop('failure-cleanup'))
-  if d.reader:phase('reader',lambda _:d.settle_reader('final'))
+  if d.reader or getattr(d,'prepared_stop_capture',None):phase('reader',lambda _:d.settle_reader('final'))
   if peer:phase('peer',lambda deadline:(setattr(peer,'cleanup_deadline',deadline),peer.close()))
   phase('trace',lambda _:d.close_trace())
   if cleanup:result.update(cleanup_errors=cleanup,status='HOLD')
