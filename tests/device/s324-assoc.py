@@ -131,12 +131,20 @@ def original_rules(device, label):
     return status
 
 
-def original_exchange(device, result, label, name, *, qtype=1, protocol=17, resolver="1.1.1.1"):
-    """A real query to a real public resolver on the original path (DNS replacement off)."""
+def original_exchange(device, result, label, name, *, qtype=1, protocol=17, resolver="1.1.1.1", warm=False):
+    """A real query to a real public resolver on the original path (DNS replacement off). With warm a
+    first query on the same socket lets the VPN learn the App UID before the measured one."""
     query = fixtures.question(device.next_id(), name, qtype)
     source = device.reserve_source_port(label)
     if protocol == 6:
         nonce = device.launch_tcp(label, resolver, source, [query], timeout=8000)
+    elif warm:
+        nonce = "s324-" + label + "-" + str(time.time_ns())
+        plan = dict(nonce=nonce, endpoint=resolver, port=53, source=source, bindDefault=True,
+                    dnsQueries=[fixtures.question(device.next_id(), "example.com", 1).hex(), query.hex()],
+                    dnsProxyTimeoutMs=8000, dnsQueryDelayMs=1000, dnsPipeline=False)
+        device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
+        device.save(label + "-launch.txt", device.action("--es", "t12ProbePlan", shlex.quote(json.dumps(plan))))
     else:
         nonce = device.launch_queries(label, resolver, source, [query], timeout=8000)
     client = device.client(label, nonce)
@@ -183,7 +191,8 @@ def original_cases(device, result):
     # A refused answer leaves only its observation: the QName is allowed, its CNAME github.com is refused.
     original_rules(device, "original-rules-cname-deny")
     before, = assoc_status(device, "original-refused-before")
-    case = original_exchange(device, result, "original-cname-refused", "www.github.com")
+    case = original_exchange(device, result, "original-cname-refused", "www.github.com",
+                             warm=device.args.profile == "vpn")
     rows = [r for r in case["records"] if r["stage"] == 2]
     case["cname_present"] = any(r.get("candidate_count", 0) > 1 for r in rows)
     if case["cname_present"]:
