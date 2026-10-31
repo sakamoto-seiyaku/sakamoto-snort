@@ -2,7 +2,8 @@
 """Ordinary Root/VPN App cleartext HTTP/1.x requests are filtered per request target (SAKAMOTO-325).
 
 Oracle: which request heads actually reach an independent finite HTTP peer on the host, what the
-App receives, the Product's own `flow.http` status of the very flow, and the physical wire."""
+App receives and the Product's own `flow.http` status of the very flow. The shared wire witness only
+captures DNS ports, so it is recorded but never used as evidence here."""
 import argparse
 import importlib.util
 import json
@@ -127,11 +128,6 @@ def hosts(case):
     return names
 
 
-def on_wire(case, needle):
-    return [row for row in case["wire"][case["physical_interface"]]
-            if row.get("kind") == "tcp" and needle in bytes.fromhex(row.get("payload_hex", "")).lower()]
-
-
 def http_row(case):
     return case["flow"]["http"]
 
@@ -166,7 +162,6 @@ def cases(device, peer, result):
     assert statuses(case) == ["timeout"] and not case["peer"], case
     row = http_row(case)
     assert row["denied_valid"] == "1" and row["denied"] == "blocked.http.test", row
-    assert not on_wire(case, b"blocked.http.test"), "refused head reached the wire"
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-deny-descendant", [request("/http-deny-descendant/d", "sub.deny.http.test")])
@@ -182,7 +177,6 @@ def cases(device, peer, result):
     row = http_row(case)
     assert row["denied_valid"] == "1" and row["denied"] == "blocked.http.test", row
     assert int(row["requests"]) >= 2, row
-    assert not on_wire(case, b"/refused") and not on_wire(case, b"/later"), "bytes after the refusal reached the wire"
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-absolute-target-wins-over-host", [
