@@ -87,7 +87,7 @@ def exchange(device, peer, result, label, requests, *, splits=None, stop_on_time
     nonce = "s325-" + label + "-" + str(time.time_ns())
     plan = dict(nonce=nonce, endpoint=device.args.endpoint4, port=PEER_PORT, source=source, bindDefault=True,
                 httpRequests=[item.hex() for item in requests], httpDelayMs=200, httpTimeoutMs=timeout_ms,
-                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2500, httpGate=True, httpAfterMs=3500)
+                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2000, httpGate=True, httpAfterMs=2500)
     if splits:
         plan["httpSplit"] = splits
     device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
@@ -225,6 +225,14 @@ def cases(device, peer, result):
     assert statuses(case) == ["answered"] and hosts(case) == ["blocked.http.test"], case
     assert http_row(case)["denied_valid"] == "0", http_row(case)
     case["status"] = "PASS"
+
+    # Informational: what the peer eventually saw of the refused requests, after every socket closed.
+    time.sleep(6)
+    refused = ("http-deny-first", "http-deny-descendant", "http-deny-blocks-rest-of-connection",
+               "http-absolute-target-wins-over-host")
+    result["late_arrivals"] = [row["request_line"] for row in peer.requests()
+                               if any("/" + name + "/" in row["request_line"] for name in refused)
+                               and not any(row in case["peer"] for case in result["cases"])]
 
 
 def main():
