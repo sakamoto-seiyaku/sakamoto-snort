@@ -279,6 +279,7 @@ add_vpp_plugin(product_core
     product_dns_proxy.c
     product_dns_tls.c
     product_dns_bootstrap.c
+    product_dns_http.c
     product_root_dns_io.c
     product_root_dns_tcp_io.c
     product_rule_config.c
