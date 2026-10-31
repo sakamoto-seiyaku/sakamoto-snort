@@ -420,6 +420,10 @@ int product_root_dns_io_send (product_root_dns_io_t *io, const product_dns_proxy
       if (!tcp->output) return -1;
       size_t built = product_dns_http_build_request (tcp->output, capacity, host, endpoint->port, path, wire, length);
       if (!built) { free (tcp->output); tcp->output = NULL; return -1; }
+      /* Owned bytes are accounted exactly: release the unused build headroom. */
+      uint8_t *exact = realloc (tcp->output, built);
+      if (exact) tcp->output = exact;
+      else { free (tcp->output); tcp->output = NULL; return -1; }
       tcp->output_length = built; allocation (io, built);
     }
   else
