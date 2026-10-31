@@ -260,6 +260,54 @@ final class ProtocolFactsProbe {
         }
     }
 
+    /* A SOCKS exchange as explicit steps: send bytes, then read exactly the expected reply length.
+     * A refused request gets no reply; the read times out and the remaining steps are skipped. */
+    private static void socksSteps(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        JSONArray steps = plan.getJSONArray("socksSteps");
+        int timeout = plan.optInt("socksTimeoutMs", 2500);
+        if (steps.length() < 1 || steps.length() > 8 || timeout < 200 || timeout > 10000)
+            throw new IllegalArgumentException("bounded SOCKS probe");
+        JSONArray replies = new JSONArray();
+        result.put("socksReplies", replies);
+        try (Socket socket = new Socket()) {
+            socket.setReuseAddress(true); socket.setTcpNoDelay(true);
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(new InetSocketAddress(endpoint, port), 10000);
+            socket.setSoTimeout(timeout);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            Thread.sleep(Math.max(0, Math.min(5000, plan.optInt("socksConnectDelayMs", 0))));
+            for (int i = 0; i < steps.length(); ++i) {
+                JSONObject step = steps.getJSONObject(i);
+                byte[] send = hex(step.getString("send"));
+                int expect = step.optInt("expect", 0);
+                if (expect < 0 || expect > 4096) throw new IllegalArgumentException("SOCKS expect");
+                JSONObject entry = new JSONObject().put("index", i).put("sentBytes", send.length);
+                replies.put(entry);
+                try {
+                    socket.getOutputStream().write(send);
+                    socket.getOutputStream().flush();
+                    byte[] reply = new byte[expect];
+                    for (int got = 0; got < expect;) {
+                        int n = socket.getInputStream().read(reply, got, expect - got);
+                        if (n < 0) throw new java.io.EOFException("closed");
+                        got += n;
+                    }
+                    entry.put("status", "answered").put("replyHex", toHex(reply));
+                } catch (SocketTimeoutException timedOut) {
+                    entry.put("status", "timeout");
+                    break;
+                } catch (java.io.IOException closed) {
+                    entry.put("status", "closed").put("error", closed.toString());
+                    break;
+                }
+            }
+            Thread.sleep(Math.max(0, Math.min(10000, plan.optInt("socksHoldMs", 0))));
+            if (plan.optBoolean("socksGate")) report(app, nonce, result, "socks_done");
+            Thread.sleep(Math.max(0, Math.min(10000, plan.optInt("socksAfterMs", 0))));
+        }
+    }
+
     private static void tcpReassembly(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         byte[] hello = hex(plan.getString("t14WireHex"));
@@ -886,6 +934,7 @@ final class ProtocolFactsProbe {
                 else if (plan.has("dnsTcpQueries")) dnsTcpQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("socksSteps")) socksSteps(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("httpRequests")) httpRequests(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
