@@ -189,6 +189,47 @@ static void sni_deadline_never_touches_the_http_state (void)
   close_flow (&x);
 }
 
+static void socks_flows_report_the_requested_target (void)
+{
+  flow_t x; open_flow (&x, 1080);
+  /* SOCKS5: greeting, the server's method selection, then a domain CONNECT. */
+  packet (&x, 0, "\x05\x01\x00", 3, x.seq); x.seq += 3;
+  assert (x.o.entry->http_mode == PRODUCT_HTTP_SOCKS && x.o.entry->sni.stop == PRODUCT_SNI_UNSUPPORTED);
+  assert (!http (&x)->pending_count && !http (&x)->socks.confirmed);
+  packet (&x, 1, "\x05\x00", 2, x.reply_seq); x.reply_seq += 2;
+  assert (http (&x)->socks.confirmed && !http (&x)->pending_count);
+  static const uint8_t request[] = {5, 1, 0, 3, 11, 's', 'o', 'c', 'k', 's', '.', 't', 'e', 's', 't', 's', 0, 80};
+  packet (&x, 0, request, sizeof (request), x.seq); x.seq += sizeof (request);
+  assert (http (&x)->pending_count == 1 && !strcmp (http (&x)->pending[0].name, "socks.tests") && http (&x)->pending[0].port == 80);
+  assert (http (&x)->socks.stop == PRODUCT_SOCKS_STOP_TUNNEL);
+  packet (&x, 0, "GET / HTTP/1.1\r\nHost: inner.test\r\n\r\n", 37, x.seq);  /* tunnel bytes are not parsed */
+  assert (!http (&x)->pending_count && !strcmp (http (&x)->current.name, "socks.tests"));
+  close_flow (&x);
+  /* SOCKS4 IP and SOCKS4a name; a retransmitted request is not reported twice. */
+  open_flow (&x, 1080);
+  static const uint8_t s4[] = {4, 1, 0, 80, 203, 0, 113, 5, 0};
+  packet (&x, 0, s4, sizeof (s4), x.seq);
+  assert (http (&x)->pending_count == 1 && http (&x)->pending[0].kind == PRODUCT_HTTP_TARGET_IPV4 && http (&x)->pending[0].address[3] == 5);
+  packet (&x, 0, s4, sizeof (s4), x.seq);
+  assert (!http (&x)->pending_count);
+  packet (&x, 1, "\x00\x5a\x00\x00\x00\x00\x00\x00", 8, x.reply_seq);
+  assert (http (&x)->socks.confirmed);
+  close_flow (&x);
+  open_flow (&x, 1080);
+  static const uint8_t s4a[] = {4, 1, 1, 187, 0, 0, 0, 9, 'u', 0, 'a', '.', 't', 'e', 's', 't', 0};
+  packet (&x, 0, s4a, 5, x.seq);
+  packet (&x, 0, s4a + 5, sizeof (s4a) - 5, x.seq + 5);
+  assert (http (&x)->pending_count == 1 && !strcmp (http (&x)->pending[0].name, "a.test") && http (&x)->pending[0].port == 443);
+  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, x.o.entry->incarnation, &http (&x)->pending[0]));
+  assert (http (&x)->has_denied);
+  close_flow (&x);
+  /* Server-first bytes never decide the mode. */
+  open_flow (&x, 21);
+  packet (&x, 1, "220 FTP ready\r\n", 15, x.reply_seq);
+  assert (x.o.entry->http_mode == PRODUCT_HTTP_UNDECIDED);
+  close_flow (&x);
+}
+
 int main (void)
 {
   assert (!product_lpi_init ());
@@ -200,6 +241,7 @@ int main (void)
   flows_that_are_not_http_are_never_taken ();
   denial_is_sticky_and_validated ();
   sni_deadline_never_touches_the_http_state ();
+  socks_flows_report_the_requested_target ();
   puts ("Flow HTTP request targets PASS");
   return 0;
 }

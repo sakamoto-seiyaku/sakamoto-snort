@@ -40,6 +40,7 @@ typedef enum {
   PRODUCT_HTTP_TARGET_USERINFO,       /* absolute-form with userinfo */
   PRODUCT_HTTP_TARGET_SCHEME,         /* absolute-form with a scheme other than http */
   PRODUCT_HTTP_TARGET_FORM,           /* request-target form not usable for this method */
+  PRODUCT_HTTP_TARGET_COMMAND,        /* SOCKS BIND or UDP ASSOCIATE: no remote connect target */
 } product_http_target_reason_t;
 
 /* Why parsing of the whole connection ended. Zero means still running. */
@@ -82,6 +83,10 @@ void product_http_target_init (product_http_target_t *);
  * PRODUCT_HTTP_FEED_STOPPED means t->stop is set; further bytes are ignored. */
 int product_http_target_feed (product_http_target_t *, uint8_t head[PRODUCT_HTTP_HEAD_BYTES],
   const uint8_t *bytes, size_t length, size_t *consumed, product_http_request_t *request);
+
+/* host [":" port] or "[" IPv6 "]" [":" port], as used by HTTP and the SOCKS domain form.
+ * Fills kind, name or address and port; returns a product_http_target_reason_t. */
+unsigned product_http_target_authority (const uint8_t *, size_t, product_http_request_t *);
 
 /* The caller saw a gap or inconsistent overlap. */
 void product_http_target_lost (product_http_target_t *);

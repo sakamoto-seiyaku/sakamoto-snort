@@ -751,7 +751,8 @@ expression_matches (const product_l4_policy_rule_t *rule,
    * behind OR. A QName is a distinct control point, never synthetic SNI. */
   if ((dependencies & PRODUCT_POLICY_DEP_SNI) && !sni_applicable) return 0;
   int direct_source = packet->domain_source == PRODUCT_POLICY_DOMAIN_DNS_QNAME ||
-    packet->domain_source == PRODUCT_POLICY_DOMAIN_HTTP_TARGET;
+    packet->domain_source == PRODUCT_POLICY_DOMAIN_HTTP_TARGET ||
+    packet->domain_source == PRODUCT_POLICY_DOMAIN_SOCKS_TARGET;
   if ((dependencies & PRODUCT_POLICY_DEP_DOMAIN) && !direct_source && !sni_applicable)
     return 0;
   uint8_t values[PRODUCT_STATIC_EXPRESSION_BYTES];

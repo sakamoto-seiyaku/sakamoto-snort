@@ -43,12 +43,16 @@ int main (void)
   assert (winner (&view, &p) == 0);
   p = packet (PRODUCT_POLICY_DOMAIN_HTTP_TARGET, 0, 1);          /* target unavailable: no domain decision */
   assert (winner (&view, &p) == 0);
+  p = packet (PRODUCT_POLICY_DOMAIN_SOCKS_TARGET, 1, 1);         /* a SOCKS target is a direct source too */
+  assert (winner (&view, &p) == 7);
+  p = packet (PRODUCT_POLICY_DOMAIN_SOCKS_TARGET, 0, 1);
+  assert (winner (&view, &p) == 0);
   p = packet (PRODUCT_POLICY_DOMAIN_SNI, 1, 1);                  /* the same plain flow with an SNI source stays inapplicable */
   assert (winner (&view, &p) == 0);
   /* An explicit SNI condition is never satisfied by an HTTP target. */
   assert (!product_l4_policy_compile (&view, rules + 1, 1));
   p = packet (PRODUCT_POLICY_DOMAIN_HTTP_TARGET, 1, 1);
   assert (winner (&view, &p) == 0);
-  puts ("HTTP target domain source PASS");
+  puts ("HTTP and SOCKS target domain sources PASS");
   return 0;
 }

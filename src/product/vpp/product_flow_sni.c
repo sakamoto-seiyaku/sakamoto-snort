@@ -142,7 +142,7 @@ unsigned product_sni_parse_hello(const uint8_t *p,const product_hello_span_t *sp
 uint32_t product_flow_sni_retained_bytes(const product_flow_entry_t *entry)
 {
   if(entry->key.protocol==17) return entry->quic_crypto.length;
-  if(entry->key.protocol==6) return entry->http_mode==PRODUCT_HTTP_ACTIVE ? 0
+  if(entry->key.protocol==6) return product_flow_direct_target(entry) ? 0
     : entry->tcp_bytes.length[0]+entry->tcp_bytes.length[1];
   return 0;
 }

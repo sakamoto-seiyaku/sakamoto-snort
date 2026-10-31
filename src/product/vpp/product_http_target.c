@@ -28,7 +28,7 @@ static int tchar (unsigned c)
 }
 
 /* host [":" port], or "[" IPv6 "]" [":" port]. The bytes are not NUL terminated. */
-static unsigned authority (const uint8_t *s, size_t n, product_http_request_t *r)
+unsigned product_http_target_authority (const uint8_t *s, size_t n, product_http_request_t *r)
 {
   size_t host_end = n, port_at = 0;
   if (!n) return PRODUCT_HTTP_TARGET_BAD_AUTHORITY;
@@ -191,7 +191,7 @@ static int parse_head (product_http_target_t *t, const uint8_t *h, size_t n, pro
   r->connect = word_is (method, method_length, "CONNECT");
   if (r->connect)
     {
-      unsigned why = authority (target, target_length, r);
+      unsigned why = product_http_target_authority (target, target_length, r);
       if (why) { r->kind = 0; r->reason = (uint8_t) why; }
       else if (!r->port) { r->kind = 0; r->reason = PRODUCT_HTTP_TARGET_BAD_AUTHORITY; }
     }
@@ -203,7 +203,7 @@ static int parse_head (product_http_target_t *t, const uint8_t *h, size_t n, pro
       else
         {
           r->via_host_field = 1;
-          unsigned why = authority (f.host, f.host_length, r);
+          unsigned why = product_http_target_authority (f.host, f.host_length, r);
           if (why) { r->kind = 0; r->reason = (uint8_t) why; }
         }
     }
@@ -220,7 +220,7 @@ static int parse_head (product_http_target_t *t, const uint8_t *h, size_t n, pro
               while (end < target_length && target[end] != '/' && target[end] != '?' && target[end] != '#') ++end;
               int userinfo = 0;
               for (size_t i = start; i < end; ++i) if (target[i] == '@') userinfo = 1;
-              unsigned why = userinfo ? PRODUCT_HTTP_TARGET_USERINFO : authority (target + start, end - start, r);
+              unsigned why = userinfo ? PRODUCT_HTTP_TARGET_USERINFO : product_http_target_authority (target + start, end - start, r);
               if (why) { r->kind = 0; r->reason = (uint8_t) why; }
             }
         }

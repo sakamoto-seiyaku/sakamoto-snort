@@ -158,6 +158,8 @@ typedef struct
 /* A visible cleartext HTTP request's effective target. Like a QName it is a distinct,
  * per-request source with its own availability and never an SNI. */
 #define PRODUCT_POLICY_DOMAIN_HTTP_TARGET 2U
+/* A SOCKS4a/SOCKS5 CONNECT request's named target; the outer proxy endpoint is never used. */
+#define PRODUCT_POLICY_DOMAIN_SOCKS_TARGET 3U
 
 typedef struct
 {

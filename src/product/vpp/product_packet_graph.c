@@ -4902,7 +4902,7 @@ product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
   product_root_dns_adapter_expire (vm, now_us);
 }
 
-/* Visible cleartext HTTP: every request target of the flow is evaluated against
+/* Visible cleartext HTTP and SOCKS: every request target of the flow is evaluated against
  * the current policy as its own domain source (never an SNI). A refusal marks the
  * flow so the rest of the connection keeps being refused while the policy still
  * refuses that target. Returns 1 with the verdict in *chosen, 0 when this packet
@@ -4914,7 +4914,7 @@ product_packet_graph_http_targets (
 {
   product_packet_graph_main_t *graph = &product_packet_graph_main;
   const product_flow_entry_t *entry = observation->entry;
-  if (!entry || entry->http_mode != PRODUCT_HTTP_ACTIVE || lease->facts.protocol != 6
+  if (!entry || !product_flow_direct_target (entry) || lease->facts.protocol != 6
       || vm->thread_index == 0 || vm->thread_index > product_packet_graph_worker_count ())
     return 0;
   const product_http_flow_t *http = &entry->http;
@@ -4933,7 +4933,8 @@ product_packet_graph_http_targets (
       const product_http_request_t *target = targets[i];
       product_l4_policy_match_result_t result;
       int named = target->kind == PRODUCT_HTTP_TARGET_NAME;
-      snapshot->domain_source = PRODUCT_POLICY_DOMAIN_HTTP_TARGET;
+      snapshot->domain_source = entry->http_mode == PRODUCT_HTTP_SOCKS
+        ? PRODUCT_POLICY_DOMAIN_SOCKS_TARGET : PRODUCT_POLICY_DOMAIN_HTTP_TARGET;
       snapshot->domain_available = named;
       snapshot->domain_lists = named ? product_domains_match (snapshot->bank->domains,
         (const uint8_t *) target->name, target->name_length) : 0;
@@ -5672,11 +5673,15 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             e->sni.stop, e->sni.attempts, e->sni.bytes, e->sni.work,
             product_flow_sni_retained_bytes(e),
             e->sni.result==PRODUCT_SNI_NAME?e->sni.name:"-");
-          if(e->key.protocol==6 && e->http_mode==PRODUCT_HTTP_ACTIVE) {
+          if(product_flow_direct_target(e)) {
             const product_http_flow_t *h=&e->http;
+            int socks=e->http_mode==PRODUCT_HTTP_SOCKS;
+            if(socks) vlib_cli_output (vm, "flow.socks worker=%u slot=%u incarnation=%llu version=%u socks4a=%u confirmed=%u method=%u command=%u reply=%u",
+              worker, slot, (unsigned long long)e->incarnation, h->socks.version, h->socks.socks4a,
+              h->socks.confirmed, h->socks.method, h->socks.command, h->socks.reply);
             vlib_cli_output (vm, "flow.http worker=%u slot=%u incarnation=%llu mode=%u requests=%llu stop=%u pending=%u overflow=%u completed=%u next_sequence=%u current_valid=%u current_index=%llu current_kind=%u current_reason=%u current_port=%u current=%s current_address=%U denied_valid=%u denied_index=%llu denied_kind=%u denied_port=%u denied=%s denied_address=%U",
               worker, slot, (unsigned long long)e->incarnation, e->http_mode,
-              (unsigned long long)h->parser.requests, h->parser.stop, h->pending_count, h->overflow,
+              (unsigned long long)(socks?h->socks.requests:h->parser.requests), socks?h->socks.stop:h->parser.stop, h->pending_count, h->overflow,
               h->completed_in_packet, h->next_sequence,
               h->has_current, (unsigned long long)h->current.index, h->current.kind, h->current.reason, h->current.port,
               h->current.kind==PRODUCT_HTTP_TARGET_NAME?h->current.name:"-", format_hex_bytes, h->current.address, 16,
@@ -5684,7 +5689,7 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
               h->denied.kind==PRODUCT_HTTP_TARGET_NAME?h->denied.name:"-", format_hex_bytes, h->denied.address, 16);
           } else if(e->key.protocol==6) vlib_cli_output (vm, "flow.http worker=%u slot=%u incarnation=%llu mode=%u",
             worker, slot, (unsigned long long)e->incarnation, e->http_mode);
-          if(e->key.protocol==6 && e->http_mode!=PRODUCT_HTTP_ACTIVE) vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
+          if(e->key.protocol==6 && !product_flow_direct_target(e)) vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
             worker, slot, (unsigned long long)e->incarnation,
             e->tcp_bytes.length[0],e->tcp_bytes.length[1],
             e->tcp_bytes.contiguous[0],e->tcp_bytes.contiguous[1],

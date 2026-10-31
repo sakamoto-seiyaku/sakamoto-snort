@@ -18,6 +18,23 @@ static void remember (product_http_flow_t *h, const product_http_request_t *requ
   if (h->completed_in_packet < UINT16_MAX) ++h->completed_in_packet;
 }
 
+/* In-order bytes of one direction: 1 with payload and length trimmed to the new bytes,
+ * 0 for a pure retransmission, -1 when bytes were lost to us. */
+static int in_order (uint32_t *next, uint8_t *valid, uint32_t sequence, const uint8_t **payload, uint32_t *length)
+{
+  if (!*valid) { *valid = 1; *next = sequence; }
+  int32_t delta = (int32_t) (sequence - *next);
+  if (delta > 0) return -1;
+  if (delta < 0)
+    {
+      uint32_t overlap = (uint32_t) -delta;
+      if (overlap >= *length) return 0;
+      *payload += overlap; *length -= overlap;
+    }
+  *next += *length;
+  return 1;
+}
+
 void product_flow_http_observe (product_flow_entry_t *entry, const product_packet_facts_t *facts,
   const uint8_t *payload, uint32_t length)
 {
@@ -25,28 +42,50 @@ void product_flow_http_observe (product_flow_entry_t *entry, const product_packe
   unsigned side = entry->last_flow_direction == PRODUCT_FLOW_DIRECTION_REPLY;
   if (entry->http_mode == PRODUCT_HTTP_UNDECIDED)
     {
-      if (!length) return;
-      if (payload[0] < 'A' || payload[0] > 'Z') { entry->http_mode = PRODUCT_HTTP_NOT_HTTP; return; }
+      /* Only the connection's first client bytes decide. TLS starts with 0x16, so neither an upper-case
+       * HTTP method nor a SOCKS version byte can be a ClientHello. */
+      if (!length || side) return;
+      unsigned first = payload[0];
+      unsigned mode = first >= 'A' && first <= 'Z' ? PRODUCT_HTTP_ACTIVE
+                    : first == 4 || first == 5 ? PRODUCT_HTTP_SOCKS : PRODUCT_HTTP_NOT_HTTP;
+      if (mode == PRODUCT_HTTP_NOT_HTTP) { entry->http_mode = PRODUCT_HTTP_NOT_HTTP; return; }
       product_flow_sni_stop (entry, PRODUCT_SNI_UNSUPPORTED);   /* also clears the shared storage */
       memset (&entry->http, 0, sizeof (entry->http));
-      product_http_target_init (&entry->http.parser);
+      if (mode == PRODUCT_HTTP_ACTIVE) product_http_target_init (&entry->http.parser);
+      else product_socks_target_init (&entry->http.socks, first);
       entry->http.side = (uint8_t) side;
-      entry->http_mode = PRODUCT_HTTP_ACTIVE;
+      entry->http_mode = (uint8_t) mode;
     }
   product_http_flow_t *h = &entry->http;
   h->pending_count = 0; h->overflow = 0; h->completed_in_packet = 0;
-  if (!length || side != h->side || h->parser.stop) return;
+  if (!length) return;
   uint32_t sequence = facts->tcp_sequence + !!(facts->tcp_flags & 2);
-  if (!h->seq_valid) { h->seq_valid = 1; h->next_sequence = sequence; }
-  int32_t delta = (int32_t) (sequence - h->next_sequence);
-  if (delta > 0) { product_http_target_lost (&h->parser); return; }   /* bytes were lost to us */
-  if (delta < 0)
+  if (entry->http_mode == PRODUCT_HTTP_SOCKS)
     {
-      uint32_t overlap = (uint32_t) -delta;
-      if (overlap >= length) return;                                  /* pure retransmission */
-      payload += overlap; length -= overlap;
+      product_http_request_t request;
+      int result;
+      if (side != h->side)
+        {
+          int order = in_order (&h->server_next_sequence, &h->server_seq_valid, sequence, &payload, &length);
+          if (order < 0) { product_socks_target_lost (&h->socks); return; }
+          if (!order) return;
+          result = product_socks_target_server (&h->socks, payload, length, &request);
+        }
+      else
+        {
+          int order = in_order (&h->next_sequence, &h->seq_valid, sequence, &payload, &length);
+          if (order < 0) { product_socks_target_lost (&h->socks); return; }
+          if (!order || h->socks.stop) return;
+          size_t consumed;
+          result = product_socks_target_client (&h->socks, payload, length, &consumed, &request);
+        }
+      if (result == PRODUCT_HTTP_FEED_REQUEST) remember (h, &request);
+      return;
     }
-  h->next_sequence += length;
+  if (side != h->side || h->parser.stop) return;
+  int order = in_order (&h->next_sequence, &h->seq_valid, sequence, &payload, &length);
+  if (order < 0) { product_http_target_lost (&h->parser); return; }
+  if (!order) return;
   while (length)
     {
       size_t consumed = 0;
@@ -66,7 +105,7 @@ product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *pool
   if (runtime.generation != generation) return PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION;
   const product_flow_entry_t *borrowed = product_flow_runtime_entry (pool, slot);
   if (!borrowed || !borrowed->linked || borrowed->incarnation != incarnation
-      || borrowed->http_mode != PRODUCT_HTTP_ACTIVE)
+      || !product_flow_direct_target (borrowed))
     return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
   product_flow_entry_t *entry = (product_flow_entry_t *) borrowed;
   /* The latest refused target is what the rest of the connection is evaluated against. */

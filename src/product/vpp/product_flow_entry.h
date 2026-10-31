@@ -19,6 +19,7 @@
 #include "product_lpi.h"
 #include "product_sni.h"
 #include "product_http_target.h"
+#include "product_socks_target.h"
 
 #define PRODUCT_FLOW_ENTRY_ADDRESS_BYTES UINT32_C (16)
 #define PRODUCT_FLOW_ENTRY_UID_UNKNOWN UINT32_MAX
@@ -98,10 +99,15 @@ typedef struct
  * been stopped for a flow whose first bytes are an HTTP request: neither
  * transport tag nor entry size grows, and TLS flows never touch it. */
 #define PRODUCT_HTTP_PENDING 4U
-enum { PRODUCT_HTTP_UNDECIDED = 0, PRODUCT_HTTP_ACTIVE, PRODUCT_HTTP_NOT_HTTP };
+/* http_mode: which direct-target protocol owns this flow's storage, decided by the first client byte. */
+enum { PRODUCT_HTTP_UNDECIDED = 0, PRODUCT_HTTP_ACTIVE, PRODUCT_HTTP_NOT_HTTP, PRODUCT_HTTP_SOCKS };
 typedef struct {
-  product_http_target_t parser;
-  uint32_t next_sequence;
+  union {
+    struct { product_http_target_t parser; uint8_t head[PRODUCT_HTTP_HEAD_BYTES]; };
+    product_socks_target_t socks;
+  };
+  uint32_t next_sequence, server_next_sequence;
+  uint8_t server_seq_valid;
   uint16_t completed_in_packet;      /* heads finished by the latest observed packet */
   uint8_t side, seq_valid, has_current, has_denied, pending_count, overflow;
   /* current: last head seen; denied: the first target the policy refused, kept so the
@@ -109,7 +115,6 @@ typedef struct {
    * by the latest packet, for per-request evaluation. */
   product_http_request_t current, denied;
   product_http_request_t pending[PRODUCT_HTTP_PENDING];
-  uint8_t head[PRODUCT_HTTP_HEAD_BYTES];
 } product_http_flow_t;
 
 typedef struct
@@ -164,6 +169,9 @@ typedef struct
     product_icmp_state_t icmp;
   } protocol_state;
 } product_flow_entry_t;
+/* Flow storage holds visible HTTP or SOCKS request targets. */
+static inline int product_flow_direct_target (const product_flow_entry_t *e)
+{ return e->key.protocol == 6 && (e->http_mode == PRODUCT_HTTP_ACTIVE || e->http_mode == PRODUCT_HTTP_SOCKS); }
 
 typedef struct
 {

@@ -137,6 +137,11 @@ target_compile_options(sakamoto-product-dns-route-doh-test PRIVATE -Wall -Wextra
 add_test(NAME sakamoto-product-dns-route-doh-test COMMAND sakamoto-product-dns-route-doh-test)
 add_executable(sakamoto-product-http-target-test tests/host/product_http_target_test.c
   src/product/vpp/product_http_target.c)
+add_executable(sakamoto-product-socks-target-test tests/host/product_socks_target_test.c
+  src/product/vpp/product_socks_target.c src/product/vpp/product_http_target.c)
+target_include_directories(sakamoto-product-socks-target-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-socks-target-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-socks-target-test COMMAND sakamoto-product-socks-target-test)
 target_include_directories(sakamoto-product-http-target-test PRIVATE src/product/vpp)
 target_compile_options(sakamoto-product-http-target-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-http-target-test COMMAND sakamoto-product-http-target-test)
@@ -257,6 +262,7 @@ add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_sni.c
   src/product/vpp/product_flow_http.c
   src/product/vpp/product_http_target.c
+  src/product/vpp/product_socks_target.c
   src/product/vpp/product_flow_quic.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
