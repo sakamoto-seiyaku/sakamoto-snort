@@ -88,7 +88,7 @@ def exchange(device, peer, result, label, requests, *, splits=None, stop_on_time
     nonce = "s325-" + label + "-" + str(time.time_ns())
     plan = dict(nonce=nonce, endpoint=device.args.endpoint4, port=PEER_PORT, source=source, bindDefault=True,
                 httpRequests=[item.hex() for item in requests], httpDelayMs=200, httpTimeoutMs=timeout_ms,
-                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2000, httpGate=True, httpAfterMs=2500)
+                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2000, httpGate=True, httpAfterMs=6000)
     if splits:
         plan["httpSplit"] = splits
     device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
@@ -99,11 +99,14 @@ def exchange(device, peer, result, label, requests, *, splits=None, stop_on_time
     client = device.wait(label + "-client", path, lambda value: value.get("phase") in ("http_done", "finished"),
                          timeout=wait, json_value=True)
     assert not client.get("error"), client
+    # Read the Flow first: the App closes its socket a few seconds after http_done, and a closed
+    # VPN flow leaves the table at once. Wire collection can take longer than that.
+    flow = flow_http(device, label, source)
     after_wire = device.wire_coverage(label + "-after")
     wire = {name: rows[len(before_wire[name]):] for name, rows in after_wire.items()}
     mine = lambda rows: [row for row in rows if "/" + label + "/" in row["request_line"]]
     case = dict(label=label, source_port=source, client=client, peer=mine(peer.requests(cursor)), wire=wire,
-                flow=flow_http(device, label, source), physical_interface=device.physical_interface,
+                flow=flow, physical_interface=device.physical_interface,
                 sent=[item.decode("latin-1") for item in requests], status="OBSERVED")
     # After the App closes its socket, retransmissions of refused bytes no longer carry a socket
     # owner and the uid-owner NFQUEUE rule cannot capture them. Record, never judge, what follows.
