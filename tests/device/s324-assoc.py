@@ -192,7 +192,10 @@ def assoc_cases(device, primary, backup, result):
                     family=6, protocol=6)
     check(case, admitted=1)
     status, = assoc_status(device, label + "-final")
-    assert int(status["entries"]) == 1 and int(status["admitted"]) == 1, status
+    if device.args.profile == "root":
+        assert int(status["entries"]) == 1 and int(status["admitted"]) == 1, status
+    else:
+        assert int(status["entries"]) == int(status["admitted"]) >= 1, status   # plus any background lookups
 
 
 def main():
