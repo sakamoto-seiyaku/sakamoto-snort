@@ -5672,7 +5672,19 @@ product_flow_status_cli (vlib_main_t *vm, unformat_input_t *input,
             e->sni.stop, e->sni.attempts, e->sni.bytes, e->sni.work,
             product_flow_sni_retained_bytes(e),
             e->sni.result==PRODUCT_SNI_NAME?e->sni.name:"-");
-          if(e->key.protocol==6) vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
+          if(e->key.protocol==6 && e->http_mode==PRODUCT_HTTP_ACTIVE) {
+            const product_http_flow_t *h=&e->http;
+            vlib_cli_output (vm, "flow.http worker=%u slot=%u incarnation=%llu mode=%u requests=%llu stop=%u pending=%u overflow=%u completed=%u next_sequence=%u current_valid=%u current_index=%llu current_kind=%u current_reason=%u current_port=%u current=%s current_address=%U denied_valid=%u denied_index=%llu denied_kind=%u denied_port=%u denied=%s denied_address=%U",
+              worker, slot, (unsigned long long)e->incarnation, e->http_mode,
+              (unsigned long long)h->parser.requests, h->parser.stop, h->pending_count, h->overflow,
+              h->completed_in_packet, h->next_sequence,
+              h->has_current, (unsigned long long)h->current.index, h->current.kind, h->current.reason, h->current.port,
+              h->current.kind==PRODUCT_HTTP_TARGET_NAME?h->current.name:"-", format_hex_bytes, h->current.address, 16,
+              h->has_denied, (unsigned long long)h->denied.index, h->denied.kind, h->denied.port,
+              h->denied.kind==PRODUCT_HTTP_TARGET_NAME?h->denied.name:"-", format_hex_bytes, h->denied.address, 16);
+          } else if(e->key.protocol==6) vlib_cli_output (vm, "flow.http worker=%u slot=%u incarnation=%llu mode=%u",
+            worker, slot, (unsigned long long)e->incarnation, e->http_mode);
+          if(e->key.protocol==6 && e->http_mode!=PRODUCT_HTTP_ACTIVE) vlib_cli_output (vm, "flow.tcp_cache worker=%u slot=%u incarnation=%llu bytes0=%u bytes1=%u contiguous0=%u contiguous1=%u ranges0=%u ranges1=%u span0=%u span1=%u reserved=%u range_limit=%u span_limit=%u",
             worker, slot, (unsigned long long)e->incarnation,
             e->tcp_bytes.length[0],e->tcp_bytes.length[1],
             e->tcp_bytes.contiguous[0],e->tcp_bytes.contiguous[1],
