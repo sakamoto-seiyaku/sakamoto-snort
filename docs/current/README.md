@@ -21,6 +21,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 
 [S322](../testing/2026-10-29_S322_DOT_BOOTSTRAP.md) adds authenticated DoT, original-network service address discovery and bounded normal identity/error observations through the shared Root/VPN owner. The record distinguishes earlier minimal device artifacts, current ABI5/TLS1.2 contracts, controlled trust and actual wire scopes. Final Root N1 full, Root/VPN N1 bootstrap and handshake-Stop device results use one rebuilt artifact after a TLS owner budget fix; N3 and VPN full matrices keep their earlier scopes.
 
+[S323](../testing/2026-10-31_S323_DOH.md) adds bounded DoH over the same Root/VPN owner: an https URL upstream with original-network address discovery, HTTP/1.1 POST with ALPN `http/1.1` only, bounded HTTP framing with no redirect or compression, HTTP Age subtracted before caching, and HTTP/ALPN failures in observation version 11. Pixel 6a Root and VPN N1 30-case matrices pass with 140 whole records each; N3, handover and public-service scopes are not claimed.
+
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
 worker, with direct TUN reads into VPP buffers and index-only owner transfer.
