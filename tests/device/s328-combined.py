@@ -66,6 +66,8 @@ def resources_zero(device, label):
 
 def run_one(device, peers, result):
     http_peer, socks_peer, udp_peer, dns_primary, dns_backup = peers
+    # Rules saved by an earlier run persist on the installed App; start from a known allow-all.
+    http.http_rules(device, "run1-baseline-allow", deny=False)
     assoc.original_cases(device, result)
     assoc.assoc_cases(device, dns_primary, dns_backup, result)
     # Replacement off again: the remaining groups use their own peers on the original path.
@@ -77,6 +79,7 @@ def run_one(device, peers, result):
 
 def run_two(device, peers, result, previous_generation):
     http_peer, socks_peer, udp_peer, _, _ = peers
+    http.http_rules(device, "run2-baseline-allow", deny=False)
     start, = assoc.assoc_status(device, "run2-start")
     assert int(start["generation"]) > previous_generation, start
     assert int(start["entries"]) == 0 and int(start["admitted"]) == 0, start   # a new generation, a new table
