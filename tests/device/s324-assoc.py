@@ -113,7 +113,12 @@ def assoc_cases(device, primary, backup, result):
     routing.configure(device, "assoc-config", routing.configuration_text(device, 4, "udp"))
     device.proxy_ready("assoc-ready")
     start, = assoc_status(device, "assoc-start")
-    assert int(start["entries"]) == 0 and int(start["admitted"]) == 0, start
+    keys = ("entries", "admitted", "refreshed", "rejected", "skipped", "evicted", "expired", "view_dropped")
+    baseline = {key: int(start[key]) for key in keys}
+    if device.args.profile == "root":
+        assert not any(baseline.values()), start
+    # The VPN carries every lookup of the phone: background lookups may already be in the table.
+    result["association_baseline"] = baseline
 
     label = "assoc-admit"
     query = device.question(label)
@@ -161,20 +166,19 @@ def assoc_cases(device, primary, backup, result):
     check(case, skipped=1, reason=REASON["UNUSABLE_ONLY"])
 
     final, = assoc_status(device, "assoc-final")
-    counts = {key: int(final[key]) for key in ("entries", "admitted", "refreshed", "rejected", "skipped",
-                                               "evicted", "expired", "view_dropped")}
+    counts = {key: int(final[key]) - baseline[key] for key in keys}
     # 1 (admit) + 2 (CNAME) + 1 (hints) pairs; one cache refresh; one ineligible answer; one unusable address.
     mine = dict(entries=4, admitted=4, refreshed=1, rejected=1, skipped=1, evicted=0, expired=0, view_dropped=0)
     if device.args.profile == "root":
-        assert counts == mine, final
+        assert counts == mine, (final, baseline)
     else:
-        # The VPN carries every lookup of the phone, so real background lookups may add pairs of
-        # their own. Nothing may be lost or double counted, and the test's own contribution is
-        # fixed by the per-case rows above; the extras are listed from the complete store later.
-        assert counts["evicted"] == counts["expired"] == counts["view_dropped"] == 0, final
-        assert counts["entries"] == counts["admitted"] >= mine["admitted"], final
-        assert counts["refreshed"] >= 1 and counts["rejected"] >= 1 and counts["skipped"] >= 1, final
-        result["foreign_pairs_at_final_status"] = counts["admitted"] - mine["admitted"]
+        # Background lookups may add pairs of their own during the test. Nothing may be lost or double
+        # counted, and the test's own contribution is fixed by the per-case rows above; the extras
+        # are listed from the complete durable store after Stop.
+        assert counts["evicted"] == counts["expired"] == counts["view_dropped"] == 0, (final, baseline)
+        assert counts["entries"] == counts["admitted"] >= mine["admitted"], (final, baseline)
+        assert counts["refreshed"] >= 1 and counts["rejected"] >= 1 and counts["skipped"] >= 1, (final, baseline)
+        result["foreign_pairs_during_test"] = counts["admitted"] - mine["admitted"]
     result["association_status"] = final
 
     # IPv6 over a proxied TCP session on a fresh configuration (a new Product proxy).
