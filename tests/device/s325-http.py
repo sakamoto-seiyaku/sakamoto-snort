@@ -111,7 +111,12 @@ def statuses(case):
 
 
 def hosts(case):
-    return [item["host"] for item in case["peer"]]
+    """The target each arrived request names: its absolute-form authority, else its Host."""
+    names = []
+    for item in case["peer"]:
+        target = item["request_line"].split(" ")[1]
+        names.append(target.split("/")[2] if target.startswith("http://") else item["host"])
+    return names
 
 
 def on_wire(case, needle):
