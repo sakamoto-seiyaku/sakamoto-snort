@@ -290,6 +290,8 @@ add_vpp_plugin(product_core
     product_flow_entry.c
     product_flow_lpi.c
     product_flow_sni.c
+    product_flow_http.c
+    product_http_target.c
     product_flow_quic.c
     product_flow_end.c
     product_runtime_topology.c

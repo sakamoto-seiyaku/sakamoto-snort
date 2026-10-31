@@ -255,6 +255,8 @@ add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_flow_entry.c
   src/product/vpp/product_flow_lpi.c
   src/product/vpp/product_flow_sni.c
+  src/product/vpp/product_flow_http.c
+  src/product/vpp/product_http_target.c
   src/product/vpp/product_flow_quic.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
@@ -551,3 +553,8 @@ add_executable(sakamoto-product-flow-sni-test tests/host/product_flow_sni_test.c
 target_compile_options(sakamoto-product-flow-sni-test PRIVATE -Wall -Wextra -Werror -pedantic)
 target_link_libraries(sakamoto-product-flow-sni-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
 add_test(NAME sakamoto-product-flow-sni-test COMMAND sakamoto-product-flow-sni-test)
+add_executable(sakamoto-product-flow-http-test tests/host/product_flow_http_test.c
+  src/product/vpp/product_packet.c)
+target_compile_options(sakamoto-product-flow-http-test PRIVATE -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-flow-http-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
+add_test(NAME sakamoto-product-flow-http-test COMMAND sakamoto-product-flow-http-test)

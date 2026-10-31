@@ -605,6 +605,7 @@ product_flow_entry_status_t product_flow_entry_identify (
       || facts->destination_port != (source_is_a ? entry->key.transport.ports.b : entry->key.transport.ports.a))
     return PRODUCT_FLOW_ENTRY_STATUS_INVALID_PACKET;
   product_flow_sni_observe (entry, facts, payload, length);
+  product_flow_http_observe (entry, facts, payload, length);
   product_flow_runtime_features_changed (pool, slot);
   /* TLS has its own bounded lifetime. Reassembly can finish after recognition
    * stops on duplicate wire traffic; publish its valid evidence independently. */
