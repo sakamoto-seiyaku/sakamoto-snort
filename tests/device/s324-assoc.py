@@ -149,7 +149,7 @@ def original_exchange(device, result, label, name, *, qtype=1, protocol=17, reso
     elif warm:
         nonce = "s324-" + label + "-" + str(time.time_ns())
         plan = dict(nonce=nonce, endpoint=resolver, port=53, source=source, bindDefault=True,
-                    dnsQueries=[fixtures.question(device.next_id(), "example.com", 1).hex(), query.hex()],
+                    dnsQueries=[fixtures.question(device.next_id(), "example.net", 28).hex(), query.hex()],   # NODATA warm-up: no pair
                     dnsProxyTimeoutMs=8000, dnsQueryDelayMs=1000, dnsPipeline=False)
         device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
         device.save(label + "-launch.txt", device.action("--es", "t12ProbePlan", shlex.quote(json.dumps(plan))))
