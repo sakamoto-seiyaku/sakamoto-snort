@@ -182,7 +182,10 @@ def original_cases(device, result):
     # A configuration saved by an earlier run must not route these queries through the proxy.
     device.upstream("original-dns-off")
     start, = assoc_status(device, "original-start")
-    assert int(start["entries"]) == 0, start
+    if device.args.profile == "root":
+        assert int(start["entries"]) == 0, start
+    # On VPN the phone's own lookups also create pairs: judge the test's contribution as a delta.
+    result["original_background_pairs"] = int(start["entries"])
 
     for label, name, qtype, protocol in (("original-a-udp", "example.com", 1, 17),
                                          ("original-a-tcp", "example.org", 1, 6),
@@ -200,7 +203,8 @@ def original_cases(device, result):
         assert rows[0].get("assoc_reason") == 2, rows       # NO_ADDRESS
     case["status"] = "PASS"
     after, = assoc_status(device, "original-after")
-    assert int(after["entries"]) >= 3 and int(after["admitted"]) >= 3, after
+    assert int(after["admitted"]) - int(start["admitted"]) >= 3, (start, after)
+    assert int(after["view_dropped"]) == int(start["view_dropped"]), (start, after)
 
     # A refused answer leaves only its observation: the QName is allowed, its CNAME github.com is refused.
     original_rules(device, "original-rules-cname-deny")
@@ -213,7 +217,8 @@ def original_cases(device, result):
         assert any(r["actual_action"] == 2 for r in rows), rows
         assert all(not r.get("assoc_admitted") and not r.get("assoc_refreshed") for r in rows), rows
         now, = assoc_status(device, "original-refused-after")
-        assert int(now["admitted"]) == int(before["admitted"]), (before, now)
+        if device.args.profile == "root":
+            assert int(now["admitted"]) == int(before["admitted"]), (before, now)
     case["status"] = "PASS"
     device.rules("original-rules-allow")
     result["original_status"] = after

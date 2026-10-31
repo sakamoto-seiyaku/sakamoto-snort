@@ -82,7 +82,11 @@ def run_two(device, peers, result, previous_generation):
     http.http_rules(device, "run2-baseline-allow", deny=False)
     start, = assoc.assoc_status(device, "run2-start")
     assert int(start["generation"]) > previous_generation, start
-    assert int(start["entries"]) == 0 and int(start["admitted"]) == 0, start   # a new generation, a new table
+    # A new generation starts new tables: nothing expired or dropped from an earlier view. On VPN the
+    # phone's own lookups may already have added pairs; Root carries only the test App.
+    assert int(start["expired"]) == 0 and int(start["view_dropped"]) == 0 and int(start["evicted"]) == 0, start
+    if device.args.profile == "root":
+        assert int(start["entries"]) == 0 and int(start["admitted"]) == 0, start
     device.upstream("run2-dns-off")
     case = assoc.original_exchange(device, result, "run2-original-a-udp", "example.com")
     rows = [r for r in case["records"] if r["stage"] == 2]
