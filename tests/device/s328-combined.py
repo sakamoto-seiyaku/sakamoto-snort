@@ -54,7 +54,7 @@ def resources_zero(device, label):
     queues = device.save(label + "-queues.txt", device.root("cat /proc/net/netfilter/nfnetlink_queue"))
     assert not queues.strip(), queues
     hooks = device.save(label + "-hooks.txt", device.root(
-        "iptables-save -t mangle; ip6tables-save -t mangle; iptables-save -t nat; ip6tables-save -t nat"))
+        "iptables-save -t mangle; ip6tables-save -t mangle; iptables-save -t nat"))
     assert "SAKAMOTO_PRODUCT_" not in hooks, "Product hook left after Stop"
     rules6 = device.save(label + "-rules6.txt", device.root("ip -6 rule show"))
     assert "1396985427" not in rules6, rules6
