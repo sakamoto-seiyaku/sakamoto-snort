@@ -68,7 +68,7 @@ projection = "".join(function(GRAPH, name, result) for name, result in (
     ("product_packet_graph_l4_packet_projection", "static void"),
     ("product_packet_graph_l4_view_evaluate", "static product_l4_policy_status_t")))
 stage = function(GRAPH, "product_packet_graph_policy_stage_snapshot", "static product_packet_result_t")
-http_targets = function(GRAPH, "product_packet_graph_http_targets", "static int")
+http_targets = function(GRAPH, "product_packet_graph_http_batch", "static int") + function(GRAPH, "product_packet_graph_http_targets", "static int")
 owner = function(GRAPH, "product_packet_graph_policy_on_owner", "static product_packet_result_t")
 flow_commit = function(GRAPH, "product_packet_graph_flow_record_decision", "static product_flow_entry_status_t")
 node_start = GRAPH.index("VLIB_NODE_FN (product_packet_policy_node)")
@@ -368,6 +368,11 @@ void product_dns_tcp_bind(product_dns_tcp_owner_t *owner,product_dns_owner_t *re
   (void)owner;(void)requests;(void)context;assert(tcp_fixture_mode && identity->generation==7 && identity->incarnation==77);
 }
 void product_flow_expiry_changed(vlib_main_t *vm) {(void)vm;}
+product_flow_entry_status_t product_flow_http_resume(product_flow_runtime_t *pool,uint32_t slot,uint64_t generation,
+  uint64_t incarnation,const product_packet_facts_t *facts,const uint8_t *payload,uint32_t length,int give_up) {
+  (void)pool;(void)slot;(void)generation;(void)incarnation;(void)facts;(void)payload;(void)length;(void)give_up;
+  return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
+}
 product_flow_entry_status_t product_flow_http_deny(product_flow_runtime_t *pool,uint32_t slot,uint64_t generation,
   uint64_t incarnation,const product_http_request_t *target) {
   (void)pool;(void)slot;(void)generation;(void)incarnation;(void)target;return PRODUCT_FLOW_ENTRY_STATUS_OK;

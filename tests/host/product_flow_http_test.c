@@ -50,6 +50,26 @@ static void send (flow_t *x, const char *text) { packet (x, 0, text, (unsigned) 
 static const product_http_flow_t *http (flow_t *x) { return &x->o.entry->http; }
 static void close_flow (flow_t *x) { product_flow_runtime_destroy (x->pool); }
 
+static product_packet_facts_t facts_at (flow_t *x, unsigned size, uint32_t sequence)
+{
+  product_packet_facts_t f = x->f;
+  f.tcp_sequence = sequence;
+  f.transport_length = (uint16_t) (20 + size); f.packet_length = (uint16_t) (20 + f.transport_length);
+  return f;
+}
+static product_flow_entry_status_t resume_with (flow_t *x, const char *bytes, unsigned size, uint32_t sequence, int give_up)
+{
+  product_packet_facts_t f = facts_at (x, size, sequence);
+  return product_flow_http_resume (x->pool, x->o.slot, 7, x->o.entry->incarnation, &f,
+    (const uint8_t *) bytes, size, give_up);
+}
+static void resume (flow_t *x, const char *bytes, unsigned size, uint32_t sequence, int give_up)
+{ assert (resume_with (x, bytes, size, sequence, give_up) == PRODUCT_FLOW_ENTRY_STATUS_OK); }
+static product_flow_entry_status_t resume_status (flow_t *x, const char *bytes, unsigned size, uint32_t sequence)
+{ return resume_with (x, bytes, size, sequence, 0); }
+static product_flow_entry_status_t resume_give_up (flow_t *x, const char *bytes, unsigned size, uint32_t sequence)
+{ return resume_with (x, bytes, size, sequence, 1); }
+
 static const char REQUEST[] = "GET /index HTTP/1.1\r\nHost: Example.Test\r\nAccept: */*\r\n\r\n";
 
 static void a_request_takes_the_flow_storage_from_sni (void)
@@ -91,11 +111,32 @@ static void pipelined_and_successive_requests_are_reported_in_order (void)
   assert (!strcmp (http (&x)->current.name, "three.test"));
   send (&x, "GET /d HTTP/1.1\r\nHost: four.test\r\n\r\n");
   assert (http (&x)->pending_count == 1 && http (&x)->pending[0].index == 3);
-  /* More heads than the pending slots in one packet: the surplus is counted, current is last. */
-  send (&x, "GET /1 HTTP/1.1\r\nHost: a.test\r\n\r\nGET /2 HTTP/1.1\r\nHost: b.test\r\n\r\n"
-            "GET /3 HTTP/1.1\r\nHost: c.test\r\n\r\nGET /4 HTTP/1.1\r\nHost: d.test\r\n\r\nGET /5 HTTP/1.1\r\nHost: e.test\r\n\r\n");
-  assert (http (&x)->pending_count == PRODUCT_HTTP_PENDING && http (&x)->overflow && http (&x)->completed_in_packet == 5);
-  assert (!strcmp (http (&x)->current.name, "e.test"));
+  /* More heads than one batch in one packet: every head is still judged, batch by batch. */
+  static const char five[] = "GET /1 HTTP/1.1\r\nHost: a.test\r\n\r\nGET /2 HTTP/1.1\r\nHost: b.test\r\n\r\n"
+            "GET /3 HTTP/1.1\r\nHost: c.test\r\n\r\nGET /4 HTTP/1.1\r\nHost: d.test\r\n\r\nGET /5 HTTP/1.1\r\nHost: e.test\r\n\r\n";
+  uint32_t start = x.seq;
+  packet (&x, 0, five, sizeof (five) - 1, start);
+  assert (http (&x)->pending_count == PRODUCT_HTTP_PENDING && http (&x)->more && http (&x)->completed_in_packet == 4);
+  assert (!strcmp (http (&x)->pending[3].name, "d.test") && !strcmp (http (&x)->current.name, "d.test"));
+  resume (&x, five, sizeof (five) - 1, start, 0);
+  assert (http (&x)->pending_count == 1 && !http (&x)->more && !strcmp (http (&x)->pending[0].name, "e.test"));
+  assert (resume_status (&x, five, sizeof (five) - 1, start) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);   /* nothing left */
+  x.seq = start + sizeof (five) - 1;
+  /* A refused packet whose batch was not finished: its retransmission resumes where parsing stopped. */
+  static const char six[] = "GET /1 HTTP/1.1\r\nHost: a.test\r\n\r\nGET /2 HTTP/1.1\r\nHost: b.test\r\n\r\n"
+            "GET /3 HTTP/1.1\r\nHost: c.test\r\n\r\nGET /4 HTTP/1.1\r\nHost: d.test\r\n\r\nGET /5 HTTP/1.1\r\nHost: f.test\r\n\r\n";
+  start = x.seq;
+  packet (&x, 0, six, sizeof (six) - 1, start);
+  assert (http (&x)->more);
+  packet (&x, 0, six, sizeof (six) - 1, start);              /* retransmission */
+  assert (http (&x)->pending_count == 1 && !strcmp (http (&x)->pending[0].name, "f.test") && !http (&x)->more);
+  /* A batch limit gives up on the rest: later requests have no known target. */
+  x.seq = start + sizeof (six) - 1;
+  start = x.seq;
+  packet (&x, 0, five, sizeof (five) - 1, start);
+  assert (http (&x)->more);
+  assert (resume_give_up (&x, five, sizeof (five) - 1, start) == PRODUCT_FLOW_ENTRY_STATUS_OK);
+  assert (http (&x)->unavailable && !http (&x)->more && http (&x)->parser.stop == PRODUCT_HTTP_STOP_HEAD_LIMIT);
   close_flow (&x);
 }
 
@@ -230,6 +271,35 @@ static void socks_flows_report_the_requested_target (void)
   close_flow (&x);
 }
 
+static void a_mid_connection_stop_leaves_no_known_target (void)
+{
+  flow_t x; open_flow (&x, 80);
+  send (&x, REQUEST);
+  assert (!http (&x)->unavailable);
+  send (&x, "GET /x HTTP/1.1\r\nHost: a.test\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n");
+  /* That head itself is reported; framing after it cannot be trusted, so later requests are unknown. */
+  assert (http (&x)->pending_count == 1 && !strcmp (http (&x)->pending[0].name, "a.test"));
+  assert (http (&x)->parser.stop == PRODUCT_HTTP_STOP_FRAMING && http (&x)->unavailable);
+  close_flow (&x);
+  open_flow (&x, 80);
+  send (&x, REQUEST);
+  packet (&x, 0, "GET", 3, x.seq + 40);                      /* lost bytes */
+  assert (http (&x)->parser.stop == PRODUCT_HTTP_STOP_SEQUENCE && http (&x)->unavailable);
+  close_flow (&x);
+  /* A tunnel keeps its target: CONNECT names where the tunnel goes. */
+  open_flow (&x, 80);
+  send (&x, "CONNECT secure.test:443 HTTP/1.1\r\nHost: secure.test:443\r\n\r\n");
+  assert (http (&x)->parser.stop == PRODUCT_HTTP_STOP_TUNNEL && !http (&x)->unavailable);
+  close_flow (&x);
+  /* SOCKS: a malformed request is unavailable, the tunnel after a request is not. */
+  open_flow (&x, 1080);
+  packet (&x, 0, "\x05\x01\x00", 3, x.seq); x.seq += 3;
+  packet (&x, 1, "\x05\x00", 2, x.reply_seq); x.reply_seq += 2;
+  packet (&x, 0, "\x05\x01\x00\x09\x00", 5, x.seq);
+  assert (http (&x)->socks.stop == PRODUCT_SOCKS_STOP_MALFORMED && http (&x)->unavailable);
+  close_flow (&x);
+}
+
 int main (void)
 {
   assert (!product_lpi_init ());
@@ -242,6 +312,7 @@ int main (void)
   denial_is_sticky_and_validated ();
   sni_deadline_never_touches_the_http_state ();
   socks_flows_report_the_requested_target ();
+  a_mid_connection_stop_leaves_no_known_target ();
   puts ("Flow HTTP request targets PASS");
   return 0;
 }

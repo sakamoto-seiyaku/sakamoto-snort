@@ -4903,30 +4903,30 @@ product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
 }
 
 /* Visible cleartext HTTP and SOCKS: every request target of the flow is evaluated against
- * the current policy as its own domain source (never an SNI). A refusal marks the
- * flow so the rest of the connection keeps being refused while the policy still
- * refuses that target. Returns 1 with the verdict in *chosen, 0 when this packet
- * has no HTTP target (the caller evaluates as usual). */
+ * the current policy as its own domain source (never an SNI). A refusal marks the flow so the
+ * rest of the connection keeps being refused while the policy still refuses that target. Every
+ * request head in this packet is judged: after each full batch the Flow parses the next one
+ * from the same packet. After a mid-connection parse stop that is not a tunnel the connection's
+ * later requests have no known target. Returns 1 with the verdict in *chosen, 0 when this packet
+ * has no HTTP/SOCKS target (the caller evaluates as usual). */
 static int
-product_packet_graph_http_targets (
-  vlib_main_t *vm, product_packet_lease_t *lease, product_policy_snapshot_t *snapshot,
-  const product_flow_entry_observation_t *observation, product_l4_policy_match_result_t *chosen)
+product_packet_graph_http_batch (
+  product_packet_lease_t *lease, product_policy_snapshot_t *snapshot,
+  const product_flow_entry_t *entry, product_l4_policy_match_result_t *chosen, int *refused,
+  const product_http_request_t **refused_target)
 {
+  static const product_http_request_t unknown;   /* no target: domain unavailable */
   product_packet_graph_main_t *graph = &product_packet_graph_main;
-  const product_flow_entry_t *entry = observation->entry;
-  if (!entry || !product_flow_direct_target (entry) || lease->facts.protocol != 6
-      || vm->thread_index == 0 || vm->thread_index > product_packet_graph_worker_count ())
-    return 0;
   const product_http_flow_t *http = &entry->http;
-  const product_http_request_t *targets[PRODUCT_HTTP_PENDING + 2];
+  const product_http_request_t *targets[PRODUCT_HTTP_PENDING + 1];
   unsigned count = 0;
   if (http->has_denied) targets[count++] = &http->denied;
-  if (http->pending_count)
+  for (unsigned i = 0; i < http->pending_count; ++i) targets[count++] = &http->pending[i];
+  if (!count)
     {
-      for (unsigned i = 0; i < http->pending_count; ++i) targets[count++] = &http->pending[i];
-      if (http->overflow && http->has_current) targets[count++] = &http->current;
+      if (http->unavailable) targets[count++] = &unknown;
+      else if (http->has_current) targets[count++] = &http->current;
     }
-  else if (http->has_current && !http->has_denied) targets[count++] = &http->current;
   if (!count) return 0;
   for (unsigned i = 0; i < count; ++i)
     {
@@ -4939,18 +4939,52 @@ product_packet_graph_http_targets (
       snapshot->domain_lists = named ? product_domains_match (snapshot->bank->domains,
         (const uint8_t *) target->name, target->name_length) : 0;
       if (product_packet_graph_l4_view_evaluate (graph, lease, snapshot, &result) != PRODUCT_L4_POLICY_STATUS_OK)
-        return 0;     /* the staging evaluation reports the matcher error itself */
+        return -1;     /* the staging evaluation reports the matcher error itself */
       *chosen = result;
       if (result.evaluation == PRODUCT_L4_POLICY_EVALUATION_MATCH
           && result.actual_action == PRODUCT_L4_POLICY_ACTION_DROP)
-        {
-          product_flow_runtime_t *pool = graph->flow_pools[vlib_get_worker_index (vm->thread_index)];
-          (void) product_flow_http_deny (pool, observation->slot, snapshot->identity.generation,
-            entry->incarnation, target);
-          return 1;
-        }
+        { *refused = 1; *refused_target = target == &unknown ? NULL : target; return 1; }
     }
   return 1;
+}
+
+static int
+product_packet_graph_http_targets (
+  vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease, product_policy_snapshot_t *snapshot,
+  const product_flow_entry_observation_t *observation, product_l4_policy_match_result_t *chosen)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  const product_flow_entry_t *entry = observation->entry;
+  if (!entry || !product_flow_direct_target (entry) || lease->facts.protocol != 6
+      || vm->thread_index == 0 || vm->thread_index > product_packet_graph_worker_count ())
+    return 0;
+  product_flow_runtime_t *pool = graph->flow_pools[vlib_get_worker_index (vm->thread_index)];
+  u64 generation = snapshot->identity.generation;
+  int decided = 0;
+  for (unsigned batch = 0;; ++batch)
+    {
+      int refused = 0;
+      const product_http_request_t *refused_target = NULL;
+      int result = product_packet_graph_http_batch (lease, snapshot, entry, chosen, &refused, &refused_target);
+      if (result < 0) return 0;
+      decided |= result;
+      if (refused)
+        {
+          if (refused_target)
+            (void) product_flow_http_deny (pool, observation->slot, generation, entry->incarnation, refused_target);
+          return 1;
+        }
+      if (!entry->http.more) return decided;
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      u32 offset = lease->facts.transport_offset + lease->facts.l4_header_length;
+      u32 length = lease->facts.transport_length >= lease->facts.l4_header_length
+        ? lease->facts.transport_length - lease->facts.l4_header_length : 0;
+      int give_up = batch + 1 >= PRODUCT_HTTP_BATCHES ||
+        offset > buffer->current_length || length > buffer->current_length - offset;
+      if (product_flow_http_resume (pool, observation->slot, generation, entry->incarnation, &lease->facts,
+            (const u8 *) vlib_buffer_get_current (buffer) + offset, length, give_up) != PRODUCT_FLOW_ENTRY_STATUS_OK)
+        return decided;
+    }
 }
 
 static product_packet_result_t
@@ -5040,7 +5074,7 @@ product_packet_graph_policy_on_owner (
         snapshot.domain_lists = product_domains_match (snapshot.bank->domains,
           (const uint8_t *) observation.entry->sni.name, observation.entry->sni.name_length);
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
-      http_decided = product_packet_graph_http_targets (vm, lease, &snapshot, &observation, &http_verdict);
+      http_decided = product_packet_graph_http_targets (vm, buffer_index, lease, &snapshot, &observation, &http_verdict);
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
     lease, evaluation, &snapshot,

@@ -32,6 +32,28 @@ KIND = dict(none=0, name=1, ipv4=2, ipv6=3)
 REASON = dict(ok=0, no_host=1, duplicate_host=2, bad_authority=3, userinfo=4, scheme=5, form=6)
 
 
+def allowlist_rules(device, label):
+    """Allow allowed.http.test (rank 10); refuse any other recognized HTTP of the App (rank 1000).
+    The DROP needs the HTTP protocol fact, so the connection itself is never refused."""
+    lines = ["lists 1", "domain 0 exact allowed.http.test",
+             "0 0 4294967295 4294967295 4294967295 10 0 0 0 1 * * 0 65535 0 65535 1100",
+             "group 10", "edge 10 1 0", f"bind 1 {device.uid} 2 10 0",
+             "0 0 4294967295 4294967295 4294967295 1000 0 0 0 2 * * 0 65535 0 65535 0fea030000",
+             "group 20", "edge 20 1 1", f"bind 2 {device.uid} 2 20 0"]
+    request = device.out / (label + "-rules.txt")
+    request.write_text("\n".join(lines) + "\n")
+    remote = "/data/local/tmp/s325-rules.txt"
+    device.adb("push", request, remote)
+    command = f'am start -n {PKG}/.DebugControlActivity --es completeRuleText "$(cat {remote})"'
+    device.save(label + "-prefill.txt", device.adb("shell", "sh", "-c", shlex.quote(command)))
+    device.adb("shell", "rm", remote)
+    old = base.props(device.app("files/product-state/complete-rule-config.properties")).get("queryElapsedMillis")
+    device.tap(label + "-replace", "Replace all rules")
+    status = device.applied(label, old)
+    assert int(status["count"]) == int(status["activeCount"]) == 2, status
+    return status
+
+
 def http_rules(device, label, *, deny=True):
     baseline = device.query_rules(label + "-before")
     lines = ["lists 2", "domain 0 exact blocked.http.test", "domain 1 descendants deny.http.test"]
@@ -222,6 +244,16 @@ def cases(device, peer, result):
     assert row["current"] == "tunnel.http.test" and row["stop"] == str(STOP["tunnel"]), row
     case["status"] = "PASS"
 
+    # Every head in one packet is judged, also beyond one batch: the sixth head is refused.
+    heads = [request(f"/http-pipelined-six/{n}", f"p{n}.http.test") for n in range(5)]
+    heads.append(request("/http-pipelined-six/blocked", "blocked.http.test"))
+    case = exchange(device, peer, result, "http-pipelined-six", [b"".join(heads)])
+    assert statuses(case) == ["timeout"] and not case["peer"], case
+    row = http_row(case)
+    assert row["denied_valid"] == "1" and row["denied"] == "blocked.http.test", row
+    assert int(row["requests"]) == 6, row
+    case["status"] = "PASS"
+
     http_rules(device, "http-rules-allow-all", deny=False)
     case = exchange(device, peer, result, "http-allow-all-after-rule-removal", [
         request("/http-allow-all-after-rule-removal/was-blocked", "blocked.http.test")])
@@ -242,10 +274,22 @@ def cases(device, peer, result):
         assert not any(r["request_line"].endswith("/second HTTP/1.1") for r in case["peer"]), case["peer"]
         case["status"] = "PASS"
 
+    # Allowlist: after a mid-connection parse stop the stale target no longer matches the allow rule.
+    allowlist_rules(device, "http-rules-allowlist")
+    case = exchange(device, peer, result, "http-allowlist-after-framing-stop", [
+        request("/http-allowlist-after-framing-stop/first", "allowed.http.test", extra="Transfer-Encoding: identity\r\n"),
+        request("/http-allowlist-after-framing-stop/second", "elsewhere.http.test")], stop_on_timeout=False)
+    assert statuses(case) == ["answered", "timeout"], case
+    assert hosts(case) == ["allowed.http.test"], case
+    row = http_row(case)
+    assert row["stop"] == str(STOP["framing"]), row
+    case["status"] = "PASS"
+
     # Informational: what the peer eventually saw of the refused requests, after every socket closed.
     time.sleep(6)
     refused = ("http-deny-first", "http-deny-descendant", "http-deny-blocks-rest-of-connection",
-               "http-absolute-target-wins-over-host", "http-vpn-cold-uid")
+               "http-absolute-target-wins-over-host", "http-vpn-cold-uid", "http-pipelined-six",
+               "http-allowlist-after-framing-stop/second")
     result["late_arrivals"] = [row["request_line"] for row in peer.requests()
                                if any("/" + name + "/" in row["request_line"] for name in refused)
                                and not any(row in case["peer"] for case in result["cases"])]

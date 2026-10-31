@@ -110,6 +110,10 @@ typedef struct {
   uint8_t server_seq_valid;
   uint16_t completed_in_packet;      /* heads finished by the latest observed packet */
   uint8_t side, seq_valid, has_current, has_denied, pending_count, overflow;
+  /* more: this packet still has unparsed bytes after a full pending batch (resume them).
+   * unavailable: parsing stopped mid-connection for a non-tunnel reason, so later
+   * requests have no known target; the last target is no longer used. */
+  uint8_t more, unavailable;
   /* current: last head seen; denied: the first target the policy refused, kept so the
    * rest of the connection keeps being evaluated against it. pending: heads finished
    * by the latest packet, for per-request evaluation. */
@@ -341,6 +345,12 @@ void product_flow_sni_stop (product_flow_entry_t *, unsigned);
 /* Owner-thread observer for the packet that product_flow_sni_observe just saw. */
 void product_flow_http_observe (product_flow_entry_t *, const product_packet_facts_t *,
   const uint8_t *, uint32_t);
+/* Same packet again after its pending batch was judged: parses the next batch. With give_up the
+ * rest of the connection is left unparsed and its later requests have no known target. */
+#define PRODUCT_HTTP_BATCHES 64U
+product_flow_entry_status_t product_flow_http_resume (product_flow_runtime_t *, uint32_t slot,
+  uint64_t generation, uint64_t incarnation, const product_packet_facts_t *, const uint8_t *, uint32_t,
+  int give_up);
 /* Sticky connection-level denial; validated like identify. */
 product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *, uint32_t slot,
   uint64_t generation, uint64_t incarnation, const product_http_request_t *);

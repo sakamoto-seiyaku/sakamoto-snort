@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "product_l4_policy.h"
+#include "product_protocol_catalog.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +54,19 @@ int main (void)
   assert (!product_l4_policy_compile (&view, rules + 1, 1));
   p = packet (PRODUCT_POLICY_DOMAIN_HTTP_TARGET, 1, 1);
   assert (winner (&view, &p) == 0);
+  /* Allowlist: ALLOW the listed name (rank 10), DROP other recognized HTTP (rank 1000). An unknown
+   * target must not keep matching the ALLOW rule; it falls through to the DROP. */
+  const uint8_t http_protocol[] = {PRODUCT_EXPRESSION_APPLICATION_PROTOCOL, 0xea, 0x03, 0, 0};
+  product_l4_policy_rule_t allowlist[2] = {rule (10, 1, list0, sizeof (list0)), rule (11, 2, http_protocol, sizeof (http_protocol))};
+  allowlist[1].priority = 1000; allowlist[0].priority = 10;
+  assert (!product_l4_policy_compile (&view, allowlist, 2));
+  p = packet (PRODUCT_POLICY_DOMAIN_HTTP_TARGET, 1, 1);
+  p.protocol_set = product_protocol_bit (1002);
+  assert (winner (&view, &p) == 10);                             /* the listed target is allowed */
+  p.domain_available = 0; p.domain_lists = 0;
+  assert (winner (&view, &p) == 11);                             /* an unknown target is refused */
+  p.protocol_set_known = 0; p.protocol_set = 0;
+  assert (winner (&view, &p) == 0);                              /* before recognition nothing applies */
   puts ("HTTP and SOCKS target domain sources PASS");
   return 0;
 }
