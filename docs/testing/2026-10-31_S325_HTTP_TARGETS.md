@@ -1,7 +1,7 @@
-# S325 — cleartext HTTP request-target filtering (interim record)
+# S325 — cleartext HTTP request-target filtering
 
 Task authority is SAKAMOTO-325 under the [application DNS specification](../product/APPLICATION_DNS_SPEC.md)
-section 11. **Status: Host and Pixel 6a Root N1 qualified; VPN is not working yet and is not claimed.**
+section 11. Host evidence and Pixel 6a Root/VPN N1 evidence are kept apart.
 
 ## Implemented contract
 
@@ -37,36 +37,44 @@ section 11. **Status: Host and Pixel 6a Root N1 qualified; VPN is not working ye
 
 ## Pixel 6a qualification
 
-Native stage `android-native-r1` and APK `android-apk-r2` built from the committed sources, unchanged repeat with
-zero compilations. Ordinary App entry, an independent finite HTTP peer on the host, the Product's own `flow.http`
-status of the very flow, normal stop.
+Native stage `android-native-r1` and APK `android-apk-r3` (SHA-256 `2cc0e330…`) built from the committed
+sources; unchanged repeats compiled nothing. Ordinary App entry, an independent finite HTTP peer on the host,
+the Product's own `flow.http` status of the very flow, normal stop. The peer's own receipt is the oracle: a
+refused request is one that never reaches it while the App owns its socket.
 
 | Run | Scope | Result |
 | --- | --- | --- |
-| `device-root-n1-r4` | Root N1, 12 cases | PASS |
-| `device-vpn-n1-r1` | VPN N1 | HOLD, see below |
+| `device-root-n1-r5` | Root N1, 12 cases | PASS |
+| `device-vpn-n1-r4` | VPN N1, the same 12 cases plus the cold-UID case | PASS |
 
-Root cases: allow, head split across packets, successive requests to different names on one connection, refused
-Host, refused descendant, refusal blocks the rest of the connection (an allowed request before it is answered,
-the refused and a later allowed one never reach the peer), absolute-form target wins over Host in both
-directions, IP target kept without a decision, duplicate Host unavailable, CONNECT ends HTTP parsing, allow-all
-after the rule is removed.
+Cases: allow; head split across packets; successive requests to different names on one connection; refused Host;
+refused descendant; refusal blocks the rest of the connection (an allowed request before it is answered, the
+refused and a later allowed one never reach the peer); absolute-form target wins over Host in both directions;
+IP target kept with address and port and no decision; duplicate Host unavailable; CONNECT ends HTTP parsing;
+allow-all after the rule is removed.
 
 Findings:
 
-- The shared physical-wire witness only captures DNS ports. Its output for these cases is recorded but is not
-  evidence. The peer's own receipt is the oracle, which is stronger.
-- While the App keeps its socket open no refused byte reaches the peer. After the App closes the socket, the
-  kernel's retransmissions of the refused segment arrived at the peer (`late_arrivals`). The Root capture rule
-  matches on socket owner (`-m owner --uid-owner`), and a closed (orphaned) socket has none. This is a property
-  of the Root capture rule, not of the HTTP code, and it applies to every Root rule once the owner socket is gone.
-- **VPN**: the App's request is answered through the VPN (client address is the TUN address, the peer sees the
-  Product's egress socket) but `show product flows` holds no FlowEntry for the App's connection, so no HTTP
-  state exists and nothing is filtered. VPN Direct TCP appears to terminate the App's TCP stream in the flow
-  stack, so the packet graph's Flow observer never sees the request bytes. This needs a decision, see the
-  ticket.
+- **VPN App identity is asynchronous.** The VPN resolves a new connection's App UID through the Android lookup
+  after its first packets, and App-bound rules apply only from then on (existing resolver contract; a miss never
+  holds a packet). The 12 shared cases therefore wait 1.5 s after connect before the first request on VPN. The
+  extra `http-vpn-cold-uid` case sends at once: the refusal is still recorded and the second request never
+  reaches the peer; in this run the first one did not reach it either (`first_request_reached_peer=false`), but
+  that is timing, not a guarantee, and is not claimed.
+- **Root retransmission after close.** While the App owns its socket no refused byte reaches the peer. After
+  the App closes it, the kernel's retransmissions of the refused segment reached the peer (`late_arrivals`).
+  The Root capture rule matches the socket owner (`-m owner --uid-owner`); an orphaned socket has none. This is a
+  property of the existing Root capture rule for every policy, not of the HTTP code. VPN has no such case.
+- The shared physical-wire witness only captures DNS ports, so it is recorded but is not evidence here.
+- Driver findings that changed test code only: a closed VPN flow leaves the table at once, so the Flow is read
+  before wire output is collected; Android's cached-app freezer can stop the probe thread while it sleeps, so the
+  App is brought to the foreground before waiting for it to close (as in S322).
+
+After the runs the original APK and all 4861 private-data members were restored at the fresh maximum
+generation (`original-restoration-r4`), with no NFQUEUE entry, Product hook or owned route left.
 
 ## Not covered
 
-VPN, N3, handover, packets that arrive out of order (parsing ends), more than four heads in one packet
-(the surplus is counted, the last head is kept), HTTP/2 and encrypted HTTP.
+Root/VPN N3, handover, packets that arrive out of order (parsing ends), more than four heads in one packet
+(the surplus is counted, the last head is kept), HTTP/2 and encrypted HTTP. IP-literal targets stop at the
+pending-qualification point; no association consumer exists and none is enabled.
