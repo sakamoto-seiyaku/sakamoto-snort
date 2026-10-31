@@ -65,9 +65,15 @@ def assoc_status(device, label):
     return rows
 
 
+def answer_rows(case):
+    """Stage-2 records of the answer: one per connected name (QName first)."""
+    rows = [r for r in case["records"] if r["stage"] == 2]
+    assert rows and sorted(r.get("name_index", 0) for r in rows) == list(range(len(rows))), rows
+    return sorted(rows, key=lambda r: r.get("name_index", 0))
+
+
 def answer_row(case):
-    row, = [r for r in case["records"] if r["stage"] == 2]
-    return row
+    return answer_rows(case)[0]
 
 
 def exchange(device, primary, backup, result, label, query, answer, *, family=4, protocol=17,
@@ -79,13 +85,19 @@ def exchange(device, primary, backup, result, label, query, answer, *, family=4,
     age = None
     if expected_cached:
         age = answer_row(case)["mono_us"] - cache_origin_us
-    routing.validate_routed(case, primary_port=15353, cache_age_us=age)
+    # The shared validator expects one stage-2 and one stage-4 record, i.e. the QName row.
+    view = dict(case, records=[r for r in case["records"] if r.get("name_index", 0) == 0])
+    routing.validate_routed(view, primary_port=15353, cache_age_us=age)
+    case["status"] = view["status"]
     case["status_after"] = assoc_status(device, label)
     return case
 
 
 def check(case, *, admitted=0, refreshed=0, skipped=0, reason=0):
     row = answer_row(case)
+    # Every per-name row of one answer reports the same admission of that answer.
+    keys = ("assoc_admitted", "assoc_refreshed", "assoc_skipped", "assoc_reason")
+    assert all([r.get(k, 0) for k in keys] == [row.get(k, 0) for k in keys] for r in answer_rows(case)), case["records"]
     got = dict(admitted=row.get("assoc_admitted", 0), refreshed=row.get("assoc_refreshed", 0),
                skipped=row.get("assoc_skipped", 0), reason=row.get("assoc_reason", 0))
     want = dict(admitted=admitted, refreshed=refreshed, skipped=skipped, reason=reason)
