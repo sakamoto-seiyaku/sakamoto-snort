@@ -63,7 +63,15 @@ def assoc_status(device, label):
         assert int(row["entry_limit"]) == 1024 and int(row["window_us"]) == 7200 * 10**6, row
         assert row["enforcement"] == "0", row
         assert int(row["bytes"]) > 0 and int(row["entries"]) <= 1024, row
-    return rows
+    if len(rows) == 1:
+        return rows
+    # Each FlowOwner keeps its own table; the cases reason about their sum.
+    total = dict(rows[0], owner="all", owners=str(len(rows)))
+    for key in ("entries", "high_water", "bytes", "admitted", "refreshed", "expired", "evicted",
+                "view_dropped", "skipped", "rejected"):
+        total[key] = str(sum(int(row[key]) for row in rows))
+    total["per_owner_entries"] = ",".join(row["entries"] for row in rows)
+    return [total]
 
 
 def answer_rows(case):
