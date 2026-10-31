@@ -40,13 +40,8 @@ retain their separate scopes; equal-throughput whole-path gains remain unestabli
 
 ## What exists
 
-The product packet domain is VPP-native C. Root uses native NFQUEUE lanes; the
-controlled Android VPN validation path uses TUN and the owner-local HEV/lwIP
-transport stack. Shared parsing, canonical worker ownership, L4 policy,
-FlowRuntime/protocol trackers, bounded reassembly, expiry and network facts have
-separately scoped evidence. Rust owns control-plane sessions; Java RuntimeService
-owns Android supervision. POC source and the removed C++ implementation are not
-product code or compatibility fallbacks.
+The product packet domain is VPP-native C. Root uses native NFQUEUE lanes; the controlled Android VPN validation path uses TUN and the owner-local HEV/lwIP transport stack. Shared parsing, canonical worker ownership, L4 policy, FlowRuntime/protocol trackers, bounded reassembly, expiry and network facts have separately scoped evidence.
+Rust owns control-plane sessions; Java RuntimeService owns Android supervision. POC source and the removed C++ implementation are not product code or compatibility fallbacks.
 
 Root defaults selected on 2026-10-13 now use 128 ordinary receive/pending slots,
 48 primary credits, a 16-datagram callback budget, a 1 MiB socket buffer request
