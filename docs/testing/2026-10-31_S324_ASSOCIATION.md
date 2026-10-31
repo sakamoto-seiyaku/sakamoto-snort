@@ -45,8 +45,51 @@ shared DNS proxy, so Root and VPN use one implementation.
 One run of `sakamoto-product-root-dns-tcp-pending-bounds-test` aborted once under `ctest -j4` and
 passed in 31 further runs and the next full run; no cause was found.
 
+## Pixel 6a qualification
+
+One native stage (`android-native-r3`) and one APK (`android-apk-r3`, SHA-256 `b42df484…`) built from the
+committed sources. An unchanged repeat of each had zero Rust compilations, zero Ninja actions and zero
+bytecode compilations, with a byte-identical payload. Ordinary App entry, normal SQLite, clean stops, and
+an independent finite UDP/TCP peer on the host as the configured upstream. The oracle is the stage-2
+observation row (`assoc_*`) of each answer plus the Product's `dns.assoc` status line, which is new
+(`show product dns proxy`).
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| `device-root-n1-r7` | Root N1, 8 cases | PASS |
+| `device-vpn-n1-r3` | VPN N1, the same 8 cases | PASS |
+
+The cases: first allowed answer (1 pair); the same query again from the cache (the pair is refreshed, none
+added); CNAME chain (QName and the connected CNAME both reach the address, 2 pairs); answer with an
+unrelated owner and an additional-section address (only the one owner-connected record admitted);
+NXDOMAIN (reason `NOT_ELIGIBLE`); NODATA (`NO_ADDRESS`); loopback-only answer (`UNUSABLE_ONLY`, one address
+skipped); AAAA over a proxied TCP session on IPv6 (1 pair). Root counters at the end: 4 entries, 4
+admitted, 1 refreshed, 1 rejected, 1 skipped, no eviction, expiry or view drop, `enforcement=0`. The
+return-stage rows carry no association claim, and every stage-2 row of one answer reports the same
+admission. The complete durable store after Stop lists the same admissions.
+
+On VPN the table also holds pairs from the phone's own background lookups (`mtalk.google.com`,
+`time.android.com`, caller Unknown, UID unknown). The VPN counters are therefore checked as deltas from a
+baseline read after configuration, with nothing lost, evicted or double counted; the extra names are
+listed in `durable_foreign_admissions`.
+
+Defects the device runs found, all fixed in Product code before the passing runs:
+
+- The observation decoder still required the former reserved bytes at 652..655 to be zero, so every
+  delivered-answer record carrying admission evidence was dropped as malformed. The Host byte-level test
+  only covered the rejecting side; the positive case is established by the device runs and the durable store.
+- Admission read the caller's receive buffer after the reply callback had run. For a proxied TCP session
+  that buffer was already reused and the answer looked ineligible. Admission now reads the proxy's own
+  copy of the answer.
+
+Findings that changed test code only: the CNAME answer produces one stage-2 row per connected name; the
+shared validator is applied to the QName row. After the runs, the original APK and all 4861 private-data
+members were restored at the fresh maximum generation (`original-restoration-r3`) with no NFQUEUE entry,
+Product hook or owned route left.
+
 ## Not covered
 
-Root and VPN Adapter runs on the Pixel 6a, real App or system lookups, return failure injected at the
-Adapter, and N3. Cross-App/profile consumption, SNI and connection-time use of the hook, and any
+Root N3 and VPN N3, a return failure injected at the Adapter (the delivery field is verified on the
+accepted path only), and any wait across the real two-hour window or the 1024-pair capacity on the phone;
+those two are Host-only evidence (`sakamoto-product-dns-assoc-test`). Cross-App/profile consumption, SNI and connection-time use of the hook, and any
 enforcement remain out of scope.

@@ -23,6 +23,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 
 [S323](../testing/2026-10-31_S323_DOH.md) adds bounded DoH over the same Root/VPN owner: an https URL upstream with original-network address discovery, HTTP/1.1 POST with ALPN `http/1.1` only, bounded HTTP framing with no redirect or compression, HTTP Age subtracted before caching, and HTTP/ALPN failures in observation version 11. Pixel 6a Root and VPN N1 30-case matrices pass with 140 whole records each; N3, handover and public-service scopes are not claimed.
 
+[S324](../testing/2026-10-31_S324_ASSOCIATION.md) adds domain-IP association facts to the shared DNS proxy: pairs from the answer section's QName/connected-CNAME addresses, a per-pair two-hour life independent of the answer TTL that only allowed answers refresh, bounded capacity with view/Stop invalidation, a read-only qualification hook with enforcement disabled (cross-App/profile scope is undecided), admission evidence in the existing DNS observation record and a `dns.assoc` status line. Qualified on Host and on Pixel 6a Root/VPN N1; no consumer of the hook exists, so no fallback acceptance is claimed.
+
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
 worker, with direct TUN reads into VPP buffers and index-only owner transfer.
