@@ -873,6 +873,9 @@ fn authenticated_service_identity_and_bootstrap_failure_survive_normal_sqlite() 
         assert!(DnsRecord::decode(&invalid).is_none(),"reserved/string guard {offset}");}
     let mut false_auth=wire.clone();false_auth[1022]=2;false_auth[1024]=1;
     assert!(DnsRecord::decode(&false_auth).is_none(),"pending authorization is never authentication");
+    // Association admission bytes (offset 652..656) belong to a delivered answer only.
+    let mut stray=wire.clone();stray[652]=1;
+    assert!(DnsRecord::decode(&stray).is_none(),"association claim on a non-answer stage");
     let root=test_root("dot-metadata");std::fs::create_dir(&root).unwrap();
     let path=root.join("observation.json");let mut store=ObservationStore::open(&path).unwrap();
     store.begin_generation(77).unwrap();store.consume_dns(&[record.clone()],61_000_000).unwrap();

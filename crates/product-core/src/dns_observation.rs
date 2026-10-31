@@ -405,7 +405,7 @@ impl DnsRecord {
         if u16_at(0) != expected || data.len() < expected as usize
             || (tcp_extended && data[590..592] != [0, 0])
             || (extended && data[571] != 0 && !doh_extended)
-            || (proxy_extended && ((data[637] != 0 && !doh_extended) || data[652..656] != [0;4]))
+            || (proxy_extended && (data[637] != 0 && !doh_extended))
             || (!extended && data[126..128] != [0, 0])
             || u16_at(112) > 255 || data[123] > 1 { return None; }
         let name_length = u16_at(112) as usize;
