@@ -105,6 +105,11 @@ pub struct DnsRecord {
     #[serde(default, skip_serializing_if = "zero_u8")] pub bootstrap_state: u8,
     #[serde(default, skip_serializing_if = "zero_u8")] pub authorization_state: u8,
     #[serde(default, skip_serializing_if = "zero_u8")] pub trust_source: u8,
+    /// DoH only (observation version 11): ALPN outcome, HTTP failure class, status and Age.
+    #[serde(default, skip_serializing_if = "zero_u8")] pub alpn_state: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub http_error: u8,
+    #[serde(default, skip_serializing_if = "zero_u16")] pub http_status: u16,
+    #[serde(default, skip_serializing_if = "zero_u32")] pub http_age: u32,
 }
 
 fn zero_u8(value: &u8) -> bool { *value == 0 }
@@ -204,13 +209,14 @@ impl DnsRecord {
         if self.transport_metadata == 0 {
             return self.service_identity.is_empty() && no_connection && no_bootstrap
                 && self.tls_state == 0 && self.bootstrap_state == 0
-                && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0;
+                && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0
+                && self.doh_fields_zero();
         }
         let address = |family, port, value: &[u8;16]| matches!(family,4|6) && port != 0
             && *value != [0;16] && value[0] != 255
             && (family != 4 || (value[0] != 0 && value[0] < 224 && value[4..] == [0;12]))
             && (family != 6 || value[0] != 0xff);
-        if self.transport_metadata != 1 || self.proxy_flags & 1 == 0 || self.upstream_transport != 3
+        if self.transport_metadata != 1 || self.proxy_flags & 1 == 0 || !matches!(self.upstream_transport,3|4)
             || self.service_identity.is_empty() || self.service_identity.len() > 255
             || !self.service_identity.is_ascii() || self.service_identity.as_bytes().contains(&0)
             || self.service_identity.bytes().any(|c| !(c.is_ascii_alphanumeric() || matches!(c,b'.'|b'-'|b'_'|b':')))
@@ -224,12 +230,25 @@ impl DnsRecord {
             || (self.tls_state == 2 && (no_connection || self.authorization_state != 2 || self.trust_source == 0 || self.tls_error != 0)) {
             return false;
         }
+        let doh = self.upstream_transport == 4;
+        if !doh && !self.doh_fields_zero() { return false; }
+        if doh && (self.alpn_state > 3 || self.http_error > 12 || self.http_status > 599) { return false; }
         if self.tls_state == 4 {
+            // Retained data creates no connection, authentication or HTTP claim.
             return self.proxy_flags & 16 != 0 && no_connection && no_bootstrap
-                && self.bootstrap_state == 0 && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0;
+                && self.bootstrap_state == 0 && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0
+                && self.doh_fields_zero();
         }
-        if self.proxy_flags & 20 != 0 && matches!(self.stage,2|4) { return self.tls_state == 2; }
+        if self.proxy_flags & 20 != 0 && matches!(self.stage,2|4) {
+            // A delivered DoH answer needs a complete 200 response on http/1.1 (or no ALPN).
+            return self.tls_state == 2
+                && (!doh || (self.http_status == 200 && self.http_error == 0 && matches!(self.alpn_state,1|2)));
+        }
         true
+    }
+
+    fn doh_fields_zero(&self) -> bool {
+        self.alpn_state == 0 && self.http_error == 0 && self.http_status == 0 && self.http_age == 0
     }
 
     fn valid_proxy(&self) -> bool {
@@ -315,10 +334,10 @@ impl DnsRecord {
                 && self.winner == 0 && self.policy_generation == 0 && self.policy_revision == 0
                 && self.policy_hash == 0 && self.return_token == 0 && self.return_winner == 0
         } else {
-            self.request_attempt != 0 && matches!(self.upstream_transport,1|2|3)
+            self.request_attempt != 0 && matches!(self.upstream_transport,1|2|3|4)
                 && ((matches!(self.upstream_family,4|6) && self.upstream_port != 0
                     && (self.upstream_family != 4 || self.upstream_address[4..] == [0;12]))
-                    || (self.transport_metadata == 1 && self.upstream_transport == 3
+                    || (self.transport_metadata == 1 && matches!(self.upstream_transport,3|4)
                         && self.upstream_family == 0 && self.upstream_address == [0;16] && self.upstream_port != 0)
                     || local_without_upstream)
                 && (self.delivery <= 5 || self.delivery == 8) && (self.client_udp_capacity == 0 || self.client_udp_capacity >= 512)
@@ -360,7 +379,7 @@ impl DnsRecord {
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8 | 9 | 10)
+        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8 | 9 | 10 | 11)
             || data[6..8] != [0, 0] {
             return None;
         }
@@ -372,11 +391,12 @@ impl DnsRecord {
         let proxy_extended = data[2] >= 8;
         let routing_extended = data[2] >= 9;
         let tls_extended = data[2] >= 10;
+        let doh_extended = data[2] >= 11;
         let expected = if tls_extended {1032} else if routing_extended {720} else if proxy_extended {704} else if tcp_extended { 592 } else if extended { 576 } else { 480 };
         if u16_at(0) != expected || data.len() < expected as usize
             || (tcp_extended && data[590..592] != [0, 0])
-            || (extended && data[571] != 0)
-            || (proxy_extended && (data[637] != 0 || data[652..656] != [0;4]))
+            || (extended && data[571] != 0 && !doh_extended)
+            || (proxy_extended && ((data[637] != 0 && !doh_extended) || data[652..656] != [0;4]))
             || (!extended && data[126..128] != [0, 0])
             || u16_at(112) > 255 || data[123] > 1 { return None; }
         let name_length = u16_at(112) as usize;
@@ -387,7 +407,7 @@ impl DnsRecord {
         let service_identity = if tls_extended {
             let text = &data[720..976];
             let length = text.iter().position(|byte| *byte == 0)?;
-            if text[length..].iter().any(|byte| *byte != 0) || data[1026..1032] != [0;6] { return None; }
+            if text[length..].iter().any(|byte| *byte != 0) || (!doh_extended && data[1026..1032] != [0;6]) { return None; }
             std::str::from_utf8(&text[..length]).ok()?.to_owned()
         } else { String::new() };
         let record = Self {
@@ -471,6 +491,10 @@ impl DnsRecord {
             bootstrap_state: if tls_extended {data[1023]} else {0},
             authorization_state: if tls_extended {data[1024]} else {0},
             trust_source: if tls_extended {data[1025]} else {0},
+            alpn_state: if doh_extended {data[571]} else {0},
+            http_error: if doh_extended {data[637]} else {0},
+            http_status: if doh_extended {u16_at(1026)} else {0},
+            http_age: if doh_extended {u32_at(1028)} else {0},
         };
         record.valid().then_some(record)
     }

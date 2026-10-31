@@ -24,7 +24,7 @@ static unsigned observation_count;
 static int send_query(void *opaque,const product_dns_proxy_key_t *selected,unsigned transport,
   const uint8_t *wire,size_t length,uint64_t limit)
 {
-  assert(!opaque && (transport==1 || transport==2 || transport==3) && length>=12 && length<=sizeof(sent));
+  assert(!opaque && (transport==1 || transport==2 || transport==3 || transport==4) && length>=12 && length<=sizeof(sent));
   assert(sends<256);attempts[sends]=*selected;
   ++sends; key=*selected; deadline=limit; sent_length=length;sent_transport=transport;
   memcpy(sent,wire,length); return 1;
@@ -382,6 +382,76 @@ static void dot_requires_complete_authentication_and_cancels_old_events(void)
   }
 }
 
+static product_dns_proxy_t *doh_proxy(void)
+{
+  product_dns_proxy_t *old=configured_proxy(1);product_dns_proxy_close(old);
+  product_dns_proxy_route_t route={.enabled=1,.family=4,.port=853,.address={192,0,2,53},
+    .endpoint_count=1,.route_count=1,.routes={{.count=1}},
+    .endpoints={{.transport=PRODUCT_DNS_PROXY_DOH,.family=4,.port=853,.address={192,0,2,53}}}};
+  memcpy(route.endpoints[0].identity,"dns.test\0/dns-query",19);
+  product_dns_proxy_callbacks_t callbacks={.send=send_query,.reply=reply,.acquire=acquire,.observe=observe};
+  product_dns_proxy_t *proxy=product_dns_proxy_open(321,&route,&callbacks,NULL);assert(proxy);return proxy;
+}
+static product_dns_proxy_io_event_t doh_event(unsigned age)
+{
+  return (product_dns_proxy_io_event_t){.connection_family=4,.connection_port=853,
+    .connection_address={192,0,2,53},.tls=PRODUCT_DNS_TLS_AUTHENTICATED,
+    .authorization=PRODUCT_DNS_AUTHORIZATION_GRANTED,.trust_source=1,.http_status=200,
+    .http_age=age,.alpn=PRODUCT_DNS_ALPN_HTTP11};
+}
+static unsigned reply_ttl(void){return ((unsigned)received[sent_length+6]<<24)|((unsigned)received[sent_length+7]<<16)|
+  ((unsigned)received[sent_length+8]<<8)|received[sent_length+9];}
+static void doh_age_is_spent_before_delivery_and_cache_lifetime(void)
+{
+  product_dns_proxy_t *proxy=doh_proxy();submit(proxy,question,100);
+  assert(sends==1&&sent_transport==PRODUCT_DNS_PROXY_DOH);
+  product_dns_proxy_io_event_t event=doh_event(20);
+  product_dns_proxy_io_event(proxy,&key,&event);
+  answer(proxy,101,0,1,60);
+  assert(replies==1&&(received[3]&15)==0&&reply_ttl()==40);
+  assert(final.io.http_age==20&&final.io.http_status==200&&final.io.alpn==PRODUCT_DNS_ALPN_HTTP11);
+  assert(final.transport==PRODUCT_DNS_PROXY_DOH);
+  /* Cache keeps the already spent Age: 40 seconds remain, then local time counts. */
+  submit(proxy,question,100+5000000);
+  assert(sends==1&&replies==2&&final.cached&&reply_ttl()>=34&&reply_ttl()<=35);
+  assert(final.io.tls==PRODUCT_DNS_TLS_CACHED_DATA&&!final.io.http_age&&!final.io.http_status);
+  submit(proxy,question,100+41000000);          /* 41s > 60s TTL minus 20s Age */
+  assert(sends==2&&replies==2);
+  product_dns_proxy_close(proxy);
+}
+static void doh_age_beyond_ttl_delivers_zero_ttl_and_never_caches(void)
+{
+  product_dns_proxy_t *proxy=doh_proxy();submit(proxy,question,100);
+  product_dns_proxy_io_event_t event=doh_event(4000000000U);
+  product_dns_proxy_io_event(proxy,&key,&event);
+  answer(proxy,101,0,1,60);
+  assert(replies==1&&(received[3]&15)==0&&reply_ttl()==0&&final.io.http_age==4000000000U);
+  submit(proxy,question,102);
+  assert(sends==2&&replies==1);                 /* TTL 0 neither extends nor creates cache data */
+  product_dns_proxy_close(proxy);
+}
+static void doh_without_complete_http_exchange_never_delivers_data(void)
+{
+  product_dns_proxy_t *proxy=doh_proxy();submit(proxy,question,100);
+  answer(proxy,101,0,1,60);                     /* no authenticated transport event yet */
+  assert(replies==1&&(received[3]&15)==2);
+  product_dns_proxy_close(proxy);
+  /* HTTP facts are DoH-only: a DoT exchange ignores them and still needs authentication. */
+  proxy=dot_proxy();submit(proxy,question,100);
+  product_dns_proxy_io_event_t event=doh_event(5);event.alpn=0;
+  product_dns_proxy_io_event(proxy,&key,&event);
+  answer(proxy,101,0,1,60);
+  assert(replies==1&&(received[3]&15)==2);
+  product_dns_proxy_close(proxy);
+  /* Out-of-range HTTP facts are not accepted for a DoH exchange either. */
+  proxy=doh_proxy();submit(proxy,question,100);
+  event=doh_event(5);event.http_status=700;
+  product_dns_proxy_io_event(proxy,&key,&event);
+  answer(proxy,101,0,1,60);
+  assert(replies==1&&(received[3]&15)==2);
+  product_dns_proxy_close(proxy);
+}
+
 int main(void)
 {
   primary_timeout_selects_backup();
@@ -395,6 +465,9 @@ int main(void)
   encrypted_candidates_keep_identity_and_do_not_add_plaintext_fallback();
   hostname_transport_uses_the_configured_identity_without_a_fabricated_ip();
   dot_requires_complete_authentication_and_cancels_old_events();
+  doh_age_is_spent_before_delivery_and_cache_lifetime();
+  doh_age_beyond_ttl_delivers_zero_ttl_and_never_caches();
+  doh_without_complete_http_exchange_never_delivers_data();
   puts("ordered DNS: primary timeout selects configured backup");
   return 0;
 }

@@ -351,8 +351,14 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .upstream_attempt = event->upstream_attempt,
     .resolution_route = event->resolution_route, .resolver_id = event->resolver_id,
   };
-  if (event->transport == PRODUCT_DNS_PROXY_DOT) {
-    memcpy (record.service_identity, event->route.identity, sizeof (record.service_identity));
+  if (event->transport == PRODUCT_DNS_PROXY_DOT || event->transport == PRODUCT_DNS_PROXY_DOH) {
+    /* DoH stores "host NUL path": only the host is the service identity. */
+    memcpy (record.service_identity, event->route.identity,
+      strnlen ((const char *) event->route.identity, sizeof (record.service_identity)));
+    if (event->transport == PRODUCT_DNS_PROXY_DOH) {
+      record.alpn_state = event->io.alpn; record.http_error = event->io.http_error;
+      record.http_status = event->io.http_status; record.http_age = event->io.http_age;
+    }
     memcpy (record.connection_address, event->io.connection_address, 16);
     memcpy (record.bootstrap_address, event->io.bootstrap_address, 16);
     record.connection_port = event->io.connection_port;

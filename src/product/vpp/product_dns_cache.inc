@@ -274,9 +274,11 @@ static dns_cache_entry_t *cache_lookup (dns_cache_t *cache, const uint8_t *query
     }
   ++cache->misses; return NULL;
 }
+/* age_seconds is HTTP Age already spent upstream (DoH). It reduces the reusable
+ * lifetime and every stored RR TTL before local elapsed time starts counting. */
 static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_length,
   const uint8_t *answer, size_t answer_length, unsigned transport, uint64_t now,
-  const dns_cache_view_t *view, const product_dns_response_t *response)
+  const dns_cache_view_t *view, const product_dns_response_t *response, uint32_t age_seconds)
 {
   size_t end;
   if (!cache_question (query, query_length, &end) || answer_length < end ||
@@ -287,8 +289,9 @@ static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_
   /* Validate directly from the synchronous input first. Retire enough old
    * owned data before allocating its replacement: the bound applies to live
    * memory throughout insertion, not just the final container state. */
-  if (!cache_answer_ttls (answer, answer_length, 0, response, NULL, &lifetime))
+  if (!cache_answer_ttls (answer, answer_length, 0, response, NULL, &lifetime) || lifetime <= age_seconds)
     { ++cache->skipped; return; }
+  lifetime -= age_seconds;
   cache_prune (cache, now, view->network, view->route);
   if (cache->serial == UINT64_MAX) { cache_clear (cache); cache->serial = 0; }
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
@@ -309,8 +312,9 @@ static void cache_store (dns_cache_t *cache, const uint8_t *query, size_t query_
   uint8_t *copy = malloc (bytes);
   if (!copy) { ++cache->skipped; return; }
   memcpy (copy, query, query_length); memcpy (copy + query_length, answer, answer_length);
-  (void) cache_answer_ttls (copy + query_length, answer_length, 0, response,
+  (void) cache_answer_ttls (copy + query_length, answer_length, age_seconds, response,
     copy + query_length, &lifetime);
+  lifetime = lifetime > age_seconds ? lifetime - age_seconds : 0;
   for (unsigned i = 0; i < DNS_CACHE_ENTRIES; ++i)
     if (!cache->entries[i].data)
       {

@@ -344,7 +344,7 @@ static int cached_exchange (product_dns_proxy_t *proxy, proxy_exchange_t *exchan
     {
       answer[0] = exchange->wire[0]; answer[1] = exchange->wire[1];
       exchange->transport = cached->transport;
-      if(cached->transport==PRODUCT_DNS_PROXY_DOT)
+      if(cached->transport==PRODUCT_DNS_PROXY_DOT||cached->transport==PRODUCT_DNS_PROXY_DOH)
         exchange->io=(product_dns_proxy_io_event_t){.tls=PRODUCT_DNS_TLS_CACHED_DATA};
       for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
         if (proxy->requests[i].exchange == exchange) proxy->requests[i].event.cached = 1;
@@ -439,7 +439,8 @@ void product_dns_proxy_io_event(product_dns_proxy_t *proxy,const product_dns_pro
   const product_dns_proxy_io_event_t *event)
 {
   proxy_exchange_t *exchange=find_exchange(proxy,key);
-  if(!exchange||!event||exchange->transport!=PRODUCT_DNS_PROXY_DOT||event->tls>PRODUCT_DNS_TLS_FAILED||
+  if(!exchange||!event||(exchange->transport!=PRODUCT_DNS_PROXY_DOT&&exchange->transport!=PRODUCT_DNS_PROXY_DOH)||
+     event->tls>PRODUCT_DNS_TLS_FAILED||
      event->bootstrap>PRODUCT_DNS_BOOTSTRAP_FAILED||event->authorization>PRODUCT_DNS_AUTHORIZATION_FAILED||
      event->trust_source<1||event->trust_source>2)return;
   if(event->connection_family){
@@ -458,6 +459,9 @@ void product_dns_proxy_io_event(product_dns_proxy_t *proxy,const product_dns_pro
        !event->bootstrap_family))return;
   if(event->tls==PRODUCT_DNS_TLS_AUTHENTICATED&&
      (!event->connection_family||event->authorization!=PRODUCT_DNS_AUTHORIZATION_GRANTED||event->error))return;
+  if(exchange->transport==PRODUCT_DNS_PROXY_DOH){
+    if(event->http_status>599||event->alpn>PRODUCT_DNS_ALPN_REFUSED||event->http_error>PRODUCT_DNS_HTTP_ERROR_ALPN)return;
+  }else if(event->http_status||event->http_age||event->http_error||event->alpn)return;
   exchange->io=*event;
 }
 
@@ -607,7 +611,8 @@ static int reserve_id (product_dns_proxy_t *proxy, uint64_t now, uint16_t *id)
 }
 
 static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
-  unsigned transport, const uint8_t *wire, size_t length, uint64_t now_us)
+  unsigned transport, const uint8_t *wire, size_t length, uint64_t now_us,
+  const uint8_t *aged, uint32_t age_seconds)
 {
   if (!request || !proxy->callbacks.acquire) return;
   const product_dns_proxy_key_t *key = &request->event.key;
@@ -655,7 +660,7 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
             {
               request->exchange->stored = 1;
               cache_store (&proxy->cache, request->exchange->wire, request->exchange->length, wire, length,
-                transport, now_us, &request->exchange->view, &response);
+                transport, now_us, &request->exchange->view, &response, age_seconds);
             }
           event.rcode = response.rcode; event.response = &response; event.transport = transport;
           if (!product_dns_response_match (snapshot.view, &snapshot.context.packet, &response,
@@ -679,7 +684,7 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
                   uint8_t *answer = malloc (length);
                   if (answer)
                     {
-                      memcpy (answer, wire, length);
+                      memcpy (answer, aged ? aged : wire, length);
                       answer[0] = event.query.id >> 8; answer[1] = event.query.id;
                       event.output_bytes = length;
                       release_request (proxy, request);
@@ -729,19 +734,31 @@ void product_dns_proxy_answer (product_dns_proxy_t *proxy, const product_dns_pro
 {
   proxy_exchange_t *exchange = find_exchange (proxy, key);
   if (!exchange || exchange->answering) return;
-  if(exchange->transport==PRODUCT_DNS_PROXY_DOT&&exchange->io.tls!=PRODUCT_DNS_TLS_AUTHENTICATED&&
+  int encrypted=exchange->transport==PRODUCT_DNS_PROXY_DOT||exchange->transport==PRODUCT_DNS_PROXY_DOH;
+  if(encrypted&&exchange->io.tls!=PRODUCT_DNS_TLS_AUTHENTICATED&&
      exchange->io.tls!=PRODUCT_DNS_TLS_CACHED_DATA){
     next_candidate(proxy,exchange,now_us,PRODUCT_DNS_PROXY_ATTEMPT_INVALID);return;
   }
   if (exchange->deadline <= now_us)
     { next_candidate (proxy, exchange, now_us, PRODUCT_DNS_PROXY_ATTEMPT_TIMEOUT); return; }
   product_dns_proxy_key_t expected = exchange->key;
+  /* HTTP Age is time the answer already spent upstream. Delivery and cache both see
+   * TTLs reduced by it (floor zero); data with no ageable RR is unchanged. */
+  uint32_t age = exchange->transport == PRODUCT_DNS_PROXY_DOH ? exchange->io.http_age : 0;
+  uint8_t *aged = NULL;
+  if (age && wire && length >= 12 && length <= PRODUCT_DNS_MESSAGE_MAX && (aged = malloc (length)))
+    {
+      uint32_t ignored;
+      memcpy (aged, wire, length);
+      if (!cache_answer_ttls (aged, length, age, NULL, aged, &ignored)) { free (aged); aged = NULL; }
+    }
   exchange->answering = 1;
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
     if (proxy->requests[i].exchange == exchange &&
         !memcmp (&exchange->key, &expected, sizeof (expected)))
-      answer_waiter (proxy, &proxy->requests[i], transport, wire, length, now_us);
+      answer_waiter (proxy, &proxy->requests[i], transport, wire, length, now_us, aged, age);
   if (!memcmp (&exchange->key, &expected, sizeof (expected))) exchange->answering = 0;
+  free (aged);
 }
 
 static int prepare_request (const product_dns_proxy_input_t *input, const uint8_t *wire, size_t length,

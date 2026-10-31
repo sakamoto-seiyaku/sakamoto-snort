@@ -137,10 +137,20 @@ def main():
             finally: listener.close()
 
         worker = threading.Thread(target=peer); worker.start()
-        original = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        original.bind(("127.0.0.1", 0)); original.settimeout(3.5); original_port = original.getsockname()[1]
-        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp.bind(("127.0.0.1", original_port)); tcp.listen(1); tcp.settimeout(3.5)
+        # The UDP ephemeral port number must also be free for TCP; retry the pair
+        # instead of failing when another process or TIME_WAIT holds the TCP side.
+        for _ in range(50):
+            original = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            original.bind(("127.0.0.1", 0)); original_port = original.getsockname()[1]
+            tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                tcp.bind(("127.0.0.1", original_port)); break
+            except OSError:
+                tcp.close(); original.close()
+        else:
+            raise RuntimeError("no free UDP/TCP port pair")
+        original.settimeout(3.5); tcp.listen(1); tcp.settimeout(3.5)
 
         def original_dns():
             try:

@@ -31,6 +31,18 @@ static inline int product_dns_name_valid (const uint8_t name[256], unsigned leng
   return label && label <= 63 && !memcmp (name + length, (uint8_t[256]) {0}, 256 - length);
 }
 
+/* DoH stores "host NUL path NUL" in the endpoint identity. Only the host part is the
+ * TLS service identity; the path is an origin-form request target (no fragment). */
+static inline int product_dns_route_doh_path_valid (const uint8_t *path, size_t available, size_t *length)
+{
+  size_t n = strnlen ((const char *) path, available);
+  if (!n || n >= available || n > 512 || path[0] != '/') return 0;
+  for (size_t i = 0; i < n; ++i)
+    if (path[i] <= 0x20 || path[i] >= 0x7f || path[i] == '#' || path[i] == '\\') return 0;
+  *length = n;
+  return 1;
+}
+
 static inline int product_dns_route_valid (const sakamoto_product_dns_config_t *config)
 {
   if (!config || config->enabled > 1 || config->reserved || config->reserved2 ||
@@ -43,18 +55,27 @@ static inline int product_dns_route_valid (const sakamoto_product_dns_config_t *
       continue;
     }
     size_t n = strnlen ((const char *) e->identity, sizeof (e->identity));
-    uint8_t numeric[16];
-    int hostname = n < 256 && product_dns_name_valid (e->identity, n) &&
-      inet_pton (AF_INET, (const char *) e->identity, numeric) != 1 &&
-      inet_pton (AF_INET6, (const char *) e->identity, numeric) != 1;
-    int bootstrap = e->transport == 3 && !e->family && e->port && e->port <= UINT16_MAX &&
+    uint8_t numeric[16], host[256] = {0};
+    /* A name check demands a zero tail, so a DoH identity is judged by its host part alone. */
+    memcpy (host, e->identity, n < 256 ? n : 256);
+    int hostname = n < 256 && product_dns_name_valid (host, n) &&
+      inet_pton (AF_INET, (const char *) host, numeric) != 1 &&
+      inet_pton (AF_INET6, (const char *) host, numeric) != 1;
+    int encrypted = e->transport == 3 || e->transport == 4;
+    int bootstrap = encrypted && !e->family && e->port && e->port <= UINT16_MAX &&
       !memcmp (e->address, (uint8_t[16]) {0}, 16) && hostname;
-    if ((e->transport != 1 && e->transport != 2 && e->transport != 3) || e->reserved ||
+    size_t used = n;
+    if (e->transport == 4) {
+      size_t path_length = 0;
+      if (n >= 255 || !product_dns_route_doh_path_valid (e->identity + n + 1, 255 - n, &path_length)) return 0;
+      used = n + 1 + path_length;
+    }
+    if ((e->transport != 1 && e->transport != 2 && !encrypted) || e->reserved ||
         (!bootstrap && !product_dns_address_valid (e->family, e->port, e->address)) || n >= 256 || !n ||
-        (!product_dns_name_valid (e->identity, n) &&
-         inet_pton (AF_INET, (const char *) e->identity, numeric) != 1 &&
-         inet_pton (AF_INET6, (const char *) e->identity, numeric) != 1) ||
-        memcmp (e->identity + n, (uint8_t[256]) {0}, 256 - n)) return 0;
+        (!product_dns_name_valid (host, n) &&
+         inet_pton (AF_INET, (const char *) host, numeric) != 1 &&
+         inet_pton (AF_INET6, (const char *) host, numeric) != 1) ||
+        used >= 256 || memcmp (e->identity + used, (uint8_t[256]) {0}, 256 - used)) return 0;
   }
   for (unsigned i = 0; i < SAKAMOTO_DNS_MAX_ROUTES; ++i) {
     const sakamoto_product_dns_route_t *r = &config->routes[i];

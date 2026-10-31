@@ -130,10 +130,21 @@ add_executable(sakamoto-product-dns-routing-io-test tests/host/product_dns_routi
 target_link_libraries(sakamoto-product-dns-routing-io-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-routing-io-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-routing-io-test COMMAND sakamoto-product-dns-routing-io-test)
+add_executable(sakamoto-product-dns-route-doh-test tests/host/product_dns_route_doh_test.c)
+target_include_directories(sakamoto-product-dns-route-doh-test PRIVATE src/product/vpp src/product/include)
+target_compile_options(sakamoto-product-dns-route-doh-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-route-doh-test COMMAND sakamoto-product-dns-route-doh-test)
 add_executable(sakamoto-product-dns-http-test tests/host/product_dns_http_test.c)
 target_link_libraries(sakamoto-product-dns-http-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-http-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-http-test COMMAND sakamoto-product-dns-http-test)
+add_executable(sakamoto-product-dns-doh-io-test tests/host/product_dns_doh_io_test.c
+  src/product/vpp/product_root_dns_io.c)
+target_link_libraries(sakamoto-product-dns-doh-io-test PRIVATE sakamoto_product_dns)
+target_compile_options(sakamoto-product-dns-doh-io-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-doh-io-test COMMAND python3
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/product_dns_doh_io_test.py"
+  $<TARGET_FILE:sakamoto-product-dns-doh-io-test>)
 add_executable(sakamoto-product-dns-dot-io-test tests/host/product_dns_dot_io_test.c
   src/product/vpp/product_root_dns_io.c)
 target_link_libraries(sakamoto-product-dns-dot-io-test PRIVATE sakamoto_product_dns)

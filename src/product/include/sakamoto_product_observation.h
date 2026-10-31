@@ -8,6 +8,8 @@
 #define PRODUCT_OBSERVATION_VERSION 8
 #define PRODUCT_DNS_OBSERVATION_VERSION 9
 #define PRODUCT_DNS_TLS_OBSERVATION_VERSION 10
+/* DoH keeps the 1032-byte TLS record and names its former reserved bytes. */
+#define PRODUCT_DNS_DOH_OBSERVATION_VERSION 11
 #define PRODUCT_DNS_OBSERVATION_LEGACY_BYTES 704U
 /* Storage bound follows the pinned VPP worker limit; live channels are 2*N. */
 #define PRODUCT_OBSERVATION_OWNERS SAKAMOTO_PRODUCT_MAX_FLOW_OWNERS
@@ -90,7 +92,7 @@ typedef struct {
   uint8_t candidate_count, name_source, correlation, packet_availability;
   uint64_t domain_lists;
   uint16_t rcode;
-  uint8_t adapter_profile, reserved_extension2;
+  uint8_t adapter_profile, alpn_state; /* alpn_state: DoH only (PRODUCT_DNS_ALPN_*) */
   uint32_t packet_uid;
   /* Per-direction framed identity prevents coalesced messages sharing one
    * packet token from replacing each other in the normal history store.
@@ -101,7 +103,7 @@ typedef struct {
   uint64_t route_revision, request_attempt, upstream_session;
   uint8_t upstream_address[16];
   uint16_t upstream_port;
-  uint8_t upstream_family, upstream_transport, proxy_result, proxy_reserved;
+  uint8_t upstream_family, upstream_transport, proxy_result, http_error; /* http_error: DoH only */
   uint16_t reply_rcode, client_udp_capacity, reply_capacity;
   uint32_t output_bytes, proxy_flags, proxy_reserved2;
   uint64_t return_token;
@@ -116,20 +118,27 @@ typedef struct {
   uint32_t bootstrap_ifindex;
   int32_t tls_error;
   uint8_t connection_family, bootstrap_family, tls_state, bootstrap_state;
-  uint8_t authorization_state, trust_source, tls_reserved[6];
+  uint8_t authorization_state, trust_source;
+  uint16_t http_status; /* DoH only */
+  uint32_t http_age;    /* DoH only: HTTP Age seconds, saturated */
 } product_dns_observation_record_t;
 _Static_assert (sizeof (product_dns_observation_record_t) == 1032, "DNS observation ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, return_token) == 656, "DNS return identity ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, upstream_attempt) == 704, "DNS resolver view ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, alpn_state) == 571, "DoH ALPN ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, http_error) == 637, "DoH error ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, http_status) == 1026, "DoH status ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, http_age) == 1028, "DoH age ABI");
 static inline uint16_t product_dns_observation_wire_bytes (const product_dns_observation_record_t *record)
 {
-  if (record->upstream_transport == 3) return sizeof (*record);
+  if (record->upstream_transport == 3 || record->upstream_transport == 4) return sizeof (*record);
   return record->upstream_attempt || record->resolution_route || record->resolver_id || record->stage == 5
     ? 720U : PRODUCT_DNS_OBSERVATION_LEGACY_BYTES;
 }
 static inline uint8_t product_dns_observation_wire_version (const product_dns_observation_record_t *record)
 {
+  if (record->upstream_transport == 4) return PRODUCT_DNS_DOH_OBSERVATION_VERSION;
   if (record->upstream_transport == 3) return PRODUCT_DNS_TLS_OBSERVATION_VERSION;
   return product_dns_observation_wire_bytes (record) == PRODUCT_DNS_OBSERVATION_LEGACY_BYTES
     ? PRODUCT_OBSERVATION_VERSION : PRODUCT_DNS_OBSERVATION_VERSION;

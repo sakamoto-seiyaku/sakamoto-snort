@@ -17,7 +17,8 @@ AES-GCM SHA-256/SHA-384 suites. The Product provides nonblocking `getrandom`
 through the library RNG callback and uses the existing owner fd/timer progression.
 It reads platform CA anchors, verifies the chain/time/server identity, and applies
 strict DNS SAN or IP SAN identity. It does not load application-selected anchors;
-a separate explicit debug-only fixture supplies offline test trust. TLS 1.3,
+a separate explicit debug-only fixture supplies offline test trust. `MBEDTLS_SSL_ALPN` is enabled
+for DoH only: its client profile offers the single protocol `http/1.1`; DoT offers none. TLS 1.3,
 TLS servers, a PSA runtime and external libcrypto are outside this build profile.
 
 `product_memory.c` scopes library allocations to each synchronous operation and

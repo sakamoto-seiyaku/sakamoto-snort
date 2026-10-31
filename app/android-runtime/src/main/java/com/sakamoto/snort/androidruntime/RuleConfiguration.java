@@ -97,7 +97,11 @@ public final class RuleConfiguration {
         java.util.HashSet<String> scopes = new java.util.HashSet<>();
         for (String line : text.split("[\\r\\n]+")) {
             String[] f = line.trim().split("\\s+");
-            if (f[0].equals("upstream")) {
+            if (f[0].equals("upstream") && f.length >= 3 && f[2].equals("doh")) {
+                if (endpoints.size() >= DNS_MAX_ENDPOINTS || unsigned32(f[1]) != endpoints.size())
+                    throw new IllegalArgumentException("upstream <index> doh <https URL> [connection IP|-]");
+                endpoints.add(dohEndpoint(f));
+            } else if (f[0].equals("upstream")) {
                 if (f.length != 6 || endpoints.size() >= DNS_MAX_ENDPOINTS
                         || unsigned32(f[1]) != endpoints.size()
                         || !(f[2].equals("udp") || f[2].equals("tcp") || f[2].equals("dot")))
@@ -162,6 +166,64 @@ public final class RuleConfiguration {
         for (java.util.ArrayList<long[]> entries : java.util.Arrays.asList(endpoints, routes, exceptions))
             for (long[] entry : entries) { System.arraycopy(entry, 0, wire, at, entry.length); at += entry.length; }
         return wire;
+    }
+
+    /** DoH is an https URL. The endpoint identity is "host NUL path"; the optional
+     * connection IP is separate, and without one the host is resolved through the
+     * original network's existing DNS in the native transport (like a DoT name). */
+    private static long[] dohEndpoint(String[] f) {
+        if (f.length != 4 && f.length != 5)
+            throw new IllegalArgumentException("upstream <index> doh <https URL> [connection IP|-]");
+        String url = f[3];
+        if (url.length() < 9 || !url.regionMatches(true, 0, "https://", 0, 8)
+                || url.indexOf('#') >= 0 || url.indexOf('\\') >= 0)
+            throw new IllegalArgumentException("DoH requires an https URL without fragment");
+        String rest = url.substring(8);
+        int cut = -1;
+        for (int i = 0; i < rest.length() && cut < 0; ++i)
+            if (rest.charAt(i) == '/' || rest.charAt(i) == '?') cut = i;
+        String authority = cut < 0 ? rest : rest.substring(0, cut);
+        String path = cut < 0 ? "/" : rest.charAt(cut) == '/' ? rest.substring(cut) : "/" + rest.substring(cut);
+        if (authority.isEmpty() || authority.indexOf('@') >= 0)
+            throw new IllegalArgumentException("DoH URL must not carry userinfo");
+        String host, portText = null;
+        if (authority.startsWith("[")) {
+            int close = authority.indexOf(']');
+            if (close < 0) throw new IllegalArgumentException("invalid DoH host");
+            host = authority.substring(1, close);
+            String after = authority.substring(close + 1);
+            if (!after.isEmpty()) {
+                if (!after.startsWith(":")) throw new IllegalArgumentException("invalid DoH host");
+                portText = after.substring(1);
+            }
+            ipv6(host); host = host.toLowerCase(java.util.Locale.ROOT);
+        } else {
+            int colon = authority.lastIndexOf(':');
+            host = colon < 0 ? authority : authority.substring(0, colon);
+            if (colon >= 0) portText = authority.substring(colon + 1);
+            if (host.matches("[0-9.]+")) ipv4(host); else host = dnsName(host);
+        }
+        long port = portText == null ? 443 : unsigned32(portText);
+        if (port == 0 || port > 65535) throw new IllegalArgumentException("invalid DNS port");
+        if (path.length() > 512) throw new IllegalArgumentException("DoH path too long");
+        for (int i = 0; i < path.length(); ++i) {
+            char c = path.charAt(i);
+            if (c <= 0x20 || c >= 0x7f) throw new IllegalArgumentException("invalid DoH path");
+        }
+        String identity = host + "\0" + path;
+        if (identity.length() > 255) throw new IllegalArgumentException("DoH URL too long");
+        boolean literal = host.contains(":") || host.matches("[0-9.]+");
+        String connection = f.length == 5 && !f[4].equals("-") ? f[4] : literal ? host : null;
+        long[] endpoint = new long[DNS_ENDPOINT_WORDS];
+        endpoint[0] = 4;
+        dnsString(endpoint, 8, identity);
+        if (connection == null) endpoint[2] = port;
+        else {
+            long[] single = dnsWire("udp " + connection + " " + port);
+            endpoint[1] = single[2]; endpoint[2] = single[3];
+            System.arraycopy(single, 4, endpoint, 4, 4);
+        }
+        return endpoint;
     }
 
     private static void dnsString(long[] wire, int at, String text) {

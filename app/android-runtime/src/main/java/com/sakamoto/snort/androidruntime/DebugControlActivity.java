@@ -853,7 +853,7 @@ public class DebugControlActivity extends Activity {
         root.addView(completeButtons, fillWrap());
         Button dnsUpstream = new Button(this); dnsUpstream.setText("Set DNS upstream"); dnsUpstream.setAllCaps(false);
         dnsUpstream.setOnClickListener(view -> submitCompleteRules(4)); root.addView(dnsUpstream, fillWrap());
-        TextView dnsHint = new TextView(this); dnsHint.setText("DNS: udp <IP> [port], or off. Ordered: upstream <index> <udp|tcp> <identity> <connection IP> <port>; route <index> <upstream indices>; exception <exact|descendants> <name> <original|route index>. Default route: 0.");
+        TextView dnsHint = new TextView(this); dnsHint.setText("DNS: udp <IP> [port], or off. Ordered: upstream <index> <udp|tcp|dot> <identity> <connection IP|-> <port>; upstream <index> doh <https URL> [connection IP]; route <index> <upstream indices>; exception <exact|descendants> <name> <original|route index>. Default route: 0.");
         root.addView(dnsHint, fillWrap());
         completeRuleView = new TextView(this); root.addView(completeRuleView, fillWrap());
 

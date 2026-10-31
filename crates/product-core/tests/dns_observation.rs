@@ -884,3 +884,69 @@ fn authenticated_service_identity_and_bootstrap_failure_survive_normal_sqlite() 
     let actual:serde_json::Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(actual["record"],value);
     drop(db);std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn doh_http_facts_survive_normal_sqlite_and_old_versions_cannot_carry_them() {
+    // Independent worked ABI v11: a DoH attempt whose HTTP response failed. The
+    // host is the only service identity; status, failure class and ALPN are named
+    // bytes that version 10 keeps reserved.
+    let mut wire = vec![0u8; 1032];
+    wire[..2].copy_from_slice(&1032u16.to_le_bytes()); wire[2]=11; wire[3]=16;
+    for (offset,value) in [(8,77u64),(16,323),(24,8),(32,100),(40,61_000_000),
+        (480,323),(488,77),(496,1),(504,123),(520,5),(544,8),(592,7),(600,1),(704,70_002)] {
+        wire[offset..offset+8].copy_from_slice(&value.to_le_bytes());
+    }
+    for offset in [80,572] {wire[offset..offset+4].copy_from_slice(&10123u32.to_le_bytes());}
+    wire[84..88].copy_from_slice(&u32::MAX.to_le_bytes());
+    wire[96..100].copy_from_slice(&3u32.to_le_bytes());
+    for (offset,value) in [(100,0x1235u16),(102,0x0100),(104,1),(106,1),
+        (108,40001),(110,53),(112,11),(632,443),(640,512),(642,512),(1008,443),(1010,53)] {
+        wire[offset..offset+2].copy_from_slice(&value.to_le_bytes());
+    }
+    wire[114..126].copy_from_slice(&[4,17,3,9,1,1,0,0,0,1,5,0]);
+    wire[128..132].copy_from_slice(&[192,0,2,2]); wire[144..148].copy_from_slice(&[1,1,1,1]);
+    wire[224..235].copy_from_slice(b"example.com"); wire[559]=9; wire[570]=1;
+    wire[635]=4; wire[636]=13;
+    wire[648..652].copy_from_slice(&1u32.to_le_bytes());
+    wire[716..720].copy_from_slice(&1u32.to_le_bytes());
+    wire[720..728].copy_from_slice(b"dns.test");
+    wire[976..980].copy_from_slice(&[192,0,2,53]);
+    wire[992..996].copy_from_slice(&[192,0,2,1]);
+    wire[1012..1016].copy_from_slice(&7u32.to_le_bytes());
+    wire[1020..1026].copy_from_slice(&[4,4,3,2,2,1]);
+    wire[571]=1;                                   // ALPN http/1.1
+    wire[637]=4;                                   // HTTP failure class: Content-Type
+    wire[1026..1028].copy_from_slice(&200u16.to_le_bytes());
+    wire[1028..1032].copy_from_slice(&17u32.to_le_bytes());
+    let record=DnsRecord::decode(&wire).expect("DoH keeps HTTP facts beside the TLS identity");
+    let value=serde_json::to_value(&record).unwrap();
+    assert_eq!(value["service_identity"],"dns.test");
+    assert_eq!(value["alpn_state"],1);assert_eq!(value["http_error"],4);
+    assert_eq!(value["http_status"],200);assert_eq!(value["http_age"],17);
+    // The path never becomes part of the identity string.
+    let mut with_path=wire.clone();with_path[729]=b'/';
+    assert!(DnsRecord::decode(&with_path).is_none(),"service identity is the host only");
+    // Version 10 reserves these bytes; a DoT record cannot claim HTTP facts either.
+    for (offset,label) in [(571usize,"alpn"),(637,"error"),(1026,"status"),(1028,"age")] {
+        let mut old=wire.clone();old[2]=10;
+        assert!(DnsRecord::decode(&old).is_none(),"version 10 reserved byte {label}@{offset}");
+    }
+    let mut dot=wire.clone();dot[635]=3;
+    assert!(DnsRecord::decode(&dot).is_none(),"DoT carries no HTTP facts");
+    for (offset,value) in [(571usize,4u8),(637,13)] {
+        let mut invalid=wire.clone();invalid[offset]=value;
+        assert!(DnsRecord::decode(&invalid).is_none(),"out-of-range DoH byte {offset}");
+    }
+    let mut status=wire.clone();status[1026..1028].copy_from_slice(&600u16.to_le_bytes());
+    assert!(DnsRecord::decode(&status).is_none(),"HTTP status above 599");
+    let root=test_root("doh-metadata");std::fs::create_dir(&root).unwrap();
+    let path=root.join("observation.json");let mut store=ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();store.consume_dns(&[record.clone()],61_000_000).unwrap();
+    store.close().unwrap();drop(store);let mut reopened=ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["dns"]["accepted"],1);assert_eq!(reopened.query()["dns"]["rejected"],0);
+    reopened.close().unwrap();drop(reopened);
+    let db=rusqlite::Connection::open_with_flags(path.with_extension("sqlite3"),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let bytes:Vec<u8>=db.query_row("SELECT value FROM observation WHERE kind=20",[],|row|row.get(0)).unwrap();
+    let actual:serde_json::Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(actual["record"],value);
+    drop(db);std::fs::remove_dir_all(root).unwrap();
+}

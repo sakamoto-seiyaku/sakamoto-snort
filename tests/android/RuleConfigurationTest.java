@@ -12,6 +12,34 @@ public final class RuleConfigurationTest {
         require(bootstrap[9] == 0 && bootstrap[12] == 0);
         long[] literal = RuleConfiguration.dnsWire("upstream 0 dot 192.0.2.53 - 853\nroute 0 0");
         require(literal[6] == 4 && literal[9] == 0xc0000235L);
+        long[] doh = RuleConfiguration.dnsWire("upstream 0 doh https://dns.test/dns-query 192.0.2.53\nroute 0 0");
+        require(doh[5] == 4 && doh[6] == 4 && doh[7] == 443 && doh[9] == 0xc0000235L);
+        require(doh[13] == 0x646e732eL && doh[14] == 0x74657374L && doh[15] == 0x002f646eL
+                && doh[16] == 0x732d7175L && doh[17] == 0x65727900L && doh[18] == 0);
+        long[] dohBootstrap = RuleConfiguration.dnsWire("upstream 0 doh https://dns.test:8443/q?x=1\nroute 0 0");
+        require(dohBootstrap[5] == 4 && dohBootstrap[6] == 0 && dohBootstrap[7] == 8443
+                && dohBootstrap[9] == 0 && dohBootstrap[12] == 0);
+        long[] dohRoot = RuleConfiguration.dnsWire("upstream 0 doh https://dns.test -\nroute 0 0");
+        require(dohRoot[6] == 0 && dohRoot[7] == 443 && dohRoot[15] == 0x002f0000L);
+        long[] dohLiteral = RuleConfiguration.dnsWire("upstream 0 doh https://[2001:DB8::53]/dns-query\nroute 0 0");
+        require(dohLiteral[5] == 4 && dohLiteral[6] == 6 && dohLiteral[7] == 443 && dohLiteral[9] == 0x20010db8L);
+        for (String invalid : new String[]{
+                "upstream 0 doh http://dns.test/dns-query\nroute 0 0",
+                "upstream 0 doh https://user@dns.test/dns-query\nroute 0 0",
+                "upstream 0 doh https://dns.test/dns-query#frag\nroute 0 0",
+                "upstream 0 doh https://dns.test:0/dns-query\nroute 0 0",
+                "upstream 0 doh https://dns.test:65536/dns-query\nroute 0 0",
+                "upstream 0 doh https:///dns-query\nroute 0 0",
+                "upstream 0 doh dns.test/dns-query\nroute 0 0",
+                "upstream 0 doh https://dns.test/dns-query 192.0.2\nroute 0 0",
+                "upstream 0 doh https://Dns..test/dns-query\nroute 0 0"}) {
+            try { RuleConfiguration.dnsWire(invalid); throw new AssertionError(invalid); }
+            catch (IllegalArgumentException expected) {}
+        }
+        StringBuilder longPath = new StringBuilder("upstream 0 doh https://dns.test/");
+        for (int i = 0; i < 300; ++i) longPath.append('a');
+        try { RuleConfiguration.dnsWire(longPath + "\nroute 0 0"); throw new AssertionError("long path"); }
+        catch (IllegalArgumentException expected) {}
         long[] orderedDns = RuleConfiguration.dnsWire("upstream 0 udp primary.test 192.0.2.53 53\n"
                 + "upstream 1 udp backup.test 192.0.2.54 53\nroute 0 0 1");
         require(orderedDns[0] == -4 && orderedDns[1] == 1 && orderedDns[2] == 2

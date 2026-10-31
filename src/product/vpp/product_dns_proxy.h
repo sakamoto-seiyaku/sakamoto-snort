@@ -3,6 +3,7 @@
 #define SAKAMOTO_PRODUCT_DNS_PROXY_H
 
 #include "product_dns.h"
+#include "product_dns_alpn.h"
 #include "sakamoto_product_rule_config.h"
 
 #define PRODUCT_DNS_PROXY_TRANSACTIONS 64U
@@ -24,6 +25,7 @@ typedef enum {
   PRODUCT_DNS_PROXY_UDP = 1,
   PRODUCT_DNS_PROXY_TCP = 2,
   PRODUCT_DNS_PROXY_DOT = 3,
+  PRODUCT_DNS_PROXY_DOH = 4,
 } product_dns_proxy_transport_t;
 
 enum { PRODUCT_DNS_TLS_NONE, PRODUCT_DNS_TLS_HANDSHAKING, PRODUCT_DNS_TLS_AUTHENTICATED,
@@ -32,11 +34,17 @@ enum { PRODUCT_DNS_BOOTSTRAP_NONE, PRODUCT_DNS_BOOTSTRAP_PENDING,
   PRODUCT_DNS_BOOTSTRAP_RESOLVED, PRODUCT_DNS_BOOTSTRAP_FAILED };
 enum { PRODUCT_DNS_AUTHORIZATION_NONE, PRODUCT_DNS_AUTHORIZATION_PENDING,
   PRODUCT_DNS_AUTHORIZATION_GRANTED, PRODUCT_DNS_AUTHORIZATION_FAILED };
+/* DoH HTTP failure class: 1..11 are the negated product_dns_http_result_t codes,
+ * 12 is an ALPN mismatch (including an HTTP/2-only endpoint). 0 means none. */
+#define PRODUCT_DNS_HTTP_ERROR_ALPN 12U
 typedef struct {
   uint8_t connection_address[16], bootstrap_address[16];
   uint32_t connection_family, connection_port, bootstrap_family, bootstrap_port, bootstrap_ifindex;
   int32_t error;
   uint8_t tls, bootstrap, authorization, trust_source; /* system=1, debug fixture=2 */
+  uint8_t http_error, alpn; /* DoH only; alpn is PRODUCT_DNS_ALPN_* */
+  uint16_t http_status;
+  uint32_t http_age;
 } product_dns_proxy_io_event_t;
 
 typedef enum {

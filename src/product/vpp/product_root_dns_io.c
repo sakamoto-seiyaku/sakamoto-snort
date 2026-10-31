@@ -4,6 +4,7 @@
 #include "product_dns_route.h"
 #include "product_dns_tls.h"
 #include "product_dns_bootstrap.h"
+#include "product_dns_http.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <net/if.h>
@@ -29,6 +30,7 @@ typedef struct {
   uint8_t *output, *input;
   size_t output_length, output_at, input_length, input_at, header_at;
   product_dns_tls_t *tls;
+  product_dns_http_response_t *http; /* DoH response parser; body lands in input */
   uint8_t transport, verified;
   uint8_t bootstrap, bootstrap_type, bootstrap_retried;
   uint8_t bootstrap_address_count, bootstrap_address_at;
@@ -72,13 +74,23 @@ static uint64_t ordinary_reservation (void)
     (2U * PRODUCT_DNS_MESSAGE_MAX + 2U) +
     PRODUCT_DNS_MESSAGE_MAX;
 }
+static int encrypted_transport(unsigned transport)
+{return transport==PRODUCT_DNS_PROXY_DOT||transport==PRODUCT_DNS_PROXY_DOH;}
+static uint64_t encrypted_reservation(int doh)
+{
+  return ordinary_reservation()+product_dns_tls_reservation(PRODUCT_ROOT_DNS_TCP_SOCKETS)+
+    (doh?(uint64_t)PRODUCT_ROOT_DNS_TCP_SOCKETS*sizeof(product_dns_http_response_t):0);
+}
 uint64_t product_root_dns_io_reservation (void)
-{return ordinary_reservation()+product_dns_tls_reservation(PRODUCT_ROOT_DNS_TCP_SOCKETS);}
+{return encrypted_reservation(1);}
 uint64_t product_root_dns_io_config_reservation (const product_dns_proxy_route_t *route)
 {
-  for(unsigned i=0;route&&i<route->endpoint_count;++i)
-    if(route->endpoints[i].transport==PRODUCT_DNS_PROXY_DOT)return product_root_dns_io_reservation();
-  return ordinary_reservation();
+  int encrypted=0,doh=0;
+  for(unsigned i=0;route&&i<route->endpoint_count;++i){
+    encrypted|=encrypted_transport(route->endpoints[i].transport);
+    doh|=route->endpoints[i].transport==PRODUCT_DNS_PROXY_DOH;
+  }
+  return encrypted?encrypted_reservation(doh):ordinary_reservation();
 }
 
 static int same_key (const product_dns_proxy_key_t *a, const product_dns_proxy_key_t *b)
@@ -119,13 +131,14 @@ static void close_tcp (product_root_dns_io_t *io, tcp_socket_t *tcp)
   product_dns_tls_close(tcp->tls);
   close_socket (io, &tcp->fd, tcp->cookie);
   io->status.allocated_bytes -= tcp->output_length + tcp->input_length;
-  free (tcp->output); free (tcp->input);
+  if (tcp->http) io->status.allocated_bytes -= sizeof (*tcp->http);
+  free (tcp->output); free (tcp->input); free (tcp->http);
   memset (tcp, 0, sizeof (*tcp)); tcp->fd = -1;
 }
 
 static void progress(product_root_dns_io_t *io,tcp_socket_t *tcp)
 {
-  if(tcp->transport==PRODUCT_DNS_PROXY_DOT&&io->callbacks.progress)
+  if(encrypted_transport(tcp->transport)&&io->callbacks.progress)
     io->callbacks.progress(io->context,&tcp->key,&tcp->progress);
 }
 
@@ -142,9 +155,11 @@ static int open_tcp_socket(product_root_dns_io_t *io,tcp_socket_t *tcp,unsigned 
   }
   tcp->authorized=!io->callbacks.authorize;
   tcp->progress.authorization=tcp->authorized?PRODUCT_DNS_AUTHORIZATION_GRANTED:PRODUCT_DNS_AUTHORIZATION_PENDING;
-  if(!tcp->bootstrap&&tcp->transport==PRODUCT_DNS_PROXY_DOT){
+  if(!tcp->bootstrap&&encrypted_transport(tcp->transport)){
     const sakamoto_product_dns_endpoint_t *endpoint=&io->route.endpoints[tcp->key.resolver_id-1];
-    tcp->tls=product_dns_tls_open(io->tls,tcp->fd,(const char *)endpoint->identity);
+    tcp->tls=tcp->transport==PRODUCT_DNS_PROXY_DOH
+      ?product_dns_tls_open_doh(io->tls,tcp->fd,(const char *)endpoint->identity)
+      :product_dns_tls_open(io->tls,tcp->fd,(const char *)endpoint->identity);
     if(!tcp->tls){tcp->progress.tls=PRODUCT_DNS_TLS_FAILED;tcp->progress.error=-ENOMEM;progress(io,tcp);return -1;}
     ++io->status.tls_started;
   }
@@ -296,9 +311,9 @@ product_root_dns_io_t *product_root_dns_io_open (uint64_t generation,
   if (!selected_address (io, &key, &io->resolver, &io->resolver_length)) { free (io); return NULL; }
   allocation (io, sizeof (*io));
   int result;
-  int first_dot=route->endpoint_count&&route->endpoints[route->routes[0].candidates[0]].transport==PRODUCT_DNS_PROXY_DOT;
+  int first_dot=route->endpoint_count&&encrypted_transport(route->endpoints[route->routes[0].candidates[0]].transport);
   for(unsigned i=0;i<route->endpoint_count;++i)
-    if(route->endpoints[i].transport==PRODUCT_DNS_PROXY_DOT){
+    if(encrypted_transport(route->endpoints[i].transport)){
       io->tls=product_dns_tls_owner_open(callbacks->trust_directory);break;
     }
   if (!first_dot&&!open_udp (io, &io->resolver, io->resolver_length, now, &result) && !route->endpoint_count)
@@ -374,9 +389,9 @@ int product_root_dns_io_send (product_root_dns_io_t *io, const product_dns_proxy
   if (!io || !key || key->generation != io->generation || !wire || length < 2 ||
       length > PRODUCT_DNS_MESSAGE_MAX || deadline <= now) return -1;
   if (transport == PRODUCT_DNS_PROXY_UDP) return send_udp (io, key, wire, length, deadline, now);
-  if (transport != PRODUCT_DNS_PROXY_TCP && transport != PRODUCT_DNS_PROXY_DOT) return -1;
+  if (transport != PRODUCT_DNS_PROXY_TCP && !encrypted_transport (transport)) return -1;
   const sakamoto_product_dns_endpoint_t *endpoint=NULL;
-  if(transport==PRODUCT_DNS_PROXY_DOT){
+  if(encrypted_transport(transport)){
     if(!key->resolver_id||key->resolver_id>io->route.endpoint_count)return -1;
     endpoint=&io->route.endpoints[key->resolver_id-1];
     if(endpoint->transport!=transport||endpoint->family!=key->resolver_family||endpoint->port!=key->resolver_port||
@@ -394,11 +409,28 @@ int product_root_dns_io_send (product_root_dns_io_t *io, const product_dns_proxy
   for (unsigned i = 0; i < PRODUCT_ROOT_DNS_TCP_SOCKETS; ++i)
     if (io->tcp[i].fd < 0) { tcp = &io->tcp[i]; break; }
   if (!tcp) { ++io->status.capacity; return 0; }
-  tcp->output = malloc (length + 2);
-  if (!tcp->output) return -1;
-  tcp->output_length = length + 2; allocation (io, length + 2);
-  tcp->output[0] = length >> 8; tcp->output[1] = length;
-  memcpy (tcp->output + 2, wire, length); tcp->key = *key; tcp->deadline = deadline;
+  if (transport == PRODUCT_DNS_PROXY_DOH)
+    {
+      /* HTTP request replaces the 2-byte DNS TCP framing; the target is the
+       * configured "host NUL path" identity and one exchange owns the connection. */
+      const char *host = (const char *) endpoint->identity;
+      const char *path = host + strlen (host) + 1;
+      size_t capacity = length + 2048;
+      tcp->output = malloc (capacity);
+      if (!tcp->output) return -1;
+      size_t built = product_dns_http_build_request (tcp->output, capacity, host, endpoint->port, path, wire, length);
+      if (!built) { free (tcp->output); tcp->output = NULL; return -1; }
+      tcp->output_length = built; allocation (io, built);
+    }
+  else
+    {
+      tcp->output = malloc (length + 2);
+      if (!tcp->output) return -1;
+      tcp->output_length = length + 2; allocation (io, length + 2);
+      tcp->output[0] = length >> 8; tcp->output[1] = length;
+      memcpy (tcp->output + 2, wire, length);
+    }
+  tcp->key = *key; tcp->deadline = deadline;
   tcp->transport=transport;
   if(endpoint){
     tcp->progress.trust_source=io->callbacks.trust_directory?2:1;
@@ -490,7 +522,7 @@ static int next_bootstrap_address(product_root_dns_io_t *io,tcp_socket_t *tcp)
 static void tcp_failed (product_root_dns_io_t *io, tcp_socket_t *tcp, uint64_t now)
 {
   product_dns_proxy_key_t key = tcp->key;
-  if(tcp->transport==PRODUCT_DNS_PROXY_DOT&&!tcp->bootstrap&&!tcp->verified&&tcp->deadline>now&&
+  if(encrypted_transport(tcp->transport)&&!tcp->bootstrap&&!tcp->verified&&tcp->deadline>now&&
      tcp->bootstrap_address_count){
     int certificate_failed=tcp->progress.tls==PRODUCT_DNS_TLS_FAILED;
     if(tcp->bootstrap_address_at<tcp->bootstrap_address_count&&next_bootstrap_address(io,tcp))return;
@@ -503,11 +535,19 @@ static void tcp_failed (product_root_dns_io_t *io, tcp_socket_t *tcp, uint64_t n
       if(start_bootstrap(io,tcp,28)>0)return;
     }
   }
-  if(tcp->transport==PRODUCT_DNS_PROXY_DOT){
+  if(encrypted_transport(tcp->transport)){
     ++io->status.tls_failed;
+    if(tcp->tls&&tcp->transport==PRODUCT_DNS_PROXY_DOH){
+      tcp->progress.alpn=(uint8_t)product_dns_tls_alpn_state(tcp->tls);
+      if(tcp->progress.alpn==PRODUCT_DNS_ALPN_REFUSED&&!tcp->progress.http_error)
+        tcp->progress.http_error=PRODUCT_DNS_HTTP_ERROR_ALPN;
+    }
+    /* An HTTP failure after authentication does not unwind the TLS facts: the peer was
+     * authenticated and the failure class travels in http_error with a zero tls_error. */
+    int http_level=tcp->transport==PRODUCT_DNS_PROXY_DOH&&tcp->verified&&tcp->progress.http_error;
     if(tcp->bootstrap){tcp->progress.bootstrap=PRODUCT_DNS_BOOTSTRAP_FAILED;++io->status.bootstrap_failed;}
-    else tcp->progress.tls=PRODUCT_DNS_TLS_FAILED;
-    if(!tcp->progress.error)tcp->progress.error=-EIO;
+    else if(!http_level)tcp->progress.tls=PRODUCT_DNS_TLS_FAILED;
+    if(!tcp->progress.error&&!http_level)tcp->progress.error=-EIO;
     progress(io,tcp);
   }
   ++io->status.errors; close_tcp (io, tcp);
@@ -597,6 +637,53 @@ static int tls_watch(product_root_dns_io_t *io,tcp_socket_t *tcp,unsigned events
   if(io->callbacks.watch(io->context,tcp->fd,events,tcp->cookie))return 1;
   tcp_failed(io,tcp,now);return 0;
 }
+static void doh_failed(product_root_dns_io_t *io,tcp_socket_t *tcp,int http_result,int tls_error,uint64_t now)
+{
+  if(http_result<0)tcp->progress.http_error=(uint8_t)-http_result;
+  if(tcp->http)tcp->progress.http_status=tcp->http->status;
+  tcp->progress.error=http_result<0?0:tls_error;
+  tcp_failed(io,tcp,now);
+}
+static void doh_deliver(product_root_dns_io_t *io,tcp_socket_t *tcp,uint64_t now)
+{
+  tcp->progress.http_status=tcp->http->status;tcp->progress.http_age=tcp->http->age;
+  progress(io,tcp);
+  ++io->status.tcp_received;
+  io->callbacks.answer(io->context,&tcp->key,PRODUCT_DNS_PROXY_DOH,tcp->input,tcp->http->body_at,now);
+}
+/* HTTP/1.1 response read: the first complete response is the only exchange on this
+ * connection. A connection-delimited body is complete only after TLS close_notify;
+ * a bare TCP end or any parser failure is a failed attempt, never a partial answer. */
+static void doh_read(product_root_dns_io_t *io,tcp_socket_t *tcp,uint64_t now)
+{
+  unsigned wanted=0;
+  if(!tcp->http){
+    tcp->http=malloc(sizeof(*tcp->http));
+    tcp->input=malloc(PRODUCT_DNS_MESSAGE_MAX);
+    if(tcp->http)allocation(io,sizeof(*tcp->http));
+    if(tcp->input){tcp->input_length=PRODUCT_DNS_MESSAGE_MAX;allocation(io,PRODUCT_DNS_MESSAGE_MAX);}
+    if(!tcp->http||!tcp->input){doh_failed(io,tcp,0,-ENOMEM,now);return;}
+    product_dns_http_init(tcp->http,tcp->input,PRODUCT_DNS_MESSAGE_MAX);
+  }
+  for(unsigned budget=0;budget<16;++budget){
+    uint8_t buffer[4096];
+    ssize_t received=product_dns_tls_read(tcp->tls,buffer,sizeof(buffer),&wanted);
+    if(received==-2){(void)tls_watch(io,tcp,wanted,now);return;}
+    if(received<=0){
+      int error=product_dns_tls_error(tcp->tls);
+      int result=product_dns_tls_peer_closed(tcp->tls)?product_dns_http_eof(tcp->http):PRODUCT_DNS_HTTP_CLOSED;
+      if(result==PRODUCT_DNS_HTTP_DONE){doh_deliver(io,tcp,now);return;}
+      doh_failed(io,tcp,result,error,now);return;
+    }
+    io->status.tcp_read_bytes+=received;
+    size_t consumed=0;
+    int result=product_dns_http_feed(tcp->http,buffer,(size_t)received,&consumed);
+    if(result==PRODUCT_DNS_HTTP_DONE){doh_deliver(io,tcp,now);return;}
+    if(result<0){doh_failed(io,tcp,result,0,now);return;}
+  }
+  if(product_dns_tls_pending(tcp->tls))tcp->progress_due=now+1;
+  (void)tls_watch(io,tcp,PRODUCT_ROOT_DNS_READ,now);
+}
 static void tls_ready(product_root_dns_io_t *io,tcp_socket_t *tcp,uint64_t now)
 {
   unsigned wanted=0;tcp->progress_due=0;
@@ -605,7 +692,9 @@ static void tls_ready(product_root_dns_io_t *io,tcp_socket_t *tcp,uint64_t now)
     int result=product_dns_tls_handshake(tcp->tls,&wanted);
     if(result<0){tcp->progress.tls=PRODUCT_DNS_TLS_FAILED;tcp->progress.error=product_dns_tls_error(tcp->tls);tcp_failed(io,tcp,now);return;}
     if(!result){(void)tls_watch(io,tcp,wanted,now);return;}
-    tcp->verified=1;++io->status.tls_verified;tcp->progress.tls=PRODUCT_DNS_TLS_AUTHENTICATED;progress(io,tcp);
+    tcp->verified=1;++io->status.tls_verified;tcp->progress.tls=PRODUCT_DNS_TLS_AUTHENTICATED;
+    if(tcp->transport==PRODUCT_DNS_PROXY_DOH)tcp->progress.alpn=(uint8_t)product_dns_tls_alpn_state(tcp->tls);
+    progress(io,tcp);
   }
   /* The output buffer and exact remaining span survive WANT_READ/WRITE.
    * Application DNS is first offered only after peer authentication. */
@@ -618,6 +707,7 @@ static void tls_ready(product_root_dns_io_t *io,tcp_socket_t *tcp,uint64_t now)
     if(tcp->output_at==tcp->output_length)++io->status.tcp_sent;
   }
   if(tcp->output_at<tcp->output_length){(void)tls_watch(io,tcp,PRODUCT_ROOT_DNS_WRITE,now);return;}
+  if(tcp->transport==PRODUCT_DNS_PROXY_DOH){doh_read(io,tcp,now);return;}
   for(unsigned budget=0;budget<16;++budget){
     uint8_t *destination=tcp->header_at<2?tcp->header+tcp->header_at:tcp->input+tcp->input_at;
     size_t remaining=tcp->header_at<2?2-tcp->header_at:tcp->input_length-tcp->input_at;
