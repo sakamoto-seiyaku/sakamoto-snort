@@ -148,6 +148,12 @@ def original_exchange(device, result, label, name, *, qtype=1, protocol=17, reso
     else:
         nonce = device.launch_queries(label, resolver, source, [query], timeout=8000)
     client = device.client(label, nonce)
+    if not warm and protocol == 17 and not any(e.get("replyHex") for e in client.get("dnsExchanges", [])) \
+            and not label.endswith("-retry"):
+        # The public resolver is a real network service; one lost UDP exchange is retried, and recorded.
+        result.setdefault("public_resolver_retries", []).append(label)
+        return original_exchange(device, result, label + "-retry", name, qtype=qtype, protocol=protocol,
+                                 resolver=resolver)
     identifier = int.from_bytes(query[:2], "big")
     select = lambda value: [row for row in shared.dns_rows(value)
                             if row["generation"] == device.generation and row["source_port"] == source
