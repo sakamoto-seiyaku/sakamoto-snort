@@ -4937,7 +4937,8 @@ product_packet_graph_dns_associate (vlib_main_t *vm, const product_packet_lease_
   if (!vm->thread_index || vm->thread_index > product_packet_graph_worker_count () || !wire) return;
   if (evaluation->terminal_preserved || evaluation->verdict != PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
       || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE) return;     /* refused answers keep only observation */
-  if (response->question.coverage != PRODUCT_DNS_QUERY_COMPLETE) return;
+  /* Only an answer to a known App request: a recaptured Product reply or an unmatched packet is not one. */
+  if (response->question.coverage != PRODUCT_DNS_QUERY_COMPLETE || response->correlation != PRODUCT_DNS_CORRELATED) return;
   product_dns_identity_t identity = product_packet_graph_dns_identity (vm, lease);
   product_dns_assoc_source_t source = {
     .generation = product_packet_graph_main.generation, .network_revision = identity.network_revision,
