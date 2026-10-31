@@ -55,6 +55,7 @@ def http_rules(device, label, *, deny=True):
 
 
 def request(path, host=None, *, target=None, extra=""):
+    """path is already unique to the case: /<label>/<name>"""
     line = target or path
     text = f"GET {line} HTTP/1.1\r\n"
     if host is not None:
@@ -86,21 +87,28 @@ def exchange(device, peer, result, label, requests, *, splits=None, stop_on_time
     nonce = "s325-" + label + "-" + str(time.time_ns())
     plan = dict(nonce=nonce, endpoint=device.args.endpoint4, port=PEER_PORT, source=source, bindDefault=True,
                 httpRequests=[item.hex() for item in requests], httpDelayMs=200, httpTimeoutMs=timeout_ms,
-                httpStopOnTimeout=stop_on_timeout)
+                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2500, httpGate=True, httpAfterMs=3500)
     if splits:
         plan["httpSplit"] = splits
     device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
     device.save(label + "-launch.txt", device.action("--es", "t12ProbePlan", shlex.quote(json.dumps(plan))))
-    client = device.wait(label + "-client", "files/product-state/t12-" + nonce + ".json",
-                         lambda value: value.get("phase") == "finished",
-                         timeout=15 + len(requests) * (timeout_ms // 1000 + 2), json_value=True)
+    path = "files/product-state/t12-" + nonce + ".json"
+    wait = 20 + len(requests) * (timeout_ms // 1000 + 2)
+    # The App still owns its socket here: this is the window in which refusals are judged.
+    client = device.wait(label + "-client", path, lambda value: value.get("phase") in ("http_done", "finished"),
+                         timeout=wait, json_value=True)
     assert not client.get("error"), client
-    time.sleep(0.5)
     after_wire = device.wire_coverage(label + "-after")
     wire = {name: rows[len(before_wire[name]):] for name, rows in after_wire.items()}
-    case = dict(label=label, source_port=source, client=client, peer=peer.requests(cursor), wire=wire,
+    mine = lambda rows: [row for row in rows if "/" + label + "/" in row["request_line"]]
+    case = dict(label=label, source_port=source, client=client, peer=mine(peer.requests(cursor)), wire=wire,
                 flow=flow_http(device, label, source), physical_interface=device.physical_interface,
                 sent=[item.decode("latin-1") for item in requests], status="OBSERVED")
+    # After the App closes its socket, retransmissions of refused bytes no longer carry a socket
+    # owner and the uid-owner NFQUEUE rule cannot capture them. Record, never judge, what follows.
+    device.wait(label + "-closed", path, lambda value: value.get("phase") == "finished", timeout=wait, json_value=True)
+    time.sleep(1.5)
+    case["peer_after_close"] = mine(peer.requests(cursor))
     result["cases"].append(case)
     device.save(label + "-observed.json", json.dumps(case, indent=2) + "\n")
     return case
@@ -131,7 +139,7 @@ def http_row(case):
 def cases(device, peer, result):
     http_rules(device, "http-rules")
 
-    case = exchange(device, peer, result, "http-allow", [request("/allow", "allowed.http.test")])
+    case = exchange(device, peer, result, "http-allow", [request("/http-allow/allow", "allowed.http.test")])
     assert statuses(case) == ["answered"] and hosts(case) == ["allowed.http.test"], case
     row = http_row(case)
     assert row["current_valid"] == "1" and row["current"] == "allowed.http.test" and row["current_kind"] == "1"
@@ -139,36 +147,36 @@ def cases(device, peer, result):
     assert row["current_reason"] == "0" and row["current_index"] == "0", row
     case["status"] = "PASS"
 
-    head = request("/split", "split.http.test")
+    head = request("/http-split-head/split", "split.http.test")
     case = exchange(device, peer, result, "http-split-head", [head], splits=[len(head) // 2])
     assert statuses(case) == ["answered"] and hosts(case) == ["split.http.test"], case
     assert http_row(case)["current"] == "split.http.test" and http_row(case)["requests"] == "1"
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-successive-allowed", [
-        request("/one", "one.http.test"),
-        request("http://two.http.test/two", target="http://two.http.test/two")])
+        request("/http-successive-allowed/one", "one.http.test"),
+        request("http://two.http.test/http-successive-allowed/two", target="http://two.http.test/http-successive-allowed/two")])
     assert statuses(case) == ["answered", "answered"] and hosts(case) == ["one.http.test", "two.http.test"], case
     row = http_row(case)
     assert row["requests"] == "2" and row["current"] == "two.http.test" and row["current_index"] == "1", row
     assert row["denied_valid"] == "0", row
     case["status"] = "PASS"
 
-    case = exchange(device, peer, result, "http-deny-first", [request("/blocked", "blocked.http.test")])
+    case = exchange(device, peer, result, "http-deny-first", [request("/http-deny-first/blocked", "blocked.http.test")])
     assert statuses(case) == ["timeout"] and not case["peer"], case
     row = http_row(case)
     assert row["denied_valid"] == "1" and row["denied"] == "blocked.http.test", row
     assert not on_wire(case, b"blocked.http.test"), "refused head reached the wire"
     case["status"] = "PASS"
 
-    case = exchange(device, peer, result, "http-deny-descendant", [request("/d", "sub.deny.http.test")])
+    case = exchange(device, peer, result, "http-deny-descendant", [request("/http-deny-descendant/d", "sub.deny.http.test")])
     assert statuses(case) == ["timeout"] and not case["peer"], case
     assert http_row(case)["denied"] == "sub.deny.http.test", http_row(case)
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-deny-blocks-rest-of-connection", [
-        request("/first", "allowed.http.test"), request("/refused", "blocked.http.test"),
-        request("/later", "allowed.http.test")], stop_on_timeout=False)
+        request("/http-deny-blocks-rest-of-connection/first", "allowed.http.test"), request("/http-deny-blocks-rest-of-connection/refused", "blocked.http.test"),
+        request("/http-deny-blocks-rest-of-connection/later", "allowed.http.test")], stop_on_timeout=False)
     assert statuses(case) == ["answered", "timeout", "timeout"], case
     assert hosts(case) == ["allowed.http.test"], case           # only the request before the refusal arrived
     row = http_row(case)
@@ -178,18 +186,18 @@ def cases(device, peer, result):
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-absolute-target-wins-over-host", [
-        request("/x", "allowed.http.test", target="http://blocked.http.test/x")])
+        request("/http-absolute-target-wins-over-host/x", "allowed.http.test", target="http://blocked.http.test/http-absolute-target-wins-over-host/x")])
     assert statuses(case) == ["timeout"] and not case["peer"], case
     assert http_row(case)["denied"] == "blocked.http.test", http_row(case)
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-absolute-target-allowed-despite-host", [
-        request("/x", "blocked.http.test", target="http://fine.http.test/x")])
+        request("/http-absolute-target-allowed-despite-host/x", "blocked.http.test", target="http://fine.http.test/http-absolute-target-allowed-despite-host/x")])
     assert statuses(case) == ["answered"] and http_row(case)["current"] == "fine.http.test", case
     assert http_row(case)["denied_valid"] == "0"
     case["status"] = "PASS"
 
-    case = exchange(device, peer, result, "http-ip-target", [request("/ip", "192.0.2.7:8080")])
+    case = exchange(device, peer, result, "http-ip-target", [request("/http-ip-target/ip", "192.0.2.7:8080")])
     assert statuses(case) == ["answered"], case
     row = http_row(case)
     assert row["current_kind"] == "2" and row["current_port"] == "8080" and row["current"] == "-", row
@@ -198,7 +206,7 @@ def cases(device, peer, result):
     case["status"] = "PASS"
 
     case = exchange(device, peer, result, "http-duplicate-host-unavailable", [
-        request("/dup", "allowed.http.test", extra="Host: blocked.http.test\r\n")])
+        request("/http-duplicate-host-unavailable/dup", "allowed.http.test", extra="Host: blocked.http.test\r\n")])
     assert statuses(case) == ["answered"], case                # no usable target: no domain decision
     row = http_row(case)
     assert row["current_kind"] == "0" and row["current_reason"] == str(REASON["duplicate_host"]), row
@@ -213,7 +221,7 @@ def cases(device, peer, result):
 
     http_rules(device, "http-rules-allow-all", deny=False)
     case = exchange(device, peer, result, "http-allow-all-after-rule-removal", [
-        request("/was-blocked", "blocked.http.test")])
+        request("/http-allow-all-after-rule-removal/was-blocked", "blocked.http.test")])
     assert statuses(case) == ["answered"] and hosts(case) == ["blocked.http.test"], case
     assert http_row(case)["denied_valid"] == "0", http_row(case)
     case["status"] = "PASS"

@@ -26,6 +26,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Debug-only ordinary app sockets for bounded protocol-fact acceptance.
@@ -193,6 +194,67 @@ final class ProtocolFactsProbe {
             if (socket.getInputStream().read() != 65) throw new IllegalStateException("raw endpoint receipt");
             result.put("sentBytes", hello.length).put("endpointReceipt", true);
             gate(app, nonce, result, "raw_ready");
+        }
+    }
+
+    /* Cleartext HTTP/1.x requests, one after another on a single connection. Each request may
+     * be sent in two pieces, and each response (head and Content-Length body) is awaited before
+     * the next request. A request the Product refuses never gets an answer: the wait ends with a
+     * timeout, which is recorded and, by default, ends the exchange. */
+    private static void httpRequests(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        JSONArray requests = plan.getJSONArray("httpRequests");
+        JSONArray splits = plan.optJSONArray("httpSplit");
+        int delay = plan.optInt("httpDelayMs", 150), timeout = plan.optInt("httpTimeoutMs", 2500);
+        if (requests.length() < 1 || requests.length() > 16 || delay < 0 || delay > 2000
+                || timeout < 200 || timeout > 10000) throw new IllegalArgumentException("bounded HTTP probe");
+        JSONArray responses = new JSONArray();
+        result.put("httpResponses", responses);
+        try (Socket socket = new Socket()) {
+            socket.setReuseAddress(true); socket.setTcpNoDelay(true);
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(new InetSocketAddress(endpoint, port), 10000);
+            socket.setSoTimeout(timeout);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            for (int i = 0; i < requests.length(); ++i) {
+                byte[] request = hex(requests.getString(i));
+                int prefix = splits == null ? 0 : splits.optInt(i, 0);
+                JSONObject entry = new JSONObject().put("index", i).put("sentBytes", request.length);
+                responses.put(entry);
+                try {
+                    if (prefix > 0 && prefix < request.length) {
+                        socket.getOutputStream().write(request, 0, prefix);
+                        socket.getOutputStream().flush();
+                        Thread.sleep(delay);
+                        socket.getOutputStream().write(request, prefix, request.length - prefix);
+                    } else socket.getOutputStream().write(request);
+                    socket.getOutputStream().flush();
+                    StringBuilder head = new StringBuilder();
+                    while (head.length() < 4096 && !head.toString().endsWith("\r\n\r\n")) {
+                        int value = socket.getInputStream().read();
+                        if (value < 0) throw new java.io.EOFException("closed");
+                        head.append((char) value);
+                    }
+                    int length = 0;
+                    for (String line : head.toString().split("\r\n"))
+                        if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:"))
+                            length = Integer.parseInt(line.substring(15).trim());
+                    for (int got = 0; got < length; ++got)
+                        if (socket.getInputStream().read() < 0) throw new java.io.EOFException("body");
+                    entry.put("status", "answered").put("head", head.toString());
+                } catch (SocketTimeoutException timedOut) {
+                    entry.put("status", "timeout");
+                    if (plan.optBoolean("httpStopOnTimeout", true)) break;
+                } catch (java.io.IOException closed) {
+                    entry.put("status", "closed").put("error", closed.toString());
+                    break;
+                }
+            }
+            /* Keep the socket owned while the Product's verdicts are observed: once an App closes a
+             * socket the kernel's retransmissions no longer match the uid-owner capture rule. */
+            Thread.sleep(Math.max(0, Math.min(10000, plan.optInt("httpHoldMs", 0))));
+            if (plan.optBoolean("httpGate")) report(app, nonce, result, "http_done");
+            Thread.sleep(Math.max(0, Math.min(10000, plan.optInt("httpAfterMs", 0))));
         }
     }
 
@@ -822,6 +884,7 @@ final class ProtocolFactsProbe {
                 else if (plan.has("dnsTcpQueries")) dnsTcpQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("httpRequests")) httpRequests(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t13RawHex")) sniRaw(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.optString("r4Protocol").equals("rtp_udp")) realtime(app, plan, result, nonce, endpoint, local, source, port);
