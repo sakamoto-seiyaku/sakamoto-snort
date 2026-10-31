@@ -64,7 +64,7 @@ def request(path, host=None, *, target=None, extra=""):
 
 def flow_http(device, label, source):
     raw = device.save(label + "-flows.txt", device.cli(label + "-flows", "show product flows"))
-    entries, https = {}, 
+    entries, https = {}, {}
     for line in raw.splitlines():
         if line.startswith(("flow.entry ", "flow.http ")):
             row = base.props(line.replace(" ", "\n"))
