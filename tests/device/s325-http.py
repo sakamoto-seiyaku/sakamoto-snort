@@ -294,7 +294,7 @@ def cases(device, peer, result):
                "http-allowlist-after-framing-stop/second")
     result["late_arrivals"] = [row["request_line"] for row in peer.requests()
                                if any("/" + name + "/" in row["request_line"] for name in refused)
-                               and not any(row in case["peer"] for case in result["cases"])]
+                               and not any(row in case.get("peer", []) for case in result["cases"])]
 
 
 def main():
