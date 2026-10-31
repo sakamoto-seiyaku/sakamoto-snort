@@ -127,7 +127,7 @@ fn zero_u32(value: &u32) -> bool { *value == 0 }
 
 impl DnsRecord {
     pub fn valid(&self) -> bool {
-        if !self.valid_transport_metadata() { return false; }
+        if !self.valid_transport_metadata() || !self.valid_association() { return false; }
         if self.proxy_flags & 1 != 0 { return self.valid_proxy(); }
         if self.route_revision != 0 || self.request_attempt != 0 || self.upstream_session != 0
             || self.upstream_attempt != 0 || self.resolution_route != 0 || self.resolver_id != 0
@@ -253,6 +253,13 @@ impl DnsRecord {
         true
     }
 
+    /// Association admission belongs to an answer (stage 2), on the original path or through the proxy.
+    fn valid_association(&self) -> bool {
+        self.assoc_reason <= 4
+            && (self.stage == 2 || (self.assoc_admitted | self.assoc_refreshed | self.assoc_skipped | self.assoc_reason) == 0)
+            && (self.assoc_reason == 0 || (self.assoc_admitted | self.assoc_refreshed) == 0)
+    }
+
     fn doh_fields_zero(&self) -> bool {
         self.alpn_state == 0 && self.http_error == 0 && self.http_status == 0 && self.http_age == 0
     }
@@ -287,9 +294,7 @@ impl DnsRecord {
             && self.proxy_result <= 15 && (self.proxy_result < 12 || self.stage == 5)
             && self.resolver_id <= 8 && (self.resolution_route < 8 || self.resolution_route == u32::MAX)
             && (self.resolution_route != u32::MAX || self.resolver_id == 0)
-            && self.proxy_flags & !31 == 0 && self.assoc_reason <= 4
-            && (self.stage == 2 || (self.assoc_admitted | self.assoc_refreshed | self.assoc_skipped | self.assoc_reason) == 0)
-            && (self.assoc_reason == 0 || (self.assoc_admitted | self.assoc_refreshed) == 0)
+            && self.proxy_flags & !31 == 0
             && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
             && self.coverage >= 1 && self.coverage <= 5 && self.codec_peak_bytes <= 512*1024
             && self.caller <= 1 && self.availability & !15 == 0 && self.packet_availability & !15 == 0

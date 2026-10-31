@@ -31,6 +31,9 @@ void product_dns_assoc_clear (product_dns_assoc_t *table)
 
 static unsigned u16 (const uint8_t *p) { return ((unsigned) p[0] << 8) | p[1]; }
 
+static int same_view (const product_dns_assoc_source_t *s, uint64_t network, uint64_t route)
+{ return s->network_revision == network && (!s->route_revision || !route || s->route_revision == route); }
+
 /* Decode one possibly compressed name into lower-case dotted form without a
  * trailing dot ("" is the root). The codec already accepted this message; the
  * walk is still bounded and refuses forward or looping pointers. */
@@ -221,7 +224,7 @@ void product_dns_assoc_advance (product_dns_assoc_t *table, uint64_t now_us,
       assoc_entry_t *e = &table->entries[i];
       if (!e->used) continue;
       if (e->expires <= now_us) ++table->stats.expired;
-      else if (e->source.network_revision != network_revision || e->source.route_revision != route_revision)
+      else if (!same_view (&e->source, network_revision, route_revision))
         ++table->stats.view_dropped;
       else continue;
       memset (e, 0, sizeof (*e)); --table->stats.count;
@@ -240,7 +243,7 @@ void product_dns_assoc_qualify (const product_dns_assoc_t *table, uint64_t now_u
     {
       const assoc_entry_t *e = &table->entries[i];
       if (!e->used || e->expires <= now_us || e->family != family ||
-          e->source.network_revision != network_revision || e->source.route_revision != route_revision ||
+          !same_view (&e->source, network_revision, route_revision) ||
           memcmp (e->address, address, 16)) continue;
       if (!first) first = e;
       ++out->candidates;

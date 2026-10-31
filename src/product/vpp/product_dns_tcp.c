@@ -375,6 +375,7 @@ static void complete_message(product_dns_tcp_owner_t *owner,product_dns_owner_t 
     {
       product_dns_inspect_response(wire,size,&current,&input->identity,requests,&event.facts);
       current_names(input,&event);match_event(input,flow,&event,&identity);
+      event.wire=wire;event.wire_length=size;
     }
   event.facts.question.message_sequence=event.message_sequence;
   event.facts.question.tcp_sequence=event.sequence;

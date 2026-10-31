@@ -43,6 +43,8 @@ typedef struct {
   uint64_t message_sequence;
   uint32_t sequence;
   uint8_t stage, continuation;
+  const uint8_t *wire; /* this message's DNS bytes, borrowed for the observer call only */
+  size_t wire_length;
 } product_dns_tcp_event_t;
 typedef void (*product_dns_tcp_observer_t) (void *, const product_dns_tcp_event_t *);
 

@@ -30,7 +30,8 @@ typedef enum {
 
 /* Facts about the answer that produced the pairs; kept per pair, never enriched
  * later. delivery: 0 unknown, 1 the reply was accepted for output, 2 it was not.
- * Neither value says the App received it. */
+ * Neither value says the App received it. route_revision is 0 for an original-path
+ * answer (the App's own resolver), nonzero for an answer the Product proxy delivered. */
 typedef struct {
   uint64_t generation, network_revision, route_revision, underlay_epoch, token;
   uint32_t resolver_id, resolution_route;
@@ -78,7 +79,9 @@ unsigned product_dns_assoc_admit (product_dns_assoc_t *, const uint8_t *wire, si
   const product_dns_response_t *, const product_dns_assoc_source_t *, uint64_t now_us,
   product_dns_assoc_admission_t *);
 
-/* Drop expired pairs and every pair whose resolver view is not the current one. */
+/* Drop expired pairs and every pair whose resolver view is not the current one. A pair from the
+ * original path has route_revision 0 and depends on the network only; a pair the Product proxy
+ * delivered also depends on its DNS route. route_revision 0 here checks the network only. */
 void product_dns_assoc_advance (product_dns_assoc_t *, uint64_t now_us,
   uint64_t network_revision, uint64_t route_revision);
 

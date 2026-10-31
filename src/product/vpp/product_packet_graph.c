@@ -15,6 +15,7 @@
 #endif
 #include "product_core_policy.h"
 #include "product_flow_entry.h"
+#include "product_dns_assoc.h"
 #include "product_protocol_catalog.h"
 #include "product_flow_end.h"
 #include "product_flow_expiry.h"
@@ -263,6 +264,7 @@ typedef struct
   u64 domain_lists;
   u8 domain_source, domain_available;
   const product_dns_response_t *dns_response;
+  product_dns_assoc_admission_t assoc; /* admission of this packet's allowed answer */
 #ifdef SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT
   product_l4_policy_prepared_query_t *prepared_query;
 #endif
@@ -321,6 +323,9 @@ typedef struct
   product_policy_worker_t policy_workers[PRODUCT_GRAPH_WORKERS];
   product_dns_owner_status_t dns[PRODUCT_GRAPH_WORKERS];
   product_dns_owner_t dns_requests[PRODUCT_GRAPH_WORKERS];
+  /* Domain-IP association facts per FlowOwner, from every allowed answer on the original path
+   * and through the Product proxy. Lives for one Product generation; DNS reconfiguration keeps it. */
+  product_dns_assoc_t *dns_assoc[PRODUCT_GRAPH_WORKERS];
   product_dns_tcp_owner_t dns_tcp[PRODUCT_GRAPH_WORKERS];
   u32 l4_policy_active_bank;
   u32 l4_policy_bank_readers[2];
@@ -2827,6 +2832,7 @@ product_packet_graph_stop_external (vlib_main_t *vm)
     {
       product_dns_owner_stop (&graph->dns_requests[owner]);
       product_dns_tcp_stop (&graph->dns_tcp[owner]);
+      product_dns_assoc_clear (graph->dns_assoc[owner]);
       fprintf (stderr, "dns event=stop generation=%llu owner=%u requests=0 codec_live_bytes=%llu active_operations=%llu tcp_active=%u tcp_owned_bytes=%llu\n",
         (unsigned long long) graph->generation, owner,
         (unsigned long long) product_dns_resources ().codec_live_bytes,
@@ -2938,6 +2944,8 @@ product_packet_graph_flow_pools_reset (product_packet_graph_main_t *graph)
     {
       product_dns_owner_start (&graph->dns_requests[owner], graph->generation);
       product_dns_tcp_start (&graph->dns_tcp[owner], graph->generation);
+      product_dns_assoc_close (graph->dns_assoc[owner]);
+      graph->dns_assoc[owner] = product_dns_assoc_open ();   /* NULL only records no pairs */
     }
   graph->policy_packet_lock_acquisitions = 0;
   graph->policy_publications = 0;
@@ -2993,6 +3001,8 @@ product_packet_graph_flow_pools_abort (product_packet_graph_main_t *graph)
       graph->flow_pools[worker] = 0;
       product_dns_owner_stop (&graph->dns_requests[worker]);
       product_dns_tcp_stop (&graph->dns_tcp[worker]);
+      product_dns_assoc_close (graph->dns_assoc[worker]);
+      graph->dns_assoc[worker] = 0;
     }
   clib_atomic_store_rel_n (&graph->flow_pools_initialized, 0);
 }
@@ -4686,6 +4696,8 @@ product_packet_graph_dns_record (
   record.candidate_count = response->name_count;
   record.chain_status = response->chain_status;
   record.rcode = response->rcode;
+  record.assoc_admitted = snapshot->assoc.admitted; record.assoc_refreshed = snapshot->assoc.refreshed;
+  record.assoc_skipped = snapshot->assoc.skipped; record.assoc_reason = snapshot->assoc.reason;
   /* The identity tuple remains client -> original resolver in both stages;
    * direction and flags describe the actual INPUT response control point. */
   record.source_port = query->packet.destination_port;
@@ -4759,6 +4771,10 @@ product_packet_graph_dns_tcp_flow_facts (void *opaque, product_l4_policy_packet_
   return 0;
 }
 
+static void product_packet_graph_dns_associate (vlib_main_t *, const product_packet_lease_t *,
+  const product_dns_response_t *, const uint8_t *, size_t,
+  const product_packet_graph_policy_evaluation_t *, product_dns_assoc_admission_t *);
+
 static void
 product_packet_graph_dns_tcp_record (void *opaque, const product_dns_tcp_event_t *event)
 {
@@ -4782,7 +4798,12 @@ product_packet_graph_dns_tcp_record (void *opaque, const product_dns_tcp_event_t
     .mode = match->mode, .reason_id = match->reason_id,
     .terminal_preserved = event->status != PRODUCT_L4_POLICY_STATUS_OK,
   };
-  product_packet_graph_dns_record (context->vm, context->lease, snapshot,
+  product_policy_snapshot_t recorded = *snapshot;
+  memset (&recorded.assoc, 0, sizeof (recorded.assoc));
+  if (event->stage == 2)
+    product_packet_graph_dns_associate (context->vm, context->lease, &event->facts,
+      event->wire, event->wire_length, &evaluation, &recorded.assoc);
+  product_packet_graph_dns_record (context->vm, context->lease, &recorded,
     &event->facts.question, event->stage == 2 ? &event->facts : NULL,
     event->facts.correlation, &evaluation, &context->flow);
   /* A retained ALLOW only releases its DNS flow restriction. Independently
@@ -4899,7 +4920,33 @@ product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
   unsigned owner = vlib_get_worker_index (vm->thread_index);
   (void) product_dns_owner_active (&product_packet_graph_main.dns_requests[owner], now_us);
   product_dns_tcp_expire (&product_packet_graph_main.dns_tcp[owner], now_us);
+  /* Original-path pairs depend on the network view only (route 0). */
+  product_dns_assoc_advance (product_packet_graph_main.dns_assoc[owner], now_us,
+    product_network_snapshot_current ()->revision, 0);
   product_root_dns_adapter_expire (vm, now_us);
+}
+
+/* An allowed, complete original-path answer creates association facts for this owner. The
+ * App's own resolver answered (route 0); delivery to the App is not proven here (0). */
+static void
+product_packet_graph_dns_associate (vlib_main_t *vm, const product_packet_lease_t *lease,
+  const product_dns_response_t *response, const uint8_t *wire, size_t length,
+  const product_packet_graph_policy_evaluation_t *evaluation, product_dns_assoc_admission_t *result)
+{
+  memset (result, 0, sizeof (*result));
+  if (!vm->thread_index || vm->thread_index > product_packet_graph_worker_count () || !wire) return;
+  if (evaluation->terminal_preserved || evaluation->verdict != PRODUCT_PACKET_GRAPH_POLICY_VERDICT_PASS_NEXT
+      || lease->terminal_intent != PRODUCT_PACKET_INTENT_NONE) return;     /* refused answers keep only observation */
+  if (response->question.coverage != PRODUCT_DNS_QUERY_COMPLETE) return;
+  product_dns_identity_t identity = product_packet_graph_dns_identity (vm, lease);
+  product_dns_assoc_source_t source = {
+    .generation = product_packet_graph_main.generation, .network_revision = identity.network_revision,
+    .route_revision = 0, .underlay_epoch = identity.underlay_epoch, .token = lease->origin_obligation_id,
+    .qtype = response->question.qtype, .rcode = response->rcode, .caller = response->question.caller,
+    .transport = response->question.packet.protocol == 6 ? 2 : 1, .cached = 0, .delivery = 0,
+  };
+  (void) product_dns_assoc_admit (product_packet_graph_main.dns_assoc[vlib_get_worker_index (vm->thread_index)],
+    wire, length, response, &source, identity.now_us, result);
 }
 
 /* Visible cleartext HTTP and SOCKS: every request target of the flow is evaluated against
@@ -5125,8 +5172,18 @@ product_packet_graph_policy_on_owner (
       tcp.pending.stage == 2 ? &tcp.pending.facts : NULL, tcp.pending.facts.correlation,
       evaluation, &observation);
   if (result == PRODUCT_PACKET_OK && dns_response_observed)
-    product_packet_graph_dns_record (vm, lease, &snapshot, &dns_response.question,
-      &dns_response, dns_response.correlation, evaluation, &observation);
+    {
+      vlib_buffer_t *buffer = vlib_get_buffer (vm, buffer_index);
+      u32 offset = lease->facts.transport_offset + lease->facts.l4_header_length;
+      u32 length = lease->facts.transport_length >= lease->facts.l4_header_length
+        ? lease->facts.transport_length - lease->facts.l4_header_length : 0;
+      const u8 *wire = offset <= buffer->current_length && length <= buffer->current_length - offset
+        ? (const u8 *) vlib_buffer_get_current (buffer) + offset : NULL;
+      product_packet_graph_dns_associate (vm, lease, &dns_response, wire, length, evaluation, &snapshot.assoc);
+      product_packet_graph_dns_record (vm, lease, &snapshot, &dns_response.question,
+        &dns_response, dns_response.correlation, evaluation, &observation);
+      memset (&snapshot.assoc, 0, sizeof (snapshot.assoc));
+    }
   if (result == PRODUCT_PACKET_OK && observation.entry
       && !evaluation->terminal_preserved && snapshot.identity.revision)
     {

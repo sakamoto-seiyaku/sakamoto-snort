@@ -108,6 +108,84 @@ def check(case, *, admitted=0, refreshed=0, skipped=0, reason=0):
     case["association"] = got
 
 
+def original_rules(device, label):
+    """Refuse answers whose connected CNAME is exactly github.com (the QName www.github.com is allowed)."""
+    lines = ["lists 1", "domain 0 exact github.com",
+             "0 0 4294967295 4294967295 4294967295 10 0 0 0 2 * * 0 65535 0 65535 1100",
+             "group 10", "edge 10 1 0", f"bind 1 {device.uid} 2 10 0",
+             "0 0 4294967295 4294967295 4294967295 1000 0 0 0 1 * * 0 65535 0 65535",
+             "group 20", "edge 20 1 1", f"bind 2 {device.uid} 2 20 0"]
+    request = device.out / (label + "-rules.txt")
+    request.write_text("\n".join(lines) + "\n")
+    remote = "/data/local/tmp/s324-rules.txt"
+    device.adb("push", request, remote)
+    command = f'am start -n {PKG}/.DebugControlActivity --es completeRuleText "$(cat {remote})"'
+    device.save(label + "-prefill.txt", device.adb("shell", "sh", "-c", shlex.quote(command)))
+    device.adb("shell", "rm", remote)
+    old = base.props(device.app("files/product-state/complete-rule-config.properties")).get("queryElapsedMillis")
+    device.tap(label + "-replace", "Replace all rules")
+    status = device.applied(label, old)
+    assert int(status["count"]) == int(status["activeCount"]) == 2, status
+    return status
+
+
+def original_exchange(device, result, label, name, *, qtype=1, protocol=17, resolver="1.1.1.1"):
+    """A real query to a real public resolver on the original path (DNS replacement off)."""
+    query = fixtures.question(device.next_id(), name, qtype)
+    source = device.reserve_source_port(label)
+    if protocol == 6:
+        nonce = device.launch_tcp(label, resolver, source, [query], timeout=8000)
+    else:
+        nonce = device.launch_queries(label, resolver, source, [query], timeout=8000)
+    client = device.client(label, nonce)
+    identifier = int.from_bytes(query[:2], "big")
+    select = lambda value: [row for row in shared.dns_rows(value)
+                            if row["generation"] == device.generation and row["source_port"] == source
+                            and row["id"] == identifier and not row["proxy_flags"] & 1]
+    observation = device.observation_matching(label, lambda value: any(r["stage"] == 2 for r in select(value)), timeout=15)
+    records = select(observation)
+    case = dict(label=label, name=name, qtype=qtype, protocol=protocol, resolver=resolver, client=client,
+                records=records, status="OBSERVED")
+    case["status_after"] = assoc_status(device, label)
+    result["cases"].append(case)
+    device.save(label + "-observed.json", json.dumps(case, indent=2) + "\n")
+    return case
+
+
+def original_cases(device, result):
+    """DNS replacement is off: allowed answers from the App's own resolver still create facts."""
+    device.next_id = lambda counter=iter(range(0x4100, 0x4fff)): next(counter)
+    start, = assoc_status(device, "original-start")
+    assert int(start["entries"]) == 0, start
+
+    for label, name, qtype, protocol in (("original-a-udp", "example.com", 1, 17),
+                                         ("original-a-tcp", "example.org", 1, 6),
+                                         ("original-aaaa-udp", "example.net", 28, 17)):
+        case = original_exchange(device, result, label, name, qtype=qtype, protocol=protocol)
+        rows = [r for r in case["records"] if r["stage"] == 2]
+        assert rows and rows[0]["rcode"] == 0 and rows[0]["correlation"] == 1, rows
+        assert rows[0]["proxy_flags"] == 0 and rows[0].get("delivery", 0) == 0, rows   # original path, delivery unproven
+        assert rows[0].get("assoc_admitted", 0) >= 1, rows
+        case["status"] = "PASS"
+    after, = assoc_status(device, "original-after")
+    assert int(after["entries"]) >= 3 and int(after["admitted"]) >= 3, after
+
+    # A refused answer leaves only its observation: the QName is allowed, its CNAME github.com is refused.
+    original_rules(device, "original-rules-cname-deny")
+    before, = assoc_status(device, "original-refused-before")
+    case = original_exchange(device, result, "original-cname-refused", "www.github.com")
+    rows = [r for r in case["records"] if r["stage"] == 2]
+    case["cname_present"] = any(r.get("candidate_count", 0) > 1 for r in rows)
+    if case["cname_present"]:
+        assert any(r["actual_action"] == 2 for r in rows), rows
+        assert all(not r.get("assoc_admitted") and not r.get("assoc_refreshed") for r in rows), rows
+        now, = assoc_status(device, "original-refused-after")
+        assert int(now["admitted"]) == int(before["admitted"]), (before, now)
+    case["status"] = "PASS"
+    device.rules("original-rules-allow")
+    result["original_status"] = after
+
+
 def assoc_cases(device, primary, backup, result):
     device.rules("assoc-allow")
     routing.configure(device, "assoc-config", routing.configuration_text(device, 4, "udp"))
@@ -115,8 +193,8 @@ def assoc_cases(device, primary, backup, result):
     start, = assoc_status(device, "assoc-start")
     keys = ("entries", "admitted", "refreshed", "rejected", "skipped", "evicted", "expired", "view_dropped")
     baseline = {key: int(start[key]) for key in keys}
-    if device.args.profile == "root":
-        assert not any(baseline.values()), start
+    # The original-path pairs from before survive the DNS reconfiguration.
+    assert int(start["entries"]) >= 3, start
     # The VPN carries every lookup of the phone: background lookups may already be in the table.
     result["association_baseline"] = baseline
 
@@ -181,10 +259,13 @@ def assoc_cases(device, primary, backup, result):
         result["foreign_pairs_during_test"] = counts["admitted"] - mine["admitted"]
     result["association_status"] = final
 
-    # IPv6 over a proxied TCP session on a fresh configuration (a new Product proxy).
+    # IPv6 over a proxied TCP session on a fresh configuration (a new Product proxy). The owner's
+    # earlier facts survive the reconfiguration: the original-path pairs and this view's own.
     label = "assoc-aaaa-tcp"
     routing.configure(device, label + "-config", routing.configuration_text(device, 6, "tcp"))
     device.proxy_ready(label + "-ready")
+    kept, = assoc_status(device, label + "-before")
+    assert int(kept["entries"]) >= 3, kept   # at least the three original-path pairs
     query = device.question(label, qtype=28)
     name = fixtures.decode_question(query)[0]
     record = aaaa_record(name, "2001:db8::53")
@@ -192,10 +273,9 @@ def assoc_cases(device, primary, backup, result):
                     family=6, protocol=6)
     check(case, admitted=1)
     status, = assoc_status(device, label + "-final")
+    assert int(status["admitted"]) >= int(kept["admitted"]) + 1, (kept, status)
     if device.args.profile == "root":
-        assert int(status["entries"]) == 1 and int(status["admitted"]) == 1, status
-    else:
-        assert int(status["entries"]) == int(status["admitted"]) >= 1, status   # plus any background lookups
+        assert int(status["admitted"]) == int(kept["admitted"]) + 1, (kept, status)
 
 
 def main():
@@ -238,6 +318,7 @@ def main():
         assert "uid=0" in result["root_grant"], "verify KernelSU grant before Root acceptance"
         device.wire_start()
         result["runs"].append(base.start_run(device, device.owners))
+        original_cases(device, result)
         assoc_cases(device, *peers, result)
         if args.profile == "root":
             base.root.finish_run(device, result, "assoc")

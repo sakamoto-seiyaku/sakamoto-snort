@@ -39,7 +39,7 @@ struct product_dns_proxy {
   proxy_exchange_t exchanges[PRODUCT_DNS_PROXY_TRANSACTIONS];
   product_dns_proxy_resources_t resources;
   dns_cache_t cache;
-  product_dns_assoc_t *assoc; /* domain-IP facts; owner-local, never shared */
+  product_dns_assoc_t *assoc; /* the owner's domain-IP facts, borrowed */
   uint64_t other_bytes;
   uint64_t id_deadline[65536];
   uint16_t next_id;
@@ -61,6 +61,9 @@ product_dns_proxy_resources_t product_dns_proxy_resources (const product_dns_pro
 
 void product_dns_proxy_other_bytes (product_dns_proxy_t *proxy, uint64_t bytes)
 { if (proxy) proxy->other_bytes = bytes; }
+
+void product_dns_proxy_association (product_dns_proxy_t *proxy, product_dns_assoc_t *table)
+{ if (proxy) proxy->assoc = table; }
 
 static void error_reply (product_dns_proxy_t *, product_dns_proxy_event_t *);
 static void next_candidate (product_dns_proxy_t *, proxy_exchange_t *, uint64_t, int);
@@ -509,7 +512,6 @@ void product_dns_proxy_stop (product_dns_proxy_t *proxy, uint64_t now)
   if (!proxy) return;
   proxy->resources.accepting = 0;
   cache_clear (&proxy->cache);
-  product_dns_assoc_clear (proxy->assoc);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
     if (proxy->requests[i].exchange)
       finish_failure (proxy, &proxy->requests[i], now, PRODUCT_DNS_PROXY_STOPPED, 0);
@@ -525,11 +527,8 @@ product_dns_proxy_t *product_dns_proxy_open (uint64_t generation,
   proxy->callbacks = *callbacks; proxy->context = context;
   if (getrandom (&proxy->next_id, sizeof (proxy->next_id), GRND_NONBLOCK) != sizeof (proxy->next_id))
     { free (proxy); return NULL; }
-  proxy->assoc = product_dns_assoc_open ();
-  if (!proxy->assoc) { free (proxy); return NULL; }
   proxy->resources.accepting = !!route->enabled;
-  proxy->resources.owned_bytes = proxy->resources.high_water_bytes =
-    sizeof (*proxy) - sizeof (proxy->cache) + product_dns_assoc_bytes ();
+  proxy->resources.owned_bytes = proxy->resources.high_water_bytes = sizeof (*proxy) - sizeof (proxy->cache);
   return proxy;
 }
 
@@ -537,7 +536,6 @@ void product_dns_proxy_close (product_dns_proxy_t *proxy)
 {
   if (!proxy) return;
   product_dns_proxy_stop (proxy, 0);
-  product_dns_assoc_close (proxy->assoc);
   free (proxy);
 }
 

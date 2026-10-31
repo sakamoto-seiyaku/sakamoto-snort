@@ -100,7 +100,11 @@ static product_dns_proxy_t *configured_proxy(unsigned candidates)
     .identity={321,1,1,0},.network_revision=5,.route_revision=7};
   product_dns_proxy_callbacks_t callbacks={.send=send_query,.reply=reply,.acquire=acquire,.observe=observe};
   product_dns_proxy_t *proxy=product_dns_proxy_open(321,&route,&callbacks,NULL);
-  assert(proxy);return proxy;
+  assert(proxy);
+  static product_dns_assoc_t *table;   /* the owner's table outlives each proxy */
+  product_dns_assoc_close(table);table=product_dns_assoc_open();assert(table);
+  product_dns_proxy_association(proxy,table);
+  return proxy;
 }
 
 static void submit(product_dns_proxy_t *proxy,const uint8_t *query,uint64_t now)
@@ -491,7 +495,8 @@ static void association_follows_allowed_answers_with_a_lifetime_independent_of_t
   submit(proxy,question,100);answer(proxy,101,0,1,60);
   assert(product_dns_proxy_resources(proxy).assoc.count==1);
   product_dns_proxy_stop(proxy,102);
-  assert(product_dns_proxy_resources(proxy).assoc.count==0);
+  /* Stopping or replacing a proxy (DNS reconfiguration) keeps the owner's facts. */
+  assert(product_dns_proxy_resources(proxy).assoc.count==1);
   product_dns_proxy_close(proxy);
 }
 

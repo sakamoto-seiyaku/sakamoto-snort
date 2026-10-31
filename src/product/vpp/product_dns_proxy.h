@@ -179,5 +179,7 @@ product_dns_proxy_resources_t product_dns_proxy_resources (const product_dns_pro
 /* Shared owner budget includes the existing original-path observation state,
  * codec/scratch work and Adapter-owned asynchronous socket/reply storage. */
 void product_dns_proxy_other_bytes (product_dns_proxy_t *, uint64_t);
+/* The owner's association table (borrowed; it outlives this proxy and DNS reconfiguration). */
+void product_dns_proxy_association (product_dns_proxy_t *, product_dns_assoc_t *);
 
 #endif

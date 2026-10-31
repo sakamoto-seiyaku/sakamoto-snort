@@ -784,6 +784,8 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
     owner->io = product_root_dns_io_open (owner->generation, &route, owner->profile == 2 ? 0 : PRODUCT_ROOT_DNS_SOCKET_MARK,
       &owner->socket_sequence, &io_callbacks, owner, now);
   if (owner->io) owner->proxy = product_dns_proxy_open (owner->generation, &route, &root_dns_proxy_callbacks, owner);
+  /* The owner's association table outlives this proxy and every DNS reconfiguration. */
+  if (owner->proxy) product_dns_proxy_association (owner->proxy, product_packet_graph_main.dns_assoc[owner - root_dns_owners]);
   if (owner->proxy) {
     product_dns_proxy_resources_t baseline = product_dns_proxy_resources (owner->proxy);
     owner->proxy_baseline_bytes = baseline.owned_bytes;
@@ -1652,14 +1654,16 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         (unsigned long long)core.cache_bytes,(unsigned long long)core.cache_high_water_bytes,
         (unsigned long long)core.cache_hits,(unsigned long long)core.cache_misses,
         (unsigned long long)core.cache_evictions,(unsigned long long)core.cache_skipped);
+      const product_dns_assoc_t *table = i < PRODUCT_GRAPH_WORKERS ? product_packet_graph_main.dns_assoc[i] : NULL;
+      product_dns_assoc_stats_t assoc = product_dns_assoc_stats (table);
       vlib_cli_output(vm,"dns.assoc owner=%u generation=%llu route_revision=%llu network_revision=%llu entries=%u entry_limit=%u high_water=%u bytes=%llu window_us=%llu admitted=%llu refreshed=%llu expired=%llu evicted=%llu view_dropped=%llu skipped=%llu rejected=%llu enforcement=%u",
         i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,
-        (unsigned long long)owner->network_revision,core.assoc.count,PRODUCT_DNS_ASSOC_ENTRIES,core.assoc.high_water,
-        (unsigned long long)core.assoc_bytes,(unsigned long long)PRODUCT_DNS_ASSOC_WINDOW_US,
-        (unsigned long long)core.assoc.admitted,(unsigned long long)core.assoc.refreshed,
-        (unsigned long long)core.assoc.expired,(unsigned long long)core.assoc.evicted,
-        (unsigned long long)core.assoc.view_dropped,(unsigned long long)core.assoc.skipped,
-        (unsigned long long)core.assoc.rejected,(unsigned)PRODUCT_DNS_ASSOC_ENFORCEMENT_ENABLED);
+        (unsigned long long)owner->network_revision,assoc.count,PRODUCT_DNS_ASSOC_ENTRIES,assoc.high_water,
+        (unsigned long long)(table ? product_dns_assoc_bytes () : 0),(unsigned long long)PRODUCT_DNS_ASSOC_WINDOW_US,
+        (unsigned long long)assoc.admitted,(unsigned long long)assoc.refreshed,
+        (unsigned long long)assoc.expired,(unsigned long long)assoc.evicted,
+        (unsigned long long)assoc.view_dropped,(unsigned long long)assoc.skipped,
+        (unsigned long long)assoc.rejected,(unsigned)PRODUCT_DNS_ASSOC_ENFORCEMENT_ENABLED);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
       vlib_cli_output(vm,"dns.tls owner=%u generation=%llu connections=%u connection_limit=%u authenticated=%u started=%llu verified=%llu failed=%llu bytes=%llu high_water_bytes=%llu trust_certificates=%u trust_certificate_limit=%u trust_byte_limit=%u owner_byte_limit=%u connection_byte_limit=%u rejected=%llu",
         i,(unsigned long long)owner->generation,io.tls_connections,PRODUCT_ROOT_DNS_TCP_SOCKETS,
