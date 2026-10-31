@@ -70,7 +70,12 @@ def routed_exchange(device, primary, backup, result, label, *, family=4, protoco
     answer = answer or base.ttl_reply(query)
     primary.register(query, answer, protocol=transport, drop=primary_drop)
     backup.register(query, answer, protocol=transport)
-    source = device.reserve_source_port(label)
+    # The data cache is FlowOwner-local: a cache hit must use the tuple (source port) of the
+    # exchange that filled the cache, or with N>1 it may land on an owner without that entry.
+    filled = getattr(device, "cache_source_port", None)
+    source = filled if expected_cached and filled and protocol == 17 else device.reserve_source_port(label)
+    if not expected_cached:
+        device.cache_source_port = source
     before = device.wire_coverage(label + "-before")
     cursors = [peer.cursor() for peer in (primary, backup)]
     resolver = "1.1.1.1" if family == 4 else "2606:4700:4700::1111"
