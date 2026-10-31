@@ -308,6 +308,44 @@ final class ProtocolFactsProbe {
         }
     }
 
+    /* UDP datagrams as explicit steps: optional pause, send, then wait for one reply. A refused
+     * datagram gets no echo and the step records a timeout; later steps still run. */
+    private static void udpSteps(Context app, JSONObject plan, JSONObject result, String nonce,
+            InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
+        JSONArray steps = plan.getJSONArray("udpSteps");
+        int timeout = plan.optInt("udpTimeoutMs", 1500);
+        if (steps.length() < 1 || steps.length() > 12 || timeout < 200 || timeout > 10000)
+            throw new IllegalArgumentException("bounded UDP probe");
+        JSONArray replies = new JSONArray();
+        result.put("udpReplies", replies);
+        try (DatagramSocket socket = new DatagramSocket(null)) {
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(local, source));
+            socket.connect(endpoint, port);
+            socket.setSoTimeout(timeout);
+            result.put("local", socket.getLocalSocketAddress().toString());
+            DatagramPacket reply = new DatagramPacket(new byte[4096], 4096);
+            for (int i = 0; i < steps.length(); ++i) {
+                JSONObject step = steps.getJSONObject(i);
+                Thread.sleep(Math.max(0, Math.min(5000, step.optInt("pauseMs", 0))));
+                byte[] send = hex(step.getString("send"));
+                JSONObject entry = new JSONObject().put("index", i).put("sentBytes", send.length);
+                replies.put(entry);
+                socket.send(new DatagramPacket(send, send.length));
+                try {
+                    reply.setLength(4096);
+                    socket.receive(reply);
+                    entry.put("status", "answered")
+                        .put("replyHex", toHex(Arrays.copyOf(reply.getData(), reply.getLength())));
+                } catch (SocketTimeoutException timedOut) {
+                    entry.put("status", "timeout");
+                }
+            }
+            if (plan.optBoolean("udpGate")) report(app, nonce, result, "udp_done");
+            Thread.sleep(Math.max(0, Math.min(10000, plan.optInt("udpAfterMs", 0))));
+        }
+    }
+
     private static void tcpReassembly(Context app, JSONObject plan, JSONObject result, String nonce,
             InetAddress endpoint, InetAddress local, int source, int port) throws Exception {
         byte[] hello = hex(plan.getString("t14WireHex"));
@@ -934,6 +972,7 @@ final class ProtocolFactsProbe {
                 else if (plan.has("dnsTcpQueries")) dnsTcpQueries(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("observationFlood")) observation(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t15InitialHex") || plan.has("t16Sequence")) quicInitial(app, plan, result, nonce, endpoint, local, source, port);
+                else if (plan.has("udpSteps")) udpSteps(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("socksSteps")) socksSteps(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("httpRequests")) httpRequests(app, plan, result, nonce, endpoint, local, source, port);
                 else if (plan.has("t14WireHex")) tcpReassembly(app, plan, result, nonce, endpoint, local, source, port);
