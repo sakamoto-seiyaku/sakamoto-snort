@@ -105,7 +105,9 @@ typedef struct {
   uint16_t upstream_port;
   uint8_t upstream_family, upstream_transport, proxy_result, http_error; /* http_error: DoH only */
   uint16_t reply_rcode, client_udp_capacity, reply_capacity;
-  uint32_t output_bytes, proxy_flags, proxy_reserved2;
+  uint32_t output_bytes, proxy_flags;
+  /* Association admission for this delivered answer (stage 2 only). Not App receipt. */
+  uint8_t assoc_admitted, assoc_refreshed, assoc_skipped, assoc_reason;
   uint64_t return_token;
   uint64_t return_policy_generation, return_policy_revision, return_policy_hash, return_winner;
   uint8_t return_declared_action, return_actual_action, return_mode, return_provenance;
@@ -126,6 +128,7 @@ _Static_assert (sizeof (product_dns_observation_record_t) == 1032, "DNS observat
 _Static_assert (offsetof (product_dns_observation_record_t, name) == 224, "DNS name ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, return_token) == 656, "DNS return identity ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, upstream_attempt) == 704, "DNS resolver view ABI");
+_Static_assert (offsetof (product_dns_observation_record_t, assoc_admitted) == 652, "DNS association ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, alpn_state) == 571, "DoH ALPN ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, http_error) == 637, "DoH error ABI");
 _Static_assert (offsetof (product_dns_observation_record_t, http_status) == 1026, "DoH status ABI");

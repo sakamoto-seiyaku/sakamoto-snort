@@ -64,7 +64,8 @@ target_link_libraries(sakamoto-product-l4-policy-test PRIVATE
 
 add_library(sakamoto_product_dns STATIC src/product/vpp/product_dns.c src/product/vpp/product_dns_tcp.c
   src/product/vpp/product_dns_proxy.c src/product/vpp/product_dns_tls.c
-  src/product/vpp/product_dns_bootstrap.c src/product/vpp/product_dns_http.c)
+  src/product/vpp/product_dns_bootstrap.c src/product/vpp/product_dns_http.c
+  src/product/vpp/product_dns_assoc.c)
 target_link_libraries(sakamoto_product_dns PUBLIC
   sakamoto_product_l4_policy sakamoto_product_domains PRIVATE sakamoto_dns_wire sakamoto_quic_crypto)
 target_compile_features(sakamoto_product_dns PRIVATE c_std_11)
@@ -134,6 +135,11 @@ add_executable(sakamoto-product-dns-route-doh-test tests/host/product_dns_route_
 target_include_directories(sakamoto-product-dns-route-doh-test PRIVATE src/product/vpp src/product/include)
 target_compile_options(sakamoto-product-dns-route-doh-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-route-doh-test COMMAND sakamoto-product-dns-route-doh-test)
+add_executable(sakamoto-product-dns-assoc-test tests/host/product_dns_assoc_test.c)
+target_link_libraries(sakamoto-product-dns-assoc-test PRIVATE sakamoto_product_dns)
+target_include_directories(sakamoto-product-dns-assoc-test PRIVATE src/product/vpp src/product/include)
+target_compile_options(sakamoto-product-dns-assoc-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-dns-assoc-test COMMAND sakamoto-product-dns-assoc-test)
 add_executable(sakamoto-product-dns-http-test tests/host/product_dns_http_test.c)
 target_link_libraries(sakamoto-product-dns-http-test PRIVATE sakamoto_product_dns)
 target_compile_options(sakamoto-product-dns-http-test PRIVATE -Wall -Wextra -Werror)

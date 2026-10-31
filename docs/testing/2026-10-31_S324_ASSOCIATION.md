@@ -1,0 +1,52 @@
+# S324 — domain-IP association facts and independent lifetime
+
+Task authority is SAKAMOTO-324 under the [application DNS specification](../product/APPLICATION_DNS_SPEC.md)
+section 10. This record states what was actually qualified. **No Pixel 6a run has been made for this
+slice**: everything below is Host evidence.
+
+## Implemented contract
+
+[`product_dns_assoc.c`](../../src/product/vpp/product_dns_assoc.c) is an owner-local fact store held by the
+shared DNS proxy, so Root and VPN use one implementation.
+
+- **Source.** A pair is (name, address) from an `A`/`AAAA` record in the *answer section* of an allowed,
+  complete answer (upstream wire or current-view cache). The owner must be the QName or a CNAME actually
+  connected to it; the chain is linear, so an address owned by `names[k]` pairs with `names[0..k]`.
+  Authority, additional, SVCB/HTTPS hints, other owners, non-IN data and unspecified/loopback/multicast
+  addresses never become pairs. NXDOMAIN, other RCODEs, truncated, broken-chain and uncorrelated answers
+  admit nothing and leave a reason.
+- **Provenance per pair.** Original caller reliability, resolver id and route, transport, cache origin,
+  network/route revision, underlay epoch, request token, QType, RCODE, and the *output* result
+  (accepted / not accepted). Output acceptance is separate evidence; it is not App receipt.
+- **Lifetime.** Two hours (provisional) per pair, independent of the answer TTL and of every other pair.
+  Only an allowed answer or a current-view cache answer for the same pair refreshes it. Qualification
+  lookups and business traffic never do. A new answer does not delete older addresses and does not renew
+  addresses it omits.
+- **Bounds.** 1024 pairs (about 0.4 MiB, counted in the proxy's owned bytes), 128 pairs per answer
+  (more admits none and reports `OVER_LIMIT`). When full, expired pairs go first, then the pair that
+  expires soonest. Network/route view change and `Stop` remove pairs; cache eviction does not.
+- **Consumption hook.** `product_dns_assoc_qualify` reports no, one or several candidate names for an
+  address in the current view, with caller, delivery and CNAME evidence. It is read-only. One candidate is
+  indirect evidence, not connection identity. `PRODUCT_DNS_ASSOC_ENFORCEMENT_ENABLED` is 0: the cross-App
+  and profile scope is undecided, so nothing consumes the hook and no fallback acceptance is claimed.
+- **Observation.** The existing DNS record keeps its size and versions. Four named bytes at offset 652
+  (`assoc_admitted`, `assoc_refreshed`, `assoc_skipped`, `assoc_reason`) describe the admission of the
+  answer for stage 2 records; the Rust decoder rejects them on any other stage. Table counts, high water
+  and evictions are in the proxy resources.
+
+## Host qualification
+
+| Check | Result |
+| --- | --- |
+| Pair source, CNAME chain, authority/additional/unrelated owner exclusion, 9:00/10:00 independent expiry, lookups do not renew, omission does not renew, view change, expiry, ineligible answers, AAAA, capacity 1024 with eviction (`sakamoto-product-dns-assoc-test`, ASan/UBSan/leak) | PASS |
+| Through the proxy: admission on wire answer, refresh on cache answer, persistence after the 60 s TTL, 2 h expiry, view-change drop, no-address and NXDOMAIN reasons, `Stop` (`sakamoto-product-dns-routing-test`, ASan/UBSan/leak) | PASS |
+| Existing DNS, Root, VPN and observation host suite (69 tests); Rust crate including the new field guard | PASS |
+
+One run of `sakamoto-product-root-dns-tcp-pending-bounds-test` aborted once under `ctest -j4` and
+passed in 31 further runs and the next full run; no cause was found.
+
+## Not covered
+
+Root and VPN Adapter runs on the Pixel 6a, real App or system lookups, return failure injected at the
+Adapter, and N3. Cross-App/profile consumption, SNI and connection-time use of the hook, and any
+enforcement remain out of scope.

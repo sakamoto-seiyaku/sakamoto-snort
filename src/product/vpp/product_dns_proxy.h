@@ -3,6 +3,7 @@
 #define SAKAMOTO_PRODUCT_DNS_PROXY_H
 
 #include "product_dns.h"
+#include "product_dns_assoc.h"
 #include "product_dns_alpn.h"
 #include "sakamoto_product_rule_config.h"
 
@@ -102,6 +103,7 @@ typedef struct {
   uint16_t rcode;
   uint8_t stage, transport, truncated, delivery, cached;
   product_dns_proxy_io_event_t io;
+  product_dns_assoc_admission_t assoc; /* association admission for this answer */
 } product_dns_proxy_event_t;
 
 enum {
@@ -140,6 +142,8 @@ typedef struct {
   uint64_t cache_bytes, cache_high_water_bytes, cache_hits, cache_misses, cache_evictions, cache_skipped;
   uint32_t cache_entries, cache_high_water;
   uint64_t failed_attempts, failovers;
+  product_dns_assoc_stats_t assoc;
+  uint64_t assoc_bytes;
   product_dns_proxy_health_t health[SAKAMOTO_DNS_MAX_ENDPOINTS];
 } product_dns_proxy_resources_t;
 

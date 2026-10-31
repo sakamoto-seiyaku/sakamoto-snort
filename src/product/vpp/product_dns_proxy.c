@@ -2,6 +2,7 @@
 #include "product_dns_proxy.h"
 #include "product_cares.h"
 #include "product_dns_route.h"
+#include "product_dns_assoc.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
@@ -38,6 +39,7 @@ struct product_dns_proxy {
   proxy_exchange_t exchanges[PRODUCT_DNS_PROXY_TRANSACTIONS];
   product_dns_proxy_resources_t resources;
   dns_cache_t cache;
+  product_dns_assoc_t *assoc; /* domain-IP facts; owner-local, never shared */
   uint64_t other_bytes;
   uint64_t id_deadline[65536];
   uint16_t next_id;
@@ -52,6 +54,8 @@ product_dns_proxy_resources_t product_dns_proxy_resources (const product_dns_pro
   result.cache_entries = proxy->cache.count; result.cache_high_water = proxy->cache.high_water;
   result.cache_hits = proxy->cache.hits; result.cache_misses = proxy->cache.misses;
   result.cache_evictions = proxy->cache.evictions; result.cache_skipped = proxy->cache.skipped;
+  result.assoc = product_dns_assoc_stats (proxy->assoc);
+  result.assoc_bytes = proxy->assoc ? product_dns_assoc_bytes () : 0;
   return result;
 }
 
@@ -472,6 +476,7 @@ void product_dns_proxy_advance (product_dns_proxy_t *proxy, uint64_t now, uint64
     memset (proxy->resources.health, 0, sizeof (proxy->resources.health));
   proxy->network_revision = network; proxy->route_revision = route; proxy->view_known = 1;
   cache_prune (&proxy->cache, now, network, route);
+  product_dns_assoc_advance (proxy->assoc, now, network, route);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
     {
       proxy_request_t *request = &proxy->requests[i];
@@ -504,6 +509,7 @@ void product_dns_proxy_stop (product_dns_proxy_t *proxy, uint64_t now)
   if (!proxy) return;
   proxy->resources.accepting = 0;
   cache_clear (&proxy->cache);
+  product_dns_assoc_clear (proxy->assoc);
   for (unsigned i = 0; i < PRODUCT_DNS_PROXY_WAITERS; ++i)
     if (proxy->requests[i].exchange)
       finish_failure (proxy, &proxy->requests[i], now, PRODUCT_DNS_PROXY_STOPPED, 0);
@@ -519,8 +525,11 @@ product_dns_proxy_t *product_dns_proxy_open (uint64_t generation,
   proxy->callbacks = *callbacks; proxy->context = context;
   if (getrandom (&proxy->next_id, sizeof (proxy->next_id), GRND_NONBLOCK) != sizeof (proxy->next_id))
     { free (proxy); return NULL; }
+  proxy->assoc = product_dns_assoc_open ();
+  if (!proxy->assoc) { free (proxy); return NULL; }
   proxy->resources.accepting = !!route->enabled;
-  proxy->resources.owned_bytes = proxy->resources.high_water_bytes = sizeof (*proxy) - sizeof (proxy->cache);
+  proxy->resources.owned_bytes = proxy->resources.high_water_bytes =
+    sizeof (*proxy) - sizeof (proxy->cache) + product_dns_assoc_bytes ();
   return proxy;
 }
 
@@ -528,6 +537,7 @@ void product_dns_proxy_close (product_dns_proxy_t *proxy)
 {
   if (!proxy) return;
   product_dns_proxy_stop (proxy, 0);
+  product_dns_assoc_close (proxy->assoc);
   free (proxy);
 }
 
@@ -687,6 +697,7 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
                       memcpy (answer, aged ? aged : wire, length);
                       answer[0] = event.query.id >> 8; answer[1] = event.query.id;
                       event.output_bytes = length;
+                      uint64_t underlay = request->exchange->view.underlay;
                       release_request (proxy, request);
                       int queued = proxy->callbacks.reply (proxy->context, &event, answer, length);
                       if (queued == PRODUCT_DNS_REPLY_CAPACITY && event.input.context.packet.protocol == 6)
@@ -698,6 +709,15 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
                       else
                         {
                           event.delivery = queued == PRODUCT_DNS_REPLY_ACCEPTED ? 1 : 2;
+                          /* Policy allowed this complete answer. Admission records the
+                           * output result as its own evidence, never as App receipt. */
+                          product_dns_assoc_source_t source = {.generation = proxy->generation,
+                            .network_revision = event.key.network_revision, .route_revision = event.key.route_revision,
+                            .underlay_epoch = underlay, .token = event.input.token,
+                            .resolver_id = event.resolver_id, .resolution_route = event.resolution_route,
+                            .qtype = event.query.qtype, .rcode = response.rcode, .caller = event.query.caller,
+                            .transport = (uint8_t) transport, .cached = event.cached, .delivery = event.delivery};
+                          product_dns_assoc_admit (proxy->assoc, wire, length, &response, &source, now_us, &event.assoc);
                           if (event.delivery != 1 && proxy->callbacks.abandon)
                             proxy->callbacks.abandon (proxy->context, &event);
                           if (proxy->callbacks.observe) proxy->callbacks.observe (proxy->context, &event);

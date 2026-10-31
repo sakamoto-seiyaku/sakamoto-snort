@@ -81,6 +81,12 @@ pub struct DnsRecord {
     #[serde(default)] pub reply_capacity: u16,
     #[serde(default)] pub output_bytes: u32,
     #[serde(default)] pub proxy_flags: u32,
+    /// Domain-IP association admission for a delivered answer (stage 2): pairs created,
+    /// refreshed, unusable addresses skipped, and why nothing was admitted (1..4).
+    #[serde(default, skip_serializing_if = "zero_u8")] pub assoc_admitted: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub assoc_refreshed: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub assoc_skipped: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub assoc_reason: u8,
     #[serde(default)] pub return_token: u64,
     #[serde(default)] pub return_policy_generation: u64,
     #[serde(default)] pub return_policy_revision: u64,
@@ -281,7 +287,10 @@ impl DnsRecord {
             && self.proxy_result <= 15 && (self.proxy_result < 12 || self.stage == 5)
             && self.resolver_id <= 8 && (self.resolution_route < 8 || self.resolution_route == u32::MAX)
             && (self.resolution_route != u32::MAX || self.resolver_id == 0)
-            && self.proxy_flags & !31 == 0 && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
+            && self.proxy_flags & !31 == 0 && self.assoc_reason <= 4
+            && (self.stage == 2 || (self.assoc_admitted | self.assoc_refreshed | self.assoc_skipped | self.assoc_reason) == 0)
+            && (self.assoc_reason == 0 || (self.assoc_admitted | self.assoc_refreshed) == 0)
+            && self.delivery <= 8 && self.reply_rcode <= 4095 && self.rcode <= 4095
             && self.coverage >= 1 && self.coverage <= 5 && self.codec_peak_bytes <= 512*1024
             && self.caller <= 1 && self.availability & !15 == 0 && self.packet_availability & !15 == 0
             && (self.caller == 1) == (self.availability & 9 == 9 && self.uid != u32::MAX)
@@ -468,6 +477,10 @@ impl DnsRecord {
             reply_capacity: if proxy_extended {u16_at(642)} else {0},
             output_bytes: if proxy_extended {u32_at(644)} else {0},
             proxy_flags: if proxy_extended {u32_at(648)} else {0},
+            assoc_admitted: if proxy_extended {data[652]} else {0},
+            assoc_refreshed: if proxy_extended {data[653]} else {0},
+            assoc_skipped: if proxy_extended {data[654]} else {0},
+            assoc_reason: if proxy_extended {data[655]} else {0},
             return_token: if proxy_extended {u64_at(656)} else {0},
             return_policy_generation: if proxy_extended {u64_at(664)} else {0},
             return_policy_revision: if proxy_extended {u64_at(672)} else {0},
@@ -698,4 +711,26 @@ mod tests {
         assert!(!record.valid());
     }
 
+
+    #[test]
+    fn association_admission_belongs_only_to_a_delivered_answer() {
+        let base = DnsRecord {
+            generation: 77, token: 9, owner: 0, uid: u32::MAX,
+            network: u32::MAX, slot: u32::MAX, family: 4, protocol: 17,
+            direction: 3, coverage: 5, stage: 3, delivery: 6,
+            source_port: 40000, resolver_port: 53, query_token: 9,
+            route_revision: 5, proxy_result: 6, adapter_profile: 1,
+            packet_uid: u32::MAX, proxy_flags: 9,
+            ..DnsRecord::default()
+        };
+        assert!(base.valid());
+        // Not an answer stage: no association evidence may be claimed.
+        let mut record = base.clone(); record.assoc_admitted = 1;
+        assert!(!record.valid());
+        let mut record = base.clone(); record.assoc_reason = 1;
+        assert!(!record.valid());
+        // Reason codes are 1..=4, and a reason excludes created/refreshed pairs.
+        let mut record = base.clone(); record.assoc_reason = 5;
+        assert!(!record.valid());
+    }
 }

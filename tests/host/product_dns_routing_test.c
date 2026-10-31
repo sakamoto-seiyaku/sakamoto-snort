@@ -452,6 +452,49 @@ static void doh_without_complete_http_exchange_never_delivers_data(void)
   product_dns_proxy_close(proxy);
 }
 
+static void association_follows_allowed_answers_with_a_lifetime_independent_of_ttl(void)
+{
+  product_dns_proxy_t *proxy=configured_proxy(1);
+  submit(proxy,question,100);answer(proxy,101,0,1,60);
+  assert(replies==1 && !final.cached && observations[observation_count-1].assoc.admitted==1 && !observations[observation_count-1].assoc.refreshed);
+  assert(observations[observation_count-1].assoc.admitted==1);
+  product_dns_proxy_resources_t resources=product_dns_proxy_resources(proxy);
+  assert(resources.assoc.count==1 && resources.assoc.admitted==1 && resources.assoc_bytes);
+  /* A current-view cache answer refreshes the same pair instead of adding one. */
+  submit(proxy,question,200);
+  assert(final.cached && observations[observation_count-1].assoc.refreshed==1 && !observations[observation_count-1].assoc.admitted);
+  assert(product_dns_proxy_resources(proxy).assoc.count==1);
+  /* The answer TTL (60 s) is long gone; the pair is not. */
+  product_dns_proxy_advance(proxy,3600U*1000000U,5,7);
+  assert(product_dns_proxy_resources(proxy).assoc.count==1);
+  product_dns_proxy_advance(proxy,200+PRODUCT_DNS_ASSOC_WINDOW_US,5,7);
+  resources=product_dns_proxy_resources(proxy);
+  assert(resources.assoc.count==0 && resources.assoc.expired==1);
+  /* A view change removes only pairs from the old view. */
+  submit(proxy,question,PRODUCT_DNS_ASSOC_WINDOW_US+300);answer(proxy,PRODUCT_DNS_ASSOC_WINDOW_US+301,0,1,60);
+  assert(product_dns_proxy_resources(proxy).assoc.count==1);
+  product_dns_proxy_advance(proxy,PRODUCT_DNS_ASSOC_WINDOW_US+400,6,7);
+  resources=product_dns_proxy_resources(proxy);
+  assert(resources.assoc.count==0 && resources.assoc.view_dropped==1);
+  product_dns_proxy_close(proxy);
+
+  /* Results without a usable address record leave a reason, never a pair. */
+  proxy=configured_proxy(1);
+  submit(proxy,question,100);answer(proxy,101,0,0,60);
+  assert(observations[observation_count-1].assoc.reason==PRODUCT_DNS_ASSOC_NO_ADDRESS && !observations[observation_count-1].assoc.admitted);
+  submit(proxy,question,102);answer(proxy,103,3,0,60);
+  assert(observations[observation_count-1].assoc.reason==PRODUCT_DNS_ASSOC_NOT_ELIGIBLE);
+  assert(product_dns_proxy_resources(proxy).assoc.count==0);
+  product_dns_proxy_close(proxy);
+
+  proxy=configured_proxy(1);
+  submit(proxy,question,100);answer(proxy,101,0,1,60);
+  assert(product_dns_proxy_resources(proxy).assoc.count==1);
+  product_dns_proxy_stop(proxy,102);
+  assert(product_dns_proxy_resources(proxy).assoc.count==0);
+  product_dns_proxy_close(proxy);
+}
+
 int main(void)
 {
   primary_timeout_selects_backup();
@@ -468,6 +511,7 @@ int main(void)
   doh_age_is_spent_before_delivery_and_cache_lifetime();
   doh_age_beyond_ttl_delivers_zero_ttl_and_never_caches();
   doh_without_complete_http_exchange_never_delivers_data();
+  association_follows_allowed_answers_with_a_lifetime_independent_of_ttl();
   puts("ordered DNS: primary timeout selects configured backup");
   return 0;
 }

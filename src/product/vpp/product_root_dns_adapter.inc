@@ -350,6 +350,8 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .return_token = event->delivery == 1 && event->output_bytes ? owner->last_reply_token : 0,
     .upstream_attempt = event->upstream_attempt,
     .resolution_route = event->resolution_route, .resolver_id = event->resolver_id,
+    .assoc_admitted = event->assoc.admitted, .assoc_refreshed = event->assoc.refreshed,
+    .assoc_skipped = event->assoc.skipped, .assoc_reason = event->assoc.reason,
   };
   if (event->transport == PRODUCT_DNS_PROXY_DOT || event->transport == PRODUCT_DNS_PROXY_DOH) {
     /* DoH stores "host NUL path": only the host is the service identity. */
