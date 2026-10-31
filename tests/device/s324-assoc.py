@@ -184,6 +184,7 @@ def main():
     parser.add_argument("--cc", default="/home/js/.local/share/android-sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang")
     args = parser.parse_args()
     args.upstream_port = 15353
+    args.matrix = "assoc"
     for field in ("apk", "stage", "backup", "output"):
         setattr(args, field, getattr(args, field).resolve())
     args.output.mkdir(parents=True, exist_ok=False)
