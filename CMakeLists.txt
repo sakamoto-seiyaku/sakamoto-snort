@@ -135,6 +135,11 @@ add_executable(sakamoto-product-dns-route-doh-test tests/host/product_dns_route_
 target_include_directories(sakamoto-product-dns-route-doh-test PRIVATE src/product/vpp src/product/include)
 target_compile_options(sakamoto-product-dns-route-doh-test PRIVATE -Wall -Wextra -Werror)
 add_test(NAME sakamoto-product-dns-route-doh-test COMMAND sakamoto-product-dns-route-doh-test)
+add_executable(sakamoto-product-http-target-test tests/host/product_http_target_test.c
+  src/product/vpp/product_http_target.c)
+target_include_directories(sakamoto-product-http-target-test PRIVATE src/product/vpp)
+target_compile_options(sakamoto-product-http-target-test PRIVATE -Wall -Wextra -Werror)
+add_test(NAME sakamoto-product-http-target-test COMMAND sakamoto-product-http-target-test)
 add_executable(sakamoto-product-dns-assoc-test tests/host/product_dns_assoc_test.c)
 target_link_libraries(sakamoto-product-dns-assoc-test PRIVATE sakamoto_product_dns)
 target_include_directories(sakamoto-product-dns-assoc-test PRIVATE src/product/vpp src/product/include)
