@@ -710,14 +710,16 @@ static void answer_waiter (product_dns_proxy_t *proxy, proxy_request_t *request,
                         {
                           event.delivery = queued == PRODUCT_DNS_REPLY_ACCEPTED ? 1 : 2;
                           /* Policy allowed this complete answer. Admission records the
-                           * output result as its own evidence, never as App receipt. */
+                           * output result as its own evidence, never as App receipt. It reads
+                           * the proxy's own copy: the caller's receive buffer may already be
+                           * reused once the reply callback has run. */
                           product_dns_assoc_source_t source = {.generation = proxy->generation,
                             .network_revision = event.key.network_revision, .route_revision = event.key.route_revision,
                             .underlay_epoch = underlay, .token = event.input.token,
                             .resolver_id = event.resolver_id, .resolution_route = event.resolution_route,
                             .qtype = event.query.qtype, .rcode = response.rcode, .caller = event.query.caller,
                             .transport = (uint8_t) transport, .cached = event.cached, .delivery = event.delivery};
-                          product_dns_assoc_admit (proxy->assoc, wire, length, &response, &source, now_us, &event.assoc);
+                          product_dns_assoc_admit (proxy->assoc, answer, length, &response, &source, now_us, &event.assoc);
                           if (event.delivery != 1 && proxy->callbacks.abandon)
                             proxy->callbacks.abandon (proxy->context, &event);
                           if (proxy->callbacks.observe) proxy->callbacks.observe (proxy->context, &event);
