@@ -558,3 +558,7 @@ add_executable(sakamoto-product-flow-http-test tests/host/product_flow_http_test
 target_compile_options(sakamoto-product-flow-http-test PRIVATE -Wall -Wextra -Werror -pedantic)
 target_link_libraries(sakamoto-product-flow-http-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
 add_test(NAME sakamoto-product-flow-http-test COMMAND sakamoto-product-flow-http-test)
+add_executable(sakamoto-product-policy-http-target-test tests/host/product_policy_http_target_test.c)
+target_compile_options(sakamoto-product-policy-http-target-test PRIVATE -Wall -Wextra -Werror -pedantic)
+target_link_libraries(sakamoto-product-policy-http-target-test PRIVATE sakamoto_product_l4_policy)
+add_test(NAME sakamoto-product-policy-http-target-test COMMAND sakamoto-product-policy-http-target-test)

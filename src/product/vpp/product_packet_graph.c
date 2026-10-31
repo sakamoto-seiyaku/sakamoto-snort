@@ -4902,6 +4902,56 @@ product_packet_graph_dns_expire (vlib_main_t *vm, uint64_t now_us)
   product_root_dns_adapter_expire (vm, now_us);
 }
 
+/* Visible cleartext HTTP: every request target of the flow is evaluated against
+ * the current policy as its own domain source (never an SNI). A refusal marks the
+ * flow so the rest of the connection keeps being refused while the policy still
+ * refuses that target. Returns 1 with the verdict in *chosen, 0 when this packet
+ * has no HTTP target (the caller evaluates as usual). */
+static int
+product_packet_graph_http_targets (
+  vlib_main_t *vm, product_packet_lease_t *lease, product_policy_snapshot_t *snapshot,
+  const product_flow_entry_observation_t *observation, product_l4_policy_match_result_t *chosen)
+{
+  product_packet_graph_main_t *graph = &product_packet_graph_main;
+  const product_flow_entry_t *entry = observation->entry;
+  if (!entry || entry->http_mode != PRODUCT_HTTP_ACTIVE || lease->facts.protocol != 6
+      || vm->thread_index == 0 || vm->thread_index > product_packet_graph_worker_count ())
+    return 0;
+  const product_http_flow_t *http = &entry->http;
+  const product_http_request_t *targets[PRODUCT_HTTP_PENDING + 2];
+  unsigned count = 0;
+  if (http->has_denied) targets[count++] = &http->denied;
+  if (http->pending_count)
+    {
+      for (unsigned i = 0; i < http->pending_count; ++i) targets[count++] = &http->pending[i];
+      if (http->overflow && http->has_current) targets[count++] = &http->current;
+    }
+  else if (http->has_current && !http->has_denied) targets[count++] = &http->current;
+  if (!count) return 0;
+  for (unsigned i = 0; i < count; ++i)
+    {
+      const product_http_request_t *target = targets[i];
+      product_l4_policy_match_result_t result;
+      int named = target->kind == PRODUCT_HTTP_TARGET_NAME;
+      snapshot->domain_source = PRODUCT_POLICY_DOMAIN_HTTP_TARGET;
+      snapshot->domain_available = named;
+      snapshot->domain_lists = named ? product_domains_match (snapshot->bank->domains,
+        (const uint8_t *) target->name, target->name_length) : 0;
+      if (product_packet_graph_l4_view_evaluate (graph, lease, snapshot, &result) != PRODUCT_L4_POLICY_STATUS_OK)
+        return 0;     /* the staging evaluation reports the matcher error itself */
+      *chosen = result;
+      if (result.evaluation == PRODUCT_L4_POLICY_EVALUATION_MATCH
+          && result.actual_action == PRODUCT_L4_POLICY_ACTION_DROP)
+        {
+          product_flow_runtime_t *pool = graph->flow_pools[vlib_get_worker_index (vm->thread_index)];
+          (void) product_flow_http_deny (pool, observation->slot, snapshot->identity.generation,
+            entry->incarnation, target);
+          return 1;
+        }
+    }
+  return 1;
+}
+
 static product_packet_result_t
 product_packet_graph_policy_on_owner (
   vlib_main_t *vm, u32 buffer_index, product_packet_lease_t *lease,
@@ -4967,6 +5017,8 @@ product_packet_graph_policy_on_owner (
     }
   int post_flow = !tcp.complete && eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK
     && early.evaluation == PRODUCT_L4_POLICY_EVALUATION_NO_MATCH;
+  product_l4_policy_match_result_t http_verdict = {0};
+  int http_decided = 0;
   product_flow_entry_observation_t observation = tcp.flow_observed ? tcp.flow : (product_flow_entry_observation_t) {0};
   if (post_flow)
     {
@@ -4987,10 +5039,12 @@ product_packet_graph_policy_on_owner (
         snapshot.domain_lists = product_domains_match (snapshot.bank->domains,
           (const uint8_t *) observation.entry->sni.name, observation.entry->sni.name_length);
       snapshot.position = PRODUCT_L4_POLICY_POSITION_POST;
+      http_decided = product_packet_graph_http_targets (vm, lease, &snapshot, &observation, &http_verdict);
     }
   product_packet_result_t result = product_packet_graph_policy_stage_snapshot (
     lease, evaluation, &snapshot,
-    eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK && !post_flow ? &early : 0);
+    eligible && early_status == PRODUCT_L4_POLICY_STATUS_OK && !post_flow ? &early
+      : http_decided ? &http_verdict : 0);
   if (result == PRODUCT_PACKET_OK && !post_flow && !tcp.flow_observed
       && lease->terminal_intent == PRODUCT_PACKET_INTENT_NONE)
     product_packet_graph_flow_observe (vm, buffer_index, lease, evaluation, trace, &observation);

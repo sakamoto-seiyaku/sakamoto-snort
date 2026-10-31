@@ -750,8 +750,9 @@ expression_matches (const product_l4_policy_rule_t *rule,
   /* Explicit SNI conditions retain whole-rule protocol applicability even
    * behind OR. A QName is a distinct control point, never synthetic SNI. */
   if ((dependencies & PRODUCT_POLICY_DEP_SNI) && !sni_applicable) return 0;
-  if ((dependencies & PRODUCT_POLICY_DEP_DOMAIN) &&
-      packet->domain_source != PRODUCT_POLICY_DOMAIN_DNS_QNAME && !sni_applicable)
+  int direct_source = packet->domain_source == PRODUCT_POLICY_DOMAIN_DNS_QNAME ||
+    packet->domain_source == PRODUCT_POLICY_DOMAIN_HTTP_TARGET;
+  if ((dependencies & PRODUCT_POLICY_DEP_DOMAIN) && !direct_source && !sni_applicable)
     return 0;
   uint8_t values[PRODUCT_STATIC_EXPRESSION_BYTES];
   unsigned stack = 0;
@@ -773,7 +774,7 @@ expression_matches (const product_l4_policy_rule_t *rule,
         }
       else if (op == PRODUCT_EXPRESSION_DOMAIN_LIST)
         {
-          if (packet->domain_source == PRODUCT_POLICY_DOMAIN_DNS_QNAME)
+          if (direct_source)
             {
               if (packet->domain_available)
                 value = !!(packet->domain_lists & (UINT64_C(1) << arg[0]));

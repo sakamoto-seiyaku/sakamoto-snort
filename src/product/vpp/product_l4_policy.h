@@ -155,6 +155,9 @@ typedef struct
 
 #define PRODUCT_POLICY_DOMAIN_SNI 0U
 #define PRODUCT_POLICY_DOMAIN_DNS_QNAME 1U
+/* A visible cleartext HTTP request's effective target. Like a QName it is a distinct,
+ * per-request source with its own availability and never an SNI. */
+#define PRODUCT_POLICY_DOMAIN_HTTP_TARGET 2U
 
 typedef struct
 {

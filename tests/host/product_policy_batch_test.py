@@ -68,6 +68,7 @@ projection = "".join(function(GRAPH, name, result) for name, result in (
     ("product_packet_graph_l4_packet_projection", "static void"),
     ("product_packet_graph_l4_view_evaluate", "static product_l4_policy_status_t")))
 stage = function(GRAPH, "product_packet_graph_policy_stage_snapshot", "static product_packet_result_t")
+http_targets = function(GRAPH, "product_packet_graph_http_targets", "static int")
 owner = function(GRAPH, "product_packet_graph_policy_on_owner", "static product_packet_result_t")
 flow_commit = function(GRAPH, "product_packet_graph_flow_record_decision", "static product_flow_entry_status_t")
 node_start = GRAPH.index("VLIB_NODE_FN (product_packet_policy_node)")
@@ -367,6 +368,10 @@ void product_dns_tcp_bind(product_dns_tcp_owner_t *owner,product_dns_owner_t *re
   (void)owner;(void)requests;(void)context;assert(tcp_fixture_mode && identity->generation==7 && identity->incarnation==77);
 }
 void product_flow_expiry_changed(vlib_main_t *vm) {(void)vm;}
+product_flow_entry_status_t product_flow_http_deny(product_flow_runtime_t *pool,uint32_t slot,uint64_t generation,
+  uint64_t incarnation,const product_http_request_t *target) {
+  (void)pool;(void)slot;(void)generation;(void)incarnation;(void)target;return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
 product_flow_entry_status_t product_flow_entry_set_decision(product_flow_runtime_t *pool,
   const product_flow_entry_t *entry,const product_flow_policy_identity_t *policy,
   uint8_t decision,uint64_t winner,uint32_t reason) {
@@ -739,7 +744,7 @@ with tempfile.TemporaryDirectory(prefix="sakamoto-policy-batch-") as temporary:
     (directory / "vlib").mkdir()
     (directory / "vlib/vlib.h").write_text(vlib_stub)
     test = directory / "test.c"
-    code = prefix + mark_fixture() + private_types + hooks + snapshot_code + publisher + stubs + projection + flow_commit + stage + owner
+    code = prefix + mark_fixture() + private_types + hooks + snapshot_code + publisher + stubs + projection + flow_commit + stage + http_targets + owner
     code += function(GRAPH, "product_metadata_set_terminal_intent", "static void")
     test.write_text(code + node + flag_wrappers + completion + suffix)
     failures = []

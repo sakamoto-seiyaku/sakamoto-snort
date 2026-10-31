@@ -69,6 +69,7 @@ product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *pool
       || borrowed->http_mode != PRODUCT_HTTP_ACTIVE)
     return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
   product_flow_entry_t *entry = (product_flow_entry_t *) borrowed;
-  if (!entry->http.has_denied) { entry->http.denied = *target; entry->http.has_denied = 1; }
+  /* The latest refused target is what the rest of the connection is evaluated against. */
+  entry->http.denied = *target; entry->http.has_denied = 1;
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }

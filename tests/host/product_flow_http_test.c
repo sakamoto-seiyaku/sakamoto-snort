@@ -164,9 +164,9 @@ static void denial_is_sticky_and_validated (void)
   assert (http (&x)->has_denied && !strcmp (http (&x)->denied.name, "example.test"));
   product_http_request_t other = target; strcpy (other.name, "other.test");
   assert (!product_flow_http_deny (x.pool, x.o.slot, 7, incarnation, &other));
-  assert (!strcmp (http (&x)->denied.name, "example.test"));          /* the first refusal stays */
+  assert (!strcmp (http (&x)->denied.name, "other.test"));            /* the latest refused target is kept */
   send (&x, "GET /y HTTP/1.1\r\nHost: later.test\r\n\r\n");
-  assert (http (&x)->has_denied && !strcmp (http (&x)->denied.name, "example.test"));
+  assert (http (&x)->has_denied && !strcmp (http (&x)->denied.name, "other.test"));   /* parsing never clears a refusal */
   close_flow (&x);
   open_flow (&x, 443);
   packet (&x, 0, "\x16\x03\x01", 3, x.seq);
