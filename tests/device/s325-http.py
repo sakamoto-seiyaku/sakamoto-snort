@@ -279,10 +279,12 @@ def cases(device, peer, result):
     case = exchange(device, peer, result, "http-allowlist-after-framing-stop", [
         request("/http-allowlist-after-framing-stop/first", "allowed.http.test", extra="Transfer-Encoding: identity\r\n"),
         request("/http-allowlist-after-framing-stop/second", "elsewhere.http.test")], stop_on_timeout=False)
-    assert statuses(case) == ["answered", "timeout"], case
+    # The first head itself is judged and reaches the peer. Its framing cannot be trusted, so every
+    # later packet of the connection, its response included, has no known target and is refused.
     assert hosts(case) == ["allowed.http.test"], case
+    assert statuses(case) == ["timeout", "timeout"], case
     row = http_row(case)
-    assert row["stop"] == str(STOP["framing"]), row
+    assert row["stop"] == str(STOP["framing"]) and row["current"] == "allowed.http.test", row
     case["status"] = "PASS"
 
     # Informational: what the peer eventually saw of the refused requests, after every socket closed.
