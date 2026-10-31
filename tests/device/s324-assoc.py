@@ -160,13 +160,19 @@ def original_cases(device, result):
 
     for label, name, qtype, protocol in (("original-a-udp", "example.com", 1, 17),
                                          ("original-a-tcp", "example.org", 1, 6),
-                                         ("original-aaaa-udp", "example.net", 28, 17)):
+                                         ("original-aaaa-udp", "one.one.one.one", 28, 17)):
         case = original_exchange(device, result, label, name, qtype=qtype, protocol=protocol)
         rows = [r for r in case["records"] if r["stage"] == 2]
         assert rows and rows[0]["rcode"] == 0 and rows[0]["correlation"] == 1, rows
         assert rows[0]["proxy_flags"] == 0 and rows[0].get("delivery", 0) == 0, rows   # original path, delivery unproven
         assert rows[0].get("assoc_admitted", 0) >= 1, rows
         case["status"] = "PASS"
+    # A real answer without an address of the asked type creates no pair, only its reason.
+    case = original_exchange(device, result, "original-nodata", "example.net", qtype=28)
+    rows = [r for r in case["records"] if r["stage"] == 2]
+    if rows and rows[0]["rcode"] == 0 and not rows[0].get("assoc_admitted"):
+        assert rows[0].get("assoc_reason") == 2, rows       # NO_ADDRESS
+    case["status"] = "PASS"
     after, = assoc_status(device, "original-after")
     assert int(after["entries"]) >= 3 and int(after["admitted"]) >= 3, after
 
