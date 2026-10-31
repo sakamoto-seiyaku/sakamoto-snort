@@ -161,10 +161,20 @@ def assoc_cases(device, primary, backup, result):
     check(case, skipped=1, reason=REASON["UNUSABLE_ONLY"])
 
     final, = assoc_status(device, "assoc-final")
+    counts = {key: int(final[key]) for key in ("entries", "admitted", "refreshed", "rejected", "skipped",
+                                               "evicted", "expired", "view_dropped")}
     # 1 (admit) + 2 (CNAME) + 1 (hints) pairs; one cache refresh; one ineligible answer; one unusable address.
-    assert (int(final["entries"]), int(final["admitted"]), int(final["refreshed"]),
-            int(final["rejected"]), int(final["skipped"]), int(final["evicted"]),
-            int(final["expired"]), int(final["view_dropped"])) == (4, 4, 1, 1, 1, 0, 0, 0), final
+    mine = dict(entries=4, admitted=4, refreshed=1, rejected=1, skipped=1, evicted=0, expired=0, view_dropped=0)
+    if device.args.profile == "root":
+        assert counts == mine, final
+    else:
+        # The VPN carries every lookup of the phone, so real background lookups may add pairs of
+        # their own. Nothing may be lost or double counted, and the test's own contribution is
+        # fixed by the per-case rows above; the extras are listed from the complete store later.
+        assert counts["evicted"] == counts["expired"] == counts["view_dropped"] == 0, final
+        assert counts["entries"] == counts["admitted"] >= mine["admitted"], final
+        assert counts["refreshed"] >= 1 and counts["rejected"] >= 1 and counts["skipped"] >= 1, final
+        result["foreign_pairs_at_final_status"] = counts["admitted"] - mine["admitted"]
     result["association_status"] = final
 
     # IPv6 over a proxied TCP session on a fresh configuration (a new Product proxy).
@@ -227,6 +237,17 @@ def main():
             base.preserve_sqlite_history(device, "assoc", result["runs"][-1]["sqlite_after_stop"])
         else:
             base.finish_run(device, result, "assoc")
+        stopped = result["runs"][-1]["sqlite_after_stop"]
+        admissions = {}
+        for row in stopped["current_generation_records"]:
+            if row.get("stage") == 2 and row.get("proxy_flags", 0) & 1 and row.get("assoc_admitted"):
+                admissions[row["token"]] = (row["name"], row["assoc_admitted"], row["uid"])
+        result["durable_admissions"] = sorted(admissions.values())
+        result["durable_foreign_admissions"] = sorted(
+            value for value in admissions.values() if not value[0].endswith(".qname.test") and ".cdn.test" not in value[0])
+        # The test's own five answers (1 + 2 + 1 + 1) must all be durable, whatever else the phone looked up.
+        own = sum(value[1] for value in admissions.values() if value[0].endswith(".qname.test") or ".cdn.test" in value[0])
+        assert own >= 5, result["durable_admissions"]
         device.wire_stop()
         result["status"] = "PASS_ACTUAL_APP_" + args.profile.upper() + "_ASSOC"
     except BaseException as error:
