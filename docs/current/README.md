@@ -20,6 +20,7 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 - [S325](../testing/2026-10-31_S325_HTTP_TARGETS.md) tracks visible cleartext HTTP/1.x request targets per TCP flow as a third domain source with sticky connection-level DROP. Qualified on Host and Pixel 6a Root/VPN N1; on VPN App-bound rules apply once the asynchronous App UID is known.
 - [S326](../testing/2026-10-31_S326_SOCKS_TARGETS.md) adds SOCKS4/4a/5 CONNECT targets, proven by the real negotiation, as a direct domain source on the same Flow storage and sticky DROP. Qualified on Host and Pixel 6a Root/VPN N1.
 - [S327](../testing/2026-10-31_S327_DTLS_SNI.md) adds DTLS 1.0/1.2 ClientHello SNI from real handshake fragments; SNI rules now apply to DTLS. Qualified on Host and Pixel 6a Root/VPN N1; on VPN the first datagram of a new flow precedes the App UID.
+- [S328](../testing/2026-11-01_S328_DNS_COMBINED.md) qualifies the delivered DNS capabilities together on one artifact: combined Root/VPN N1/N3 runs across two generations and per-capability N3 runs. Association enforcement stays deferred.
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
 worker, with direct TUN reads into VPP buffers and index-only owner transfer.
