@@ -240,8 +240,15 @@ def assoc_cases(device, primary, backup, result):
 
     label = "assoc-cache-refresh"
     second = (int.from_bytes(query[:2], "big") + 1).to_bytes(2, "big") + query[2:]
-    hit = exchange(device, primary, backup, result, label, second, reply(query, [a_record(name, "192.0.2.44")]),
-                   expected_cached=True, cache_origin_us=origin)
+    # The data cache and the association table are FlowOwner-local: the same tuple (same source
+    # port) keeps the second query on the owner that cached the first answer.
+    reserve = device.reserve_source_port
+    device.reserve_source_port = lambda label, port=first["source_port"]: port
+    try:
+        hit = exchange(device, primary, backup, result, label, second, reply(query, [a_record(name, "192.0.2.44")]),
+                       expected_cached=True, cache_origin_us=origin)
+    finally:
+        device.reserve_source_port = reserve
     check(hit, refreshed=1)
 
     label = "assoc-cname"
