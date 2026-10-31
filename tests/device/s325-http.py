@@ -81,14 +81,17 @@ def flow_http(device, label, source):
     return dict(entry=entry, http=row, key=list(key))
 
 
-def exchange(device, peer, result, label, requests, *, splits=None, stop_on_timeout=True, timeout_ms=2500):
+def exchange(device, peer, result, label, requests, *, splits=None, stop_on_timeout=True, timeout_ms=2500,
+             connect_delay_ms=None):
     source = device.reserve_source_port(label)
     before_wire = device.wire_coverage(label + "-before")
     cursor = peer.cursor()
     nonce = "s325-" + label + "-" + str(time.time_ns())
     plan = dict(nonce=nonce, endpoint=device.args.endpoint4, port=PEER_PORT, source=source, bindDefault=True,
                 httpRequests=[item.hex() for item in requests], httpDelayMs=200, httpTimeoutMs=timeout_ms,
-                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2000, httpGate=True, httpAfterMs=6000)
+                httpStopOnTimeout=stop_on_timeout, httpHoldMs=2000, httpGate=True, httpAfterMs=6000,
+                httpConnectDelayMs=connect_delay_ms if connect_delay_ms is not None else
+                (1500 if device.args.profile == "vpn" else 0))
     if splits:
         plan["httpSplit"] = splits
     device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
@@ -223,10 +226,23 @@ def cases(device, peer, result):
     assert http_row(case)["denied_valid"] == "0", http_row(case)
     case["status"] = "PASS"
 
+    if device.args.profile == "vpn":
+        # Without waiting for the asynchronous VPN UID, the App-bound rule cannot apply to the first
+        # packets: the first request may pass. Once the UID is known the same connection is refused.
+        http_rules(device, "http-rules-vpn-cold")
+        case = exchange(device, peer, result, "http-vpn-cold-uid", [
+            request("/http-vpn-cold-uid/first", "blocked.http.test"),
+            request("/http-vpn-cold-uid/second", "blocked.http.test")], connect_delay_ms=0, stop_on_timeout=False)
+        row = http_row(case)
+        assert row["denied_valid"] == "1" and row["denied"] == "blocked.http.test", row
+        case["first_request_reached_peer"] = any(r["request_line"].endswith("/first HTTP/1.1") for r in case["peer"])
+        assert not any(r["request_line"].endswith("/second HTTP/1.1") for r in case["peer"]), case["peer"]
+        case["status"] = "PASS"
+
     # Informational: what the peer eventually saw of the refused requests, after every socket closed.
     time.sleep(6)
     refused = ("http-deny-first", "http-deny-descendant", "http-deny-blocks-rest-of-connection",
-               "http-absolute-target-wins-over-host")
+               "http-absolute-target-wins-over-host", "http-vpn-cold-uid")
     result["late_arrivals"] = [row["request_line"] for row in peer.requests()
                                if any("/" + name + "/" in row["request_line"] for name in refused)
                                and not any(row in case["peer"] for case in result["cases"])]

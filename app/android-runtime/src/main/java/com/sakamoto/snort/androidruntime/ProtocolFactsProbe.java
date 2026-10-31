@@ -216,6 +216,8 @@ final class ProtocolFactsProbe {
             socket.connect(new InetSocketAddress(endpoint, port), 10000);
             socket.setSoTimeout(timeout);
             result.put("local", socket.getLocalSocketAddress().toString());
+            /* VPN resolves a new connection's App UID asynchronously; App-bound rules apply from then on. */
+            Thread.sleep(Math.max(0, Math.min(5000, plan.optInt("httpConnectDelayMs", 0))));
             for (int i = 0; i < requests.length(); ++i) {
                 byte[] request = hex(requests.getString(i));
                 int prefix = splits == null ? 0 : splits.optInt(i, 0);
