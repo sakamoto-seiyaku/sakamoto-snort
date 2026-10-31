@@ -157,6 +157,8 @@ def original_exchange(device, result, label, name, *, qtype=1, protocol=17, reso
 def original_cases(device, result):
     """DNS replacement is off: allowed answers from the App's own resolver still create facts."""
     device.next_id = lambda counter=iter(range(0x4100, 0x4fff)): next(counter)
+    # A configuration saved by an earlier run must not route these queries through the proxy.
+    device.upstream("original-dns-off")
     start, = assoc_status(device, "original-start")
     assert int(start["entries"]) == 0, start
 
