@@ -111,6 +111,7 @@ def check(case, *, admitted=0, refreshed=0, skipped=0, reason=0):
 
 def original_rules(device, label):
     """Refuse answers whose connected CNAME is exactly github.com (the QName www.github.com is allowed)."""
+    device.query_rules(label + "-before")   # current saved revision for the replacement
     lines = ["lists 1", "domain 0 exact github.com",
              "0 0 4294967295 4294967295 4294967295 10 0 0 0 2 * * 0 65535 0 65535 1100",
              "group 10", "edge 10 1 0", f"bind 1 {device.uid} 2 10 0",
