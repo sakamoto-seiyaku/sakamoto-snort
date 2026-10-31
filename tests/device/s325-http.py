@@ -113,6 +113,9 @@ def exchange(device, peer, result, label, requests, *, splits=None, stop_on_time
                 sent=[item.decode("latin-1") for item in requests], status="OBSERVED")
     # After the App closes its socket, retransmissions of refused bytes no longer carry a socket
     # owner and the uid-owner NFQUEUE rule cannot capture them. Record, never judge, what follows.
+    # Android's cached-app freezer can stop the probe thread while it sleeps; bring the App to the
+    # foreground (as the S322 driver does) before waiting for it to close its socket.
+    device.save(label + "-client-foreground.txt", device.action())
     device.wait(label + "-closed", path, lambda value: value.get("phase") == "finished", timeout=wait, json_value=True)
     time.sleep(1.5)
     case["peer_after_close"] = mine(peer.requests(cursor))
