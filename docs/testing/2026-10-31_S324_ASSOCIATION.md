@@ -87,6 +87,14 @@ shared validator is applied to the QName row. After the runs, the original APK a
 members were restored at the fresh maximum generation (`original-restoration-r3`) with no NFQUEUE entry,
 Product hook or owned route left.
 
+## Scope correction (2026-10-31)
+
+Pairs are admitted only from answers the Product's own DNS proxy delivers (replacement enabled). Allowed answers
+on the original path, which is the default because replacement is opt-in, create no pairs. The specification asks
+for association evidence from allowed answers in general, so this record does not cover the default path. The
+table also belongs to the proxy object and is rebuilt on every DNS configuration change. A separate ticket is
+needed to move the table to each FlowOwner and admit original-path allowed answers.
+
 ## Not covered
 
 Root N3 and VPN N3, a return failure injected at the Adapter (the delivery field is verified on the

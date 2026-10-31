@@ -73,8 +73,31 @@ Findings:
 After the runs the original APK and all 4861 private-data members were restored at the fresh maximum
 generation (`original-restoration-r4`), with no NFQUEUE entry, Product hook or owned route left.
 
+## Review correction (2026-10-31, after the Opus review)
+
+A review of the first implementation found two ways around per-request filtering, both fixed in Product code:
+
+- **More than four heads in one packet.** Only four heads per packet were judged; the rest were counted and
+  skipped. Root output packets can be large, so this was reachable. Now the Flow stops at a full batch without
+  consuming the remaining bytes and the policy stage resumes the same packet batch by batch until every head is
+  judged or one is refused (64 batches; beyond that the rest of the connection is unavailable). A refused packet's
+  retransmission resumes where parsing stopped.
+- **Stale target after a parse stop.** After a malformed, framing, head-limit, version or loss stop the rest of
+  the connection was judged as its last target. Now its later packets, responses included, have no known target;
+  a refused target stays refused, and a tunnel (CONNECT, Upgrade, SOCKS) keeps its target. This matters for
+  allow-style policies (an ALLOW for one name no longer keeps matching other requests). With deny-style rules an
+  unknown target still makes no domain decision, which is the unified rule semantics, so traffic after such a stop
+  is not refused by domain rules.
+
+Device re-qualification with APK `android-apk-r4` (`150f0370…`): Root N1 `device-root-n1-r7` 14 cases and VPN N1
+`device-vpn-n1-r5` 15 cases PASS, adding `http-pipelined-six` (six heads in one packet, the sixth refused: the
+whole packet never reaches the peer) and `http-allowlist-after-framing-stop` (the malformed first head itself is
+judged and delivered; the rest of the connection is refused). S326 SOCKS was re-run with the same APK: Root
+`device-root-n1-r2` and VPN `device-vpn-n1-r2`, 10 cases each, PASS. The device was restored afterwards
+(`original-restoration-r5`).
+
 ## Not covered
 
-Root/VPN N3, handover, packets that arrive out of order (parsing ends), more than four heads in one packet
-(the surplus is counted, the last head is kept), HTTP/2 and encrypted HTTP. IP-literal targets stop at the
+Root/VPN N3, handover, packets that arrive out of order (parsing ends and the rest is unavailable), more than 256
+heads in one packet (the rest is unavailable), HTTP/2 and encrypted HTTP. IP-literal targets stop at the
 pending-qualification point; no association consumer exists and none is enabled.
