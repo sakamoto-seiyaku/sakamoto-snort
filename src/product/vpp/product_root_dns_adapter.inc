@@ -1652,6 +1652,14 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         (unsigned long long)core.cache_bytes,(unsigned long long)core.cache_high_water_bytes,
         (unsigned long long)core.cache_hits,(unsigned long long)core.cache_misses,
         (unsigned long long)core.cache_evictions,(unsigned long long)core.cache_skipped);
+      vlib_cli_output(vm,"dns.assoc owner=%u generation=%llu route_revision=%llu network_revision=%llu entries=%u entry_limit=%u high_water=%u bytes=%llu window_us=%llu admitted=%llu refreshed=%llu expired=%llu evicted=%llu view_dropped=%llu skipped=%llu rejected=%llu enforcement=%u",
+        i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,
+        (unsigned long long)owner->network_revision,core.assoc.count,PRODUCT_DNS_ASSOC_ENTRIES,core.assoc.high_water,
+        (unsigned long long)core.assoc_bytes,(unsigned long long)PRODUCT_DNS_ASSOC_WINDOW_US,
+        (unsigned long long)core.assoc.admitted,(unsigned long long)core.assoc.refreshed,
+        (unsigned long long)core.assoc.expired,(unsigned long long)core.assoc.evicted,
+        (unsigned long long)core.assoc.view_dropped,(unsigned long long)core.assoc.skipped,
+        (unsigned long long)core.assoc.rejected,(unsigned)PRODUCT_DNS_ASSOC_ENFORCEMENT_ENABLED);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
       vlib_cli_output(vm,"dns.tls owner=%u generation=%llu connections=%u connection_limit=%u authenticated=%u started=%llu verified=%llu failed=%llu bytes=%llu high_water_bytes=%llu trust_certificates=%u trust_certificate_limit=%u trust_byte_limit=%u owner_byte_limit=%u connection_byte_limit=%u rejected=%llu",
         i,(unsigned long long)owner->generation,io.tls_connections,PRODUCT_ROOT_DNS_TCP_SOCKETS,
