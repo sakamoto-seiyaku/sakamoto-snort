@@ -31,6 +31,30 @@ QUIC_BIT = 1 << 3
 FIXTURES = ROOT / "tests/host/fixtures"
 
 
+def sni_rules(device, label, *, deny=True):
+    baseline = device.query_rules(label + "-before")
+    lines = ["lists 3", "domain 0 exact blocked.http.test", "domain 1 descendants deny.http.test",
+             "domain 2 exact example.com"]
+    if deny:
+        lines += ["0 0 4294967295 4294967295 4294967295 10 0 0 0 2 * * 0 65535 0 65535 1100110102110202",
+                  "group 10", "edge 10 1 0", f"bind 1 {device.uid} 2 10 0"]
+    index = int(deny)
+    lines += ["0 0 4294967295 4294967295 4294967295 1000 0 0 0 1 * * 0 65535 0 65535",
+              "group 20", f"edge 20 1 {index}", f"bind 2 {device.uid} 2 20 0"]
+    request = device.out / (label + "-rules.txt")
+    request.write_text("\n".join(lines) + "\n")
+    remote = "/data/local/tmp/s327-rules.txt"
+    device.adb("push", request, remote)
+    command = f'am start -n {PKG}/.DebugControlActivity --es completeRuleText "$(cat {remote})"'
+    device.save(label + "-prefill.txt", device.adb("shell", "sh", "-c", shlex.quote(command)))
+    device.adb("shell", "rm", remote)
+    old = base.props(device.app("files/product-state/complete-rule-config.properties")).get("queryElapsedMillis")
+    device.tap(label + "-replace", "Replace all rules")
+    status = device.applied(label, old)
+    assert int(status["count"]) == int(status["activeCount"]) == 1 + index, status
+    return status
+
+
 def fixture(name):
     return [bytes.fromhex(line) for line in (FIXTURES / (name + ".hex")).read_text().split()]
 
@@ -78,6 +102,45 @@ def exchange(device, peer, result, label, steps, *, family=4):
     return case
 
 
+TCP_PORT = 18444
+
+
+def tcp_exchange(device, result, label, hello):
+    """One real TLS ClientHello over TCP; the App's UID is known before it is sent (TCP connect)."""
+    peer = device.tcp_peer
+    source = device.reserve_source_port(label)
+    cursor = peer.cursor()
+    nonce = "s327-" + label + "-" + str(time.time_ns())
+    plan = dict(nonce=nonce, endpoint=device.args.endpoint4, port=TCP_PORT, source=source, bindDefault=True,
+                socksSteps=[dict(send=hello.hex(), expect=len(hello))], socksTimeoutMs=2500,
+                socksConnectDelayMs=1500 if device.args.profile == "vpn" else 0,
+                socksHoldMs=1000, socksGate=True, socksAfterMs=4000)
+    device.save(label + "-plan.json", json.dumps(plan, indent=2) + "\n")
+    device.save(label + "-launch.txt", device.action("--es", "t12ProbePlan", shlex.quote(json.dumps(plan))))
+    path = "files/product-state/t12-" + nonce + ".json"
+    client = device.wait(label + "-client", path, lambda value: value.get("phase") in ("socks_done", "finished"),
+                         timeout=30, json_value=True)
+    assert not client.get("error"), client
+    raw = device.save(label + "-flows.txt", device.cli(label + "-flows", "show product flows"))
+    tables = {"flow.entry ": {}, "flow.sni ": {}, "flow.lpi ": {}}
+    for line in raw.splitlines():
+        for prefix, table in tables.items():
+            if line.startswith(prefix):
+                row = base.props(line.replace(" ", "\n"))
+                table[(row["worker"], row["slot"], row["incarnation"])] = row
+    found = [(key, row) for key, row in tables["flow.entry "].items()
+             if row["protocol"] == "6" and {int(row["port_a"]), int(row["port_b"])} == {source, TCP_PORT}]
+    assert found, (source, raw[-2000:])
+    key, entry = max(found, key=lambda item: int(item[0][2]))
+    case = dict(label=label, source_port=source, client=client, arrived=peer.received(cursor),
+                flow=dict(entry=entry, sni=tables["flow.sni "][key], lpi=tables["flow.lpi "][key]), status="OBSERVED")
+    device.save(label + "-client-foreground.txt", device.action())
+    device.wait(label + "-closed", path, lambda value: value.get("phase") == "finished", timeout=30, json_value=True)
+    result["cases"].append(case)
+    device.save(label + "-observed.json", json.dumps(case, indent=2) + "\n")
+    return case
+
+
 def answered(case):
     return [item["status"] == "answered" and item.get("replyHex") == case["sent"][item["index"]]
             for item in case["client"]["udpReplies"]]
@@ -88,7 +151,7 @@ def delivered(case, index):
 
 
 def cases(device, peer, result):
-    http.http_rules(device, "dtls-rules")
+    sni_rules(device, "dtls-rules")
     vpn = device.args.profile == "vpn"
     # VPN learns a new flow's App UID asynchronously; App-bound rules apply from the next datagrams on.
     # Every case therefore sends the real ClientHello, then (after the UID wait) OpenSSL's own
@@ -146,7 +209,28 @@ def cases(device, peer, result):
     assert case["flow"]["sni"]["result"] == "0", case["flow"]["sni"]
     case["status"] = "PASS"
 
-    http.http_rules(device, "dtls-rules-allow-all", deny=False)
+    # Regression: the existing TLS (TCP) and QUIC (UDP) SNI producers keep their own facts and verdicts.
+    quic = fixture("quic_rfc9001_initial")[0]
+    case = exchange(device, peer, result, "quic-regression-deny", [(quic, 0), (quic, pause)])
+    assert case["flow"]["sni"]["name"] == "example.com" and case["flow"]["sni"]["result"] == "1", case["flow"]["sni"]
+    protocols = int(case["flow"]["lpi"]["protocols"])
+    assert protocols & QUIC_BIT and not protocols & DTLS_BIT, case["flow"]["lpi"]
+    assert answered(case)[1] is False, case["client"]
+    if not vpn:
+        assert answered(case)[0] is False and not case["arrived"], case
+    case["status"] = "PASS"
+    for name, label, refused in (("tls13_allowed", "tls-regression-allow", False),
+                                 ("tls13_named", "tls-regression-deny", True)):
+        hello = fixture(name)[0]
+        case = tcp_exchange(device, result, label, hello)
+        assert case["flow"]["sni"]["result"] == "1", case["flow"]["sni"]
+        assert int(case["flow"]["lpi"]["protocols"]) & (1 << 2), case["flow"]["lpi"]
+        echoed = case["client"]["socksReplies"][0]["status"] == "answered"
+        assert echoed is (not refused), case["client"]
+        assert (case["arrived"] == hello.hex()) is (not refused), case["arrived"][:80]
+        case["status"] = "PASS"
+
+    sni_rules(device, "dtls-rules-allow-all", deny=False)
     case = exchange(device, peer, result, "dtls-allow-all-after-rule-removal",
                     [(named[0], 0), (named[1], pause), (b"s327-after-removal", 0)])
     assert answered(case) == [True, True, True], case["client"]
@@ -186,6 +270,10 @@ def main():
         out.mkdir()
         peers.append(peer_module.UdpEchoPeer([args.endpoint4, args.endpoint6], out,
                                              device.capture_deadline, port=PEER_PORT))
+        out = args.output / "peer-tcp"
+        out.mkdir()
+        device.tcp_peer = peer_module.TcpEchoPeer([args.endpoint4], out, device.capture_deadline, port=TCP_PORT)
+        peers.append(device.tcp_peer)
         result["native"] = device.install()
         result["root_grant"] = device.save("postinstall-root-grant.txt",
             device.adb("shell", "run-as", PKG, "su", "-c", "id"))
