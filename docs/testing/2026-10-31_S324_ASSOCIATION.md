@@ -87,13 +87,38 @@ shared validator is applied to the QName row. After the runs, the original APK a
 members were restored at the fresh maximum generation (`original-restoration-r3`) with no NFQUEUE entry,
 Product hook or owned route left.
 
-## Scope correction (2026-10-31)
+## Follow-up: every allowed answer (2026-10-31)
 
-Pairs are admitted only from answers the Product's own DNS proxy delivers (replacement enabled). Allowed answers
-on the original path, which is the default because replacement is opt-in, create no pairs. The specification asks
-for association evidence from allowed answers in general, so this record does not cover the default path. The
-table also belongs to the proxy object and is rebuilt on every DNS configuration change. A separate ticket is
-needed to move the table to each FlowOwner and admit original-path allowed answers.
+User decision recorded in the [specification](../product/APPLICATION_DNS_SPEC.md) section 10: allowed answers
+create association facts whether or not DNS replacement is enabled; whether they take part in decisions is the
+user's policy.
+
+- The table moved from the proxy to each FlowOwner (`product_packet_graph_main.dns_assoc`). It lives for one
+  Product generation, is cleared at Stop, and survives DNS reconfiguration; the proxy borrows it.
+- Original-path UDP and TCP answers are admitted when the answer passed policy, is complete and correlates to a
+  known App request. Their pairs carry route 0 and delivery 0 (unproven) and depend on the network view only;
+  proxy pairs also depend on their DNS route. Refused answers keep only their observation. Uncorrelated packets
+  (for example a recaptured Product reply) are not answers to an App request and admit nothing.
+- Original-path stage-2 records carry the same `assoc_*` bytes; the decoder validates them for every record kind.
+
+Pixel 6a with APK `android-apk-r5` (`8904e090…`):
+
+| Run | Scope | Result |
+| --- | --- | --- |
+| `device-root-n1-r13` | Root N1: 5 original-path cases plus the 8 proxy cases | PASS |
+| `device-vpn-n1-r6` | VPN N1: the same 13 cases | PASS |
+
+Original-path cases use real queries to 1.1.1.1 with replacement turned off: A over UDP (`example.com`), A over
+TCP (`example.org`), AAAA over UDP (`one.one.one.one`) each admit pairs; `example.net` AAAA is a real NODATA
+answer (`NO_ADDRESS`, no pair); `www.github.com` with a rule refusing its connected CNAME `github.com` is refused
+and admits nothing. The original-path pairs are still present after the proxy configuration that follows. On VPN
+the refused-answer query is sent after a first query on the same socket, so the asynchronous App UID is known.
+Two driver findings: a configuration saved by an earlier run kept replacement on (the cases now turn it off
+first), and the first build also admitted uncorrelated duplicates, which the correlated-only rule removed. The
+device was restored afterwards (`original-restoration-r5`).
+
+The table is still not consumed: `PRODUCT_DNS_ASSOC_ENFORCEMENT_ENABLED` stays 0 and no fallback acceptance is
+claimed.
 
 ## Not covered
 
