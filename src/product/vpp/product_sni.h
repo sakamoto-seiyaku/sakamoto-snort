@@ -33,12 +33,16 @@ typedef struct {
   uint64_t largest_pn;
   uint16_t length, contiguous;
   uint8_t dcid[20], dcid_size, direction, anchored, range_count;
+  /* DTLS shares this UDP offset space: handshake fragment offsets of one ClientHello. */
+  uint16_t dtls_message_seq;
+  uint32_t dtls_message_length;
 } product_quic_crypto_t;
 typedef struct {
   uint64_t started_us, deadline_us;
   uint32_t bytes, work;
   uint16_t name_length;
   uint8_t result, stop, attempts;
+  uint8_t dtls; /* UDP producer is DTLS, not QUIC; survives the stop that clears reserved storage */
   char name[PRODUCT_SNI_NAME_BYTES];
 } product_sni_state_t;
 #endif

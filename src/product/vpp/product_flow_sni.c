@@ -160,7 +160,14 @@ void product_flow_sni_observe(product_flow_entry_t *entry,
 {
   product_sni_state_t *s=&entry->sni;
   if(s->stop) return;
-  if(facts->protocol==17) {product_flow_quic_observe(entry,payload,length);return;}
+  if(facts->protocol==17) {
+    /* The first origin datagram picks the UDP handshake producer; DTLS and QUIC never share it. */
+    if(!s->attempts && !entry->sni.dtls && length && product_flow_dtls_candidate(payload,length))
+      entry->sni.dtls=1;
+    if(entry->sni.dtls) product_flow_dtls_observe(entry,payload,length);
+    else product_flow_quic_observe(entry,payload,length);
+    return;
+  }
   if(facts->protocol!=6) {product_flow_sni_stop(entry,PRODUCT_SNI_UNSUPPORTED);return;}
   if(s->attempts && entry->last_seen-s->started_us>=PRODUCT_SNI_TIMEOUT_US) {
     product_flow_sni_stop(entry,PRODUCT_SNI_TIMEOUT);return;

@@ -12,4 +12,8 @@ unsigned product_sni_parse_hello(const uint8_t *bytes,
   product_sni_state_t *state);
 void product_flow_quic_observe(product_flow_entry_t *entry,
   const uint8_t *payload,uint32_t length);
+/* RFC 6347/9147 DTLS 1.0/1.2 ClientHello from the flow's origin direction. */
+int product_flow_dtls_candidate(const uint8_t *payload,uint32_t length);
+void product_flow_dtls_observe(product_flow_entry_t *entry,
+  const uint8_t *payload,uint32_t length);
 #endif

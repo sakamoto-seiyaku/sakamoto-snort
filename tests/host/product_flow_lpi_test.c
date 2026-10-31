@@ -27,7 +27,8 @@ static void unavailable_sni_rules(const product_flow_entry_t *entry)
     assert(!product_l4_policy_compile(&view,&rule,1));
     product_l4_policy_match_result_t result;
     assert(!product_l4_policy_match(&view,&packet,&result));
-    int applicable=!!(entry->lpi.protocols & (UINT64_C(4)|UINT64_C(8)));
+    /* TLS, QUIC and (since S327, per UNIFIED_RULE_ENGINE_SPEC) DTLS facts make SNI rules applicable. */
+    int applicable=!!(entry->lpi.protocols & (UINT64_C(4)|UINT64_C(8)|(UINT64_C(1)<<19)));
     assert(result.rule_id==(shape==2 && applicable?90:0));
   }
 }

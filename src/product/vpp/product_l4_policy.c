@@ -746,7 +746,7 @@ expression_matches (const product_l4_policy_rule_t *rule,
   if (!rule->expression_length) return 1;
   unsigned dependencies = expression_dependencies (rule);
   int sni_applicable = packet->protocol_set_known && (packet->protocol_set &
-    (product_protocol_bit (1003) | product_protocol_bit (1004)));
+    (product_protocol_bit (1003) | product_protocol_bit (1004) | product_protocol_bit (1020)));
   /* Explicit SNI conditions retain whole-rule protocol applicability even
    * behind OR. A QName is a distinct control point, never synthetic SNI. */
   if ((dependencies & PRODUCT_POLICY_DEP_SNI) && !sni_applicable) return 0;

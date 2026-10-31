@@ -264,6 +264,7 @@ add_library(sakamoto_product_flow_entry STATIC
   src/product/vpp/product_http_target.c
   src/product/vpp/product_socks_target.c
   src/product/vpp/product_flow_quic.c
+  src/product/vpp/product_flow_dtls.c
   src/product/vpp/product_flow_udp.c
   src/product/vpp/product_flow_tcp.c
   src/product/vpp/product_flow_icmp.c
@@ -564,6 +565,11 @@ add_executable(sakamoto-product-flow-http-test tests/host/product_flow_http_test
 target_compile_options(sakamoto-product-flow-http-test PRIVATE -Wall -Wextra -Werror -pedantic)
 target_link_libraries(sakamoto-product-flow-http-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
 add_test(NAME sakamoto-product-flow-http-test COMMAND sakamoto-product-flow-http-test)
+add_executable(sakamoto-product-flow-dtls-test tests/host/product_flow_dtls_test.c
+  src/product/vpp/product_packet.c)
+target_compile_options(sakamoto-product-flow-dtls-test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sakamoto-product-flow-dtls-test PRIVATE sakamoto_product_flow_entry sakamoto_product_l4_policy sakamoto_product_domains)
+add_test(NAME sakamoto-product-flow-dtls-test COMMAND sakamoto-product-flow-dtls-test "${CMAKE_CURRENT_SOURCE_DIR}/tests/host/fixtures")
 add_executable(sakamoto-product-policy-http-target-test tests/host/product_policy_http_target_test.c)
 target_compile_options(sakamoto-product-policy-http-target-test PRIVATE -Wall -Wextra -Werror -pedantic)
 target_link_libraries(sakamoto-product-policy-http-target-test PRIVATE sakamoto_product_l4_policy)

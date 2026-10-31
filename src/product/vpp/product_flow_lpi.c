@@ -610,7 +610,7 @@ product_flow_entry_status_t product_flow_entry_identify (
   /* TLS has its own bounded lifetime. Reassembly can finish after recognition
    * stops on duplicate wire traffic; publish its valid evidence independently. */
   if (entry->sni.result) {
-    state->protocols |= product_protocol_bit (facts->protocol==17 ? 1004 : 1003);
+    state->protocols |= product_protocol_bit (facts->protocol==17 ? (entry->sni.dtls ? 1020 : 1004) : 1003);
     state->available = 1;
   }
   if (state->stop_reason || !length) return PRODUCT_FLOW_ENTRY_STATUS_OK;
@@ -639,7 +639,7 @@ product_flow_entry_status_t product_flow_entry_identify (
   alias = resolve_guess (alias,facts,payload,length,&companion,state,side);
   uint64_t result = product_protocol_bit (product_protocol_provider_id (alias))
     | product_protocol_bit (product_protocol_provider_id (companion));
-  if (entry->sni.result) result |= product_protocol_bit (facts->protocol==17 ? 1004 : 1003);
+  if (entry->sni.result) result |= product_protocol_bit (facts->protocol==17 ? (entry->sni.dtls ? 1020 : 1004) : 1003);
   state->last_outcome = result ? PRODUCT_LPI_MAPPED : alias ? PRODUCT_LPI_UNMAPPED : PRODUCT_LPI_MISS;
   state->protocols |= result;
   state->available = state->protocols != 0;
