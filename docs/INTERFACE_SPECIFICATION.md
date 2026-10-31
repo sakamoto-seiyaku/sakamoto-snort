@@ -17,6 +17,7 @@ Current contracts are typed at their owning boundary:
 | VPP generated API | [`product_core.api`](../src/product/vpp/product_core.api) |
 | Native Product ABI and status | [`sakamoto_product_abi.h`](../src/product/include/sakamoto_product_abi.h) |
 | Rust/native control calls | [`sakamoto_product_core_ffi.h`](../src/product/include/sakamoto_product_core_ffi.h), [Rust Product Core](../crates/product-core/src/lib.rs) |
+| Authenticated upstream identity, bootstrap and normal DNS observation v10 (Product ABI5) | [S322 contract and qualification](testing/2026-10-29_S322_DOT_BOOTSTRAP.md), [`product_dns_proxy.h`](../src/product/vpp/product_dns_proxy.h), [`sakamoto_product_observation.h`](../src/product/include/sakamoto_product_observation.h) |
 | Platform network facts | [`sakamoto_product_network.h`](../src/product/include/sakamoto_product_network.h) |
 | Android request protocol | [`RuntimeControlProtocol.java`](../app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeControlProtocol.java) |
 | Android adapter readiness | [`ProductPacketAdapterContract.java`](../app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPacketAdapterContract.java) |

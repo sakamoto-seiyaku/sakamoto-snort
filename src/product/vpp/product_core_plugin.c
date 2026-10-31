@@ -989,6 +989,13 @@ vl_api_product_core_network_publish_t_handler (
       snapshot.entries[i].linux_ifindex = ntohl (mp->entries[i].linux_ifindex);
       snapshot.entries[i].context = ntohl (mp->entries[i].network_context);
     }
+  snapshot.dns_count = ntohl (mp->dns_count);
+  snapshot.dns_ifindex = ntohl (mp->dns_ifindex);
+  for (u32 i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_DNS; ++i)
+    {
+      snapshot.dns[i].family = ntohl (mp->dns[i].family);
+      memcpy (snapshot.dns[i].address, mp->dns[i].address, 16);
+    }
   int rv = generation == pcm->generation && pcm->core_ready
     && product_network_snapshot_publish (pcm->vlib_main, generation, &snapshot)
     ? 0 : -1;

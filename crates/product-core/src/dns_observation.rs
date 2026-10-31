@@ -91,13 +91,32 @@ pub struct DnsRecord {
     #[serde(default)] pub return_mode: u8,
     #[serde(default)] pub return_provenance: u8,
     #[serde(default)] pub return_packet_uid: u32,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub transport_metadata: u8,
+    #[serde(default, skip_serializing_if = "String::is_empty")] pub service_identity: String,
+    #[serde(default, skip_serializing_if = "zero_address")] pub connection_address: [u8;16],
+    #[serde(default, skip_serializing_if = "zero_address")] pub bootstrap_address: [u8;16],
+    #[serde(default, skip_serializing_if = "zero_u16")] pub connection_port: u16,
+    #[serde(default, skip_serializing_if = "zero_u16")] pub bootstrap_port: u16,
+    #[serde(default, skip_serializing_if = "zero_u32")] pub bootstrap_ifindex: u32,
+    #[serde(default, skip_serializing_if = "zero_i32")] pub tls_error: i32,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub connection_family: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub bootstrap_family: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub tls_state: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub bootstrap_state: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub authorization_state: u8,
+    #[serde(default, skip_serializing_if = "zero_u8")] pub trust_source: u8,
 }
 
+fn zero_u8(value: &u8) -> bool { *value == 0 }
+fn zero_u16(value: &u16) -> bool { *value == 0 }
+fn zero_i32(value: &i32) -> bool { *value == 0 }
+fn zero_address(value: &[u8;16]) -> bool { *value == [0;16] }
 fn zero_u64(value: &u64) -> bool { *value == 0 }
 fn zero_u32(value: &u32) -> bool { *value == 0 }
 
 impl DnsRecord {
     pub fn valid(&self) -> bool {
+        if !self.valid_transport_metadata() { return false; }
         if self.proxy_flags & 1 != 0 { return self.valid_proxy(); }
         if self.route_revision != 0 || self.request_attempt != 0 || self.upstream_session != 0
             || self.upstream_attempt != 0 || self.resolution_route != 0 || self.resolver_id != 0
@@ -175,6 +194,42 @@ impl DnsRecord {
                     && self.declared_action != 0
                     && self.actual_action == if self.mode == 1 { 1 } else { self.declared_action }
             })
+    }
+
+    fn valid_transport_metadata(&self) -> bool {
+        let no_connection = self.connection_family == 0 && self.connection_port == 0
+            && self.connection_address == [0;16];
+        let no_bootstrap = self.bootstrap_family == 0 && self.bootstrap_port == 0
+            && self.bootstrap_address == [0;16] && self.bootstrap_ifindex == 0;
+        if self.transport_metadata == 0 {
+            return self.service_identity.is_empty() && no_connection && no_bootstrap
+                && self.tls_state == 0 && self.bootstrap_state == 0
+                && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0;
+        }
+        let address = |family, port, value: &[u8;16]| matches!(family,4|6) && port != 0
+            && *value != [0;16] && value[0] != 255
+            && (family != 4 || (value[0] != 0 && value[0] < 224 && value[4..] == [0;12]))
+            && (family != 6 || value[0] != 0xff);
+        if self.transport_metadata != 1 || self.proxy_flags & 1 == 0 || self.upstream_transport != 3
+            || self.service_identity.is_empty() || self.service_identity.len() > 255
+            || !self.service_identity.is_ascii() || self.service_identity.as_bytes().contains(&0)
+            || self.service_identity.bytes().any(|c| !(c.is_ascii_alphanumeric() || matches!(c,b'.'|b'-'|b'_'|b':')))
+            || self.tls_state > 4 || self.bootstrap_state > 3 || self.authorization_state > 3 || self.trust_source > 2
+            || (!no_connection && (!address(self.connection_family,self.connection_port,&self.connection_address)
+                || self.connection_port != self.upstream_port))
+            || (!no_bootstrap && (!address(self.bootstrap_family,self.bootstrap_port,&self.bootstrap_address)
+                || self.bootstrap_port != 53 || self.bootstrap_ifindex == 0))
+            || (self.bootstrap_state == 0 && !no_bootstrap)
+            || (matches!(self.bootstrap_state,1|2) && no_bootstrap)
+            || (self.tls_state == 2 && (no_connection || self.authorization_state != 2 || self.trust_source == 0 || self.tls_error != 0)) {
+            return false;
+        }
+        if self.tls_state == 4 {
+            return self.proxy_flags & 16 != 0 && no_connection && no_bootstrap
+                && self.bootstrap_state == 0 && self.authorization_state == 0 && self.trust_source == 0 && self.tls_error == 0;
+        }
+        if self.proxy_flags & 20 != 0 && matches!(self.stage,2|4) { return self.tls_state == 2; }
+        true
     }
 
     fn valid_proxy(&self) -> bool {
@@ -260,9 +315,11 @@ impl DnsRecord {
                 && self.winner == 0 && self.policy_generation == 0 && self.policy_revision == 0
                 && self.policy_hash == 0 && self.return_token == 0 && self.return_winner == 0
         } else {
-            self.request_attempt != 0 && matches!(self.upstream_transport,1|2)
+            self.request_attempt != 0 && matches!(self.upstream_transport,1|2|3)
                 && ((matches!(self.upstream_family,4|6) && self.upstream_port != 0
                     && (self.upstream_family != 4 || self.upstream_address[4..] == [0;12]))
+                    || (self.transport_metadata == 1 && self.upstream_transport == 3
+                        && self.upstream_family == 0 && self.upstream_address == [0;16] && self.upstream_port != 0)
                     || local_without_upstream)
                 && (self.delivery <= 5 || self.delivery == 8) && (self.client_udp_capacity == 0 || self.client_udp_capacity >= 512)
                 && (if self.protocol == 6 { self.reply_capacity == 65535 }
@@ -303,7 +360,7 @@ impl DnsRecord {
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8 | 9)
+        if data.len() < 480 || data[3] != 16 || !matches!(data[2], 5 | 6 | 7 | 8 | 9 | 10)
             || data[6..8] != [0, 0] {
             return None;
         }
@@ -314,7 +371,8 @@ impl DnsRecord {
         let tcp_extended = data[2] >= 7;
         let proxy_extended = data[2] >= 8;
         let routing_extended = data[2] >= 9;
-        let expected = if routing_extended {720} else if proxy_extended {704} else if tcp_extended { 592 } else if extended { 576 } else { 480 };
+        let tls_extended = data[2] >= 10;
+        let expected = if tls_extended {1032} else if routing_extended {720} else if proxy_extended {704} else if tcp_extended { 592 } else if extended { 576 } else { 480 };
         if u16_at(0) != expected || data.len() < expected as usize
             || (tcp_extended && data[590..592] != [0, 0])
             || (extended && data[571] != 0)
@@ -326,6 +384,12 @@ impl DnsRecord {
         let rule_name = &data[160..224];
         let rule_length = rule_name.iter().position(|byte| *byte == 0)?;
         if rule_name[rule_length..].iter().any(|byte| *byte != 0) { return None; }
+        let service_identity = if tls_extended {
+            let text = &data[720..976];
+            let length = text.iter().position(|byte| *byte == 0)?;
+            if text[length..].iter().any(|byte| *byte != 0) || data[1026..1032] != [0;6] { return None; }
+            std::str::from_utf8(&text[..length]).ok()?.to_owned()
+        } else { String::new() };
         let record = Self {
             generation: u64_at(8), owner: u16_at(4), token: u64_at(16),
             incarnation: u64_at(24), mono_us: u64_at(32), activity_utc_us: u64_at(40),
@@ -394,6 +458,19 @@ impl DnsRecord {
             return_mode: if proxy_extended {data[698]} else {0},
             return_provenance: if proxy_extended {data[699]} else {0},
             return_packet_uid: if proxy_extended {u32_at(700)} else {0},
+            transport_metadata: u8::from(tls_extended), service_identity,
+            connection_address: if tls_extended {data[976..992].try_into().ok()?} else {[0;16]},
+            bootstrap_address: if tls_extended {data[992..1008].try_into().ok()?} else {[0;16]},
+            connection_port: if tls_extended {u16_at(1008)} else {0},
+            bootstrap_port: if tls_extended {u16_at(1010)} else {0},
+            bootstrap_ifindex: if tls_extended {u32_at(1012)} else {0},
+            tls_error: if tls_extended {i32::from_le_bytes(data[1016..1020].try_into().ok()?)} else {0},
+            connection_family: if tls_extended {data[1020]} else {0},
+            bootstrap_family: if tls_extended {data[1021]} else {0},
+            tls_state: if tls_extended {data[1022]} else {0},
+            bootstrap_state: if tls_extended {data[1023]} else {0},
+            authorization_state: if tls_extended {data[1024]} else {0},
+            trust_source: if tls_extended {data[1025]} else {0},
         };
         record.valid().then_some(record)
     }

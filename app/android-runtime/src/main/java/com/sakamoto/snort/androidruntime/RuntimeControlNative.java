@@ -3,6 +3,7 @@ package com.sakamoto.snort.androidruntime;
 /** JNI facade for the Rust-owned Product Core control session. */
 public final class RuntimeControlNative {
     public static final int CONTROL_ABI_VERSION = 1;
+    public static final int PRODUCT_ABI_VERSION = 5;
     public static final int POLICY_MUTATION_FAULT_NONE = 0;
     public static final int POLICY_MUTATION_FAULT_OMIT_CALLBACK = 1;
     public static final int POLICY_MUTATION_FAULT_PRE_SUBMIT_NOT_SENT = 2;
@@ -352,7 +353,8 @@ public final class RuntimeControlNative {
     private static native int nativeStopRoot(long handle, long generation);
 
     private static native int nativePublishNetwork(long handle, long generation,
-            long revision, long eventElapsedNs, int[] interfaceContextPairs);
+            long revision, long eventElapsedNs, int[] interfaceContextPairs,
+            int dnsIfindex, byte[] originalDns);
 
     public static final class Session implements AutoCloseable {
         /** Supervisor only: 0 draining, 1 native lanes closed, negative error.
@@ -361,10 +363,10 @@ public final class RuntimeControlNative {
             return nativeHandle == 0L ? -5 : nativeStopRoot(nativeHandle, generation);
         }
         public synchronized int publishNetwork(long revision, long eventElapsedNs,
-                                                int[] interfaceContextPairs) {
+                                                int[] interfaceContextPairs, int dnsIfindex, byte[] originalDns) {
             if (nativeHandle == 0 || interfaceContextPairs == null) return -1;
             return nativePublishNetwork(nativeHandle, generation, revision,
-                    eventElapsedNs, interfaceContextPairs);
+                    eventElapsedNs, interfaceContextPairs, dnsIfindex, originalDns);
         }
         private long nativeHandle;
         private final long generation;

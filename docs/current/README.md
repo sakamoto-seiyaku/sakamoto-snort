@@ -19,6 +19,8 @@ Accepted 2026-10-07: [ADR-0011](../adr/0011-application-dns-filtering-root-and-v
 
 [S321](../testing/2026-10-29_S321_ORDERED_DNS_ROUTING.md) adds VPP-persisted ordered ordinary resolvers, bounded demand recovery, exact/longest-label exceptions and resolution-view fencing. Its self-tests cover Root/VPN N1/N3 client UDP/TCP and both families, candidate cache/RCODE/view behavior, actual advertised LAN resolver and scoped original-network mDNS; 246 whole case records remain in MAIN727. The standard5353 feedback regression and original HOLDs keep their actual artifact scopes. The original APK/all4861 nodes are restored at fresh BOTH2922; independent review and delivery have a separate linked receipt.
 
+[S322](../testing/2026-10-29_S322_DOT_BOOTSTRAP.md) adds authenticated DoT, original-network service address discovery and bounded normal identity/error observations through the shared Root/VPN owner. The record distinguishes earlier minimal device artifacts, current ABI5/TLS1.2 contracts, controlled trust and actual wire scopes. Final Root N1 full, Root/VPN N1 bootstrap and handshake-Stop device results use one rebuilt artifact after a TLS owner budget fix; N3 and VPN full matrices keep their earlier scopes.
+
 Accepted design update, 2026-10-21: [ADR-0012](../adr/0012-configurable-flow-owners-and-dedicated-vpn-tun-io.md)
 selects configurable `N >= 1` FlowOwners and a separate VPN-only TUN I/O VPP
 worker, with direct TUN reads into VPP buffers and index-only owner transfer.

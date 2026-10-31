@@ -2,6 +2,34 @@ use sakamoto_product_core::dns_observation::DnsRecord;
 use sakamoto_product_core::observation_store::ObservationStore;
 
 #[test]
+fn dot_transport_remains_distinct_in_normal_sqlite_after_reopen() {
+    let root = test_root("dot-transport"); std::fs::create_dir(&root).unwrap();
+    let path = root.join("observation.json");
+    let mut records = Vec::new();
+    for profile in [1, 2] { for protocol in [6, 17] {
+        let mut record = proxy_query(322 + records.len() as u64, protocol, profile);
+        record.upstream_transport = 3; record.upstream_port = 853;
+        assert!(record.valid(), "DoT is an explicit authenticated transport");
+        records.push(record);
+    } }
+    let mut store = ObservationStore::open(&path).unwrap();store.begin_generation(77).unwrap();
+    store.consume_dns(&records, 61_000_000).unwrap(); store.close().unwrap();drop(store);
+    let mut reopened = ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["dns"]["accepted"], 4);
+    assert_eq!(reopened.query()["dns"]["rejected"], 0);
+    reopened.close().unwrap();drop(reopened);
+    let database = rusqlite::Connection::open_with_flags(path.with_extension("sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let mut query = database.prepare("SELECT value FROM observation WHERE kind=20").unwrap();
+    let actual: Vec<DnsRecord> = query.query_map([], |row| row.get::<_, Vec<u8>>(0)).unwrap()
+        .map(|row| serde_json::from_value(serde_json::from_slice::<serde_json::Value>(&row.unwrap()).unwrap()["record"].clone()).unwrap())
+        .collect();
+    assert_eq!(actual.len(), records.len());
+    for record in &records { assert!(actual.contains(record)); }
+    drop(query);drop(database); std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn resolver_attempts_keep_full_view_and_failure_identity_through_sqlite_reopen() {
     // A worked v9 normal-owner record: one known App's primary timeout.
     // Offsets are the published C wire ABI, independent of its producer.
@@ -804,4 +832,55 @@ fn cached_answers_preserve_source_current_policy_and_normal_sqlite_reopen() {
         assert_eq!(rows.values().filter(|row| row["record"] == value).count(), 1);
     }
     reopened.close().unwrap();
+}
+
+
+#[test]
+fn authenticated_service_identity_and_bootstrap_failure_survive_normal_sqlite() {
+    // Independent worked ABI v10: hostname-only endpoint, original-network
+    // resolver, selected IP, and a certificate identity error on that attempt.
+    let mut wire = vec![0u8; 1032];
+    wire[..2].copy_from_slice(&1032u16.to_le_bytes()); wire[2]=10; wire[3]=16;
+    for (offset,value) in [(8,77u64),(16,322),(24,8),(32,100),(40,61_000_000),
+        (480,322),(488,77),(496,1),(504,123),(520,5),(544,8),(592,7),(600,1),(704,70_001)] {
+        wire[offset..offset+8].copy_from_slice(&value.to_le_bytes());
+    }
+    for offset in [80,572] {wire[offset..offset+4].copy_from_slice(&10123u32.to_le_bytes());}
+    wire[84..88].copy_from_slice(&u32::MAX.to_le_bytes());
+    wire[96..100].copy_from_slice(&3u32.to_le_bytes());
+    for (offset,value) in [(100,0x1234u16),(102,0x0100),(104,1),(106,1),
+        (108,40000),(110,53),(112,11),(632,853),(640,512),(642,512),(1008,853),(1010,53)] {
+        wire[offset..offset+2].copy_from_slice(&value.to_le_bytes());
+    }
+    wire[114..126].copy_from_slice(&[4,17,3,9,1,1,0,0,0,1,5,0]);
+    wire[128..132].copy_from_slice(&[192,0,2,2]); wire[144..148].copy_from_slice(&[1,1,1,1]);
+    wire[224..235].copy_from_slice(b"example.com"); wire[559]=9; wire[570]=1;
+    wire[635]=3;wire[636]=13;
+    wire[648..652].copy_from_slice(&1u32.to_le_bytes());
+    wire[716..720].copy_from_slice(&1u32.to_le_bytes());
+    wire[720..728].copy_from_slice(b"dot.test");
+    wire[976..980].copy_from_slice(&[192,0,2,53]);
+    wire[992..996].copy_from_slice(&[192,0,2,1]);
+    wire[1012..1016].copy_from_slice(&7u32.to_le_bytes());
+    wire[1016..1020].copy_from_slice(&(-9984i32).to_le_bytes());
+    wire[1020..1026].copy_from_slice(&[4,4,3,2,2,1]);
+    let record=DnsRecord::decode(&wire).expect("normal DoT failure keeps identity distinct from selected IP");
+    let value=serde_json::to_value(&record).unwrap();
+    assert_eq!(value["service_identity"],"dot.test");
+    assert_eq!(value["connection_address"][0],192);
+    assert_eq!(value["tls_error"],-9984);assert_eq!(value["bootstrap_ifindex"],7);
+    for offset in [728usize,1026] {let mut invalid=wire.clone();invalid[offset]=255;
+        assert!(DnsRecord::decode(&invalid).is_none(),"reserved/string guard {offset}");}
+    let mut false_auth=wire.clone();false_auth[1022]=2;false_auth[1024]=1;
+    assert!(DnsRecord::decode(&false_auth).is_none(),"pending authorization is never authentication");
+    let root=test_root("dot-metadata");std::fs::create_dir(&root).unwrap();
+    let path=root.join("observation.json");let mut store=ObservationStore::open(&path).unwrap();
+    store.begin_generation(77).unwrap();store.consume_dns(&[record.clone()],61_000_000).unwrap();
+    store.close().unwrap();drop(store);let mut reopened=ObservationStore::open(&path).unwrap();
+    assert_eq!(reopened.query()["dns"]["accepted"],1);assert_eq!(reopened.query()["dns"]["rejected"],0);
+    reopened.close().unwrap();drop(reopened);
+    let db=rusqlite::Connection::open_with_flags(path.with_extension("sqlite3"),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let bytes:Vec<u8>=db.query_row("SELECT value FROM observation WHERE kind=20",[],|row|row.get(0)).unwrap();
+    let actual:serde_json::Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(actual["record"],value);
+    drop(db);std::fs::remove_dir_all(root).unwrap();
 }

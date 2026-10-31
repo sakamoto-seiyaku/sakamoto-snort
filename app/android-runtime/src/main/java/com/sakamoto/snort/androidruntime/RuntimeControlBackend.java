@@ -40,10 +40,17 @@ public final class RuntimeControlBackend {
     public StartResult start(Context context, RuntimeProfile profile,
                              String rootNfqueueFaultMode, String vpnFaultMode,
                              String workerCpuIds, String tunIoCpuId) {
+        return start(context, profile, rootNfqueueFaultMode, vpnFaultMode, workerCpuIds, tunIoCpuId, false);
+    }
+
+    public StartResult start(Context context, RuntimeProfile profile,
+                             String rootNfqueueFaultMode, String vpnFaultMode,
+                             String workerCpuIds, String tunIoCpuId, boolean dnsTestTrust) {
         if (!RuntimeService.notificationsReady(context)) {
             return StartResult.NOTIFICATION_REQUIRED;
         }
         Intent intent = requestIntent(context, RuntimeControlRequest.start(profile));
+        if (dnsTestTrust) intent.putExtra("debugDnsTestTrust", true);
         if (workerCpuIds != null)
             intent.putExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS, workerCpuIds);
         if (tunIoCpuId != null)

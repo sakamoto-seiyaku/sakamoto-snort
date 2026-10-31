@@ -95,6 +95,29 @@ publish_snapshot (
       for (u32 j = 0; j < i; ++j)
         if (snapshot->entries[j].linux_ifindex == iface) return 0;
     }
+  if (snapshot->dns_count > SAKAMOTO_PRODUCT_NETWORK_MAX_DNS ||
+      (!!snapshot->dns_count != !!snapshot->dns_ifindex)) return 0;
+  if (snapshot->dns_count) {
+    int original = 0;
+    for (u32 i = 0; i < snapshot->count; ++i)
+      if (snapshot->entries[i].linux_ifindex == snapshot->dns_ifindex &&
+          snapshot->entries[i].context != SAKAMOTO_PRODUCT_NETWORK_VPN) original = 1;
+    if (!original) return 0;
+  }
+  for (u32 i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_DNS; ++i) {
+    const sakamoto_product_network_dns_t *dns = &snapshot->dns[i];
+    if (i >= snapshot->dns_count) {
+      if (memcmp (dns, &(sakamoto_product_network_dns_t){0}, sizeof (*dns))) return 0;
+      continue;
+    }
+    if (dns->family == 4) {
+      if (!dns->address[0] || dns->address[0] >= 224 ||
+          memcmp (dns->address + 4, (u8[12]){0}, 12)) return 0;
+    } else if (dns->family != 6 || dns->address[0] == 0xff ||
+        !memcmp (dns->address, (u8[16]){0}, 16)) return 0;
+    for (u32 j = 0; j < i; ++j)
+      if (!memcmp (dns, &snapshot->dns[j], sizeof (*dns))) return 0;
+  }
   vlib_worker_thread_barrier_sync (vm);
   product_network_snapshot = *snapshot;
   vlib_worker_thread_barrier_release (vm);

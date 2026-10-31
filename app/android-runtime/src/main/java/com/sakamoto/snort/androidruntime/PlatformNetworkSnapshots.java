@@ -10,6 +10,10 @@ import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Log;
 import java.net.NetworkInterface;
+import java.net.InetAddress;
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.net.SocketException;
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +40,7 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
         String interfaceName;
         long epoch;
         boolean eligible;
+        List<InetAddress> dns = new ArrayList<>();
     }
 
     /** Binding incarnation, not a mutable default-network label or Android netId. */
@@ -77,7 +82,7 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
             synchronized (PlatformNetworkSnapshots.this) {
                 if (!active) return;
                 Facts facts = networks.computeIfAbsent(network, ignored -> new Facts());
-                facts.interfaceName = properties.getInterfaceName();
+                updateLink(facts, properties);
                 publish("link_properties");
             }
         }
@@ -118,12 +123,17 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
                 Facts facts = networks.computeIfAbsent(network, ignored -> new Facts());
                 updateCapabilities(facts, capabilities);
                 LinkProperties properties = manager.getLinkProperties(network);
-                if (properties != null) facts.interfaceName = properties.getInterfaceName();
+                if (properties != null) updateLink(facts, properties);
             }
             publish("initial_networks");
         } catch (RuntimeException error) {
             Log.w(TAG, "s232 subscription_unavailable " + error.getClass().getSimpleName());
         }
+    }
+
+    private static void updateLink(Facts facts, LinkProperties properties) {
+        facts.interfaceName = properties.getInterfaceName();
+        facts.dns = new ArrayList<>(properties.getDnsServers());
     }
 
     private long updateCapabilities(Facts facts, NetworkCapabilities capabilities) {
@@ -204,10 +214,36 @@ final class PlatformNetworkSnapshots implements AutoCloseable {
             pairs[i++] = entry.getKey();
             pairs[i++] = entry.getValue();
         }
+        int dnsIfindex = 0;
+        ByteArrayOutputStream dns = new ByteArrayOutputStream(4 * 17);
+        Underlay selected = currentUnderlay();
+        Facts original = selected == null ? null : networks.get(selected.network);
+        if (!debugMissing && original != null && original.interfaceName != null) {
+            try {
+                NetworkInterface iface = NetworkInterface.getByName(original.interfaceName);
+                if (iface != null && interfaces.containsKey(iface.getIndex())) {
+                    List<InetAddress> seen = new ArrayList<>();
+                    for (InetAddress address : original.dns) {
+                        if (seen.size() == 4) break;
+                        if (seen.contains(address) || address.isAnyLocalAddress() || address.isMulticastAddress()) continue;
+                        byte[] bytes = address.getAddress();
+                        if (bytes.length != 4 && bytes.length != 16) continue;
+                        dns.write(bytes.length == 4 ? 4 : 6);
+                        dns.write(bytes, 0, bytes.length);
+                        if (bytes.length == 4) dns.write(new byte[12], 0, 12);
+                        seen.add(address);
+                    }
+                    if (!seen.isEmpty()) dnsIfindex = iface.getIndex();
+                }
+            } catch (SocketException | SecurityException unavailable) {
+                dns.reset();
+            }
+        }
         long timestamp = SystemClock.elapsedRealtimeNanos();
-        int code = session.publishNetwork(++revision, timestamp, pairs);
+        int code = session.publishNetwork(++revision, timestamp, pairs, dnsIfindex, dns.toByteArray());
         Log.i(TAG, "s232 event=" + event + " revision=" + revision
-                + " event_elapsed_ns=" + timestamp + " interfaces=" + interfaces + " code=" + code);
+                + " event_elapsed_ns=" + timestamp + " interfaces=" + interfaces
+                + " original_dns_count=" + dns.size() / 17 + " original_dns_ifindex=" + dnsIfindex + " code=" + code);
         if (code != 0 && active) publicationFailure.accept(code);
     }
 

@@ -38,7 +38,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('libraries', nargs='+')
 parser.add_argument('--records')
 parser.add_argument('--evidence',type=Path)
-parser.add_argument('--case', choices=('all', 'routing', 'coalescing', 'cache', 'cache-resource', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view', 'shutdown-prefix'), default='all')
+parser.add_argument('--case', choices=('all', 'routing', 'coalescing', 'cache', 'cache-resource', 'generation', 'crossover', 'reverse-crossover', 'vpn-return', 'vpn-authority', 'idle-health', 'tcp-proxy', 'tcp-unknown', 'vpn-tcp-off', 'vpn-tcp-view', 'shutdown-prefix', 'tls-view'), default='all')
 args = parser.parse_args()
 cache = Path(args.libraries[1]).resolve().parent / 'CMakeCache.txt'
 batch = re.search(r'^SAKAMOTO_PRODUCT_ROOT_BATCH_EXPERIMENT:BOOL=(ON|OFF)$', cache.read_text(), re.M)
@@ -55,12 +55,16 @@ with tempfile.TemporaryDirectory(prefix='sakamoto-root-dns-adapter-') as tmp:
         + function('product_packet_graph_dns_identity', 'static product_dns_identity_t')
         + function('product_packet_graph_dns_response_prepare', 'static void'))
     binary = directory / 'test'
+    real_io = args.case == 'tls-view'
+    extra_sources = [str(ROOT/'src/product/vpp/product_root_dns_io.c')] if real_io else []
+    extra_options = ['-DPRODUCT_ROOT_DNS_REAL_IO=1', '-Wl,--wrap=setsockopt'] if real_io else []
+    extra_libraries = [str(cache.parent/'third_party/mbedtls/libsakamoto_quic_crypto.a')] if real_io else []
     subprocess.run(['cc', '-std=gnu11', '-Wall', '-Wextra', '-Werror',
-        '-Wno-unused-function', '-Wno-unused-variable', *defines,
+        '-Wno-unused-function', '-Wno-unused-variable', *defines, *extra_options,
         '-I'+str(directory), '-I'+str(ROOT/'src/product/vpp'), '-I'+str(ROOT/'src/product/include'),
         str(ROOT/'tests/host/product_root_dns_adapter_test.c'),
         str(ROOT/'src/product/vpp/product_packet.c'), str(ROOT/'src/product/vpp/product_flow_udp.c'),
-        *args.libraries, '-Wl,--wrap=malloc', '-lm', '-o', str(binary)], check=True)
+        *extra_sources, *args.libraries, *extra_libraries, '-Wl,--wrap=malloc', '-lm', '-o', str(binary)], check=True)
     command = [str(binary)]
     if args.case != 'all':
         command.append(args.case)

@@ -20,6 +20,7 @@
 #include "product_flow_entry.h"
 #include "product_packet_completion.h"
 #include "sakamoto_product_observation.h"
+#include "sakamoto_product_network.h"
 
 /* A single real malloc failure, armed only at the public request/answer
  * boundary. Equal wire lengths distinguish cache scratch from output by
@@ -69,7 +70,7 @@ static vlib_main_t worker={1};
 static vlib_buffer_t buffers[132];
 static unsigned allocated[132], submitted[132], freed, submit_allowed=1;
 static u64 now_us=100;
-static struct {u64 revision;} network={5};
+static sakamoto_product_network_snapshot_t network={.revision=5};
 static unsigned raw_created, raw_closed, raw_sent, raw_fail, raw_setup_fail;
 static unsigned sends, cancelled, watches, ready_calls;
 static uint8_t last_wire[65535], emitted_wire[2048];
@@ -239,6 +240,7 @@ static int product_vpn_flow_stack_driver_tcp_reply(vlib_main_t *vm,u64 generatio
   vpn_tcp_reply_token=token;++vpn_tcp_reply_count;return 0; }
 static int product_vpn_flow_stack_driver_tcp_abandon(vlib_main_t *vm,u64 generation,u64 session,u64 token)
 { (void)vm;(void)generation;(void)session;(void)token;return 0; }
+#ifndef PRODUCT_ROOT_DNS_REAL_IO
 int product_root_dns_io_authorized(product_root_dns_io_t *io,u64 generation,u64 cookie,int success,u64 now)
 {
  assert(io==&fixture_io&&generation&&cookie&&now==now_us);
@@ -247,7 +249,9 @@ int product_root_dns_io_authorized(product_root_dns_io_t *io,u64 generation,u64 
  else {io->live=0;assert(io->callbacks.watch(io->context,50,0,io->cookie));}
  return 0;
 }
+#endif
 int product_root_dns_vpn_return_known(vlib_main_t *,u32);
+#ifndef PRODUCT_ROOT_DNS_REAL_IO
 
 product_root_dns_io_t *product_root_dns_io_open(uint64_t generation,const product_dns_proxy_route_t *route,uint32_t mark,
  uint64_t *sequence,const product_root_dns_io_callbacks_t *callbacks,void *context,uint64_t now) {
@@ -285,6 +289,8 @@ product_root_dns_io_status_t product_root_dns_io_status(const product_root_dns_i
    io->live?(io->authorized?PRODUCT_ROOT_DNS_UDP_AUTHORIZED:PRODUCT_ROOT_DNS_UDP_AUTHORIZING):PRODUCT_ROOT_DNS_UDP_FAILED};
 }
 uint64_t product_root_dns_io_reservation(void) {return 1024*1024;}
+uint64_t product_root_dns_io_config_reservation(const product_dns_proxy_route_t *route) {(void)route;return product_root_dns_io_reservation();}
+#endif
 /* TCP sockets are a controlled transport dependency in this source-linked
  * Adapter fixture. Real kernel framing/SAVED_SYN is tested separately. */
 struct product_root_dns_tcp_io { int live; };
@@ -1281,7 +1287,14 @@ static void shutdown_prefix_records(void) {
  puts("Root/VPN UDP/TCP dual-stack pending Stop: exact QUERY/STOPPED identity, no delivery or late replay: PASS");
 }
 
+#ifdef PRODUCT_ROOT_DNS_REAL_IO
+#include "product_root_dns_tls_view_test.inc"
+#endif
+
 int main(int argc,char **argv) {
+#ifdef PRODUCT_ROOT_DNS_REAL_IO
+ if(argc>1&&!strcmp(argv[1],"tls-view")) {tls_view_replacement();return 0;}
+#endif
  assert(!product_l4_policy_compile(&bank.view,NULL,0));
  if(argc>1&&!strcmp(argv[1],"routing")) {
   ordered_routing_records();

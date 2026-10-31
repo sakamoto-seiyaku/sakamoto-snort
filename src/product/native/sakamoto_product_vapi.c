@@ -580,7 +580,8 @@ sakamoto_product_session_publish_network (
 {
   if (!session || !snapshot || !generation || !snapshot->revision
       || snapshot->reserved
-      || snapshot->count > SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES)
+      || snapshot->count > SAKAMOTO_PRODUCT_NETWORK_MAX_INTERFACES
+      || snapshot->dns_count > SAKAMOTO_PRODUCT_NETWORK_MAX_DNS)
     return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
   if (session_lock (session) != 0)
     return SAKAMOTO_PRODUCT_INTERNAL_ERROR;
@@ -605,6 +606,13 @@ sakamoto_product_session_publish_network (
     {
       message->payload.entries[i].linux_ifindex = snapshot->entries[i].linux_ifindex;
       message->payload.entries[i].network_context = snapshot->entries[i].context;
+    }
+  message->payload.dns_count = snapshot->dns_count;
+  message->payload.dns_ifindex = snapshot->dns_ifindex;
+  for (uint32_t i = 0; i < SAKAMOTO_PRODUCT_NETWORK_MAX_DNS; ++i)
+    {
+      message->payload.dns[i].family = snapshot->dns[i].family;
+      memcpy (message->payload.dns[i].address, snapshot->dns[i].address, 16);
     }
   network_call_t call = { .called = false, .code = SAKAMOTO_PRODUCT_INTERNAL_ERROR };
   vapi_error_e rv = vapi_product_core_network_publish (

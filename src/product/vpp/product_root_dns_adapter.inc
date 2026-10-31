@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <vlib/file.h>
 #include "product_root_dns_tcp_mark.h"
+#include "product_dns_tls.h"
+#include "product_dns_bootstrap.h"
 
 #define ROOT_DNS_REPLIES 128U
 #define ROOT_DNS_WATCHES (PRODUCT_DNS_PROXY_SOCKETS + PRODUCT_ROOT_DNS_TCP_CLIENTS + 2U)
@@ -128,7 +130,7 @@ static int root_dns_owner_current (const root_dns_owner_t *owner, u64 revision, 
 static u64 root_dns_other_bytes (root_dns_owner_t *owner)
 {
   return sizeof (*owner) + sizeof (product_dns_owner_t) + sizeof (product_dns_tcp_owner_t) +
-    product_packet_graph_main.dns_tcp[owner->owner].allocated_bytes + product_root_dns_io_reservation () +
+    product_packet_graph_main.dns_tcp[owner->owner].allocated_bytes + product_root_dns_io_config_reservation (&owner->route) +
     (owner->profile == 2 ? product_vpn_flow_stack_driver_dns_reservation (owner->owner) : 0) +
     (owner->profile==1 ? PRODUCT_ROOT_DNS_TCP_WORK_BYTES : 0) +
     ROOT_DNS_REPLIES * (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (owner->vm));
@@ -143,7 +145,7 @@ static u64 root_dns_tcp_other_bytes (unsigned owner)
     ROOT_DNS_REPLIES *
     (sizeof (vlib_buffer_t) + vlib_buffer_get_default_data_size (root_dns_owners[owner].vm)) +
     (root_dns_owners[owner].proxy ? product_dns_proxy_resources (root_dns_owners[owner].proxy).owned_bytes +
-      product_root_dns_io_reservation () : 0);
+      product_root_dns_io_config_reservation (&root_dns_owners[owner].route) : 0);
 }
 
 static void root_dns_close_raw (root_dns_owner_t *owner)
@@ -349,6 +351,19 @@ static product_dns_observation_record_t root_dns_record (root_dns_owner_t *owner
     .upstream_attempt = event->upstream_attempt,
     .resolution_route = event->resolution_route, .resolver_id = event->resolver_id,
   };
+  if (event->transport == PRODUCT_DNS_PROXY_DOT) {
+    memcpy (record.service_identity, event->route.identity, sizeof (record.service_identity));
+    memcpy (record.connection_address, event->io.connection_address, 16);
+    memcpy (record.bootstrap_address, event->io.bootstrap_address, 16);
+    record.connection_port = event->io.connection_port;
+    record.bootstrap_port = event->io.bootstrap_port;
+    record.bootstrap_ifindex = event->io.bootstrap_ifindex;
+    record.tls_error = event->io.error;
+    record.connection_family = event->io.connection_family;
+    record.bootstrap_family = event->io.bootstrap_family;
+    record.tls_state = event->io.tls; record.bootstrap_state = event->io.bootstrap;
+    record.authorization_state = event->io.authorization; record.trust_source = event->io.trust_source;
+  }
   record.packet_availability = event->input.capture_present ? event->input.capture_availability : record.availability;
   if (packet->protocol == 6) record.message_sequence = event->input.token;
   memcpy (record.source_address, packet->source_address, 16);
@@ -700,6 +715,24 @@ static const product_root_dns_tcp_callbacks_t root_dns_tcp_callbacks={
   .delivered=root_dns_tcp_delivered,.ended=root_dns_tcp_ended,
 };
 
+static int root_dns_bootstrap_network (void *opaque, product_root_dns_network_t *result)
+{
+  root_dns_owner_t *owner = opaque;
+  const sakamoto_product_network_snapshot_t *snapshot = product_network_snapshot_current ();
+  if (!owner || owner->stopping || snapshot->revision != owner->network_revision ||
+      !snapshot->dns_count || !snapshot->dns_ifindex) return 0;
+  *result = (product_root_dns_network_t){.family=snapshot->dns[0].family,
+    .port=53,.ifindex=snapshot->dns_ifindex};
+  memcpy (result->address, snapshot->dns[0].address, 16);
+  return 1;
+}
+static void root_dns_io_progress (void *opaque, const product_dns_proxy_key_t *key,
+  const product_dns_proxy_io_event_t *event)
+{
+  root_dns_owner_t *owner = opaque;
+  product_dns_proxy_io_event (owner->proxy, key, event);
+}
+
 static void root_dns_sync (root_dns_owner_t *owner, u64 now)
 {
   if (owner->stopping || !product_packet_graph_enabled ()) return;
@@ -736,6 +769,8 @@ static void root_dns_sync (root_dns_owner_t *owner, u64 now)
   const product_root_dns_io_callbacks_t io_callbacks = {
     .watch = root_dns_watch, .answer = root_dns_io_answer, .failed = root_dns_io_failed,
     .authorize = owner->profile == 2 ? root_dns_authorize : NULL,
+    .trust_directory = getenv("SAKAMOTO_PRODUCT_DNS_TEST_TRUST_DIRECTORY"),
+    .bootstrap_network = root_dns_bootstrap_network, .progress = root_dns_io_progress,
   };
   if (owner->profile == 2 || (root_dns_raw (owner, 4) && root_dns_raw (owner, 6)))
     owner->io = product_root_dns_io_open (owner->generation, &route, owner->profile == 2 ? 0 : PRODUCT_ROOT_DNS_SOCKET_MARK,
@@ -1595,7 +1630,8 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
       for(unsigned resolver=0;resolver<owner->route.endpoint_count;++resolver) {
         const sakamoto_product_dns_endpoint_t *endpoint=&owner->route.endpoints[resolver];
         char selected[INET6_ADDRSTRLEN]="unselected";
-        inet_ntop(endpoint->family==4?AF_INET:AF_INET6,endpoint->address,selected,sizeof(selected));
+        if(endpoint->family)inet_ntop(endpoint->family==4?AF_INET:AF_INET6,endpoint->address,selected,sizeof(selected));
+        else snprintf(selected,sizeof(selected),"bootstrap");
         vlib_cli_output(vm,"dns.resolver owner=%u generation=%llu route_revision=%llu resolver_id=%u identity=%s family=%u address=%s port=%u transport=%u failures=%u cooldown_until_us=%llu probing=%u",
           i,(unsigned long long)owner->generation,(unsigned long long)owner->route_revision,resolver+1,
           endpoint->identity,endpoint->family,selected,endpoint->port,endpoint->transport,
@@ -1609,6 +1645,17 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         (unsigned long long)core.cache_hits,(unsigned long long)core.cache_misses,
         (unsigned long long)core.cache_evictions,(unsigned long long)core.cache_skipped);
       product_root_dns_io_status_t io = product_root_dns_io_status (owner->io);
+      vlib_cli_output(vm,"dns.tls owner=%u generation=%llu connections=%u connection_limit=%u authenticated=%u started=%llu verified=%llu failed=%llu bytes=%llu high_water_bytes=%llu trust_certificates=%u trust_certificate_limit=%u trust_byte_limit=%u owner_byte_limit=%u connection_byte_limit=%u rejected=%llu",
+        i,(unsigned long long)owner->generation,io.tls_connections,PRODUCT_ROOT_DNS_TCP_SOCKETS,
+        io.tls_authenticated,(unsigned long long)io.tls_started,(unsigned long long)io.tls_verified,
+        (unsigned long long)io.tls_failed,(unsigned long long)io.tls_bytes,(unsigned long long)io.tls_high_water_bytes,
+        io.trust_certificates,PRODUCT_DNS_TLS_TRUST_CERTIFICATES,PRODUCT_DNS_TLS_TRUST_BYTES,
+        PRODUCT_DNS_TLS_OWNER_BYTES,PRODUCT_DNS_TLS_CONNECTION_BYTES,(unsigned long long)io.tls_rejected);
+      const sakamoto_product_network_snapshot_t *original = product_network_snapshot_current ();
+      vlib_cli_output(vm,"dns.bootstrap owner=%u generation=%llu started=%llu received=%llu failed=%llu original_network_revision=%llu original_dns_count=%u original_dns_ifindex=%u address_limit=%u",
+        i,(unsigned long long)owner->generation,(unsigned long long)io.bootstrap_started,
+        (unsigned long long)io.bootstrap_received,(unsigned long long)io.bootstrap_failed,
+        (unsigned long long)original->revision,original->dns_count,original->dns_ifindex,PRODUCT_DNS_BOOTSTRAP_ADDRESSES);
       product_root_dns_tcp_status_t tcp=product_root_dns_tcp_io_status(owner->tcp_io);
       if(owner->profile==2) {
         product_vpn_flow_stack_snapshot_t local=product_vpn_flow_stack_driver_tcp_status(i);
@@ -1642,7 +1689,7 @@ static clib_error_t *root_dns_status_cli (vlib_main_t *vm, unformat_input_t *inp
         (unsigned long long) (owner->stale + core.stale + io.stale), owner->last_error,
         (unsigned long long) core.high_water_bytes, (unsigned long long) io.high_water_bytes,
         io.high_water_sockets, 1U + PRODUCT_ROOT_DNS_TCP_SOCKETS,
-        (unsigned long long) product_root_dns_io_reservation (), (unsigned long long) core.capacity,
+        (unsigned long long) product_root_dns_io_config_reservation (&owner->route), (unsigned long long) core.capacity,
         (unsigned long long) io.capacity, (unsigned long long) io.errors, io.authorizing, io.udp_ready, owner->profile, core.active, core.high_water,
         (unsigned long long) core.coalesced);
     }

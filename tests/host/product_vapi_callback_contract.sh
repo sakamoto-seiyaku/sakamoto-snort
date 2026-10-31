@@ -294,6 +294,8 @@ typedef struct {
     uint64_t generation, revision, event_elapsed_ns;
     uint32_t count, reserved;
     struct { uint32_t linux_ifindex, network_context; } entries[32];
+    uint32_t dns_count, dns_ifindex;
+    struct {uint32_t family; uint8_t address[16];} dns[4];
   } payload;
 } vapi_msg_product_core_network_publish;
 typedef vapi_error_e (*vapi_product_core_network_publish_callback_t)(

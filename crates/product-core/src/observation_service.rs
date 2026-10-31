@@ -26,7 +26,7 @@ mod live {
         fn product_observation_close_fd(fd: c_int);
     }
     #[repr(C, align(8))]
-    struct RawRecord([u8; 720]);
+    struct RawRecord([u8; 1032]);
     #[derive(serde::Serialize)]
     struct State {
         overview: Overview,
@@ -251,9 +251,9 @@ mod live {
                             let limit = shutdown_remaining.as_ref()
                                 .map_or(128, |n| n[channel as usize].min(128));
                             for _ in 0..limit {
-                                let mut raw = RawRecord([0; 720]);
+                                let mut raw = RawRecord([0; 1032]);
                                 let rv = unsafe {
-                                    product_observation_receive(handle, channel, &mut raw, 720)
+                                    product_observation_receive(handle, channel, &mut raw, 1032)
                                 };
                                 if rv == 0 {
                                     if let Some(remaining) = &mut shutdown_remaining {

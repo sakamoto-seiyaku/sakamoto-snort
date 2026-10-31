@@ -44,8 +44,13 @@ static inline int product_dns_route_valid (const sakamoto_product_dns_config_t *
     }
     size_t n = strnlen ((const char *) e->identity, sizeof (e->identity));
     uint8_t numeric[16];
-    if ((e->transport != 1 && e->transport != 2) || e->reserved ||
-        !product_dns_address_valid (e->family, e->port, e->address) || n >= 256 || !n ||
+    int hostname = n < 256 && product_dns_name_valid (e->identity, n) &&
+      inet_pton (AF_INET, (const char *) e->identity, numeric) != 1 &&
+      inet_pton (AF_INET6, (const char *) e->identity, numeric) != 1;
+    int bootstrap = e->transport == 3 && !e->family && e->port && e->port <= UINT16_MAX &&
+      !memcmp (e->address, (uint8_t[16]) {0}, 16) && hostname;
+    if ((e->transport != 1 && e->transport != 2 && e->transport != 3) || e->reserved ||
+        (!bootstrap && !product_dns_address_valid (e->family, e->port, e->address)) || n >= 256 || !n ||
         (!product_dns_name_valid (e->identity, n) &&
          inet_pton (AF_INET, (const char *) e->identity, numeric) != 1 &&
          inet_pton (AF_INET6, (const char *) e->identity, numeric) != 1) ||

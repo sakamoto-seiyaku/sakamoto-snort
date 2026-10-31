@@ -19,12 +19,23 @@ typedef enum {
 
 typedef struct product_root_dns_io product_root_dns_io_t;
 typedef struct {
+  uint32_t family, port, ifindex;
+  uint8_t address[16];
+} product_root_dns_network_t;
+typedef struct {
   /* Optional async platform authorization; completion must precede connect. */
   int (*authorize) (void *, int fd, uint64_t cookie);
   int (*watch) (void *, int fd, unsigned events, uint64_t cookie);
   void (*answer) (void *, const product_dns_proxy_key_t *, unsigned,
     const uint8_t *, size_t, uint64_t now_us);
   void (*failed) (void *, const product_dns_proxy_key_t *, uint64_t now_us);
+  /* A private controlled-IO seam for a read-only CA directory. Product passes
+   * NULL and uses the platform system anchors; requests cannot select trust. */
+  const char *trust_directory;
+  /* Platform-selected original-network resolver, copied synchronously. This
+   * is never the intercepted application's resolver or a hidden default. */
+  int (*bootstrap_network) (void *, product_root_dns_network_t *);
+  void (*progress) (void *, const product_dns_proxy_key_t *, const product_dns_proxy_io_event_t *);
 } product_root_dns_io_callbacks_t;
 typedef struct {
   uint64_t allocated_bytes, high_water_bytes, opened, closed, stale, errors;
@@ -33,6 +44,9 @@ typedef struct {
   uint32_t sockets, high_water_sockets, requests, authorizing;
   uint8_t udp_ready;
   product_root_dns_udp_state_t udp_state;
+  uint64_t tls_started, tls_verified, tls_failed, tls_bytes, tls_high_water_bytes, tls_rejected;
+  uint32_t tls_connections, tls_authenticated, trust_certificates;
+  uint64_t bootstrap_started, bootstrap_received, bootstrap_failed;
 } product_root_dns_io_status_t;
 
 /* Actual nonblocking Root socket operations. The existing owner provides all
@@ -54,4 +68,5 @@ uint64_t product_root_dns_io_deadline (const product_root_dns_io_t *);
 void product_root_dns_io_expire (product_root_dns_io_t *, uint64_t now_us);
 product_root_dns_io_status_t product_root_dns_io_status (const product_root_dns_io_t *);
 uint64_t product_root_dns_io_reservation (void);
+uint64_t product_root_dns_io_config_reservation (const product_dns_proxy_route_t *);
 #endif

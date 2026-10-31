@@ -122,28 +122,33 @@ def routed_exchange(device, primary, backup, result, label, *, family=4, protoco
                 assert device.client(label, nonce)["dnsExchanges"] == client["dnsExchanges"]
 
 
-def validate_routed(case):
+def validate_routed(case, *, primary_port=15353, primary_failed_before_dns=False, cache_age_us=None):
     client = case["client"]
     assert not client.get("error") and len(client["dnsExchanges"]) == 1, client
     exchange, = client["dnsExchanges"]
     assert exchange.get("sentHex") == case["query"], exchange
     actual = bytes.fromhex(exchange.get("replyHex", ""))
     expected, query = bytes.fromhex(case["expected_reply"]), bytes.fromhex(case["query"])
-    base.verify_data_reply(actual, expected, query, 0, cached=case["expected_cached"])
+    base.verify_data_reply(actual, expected, query, 0, cached=case["expected_cached"], cache_age_us=cache_age_us)
     final = [row for row in case["records"] if row["stage"] in (2, 4)]
     assert len(final) == 2 and all(row["upstream_port"] == case["expected_port"] for row in final), final
     assert all(row["proxy_flags"] & (16 if case["expected_cached"] else 4) for row in final), final
-    selected = 0 if case["expected_port"] == 15353 else 1
+    selected = 0 if case["expected_port"] == primary_port else 1
     attempts = [row for row in case["records"] if row["stage"] == 5]
     if case["expected_cached"]:
         assert not case["primary"] and not case["backup"] and not attempts, case
     else:
         assert len(case["primary"] if selected == 0 else case["backup"]) >= 1, case
-        assert not case["backup"] if selected == 0 else 1 <= len(case["primary"]) <= 2, case
+        if selected == 0: assert not case["backup"], case
+        elif primary_failed_before_dns:
+            assert not case["primary"], case
+            failures = [row for row in attempts if row["proxy_result"] == 13 and row["resolver_id"] == 1]
+            assert len(failures) == 1 and failures[0]["tls_state"] == 3 and failures[0]["tls_error"] != 0, failures
+        else: assert 1 <= len(case["primary"]) <= 2, case
         started = [row for row in attempts if row["proxy_result"] == 12]
-        assert [row["upstream_port"] for row in started] == ([15353] if selected == 0 else [15353, 15354]), started
+        assert [row["upstream_port"] for row in started] == ([primary_port] if selected == 0 else [primary_port, primary_port + 1]), started
         assert len({row["upstream_attempt"] for row in started}) == len(started), started
-        assert all(row["request_attempt"] and row["resolver_id"] == (1 if row["upstream_port"] == 15353 else 2)
+        assert all(row["request_attempt"] and row["resolver_id"] == (1 if row["upstream_port"] == primary_port else 2)
                    and row.get("resolution_route", 0) == 0 for row in attempts), attempts
     assert all(row["adapter_profile"] in (1, 2) and
                ((row["caller"] == 0 and row["uid"] == 4294967295) or

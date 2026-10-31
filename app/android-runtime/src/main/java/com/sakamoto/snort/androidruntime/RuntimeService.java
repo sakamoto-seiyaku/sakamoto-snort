@@ -213,6 +213,7 @@ public final class RuntimeService extends VpnService {
     private boolean requestedHevUnknownIdentity, requestedHevUnknownContext;
     private boolean hevUnknownIdentity, hevUnknownContext;
     private String requestedHevLimits, hevLimits;
+    private boolean dnsTestTrust;
     private int requestedHevFlowEntries, hevFlowEntries;
     private int requestedNativeBuffers, nativeBuffers;
     private VpnPacketProfile vpnPacketProfile = VpnPacketProfile.standard();
@@ -701,6 +702,9 @@ public final class RuntimeService extends VpnService {
                 requestedHevUnknownContext = hevValidation && intent.getBooleanExtra("debugVpnHevUnknownContext", false);
                 requestedHevLimits = hevValidation ? intent.getStringExtra("debugVpnHevLimits") : null;
                 requestedHevFlowEntries = hevValidation ? intent.getIntExtra("debugVpnFlowEntries", 0) : 0;
+                dnsTestTrust = intent != null
+                        && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                        && intent.getBooleanExtra("debugDnsTestTrust", false);
                 requestedNativeBuffers = intent != null
                         && (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
                         ? intent.getIntExtra("debugNativeBuffers", 0) : 0;
@@ -1106,7 +1110,7 @@ public final class RuntimeService extends VpnService {
                         "product ABI does not match device ABI");
                 return;
             }
-            if (productAbiVersion != 4 || productApiVersion != 1) {
+            if (productAbiVersion != RuntimeControlNative.PRODUCT_ABI_VERSION || productApiVersion != 1) {
                 failWithoutRuntime("product_protocol_mismatch",
                         "product manifest ABI/API versions are unsupported");
                 return;
@@ -1183,6 +1187,8 @@ public final class RuntimeService extends VpnService {
             builder.environment().put("SAKAMOTO_RUNTIME_PROFILE", selected.wireName);
             builder.environment().put("SAKAMOTO_PRODUCT_OWNER_COUNT",
                     Integer.toString(activeWorkerPlacement.ownerCount));
+            if (dnsTestTrustDirectory() != null)
+                builder.environment().put("SAKAMOTO_PRODUCT_DNS_TEST_TRUST_DIRECTORY", dnsTestTrustDirectory());
             if (selected == RuntimeProfile.VPN)
                 builder.environment().put("SAKAMOTO_PRODUCT_TUN_IO_CPU_ID",
                         Integer.toString(activeTunIoCpuId));
@@ -1646,11 +1652,19 @@ public final class RuntimeService extends VpnService {
                     + "; export SAKAMOTO_PRODUCT_ROOT_NFQUEUE_UID="
                     + shellQuote(Integer.toString(getApplicationInfo().uid))
                     + productRootNfqueueFaultExport()
+                    + (dnsTestTrustDirectory() == null ? ""
+                        : "; export SAKAMOTO_PRODUCT_DNS_TEST_TRUST_DIRECTORY=" + shellQuote(dnsTestTrustDirectory()))
                     + "; exec " + shellQuote(vpp.getPath()) + " -c "
                     + shellQuote(startup.getPath());
             return new ProcessBuilder(SU_PATH, "0", "sh", "-c", command);
         }
         return new ProcessBuilder(vpp.getPath(), "-c", startup.getPath());
+    }
+
+    private String dnsTestTrustDirectory() {
+        if (!dnsTestTrust || (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0)
+            return null;
+        return new File(getFilesDir(), "dns-test-trust").getAbsolutePath();
     }
 
     private RuntimeControlNative.Session connectProductCoreSession(
@@ -5996,7 +6010,11 @@ public final class RuntimeService extends VpnService {
                 + productRootFamilyHooks("ip6tables", outputChain, inputChain, uid, "178:179", activeWorkerPlacement.ownerCount);
         for (int attempt = 1; attempt <= PRODUCT_ROOT_NFQUEUE_HOOK_INSTALL_ATTEMPTS;
                 attempt++) {
-            if (runRootCommand(command, 5L)) {
+            long began = SystemClock.elapsedRealtime();
+            int hookResult = runRootCommandStatus(command, 5L);
+            appendLog("product_root_nfqueue_hook_result attempt=" + attempt + " code=" + hookResult
+                    + " elapsed_ms=" + (SystemClock.elapsedRealtime() - began));
+            if (hookResult == 0) {
                 appendLog("product_root_nfqueue_hook_install=installed attempt=" + attempt);
                 return true;
             }

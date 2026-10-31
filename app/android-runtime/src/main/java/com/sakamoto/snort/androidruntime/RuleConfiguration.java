@@ -67,7 +67,7 @@ public final class RuleConfiguration {
     public static final int DNS_CONFIG_WORDS = 12 + 8*DNS_ENDPOINT_WORDS + 8*DNS_ROUTE_WORDS + 32*DNS_EXCEPTION_WORDS;
 
     /** Explicit numeric ordinary upstream; the existing VPP source transaction
-     * remains the only saved setting. No hostname or bootstrap lookup occurs. */
+     * remains the only saved setting. Address discovery runs only in the native upstream transport. */
     public static long[] dnsWire(String text) {
         if (text == null) throw new IllegalArgumentException("DNS upstream required");
         if (text.trim().startsWith("upstream ")) return dnsRoutesWire(text);
@@ -88,9 +88,8 @@ public final class RuleConfiguration {
         return wire;
     }
 
-    /** Request text for the same VPP transaction as the single-upstream form.
-     * Endpoint identity is separate from its explicit numeric connection IP;
-     * this ordinary profile never performs a hostname/bootstrap lookup. */
+    /** Same VPP source transaction: identity is independent of connection IP.
+     * A DoT domain with '-' explicitly requests original-network bootstrap. */
     private static long[] dnsRoutesWire(String text) {
         java.util.ArrayList<long[]> endpoints = new java.util.ArrayList<>();
         java.util.ArrayList<long[]> routes = new java.util.ArrayList<>();
@@ -101,18 +100,30 @@ public final class RuleConfiguration {
             if (f[0].equals("upstream")) {
                 if (f.length != 6 || endpoints.size() >= DNS_MAX_ENDPOINTS
                         || unsigned32(f[1]) != endpoints.size()
-                        || !(f[2].equals("udp") || f[2].equals("tcp")))
-                    throw new IllegalArgumentException("upstream <index> <udp|tcp> <identity> <connection IP> <port>");
-                long[] single = dnsWire("udp " + f[4] + " " + f[5]);
+                        || !(f[2].equals("udp") || f[2].equals("tcp") || f[2].equals("dot")))
+                    throw new IllegalArgumentException("upstream <index> <udp|tcp|dot> <identity> <connection IP> <port>");
                 long[] endpoint = new long[DNS_ENDPOINT_WORDS];
-                endpoint[0] = f[2].equals("udp") ? 1 : 2;
-                endpoint[1] = single[2]; endpoint[2] = single[3];
-                System.arraycopy(single, 4, endpoint, 4, 4);
+                endpoint[0] = f[2].equals("udp") ? 1 : f[2].equals("tcp") ? 2 : 3;
                 String identity;
                 if (f[3].contains(":")) { ipv6(f[3]); identity = f[3].toLowerCase(java.util.Locale.ROOT); }
                 else if (f[3].matches("[0-9.]+")) { ipv4(f[3]); identity = f[3]; }
                 else identity = dnsName(f[3]);
                 dnsString(endpoint, 8, identity);
+                String connection = f[4];
+                if (connection.equals("-")) {
+                    if (endpoint[0] != 3) throw new IllegalArgumentException("bootstrap requires DoT");
+                    if (identity.contains(":") || identity.matches("[0-9.]+")) connection = identity;
+                    else {
+                        endpoint[2] = unsigned32(f[5]);
+                        if (endpoint[2] == 0 || endpoint[2] > 65535)
+                            throw new IllegalArgumentException("invalid DNS port");
+                    }
+                }
+                if (!connection.equals("-")) {
+                    long[] single = dnsWire("udp " + connection + " " + f[5]);
+                    endpoint[1] = single[2]; endpoint[2] = single[3];
+                    System.arraycopy(single, 4, endpoint, 4, 4);
+                }
                 endpoints.add(endpoint);
             } else if (f[0].equals("route")) {
                 if (f.length < 3 || f.length > 10 || routes.size() >= DNS_MAX_ROUTES

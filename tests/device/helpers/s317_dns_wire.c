@@ -62,7 +62,7 @@ int main (int argc, char **argv) {
     }else continue;
     if(protocol!=6&&protocol!=17)continue;
     unsigned sport=u16(packet+header),dport=u16(packet+header+2);
-    if(sport!=53&&dport!=53&&sport!=5353&&dport!=5353&&sport!=53053&&dport!=53053&&sport!=53054&&dport!=53054&&
+    if(sport!=53&&dport!=53&&sport!=5353&&dport!=5353&&sport!=53053&&dport!=53053&&sport!=53054&&dport!=53054&&sport!=1853&&dport!=1853&&sport!=1854&&dport!=1854&&
        !(sport>=15353&&sport<15415)&&!(dport>=15353&&dport<15415))continue;
     unsigned selected=0;
     for(int i=3;i<argc;++i)if(families[i-3]==(int)family&&

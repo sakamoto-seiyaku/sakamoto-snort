@@ -23,7 +23,21 @@ typedef struct {
 typedef enum {
   PRODUCT_DNS_PROXY_UDP = 1,
   PRODUCT_DNS_PROXY_TCP = 2,
+  PRODUCT_DNS_PROXY_DOT = 3,
 } product_dns_proxy_transport_t;
+
+enum { PRODUCT_DNS_TLS_NONE, PRODUCT_DNS_TLS_HANDSHAKING, PRODUCT_DNS_TLS_AUTHENTICATED,
+  PRODUCT_DNS_TLS_FAILED, PRODUCT_DNS_TLS_CACHED_DATA };
+enum { PRODUCT_DNS_BOOTSTRAP_NONE, PRODUCT_DNS_BOOTSTRAP_PENDING,
+  PRODUCT_DNS_BOOTSTRAP_RESOLVED, PRODUCT_DNS_BOOTSTRAP_FAILED };
+enum { PRODUCT_DNS_AUTHORIZATION_NONE, PRODUCT_DNS_AUTHORIZATION_PENDING,
+  PRODUCT_DNS_AUTHORIZATION_GRANTED, PRODUCT_DNS_AUTHORIZATION_FAILED };
+typedef struct {
+  uint8_t connection_address[16], bootstrap_address[16];
+  uint32_t connection_family, connection_port, bootstrap_family, bootstrap_port, bootstrap_ifindex;
+  int32_t error;
+  uint8_t tls, bootstrap, authorization, trust_source; /* system=1, debug fixture=2 */
+} product_dns_proxy_io_event_t;
 
 typedef enum {
   PRODUCT_DNS_PROXY_QUERY = 0,
@@ -79,6 +93,7 @@ typedef struct {
   uint32_t result, client_capacity, output_bytes;
   uint16_t rcode;
   uint8_t stage, transport, truncated, delivery, cached;
+  product_dns_proxy_io_event_t io;
 } product_dns_proxy_event_t;
 
 enum {
@@ -133,6 +148,10 @@ int product_dns_proxy_submit (product_dns_proxy_t *, const product_dns_proxy_inp
 void product_dns_proxy_answer (product_dns_proxy_t *, const product_dns_proxy_key_t *,
   unsigned transport, const uint8_t *, size_t, uint64_t now_us);
 void product_dns_proxy_fail (product_dns_proxy_t *, const product_dns_proxy_key_t *, uint64_t now_us);
+/* Same live attempt's transport event. Discovery and socket authorization
+ * never stand in for service authentication. */
+void product_dns_proxy_io_event (product_dns_proxy_t *, const product_dns_proxy_key_t *,
+  const product_dns_proxy_io_event_t *);
 void product_dns_proxy_cancel (product_dns_proxy_t *, const product_dns_proxy_key_t *, uint64_t now_us);
 void product_dns_proxy_end (product_dns_proxy_t *, uint64_t generation, uint64_t incarnation, uint64_t now_us);
 void product_dns_proxy_session_end (product_dns_proxy_t *, uint64_t generation, uint64_t session, uint64_t now_us);

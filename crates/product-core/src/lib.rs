@@ -290,7 +290,13 @@ pub struct ProductStatus {
     pub product_graph_tun_io_worker_index: u32,
 }
 
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
+
+#[repr(C)]
+pub struct ProductNetworkDns {
+    pub family: u32,
+    pub address: [u8; 16],
+}
 
 #[repr(C)]
 pub struct ProductNetworkSnapshot {
@@ -299,8 +305,11 @@ pub struct ProductNetworkSnapshot {
     pub count: u32,
     pub reserved: u32,
     pub entries: [[u32; 2]; 32],
+    pub dns_count: u32,
+    pub dns_ifindex: u32,
+    pub dns: [ProductNetworkDns; 4],
 }
-const _: () = assert!(std::mem::size_of::<ProductNetworkSnapshot>() == 280);
+const _: () = assert!(std::mem::size_of::<ProductNetworkSnapshot>() == 368);
 
 pub const API_VERSION: u32 = 1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

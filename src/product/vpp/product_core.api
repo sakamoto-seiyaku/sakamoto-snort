@@ -293,6 +293,11 @@ typedef product_network_entry {
     u32 network_context;
 };
 
+typedef product_network_dns {
+    u32 family;
+    u8 address[16];
+};
+
 define product_core_network_publish {
     u32 client_index;
     u32 context;
@@ -302,6 +307,9 @@ define product_core_network_publish {
     u32 count;
     u32 reserved;
     vl_api_product_network_entry_t entries[32];
+    u32 dns_count;
+    u32 dns_ifindex;
+    vl_api_product_network_dns_t dns[4];
 };
 
 define product_core_network_publish_reply {

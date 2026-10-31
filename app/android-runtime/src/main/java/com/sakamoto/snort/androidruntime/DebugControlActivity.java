@@ -374,7 +374,8 @@ public class DebugControlActivity extends Activity {
                     ? RuntimeProfile.VPN : RuntimeProfile.ROOT;
             backend.start(this, selected, rootNfqueueFaultMode, vpnFaultMode,
                     intent.getStringExtra(RuntimeControlProtocol.EXTRA_WORKER_CPU_IDS),
-                    intent.getStringExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID));
+                    intent.getStringExtra(RuntimeControlProtocol.EXTRA_TUN_IO_CPU_ID),
+                    debuggable && intent.getBooleanExtra("debugDnsTestTrust", false));
             handled = true;
         }
         if (intent.getBooleanExtra(EXTRA_DEBUG_REFRESH, false)) {

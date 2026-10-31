@@ -5,6 +5,13 @@ public final class RuleConfigurationTest {
         if (!condition) throw new AssertionError();
     }
     public static void main(String[] args) {
+        long[] dot = RuleConfiguration.dnsWire("upstream 0 dot dot.test 192.0.2.53 853\nroute 0 0");
+        require(dot[0] == -4 && dot[5] == 3 && dot[6] == 4 && dot[7] == 853);
+        long[] bootstrap = RuleConfiguration.dnsWire("upstream 0 dot dot.test - 853\nroute 0 0");
+        require(bootstrap[5] == 3 && bootstrap[6] == 0 && bootstrap[7] == 853);
+        require(bootstrap[9] == 0 && bootstrap[12] == 0);
+        long[] literal = RuleConfiguration.dnsWire("upstream 0 dot 192.0.2.53 - 853\nroute 0 0");
+        require(literal[6] == 4 && literal[9] == 0xc0000235L);
         long[] orderedDns = RuleConfiguration.dnsWire("upstream 0 udp primary.test 192.0.2.53 53\n"
                 + "upstream 1 udp backup.test 192.0.2.54 53\nroute 0 0 1");
         require(orderedDns[0] == -4 && orderedDns[1] == 1 && orderedDns[2] == 2

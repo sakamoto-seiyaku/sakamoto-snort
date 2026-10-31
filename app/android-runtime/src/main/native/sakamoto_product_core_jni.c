@@ -1496,7 +1496,7 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeStopRoot (
 JNIEXPORT jint JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativePublishNetwork (
     JNIEnv *env, jclass clazz, jlong handle, jlong generation,
-    jlong revision, jlong event_elapsed_ns, jintArray pairs)
+    jlong revision, jlong event_elapsed_ns, jintArray pairs, jint dns_ifindex, jbyteArray dns)
 {
   (void) clazz;
   if (!handle || generation <= 0 || revision <= 0 || event_elapsed_ns < 0 || !pairs)
@@ -1516,6 +1516,19 @@ Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativePublishNetwork
       snapshot.entries[i].linux_ifindex = (uint32_t) values[i * 2];
       snapshot.entries[i].context = (uint32_t) values[i * 2 + 1];
     }
+  if (!dns || dns_ifindex < 0) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  jsize dns_size = (*env)->GetArrayLength (env, dns);
+  if (dns_size < 0 || dns_size > 4 * 17 || dns_size % 17)
+    return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  jbyte dns_values[4 * 17] = {0};
+  (*env)->GetByteArrayRegion (env, dns, 0, dns_size, dns_values);
+  if ((*env)->ExceptionCheck (env)) return SAKAMOTO_PRODUCT_INVALID_ARGUMENT;
+  snapshot.dns_count = (uint32_t) dns_size / 17;
+  snapshot.dns_ifindex = (uint32_t) dns_ifindex;
+  for (uint32_t i = 0; i < snapshot.dns_count; ++i) {
+    snapshot.dns[i].family = (uint8_t) dns_values[i * 17];
+    memcpy (snapshot.dns[i].address, dns_values + i * 17 + 1, 16);
+  }
   return (jint) sakamoto_product_core_publish_network (
     (sakamoto_product_core_handle_t *) (intptr_t) handle,
     (uint64_t) generation, &snapshot);

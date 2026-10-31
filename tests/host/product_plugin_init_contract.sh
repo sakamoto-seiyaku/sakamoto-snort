@@ -433,6 +433,8 @@ typedef struct {
   u64 generation, revision, event_elapsed_ns;
   u32 count, reserved;
   struct { u32 linux_ifindex, network_context; } entries[32];
+  u32 dns_count, dns_ifindex;
+  struct {u32 family;u8 address[16];} dns[4];
 } vl_api_product_core_network_publish_t;
 typedef struct { int32_t retval; } vl_api_product_core_network_publish_reply_t;
 typedef struct { u64 generation; } vl_api_product_core_root_stop_t;
@@ -443,7 +445,7 @@ cat >"$work_dir/product_core_identity.h" <<'EOF'
 #ifndef SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #define SAKAMOTO_TEST_PRODUCT_CORE_IDENTITY_H
 #ifndef SAKAMOTO_PRODUCT_ABI_VERSION
-#define SAKAMOTO_PRODUCT_ABI_VERSION 4
+#define SAKAMOTO_PRODUCT_ABI_VERSION 5
 #endif
 #ifndef SAKAMOTO_PRODUCT_API_VERSION
 #define SAKAMOTO_PRODUCT_API_VERSION 1

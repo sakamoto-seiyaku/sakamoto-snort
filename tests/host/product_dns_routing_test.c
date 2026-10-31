@@ -24,7 +24,7 @@ static unsigned observation_count;
 static int send_query(void *opaque,const product_dns_proxy_key_t *selected,unsigned transport,
   const uint8_t *wire,size_t length,uint64_t limit)
 {
-  assert(!opaque && (transport==1 || transport==2) && length>=12 && length<=sizeof(sent));
+  assert(!opaque && (transport==1 || transport==2 || transport==3) && length>=12 && length<=sizeof(sent));
   assert(sends<256);attempts[sends]=*selected;
   ++sends; key=*selected; deadline=limit; sent_length=length;sent_transport=transport;
   memcpy(sent,wire,length); return 1;
@@ -304,6 +304,84 @@ static void normal_attempt_observations_preserve_request_and_selected_candidate(
   product_dns_proxy_close(proxy);
 }
 
+static void encrypted_candidates_keep_identity_and_do_not_add_plaintext_fallback(void)
+{
+  product_dns_proxy_t *proxy=configured_proxy(2);product_dns_proxy_close(proxy);
+  product_dns_proxy_route_t route={.enabled=1,.family=4,.port=853,.address={192,0,2,53},
+    .endpoint_count=2,.route_count=1,.routes={{.count=2,.candidates={0,1}}},
+    .endpoints={{.transport=3,.family=4,.port=853,.address={192,0,2,53},.identity="primary.test"},
+      {.transport=3,.family=6,.port=8853,.address={0x20,1,0xd,0xb8,0,0,0,0,0,0,0,0,0,0,0,53},
+       .identity="backup.test"}}};
+  product_dns_proxy_callbacks_t callbacks={.send=send_query,.reply=reply,.acquire=acquire,.observe=observe};
+  proxy=product_dns_proxy_open(321,&route,&callbacks,NULL);assert(proxy);
+  submit(proxy,question,100);
+  assert(sends==1 && sent_transport==3 && key.resolver_port==853 && key.resolver_id==1);
+  assert(observation_count==2 && observations[0].stage==1 && observations[0].transport==3);
+  product_dns_proxy_key_t failed=key;
+  product_dns_proxy_fail(proxy,&failed,101);
+  assert(sends==2 && sent_transport==3 && key.resolver_family==6 && key.resolver_id==2);
+  failed=key;product_dns_proxy_fail(proxy,&failed,102);
+  assert(sends==2 && replies==1 && (received[3]&15)==2);
+  product_dns_proxy_advance(proxy,10000100,5,7);
+  assert(sends==2 && !product_dns_proxy_resources(proxy).active);
+  product_dns_proxy_close(proxy);
+}
+
+static void hostname_transport_uses_the_configured_identity_without_a_fabricated_ip(void)
+{
+  product_dns_proxy_t *proxy=configured_proxy(1);product_dns_proxy_close(proxy);
+  product_dns_proxy_route_t route={.enabled=1,.port=853,.endpoint_count=1,.route_count=1,
+    .routes={{.count=1}},.endpoints={{.transport=3,.port=853,.identity="dot.test"}}};
+  product_dns_proxy_callbacks_t callbacks={.send=send_query,.reply=reply,.acquire=acquire,.observe=observe};
+  proxy=product_dns_proxy_open(321,&route,&callbacks,NULL);assert(proxy);
+  submit(proxy,question,100);
+  assert(sends==1 && sent_transport==3 && key.resolver_family==0 && key.resolver_port==853);
+  assert(!memcmp(key.resolver_address,(uint8_t[16]){0},16));
+  assert(!strcmp((char *)observations[0].route.identity,"dot.test") && observations[0].transport==3);
+  product_dns_proxy_key_t pending=key;product_dns_proxy_fail(proxy,&pending,101);
+  assert(sends==1 && replies==1 && (received[3]&15)==2);
+  assert(!strcmp((char *)final.route.identity,"dot.test"));
+  product_dns_proxy_close(proxy);
+}
+
+static product_dns_proxy_t *dot_proxy(void)
+{
+  product_dns_proxy_t *old=configured_proxy(1);product_dns_proxy_close(old);
+  product_dns_proxy_route_t route={.enabled=1,.family=4,.port=853,.address={192,0,2,53},
+    .endpoint_count=1,.route_count=1,.routes={{.count=1}},
+    .endpoints={{.transport=3,.family=4,.port=853,.address={192,0,2,53},.identity="dot.test"}}};
+  product_dns_proxy_callbacks_t callbacks={.send=send_query,.reply=reply,.acquire=acquire,.observe=observe};
+  product_dns_proxy_t *proxy=product_dns_proxy_open(321,&route,&callbacks,NULL);assert(proxy);return proxy;
+}
+static void dot_requires_complete_authentication_and_cancels_old_events(void)
+{
+  for(unsigned proof=0;proof<4;++proof){
+    product_dns_proxy_t *proxy=dot_proxy();submit(proxy,question,100);
+    product_dns_proxy_io_event_t state={.connection_family=4,.connection_port=853,
+      .connection_address={192,0,2,53},.tls=proof?PRODUCT_DNS_TLS_AUTHENTICATED:PRODUCT_DNS_TLS_HANDSHAKING,
+      .authorization=proof==1?PRODUCT_DNS_AUTHORIZATION_PENDING:PRODUCT_DNS_AUTHORIZATION_GRANTED,
+      .trust_source=proof==2?0:1};
+    product_dns_proxy_io_event(proxy,&key,&state);answer(proxy,101,0,1,60);
+    assert(replies==1&&(received[3]&15)==(proof==3?0:2));
+    if(proof==3){
+      assert(final.io.tls==PRODUCT_DNS_TLS_AUTHENTICATED&&final.io.authorization==PRODUCT_DNS_AUTHORIZATION_GRANTED);
+      submit(proxy,question,102);assert(sends==1&&replies==2&&final.cached);
+      assert(final.io.tls==PRODUCT_DNS_TLS_CACHED_DATA&&!final.io.connection_family&&!final.io.authorization);
+    }
+    product_dns_proxy_close(proxy);
+  }
+  for(unsigned stop=0;stop<2;++stop){
+    product_dns_proxy_t *proxy=dot_proxy();submit(proxy,question,100);product_dns_proxy_key_t old=key;
+    if(stop)product_dns_proxy_stop(proxy,101);else product_dns_proxy_advance(proxy,101,6,7);
+    unsigned settled=replies;
+    product_dns_proxy_io_event_t late={.tls=PRODUCT_DNS_TLS_AUTHENTICATED,.authorization=PRODUCT_DNS_AUTHORIZATION_GRANTED,
+      .connection_family=4,.connection_port=853,.connection_address={192,0,2,53},.trust_source=1};
+    product_dns_proxy_io_event(proxy,&old,&late);answer(proxy,102,0,1,60);
+    assert(replies==settled&&sends==1&&!product_dns_proxy_resources(proxy).active);
+    product_dns_proxy_close(proxy);
+  }
+}
+
 int main(void)
 {
   primary_timeout_selects_backup();
@@ -314,6 +392,9 @@ int main(void)
   exception_suffix_requires_a_real_wire_label_boundary();
   exact_and_longest_suffix_routes_preserve_explicit_local_resolution();
   normal_attempt_observations_preserve_request_and_selected_candidate();
+  encrypted_candidates_keep_identity_and_do_not_add_plaintext_fallback();
+  hostname_transport_uses_the_configured_identity_without_a_fabricated_ip();
+  dot_requires_complete_authentication_and_cancels_old_events();
   puts("ordered DNS: primary timeout selects configured backup");
   return 0;
 }
