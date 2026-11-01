@@ -71,6 +71,11 @@ All changes after the artifact build are in device drivers; Product code was not
 After the runs the original APK and all 4861 private-data members were restored at the fresh maximum generation
 (`original-restoration-r2`), with no NFQUEUE entry, Product hook or owned route left.
 
+## Acceptance decision (2026-11-01)
+
+The user accepted this scope and asked for SAKAMOTO-328 to be marked complete with observation backpressure
+recorded as an explicit uncovered item, not as qualified.
+
 ## Not covered
 
 Observation backpressure was not re-exercised (no DNS driver floods the observation channel; the earlier
