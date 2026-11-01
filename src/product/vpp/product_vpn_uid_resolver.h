@@ -11,14 +11,22 @@
 void product_vpn_uid_resolver_start (u64 generation);
 int product_vpn_uid_resolver_attach (int fd, u32 owner_index);
 int product_vpn_uid_resolver_ready (void);
-void product_vpn_uid_resolver_lookup (vlib_main_t *vm,
+/* Before policy: this packet's App identity from the owner's current result, and
+ * a known UID recorded on the current admitted Flow incarnation. Returns 1 when
+ * the packet is one the resolver identifies (its platform facts may have changed
+ * and must be written back), 0 when it is not. Never waits or starts a query. */
+int product_vpn_uid_resolver_identify (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
   u64 generation);
-/* Only an admitted flow may initiate or refresh Android metadata. */
-void product_vpn_uid_resolver_refresh (vlib_main_t *vm,
+/* After Flow processing of a successfully processed packet. observed_incarnation is
+ * the Flow this packet was observed on, or 0. The resolver selects and validates the
+ * incarnation; only an admitted Flow may initiate or refresh Android metadata, so a
+ * packet dropped before any Flow exists creates no query state. */
+void product_vpn_uid_resolver_flow_processed (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
-  const product_packet_facts_t *facts, u64 generation, u64 incarnation);
+  const product_packet_facts_t *facts, const product_platform_packet_facts_t *platform,
+  u64 generation, u64 observed_incarnation);
 void product_vpn_uid_resolver_stop (void);
 
 #endif

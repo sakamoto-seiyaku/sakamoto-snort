@@ -78,7 +78,7 @@ static int product_flow_entry_enrich_uid(product_flow_runtime_t *pool,
   const product_owner_assignment_t *assignment, u64 generation, u64 flow,
   u32 uid, u64 now) {
   assert(pool && assignment->valid && generation==live_generation && flow==incarnation && now && uid!=UINT32_MAX);
-  ++enrichments; return 1;
+  ++enrichments; return uid==20000 ? 2 : 1;   /* 20000: the tuple now belongs to another App */
 }
 '''
 
@@ -99,8 +99,18 @@ static product_platform_packet_facts_t lookup(vlib_main_t *vm,product_flow_runti
   product_owner_assignment_t *assignment,product_packet_facts_t *facts) {
   product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
     .direction=PRODUCT_PACKET_DIRECTION_OUTPUT};
-  product_vpn_uid_resolver_lookup(vm,pool,assignment,facts,&platform,live_generation);
+  assert(product_vpn_uid_resolver_identify(vm,pool,assignment,facts,&platform,live_generation)==1);
   return platform;
+}
+static void processed(vlib_main_t *vm,product_flow_runtime_t *pool,
+  product_owner_assignment_t *assignment,product_packet_facts_t *facts,u64 observed) {
+  product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
+    .direction=PRODUCT_PACKET_DIRECTION_OUTPUT};
+  product_vpn_uid_resolver_flow_processed(vm,pool,assignment,facts,&platform,live_generation,observed);
+}
+static int nothing_sent(int peer) {
+  uid_request_t request;
+  return recv(peer,&request,sizeof(request),MSG_DONTWAIT)<0 && (errno==EAGAIN||errno==EWOULDBLOCK);
 }
 int main(void) {
   int channels[2][2];
@@ -116,21 +126,33 @@ int main(void) {
     assert(!product_vpn_uid_resolver_attach(channels[i][0],i));
   }
   assert(product_vpn_uid_resolver_ready());
+  /* Product mode identifies device-origin packets only; a return packet is left untouched. */
+  product_platform_packet_facts_t inbound={.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
+    .direction=PRODUCT_PACKET_DIRECTION_INPUT,.availability=PRODUCT_PLATFORM_DNS_APP_RELIABLE};
+  assert(!product_vpn_uid_resolver_identify(&vm,&pool,&assignment,&facts,&inbound,live_generation));
+  assert(inbound.availability==PRODUCT_PLATFORM_DNS_APP_RELIABLE);
+  /* A packet dropped before any Flow exists creates no query state and sends nothing. */
+  u64 admitted=incarnation; incarnation=0;
+  processed(&vm,&pool,&assignment,&facts,0);
+  assert(nothing_sent(channels[0][1]));
+  incarnation=admitted;
   product_platform_packet_facts_t cold=lookup(&vm,&pool,&assignment,&facts);
   assert(!cold.availability); /* Lookup neither waits nor initiates work. */
-  product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
   uid_request_t request=receive_request(channels[0][1]);
   assert(request.family==4 && request.protocol==17 && ntohs(request.local_port)==40000);
   assert(ntohs(request.remote_port)==53 && !memcmp(request.remote,facts.destination_address,16));
   respond(channels[0][1],request,10123);
+  unsigned enriched=enrichments;
   product_platform_packet_facts_t app=lookup(&vm,&pool,&assignment,&facts);
+  assert(enrichments==enriched+1); /* identify records the known UID on the current Flow */
   assert(app.uid==10123 && (app.availability&PRODUCT_PLATFORM_UID_KNOWN));
   assert(app.availability&PRODUCT_PLATFORM_DNS_APP_RELIABLE);
   assert(!cold.availability); /* The completed cold query remains Unknown. */
   for(unsigned i=0;i<7;++i) {
     const u32 system[]={1000,1051,2000,9999,90000,99000,UINT32_MAX};
     timestamp+=UINT64_C(300000000);
-    product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+    processed(&vm,&pool,&assignment,&facts,incarnation);
     request=receive_request(channels[0][1]);
     assert(!lookup(&vm,&pool,&assignment,&facts).availability);
     respond(channels[0][1],request,system[i]);
@@ -140,26 +162,51 @@ int main(void) {
     assert(!(delegated.availability&PRODUCT_PLATFORM_DNS_APP_RELIABLE));
   }
   timestamp+=UINT64_C(300000000);
-  product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
   request=receive_request(channels[0][1]);
   ++incarnation; unsigned before=enrichments;
   respond(channels[0][1],request,10123);
   assert(enrichments==before && !lookup(&vm,&pool,&assignment,&facts).availability);
-  product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
   timestamp+=UINT64_C(300000000);
-  product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
   request=receive_request(channels[0][1]);
   timestamp+=UINT64_C(3000000000);
   assert(!lookup(&vm,&pool,&assignment,&facts).availability); /* Bounded broker timeout. */
   respond(channels[0][1],request,10123); /* A timed-out result cannot revive identity. */
   assert(!lookup(&vm,&pool,&assignment,&facts).availability);
   product_platform_packet_facts_t diagnostic={.uid=10123,
-    .provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
+    .provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,.direction=PRODUCT_PACKET_DIRECTION_OUTPUT,
     .availability=PRODUCT_PLATFORM_UID_KNOWN|PRODUCT_PLATFORM_DNS_APP_RELIABLE};
-  product_vpn_uid_resolver_lookup(&vm,&pool,&assignment,&facts,&diagnostic,live_generation);
+  assert(product_vpn_uid_resolver_identify(&vm,&pool,&assignment,&facts,&diagnostic,live_generation)==1);
   assert(!(diagnostic.availability&PRODUCT_PLATFORM_DNS_APP_RELIABLE));
+  /* An identity conflict retires the cached identity; it is not reused for the old Flow. */
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
+  request=receive_request(channels[0][1]);
+  respond(channels[0][1],request,20000);
+  assert(!lookup(&vm,&pool,&assignment,&facts).availability);
+  /* A fresh TCP SYN never inherits an identity cached for an earlier connection on the tuple. */
+  product_packet_facts_t tcp=facts; tcp.protocol=6; tcp.tcp_flags=0x02;
+  product_packet_facts_t established=tcp; established.tcp_flags=0x10;
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&established,incarnation);
+  request=receive_request(channels[0][1]);
+  respond(channels[0][1],request,10123);
+  assert(lookup(&vm,&pool,&assignment,&established).uid==10123);
+  assert(!lookup(&vm,&pool,&assignment,&tcp).availability);
+  /* A Flow observed on this packet is used as is; without one the current admitted Flow is. */
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&facts,0);
+  assert(!nothing_sent(channels[0][1]));
   product_vpn_uid_resolver_stop();
   assert(closed_count==2 && !product_vpn_uid_resolver_ready());
+  /* Without a broker a controlled provider's UID is still recorded on the current Flow. */
+  product_platform_packet_facts_t controlled={.uid=10777,.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
+    .direction=PRODUCT_PACKET_DIRECTION_OUTPUT,.availability=PRODUCT_PLATFORM_UID_KNOWN};
+  unsigned before_controlled=enrichments;
+  assert(product_vpn_uid_resolver_identify(&vm,&pool,&assignment,&facts,&controlled,live_generation)==1);
+  assert(enrichments==before_controlled+1 && controlled.uid==10777);
   assert(!lookup(&vm,&pool,&assignment,&facts).availability);
   registered[0].read_function(&registered[0]); /* Old fd callback is harmless. */
   for(unsigned i=0;i<2;++i) close(channels[i][1]);
@@ -169,7 +216,7 @@ int main(void) {
     assert(!socketpair(AF_UNIX,SOCK_SEQPACKET,0,channels[i]));
     assert(!product_vpn_uid_resolver_attach(channels[i][0],i));
   }
-  product_vpn_uid_resolver_refresh(&vm,&pool,&assignment,&facts,live_generation,incarnation);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
   uid_request_t current=receive_request(channels[0][1]);
   /* Even a reused request number cannot accept an older runtime's result. */
   current.generation=request.generation;
@@ -177,7 +224,7 @@ int main(void) {
   assert(!product_vpn_uid_resolver_ready() && closed_count==3);
   product_vpn_uid_resolver_stop(); assert(closed_count==4);
   for(unsigned i=0;i<2;++i) close(channels[i][1]);
-  puts("VPN DNS caller evidence, no hold and late lifecycle: PASS");
+  puts("VPN UID resolver identity, admitted-flow refresh, no hold and late lifecycle: PASS");
 }
 '''
 

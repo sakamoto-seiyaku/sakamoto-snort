@@ -218,7 +218,7 @@ static uid_tuple_t tuple_for (const product_packet_facts_t *facts)
   return key;
 }
 
-void product_vpn_uid_resolver_lookup (vlib_main_t *vm,
+static void cached_identity (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
   u64 generation)
@@ -264,7 +264,7 @@ void product_vpn_uid_resolver_lookup (vlib_main_t *vm,
   }
 }
 
-void product_vpn_uid_resolver_refresh (vlib_main_t *vm,
+static void request_identity (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, u64 generation, u64 incarnation)
 {
@@ -307,6 +307,43 @@ void product_vpn_uid_resolver_refresh (vlib_main_t *vm,
       .request_pending = 1};
   }
   owner->requests++;
+}
+
+int product_vpn_uid_resolver_identify (vlib_main_t *vm,
+  product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
+  const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
+  u64 generation)
+{
+  if (!vm || !platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) return 0;
+  /* Product mode identifies device-origin packets only; graph validation identifies every
+   * TUN packet with its controlled UID. */
+  if (product_vpn_tun_product_mode() && platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT) return 0;
+  cached_identity(vm, pool, assignment, facts, platform, generation);
+  /* A known UID, from this owner's Android result or a controlled provider, belongs to
+   * the Flow incarnation that is current for this tuple now, never to a retired one. */
+  if ((platform->availability & PRODUCT_PLATFORM_UID_KNOWN) && pool && assignment && assignment->valid) {
+    u64 now_us = (u64)(vlib_time_now(vm) * 1000000.0);
+    (void) product_flow_entry_enrich_uid(pool, assignment, generation,
+      product_flow_entry_current_incarnation(pool, assignment, generation, now_us),
+      platform->uid, now_us);
+  }
+  return 1;
+}
+
+void product_vpn_uid_resolver_flow_processed (vlib_main_t *vm,
+  product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
+  const product_packet_facts_t *facts, const product_platform_packet_facts_t *platform,
+  u64 generation, u64 observed_incarnation)
+{
+  if (!vm || !pool || !platform || !assignment || !assignment->valid ||
+      platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
+      platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT) return;
+  /* The packet's own Flow if it was observed, otherwise the current admitted Flow for the
+   * tuple. A packet dropped before any Flow exists has none, and creates no query state. */
+  u64 incarnation = observed_incarnation ? observed_incarnation
+    : product_flow_entry_current_incarnation(pool, assignment, generation,
+        (u64)(vlib_time_now(vm) * 1000000.0));
+  request_identity(vm, pool, assignment, facts, generation, incarnation);
 }
 
 void product_vpn_uid_resolver_stop (void)

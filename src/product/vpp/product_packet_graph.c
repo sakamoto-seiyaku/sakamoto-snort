@@ -1864,28 +1864,13 @@ VLIB_NODE_FN (product_packet_policy_node)
         }
       else
         {
+          /* The resolver owns VPN App identity; the graph writes the packet's facts back. */
           if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE &&
-              lease.platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
-              (!product_vpn_tun_product_mode() ||
-               lease.platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT))
-            {
-              product_vpn_uid_resolver_lookup(vm,
+              product_vpn_uid_resolver_identify(vm,
                 graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
-                &lease.assignment, &lease.facts, &lease.platform,
-                metadata.generation);
-              product_packet_graph_set_platform_facts(buffer, &lease.platform,
-                                                      metadata.generation);
-              if ((lease.platform.availability & PRODUCT_PLATFORM_UID_KNOWN)
-                  && lease.assignment.valid)
-                product_flow_entry_enrich_uid(
-                  graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
-                  &lease.assignment, metadata.generation,
-                  product_flow_entry_current_incarnation(
-                    graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
-                    &lease.assignment, metadata.generation,
-                    (u64)(vlib_time_now(vm) * 1000000.0)), lease.platform.uid,
-                  (u64)(vlib_time_now(vm) * 1000000.0));
-            }
+                &lease.assignment, &lease.facts, &lease.platform, metadata.generation))
+            product_packet_graph_set_platform_facts(buffer, &lease.platform,
+                                                    metadata.generation);
           if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE)
             {
               lease.policy_owner_ready = 1;
@@ -5225,18 +5210,11 @@ product_packet_graph_policy_on_owner (
           lease->platform.direction, lease->facts.packet_length, &context);
     }
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
-  if (lease->platform.provenance == PRODUCT_PACKET_PROVENANCE_VPN_TUN &&
-      lease->platform.direction == PRODUCT_PACKET_DIRECTION_OUTPUT &&
-      lease->assignment.valid && result == PRODUCT_PACKET_OK) {
-    product_flow_runtime_t *pool = graph->flow_pools[vlib_get_worker_index(vm->thread_index)];
-    u64 incarnation = observation.entry ? observation.entry->incarnation
-      : product_flow_entry_current_incarnation(pool, &lease->assignment,
-          graph->generation, (u64)(vlib_time_now(vm) * 1000000.0));
-    /* A new lookup follows admission. A pre-policy DROP may refresh only an
-     * already admitted flow; it must not create ownership state itself. */
-    product_vpn_uid_resolver_refresh(vm, pool, &lease->assignment,
-      &lease->facts, graph->generation, incarnation);
-  }
+  if (result == PRODUCT_PACKET_OK)
+    product_vpn_uid_resolver_flow_processed (vm,
+      graph->flow_pools[vlib_get_worker_index (vm->thread_index)], &lease->assignment,
+      &lease->facts, &lease->platform, graph->generation,
+      observation.entry ? observation.entry->incarnation : 0);
 #endif
   product_flow_expiry_changed (vm);
   if (result == PRODUCT_PACKET_OK) root_dns_return_policy (vm, buffer_index, lease, evaluation);
