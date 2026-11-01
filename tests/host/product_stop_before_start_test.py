@@ -22,13 +22,15 @@ typedef struct { int thread_index; } vlib_main_t;
 typedef struct { unsigned active; } product_dns_owner_t;
 typedef struct { unsigned active; unsigned long long allocated_bytes; } product_dns_tcp_owner_t;
 typedef struct { unsigned codec_live_bytes, active_operations; } product_dns_resources_t;
+typedef struct { unsigned pairs; } product_dns_assoc_t;
 typedef struct {
   unsigned accepting, enabled, generation;
   product_dns_owner_t dns_requests[2];
   product_dns_tcp_owner_t dns_tcp[2];
+  product_dns_assoc_t *dns_assoc[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
-static int workers_ready, calls, debt, dns_stops, tcp_stops, dns_adapter_stops;
+static int workers_ready, calls, debt, dns_stops, tcp_stops, dns_adapter_stops, assoc_clears;
 static unsigned product_packet_graph_worker_count(void) { return 2; }
 static void product_dns_owner_stop(product_dns_owner_t *owner) {
   assert(owner->active); owner->active=0; ++dns_stops;
@@ -36,6 +38,7 @@ static void product_dns_owner_stop(product_dns_owner_t *owner) {
 static void product_dns_tcp_stop(product_dns_tcp_owner_t *owner) {
   assert(owner->active && owner->allocated_bytes);owner->active=0;owner->allocated_bytes=0;++tcp_stops;
 }
+static void product_dns_assoc_clear(product_dns_assoc_t *table) { if (table) table->pairs=0; ++assoc_clears; }
 static product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
 #define PREDICT_FALSE(x) (x)
 #define clib_atomic_store_rel_n(p,v) (*(p)=(v))
@@ -60,8 +63,11 @@ int main(void) {
    * as valid pools with no packets. */
   product_packet_graph_stop_external(0);
   assert(calls==0 && dns_stops==0 && tcp_stops==0 && !product_packet_graph_main.enabled);
-  assert(dns_adapter_stops==0);
+  assert(dns_adapter_stops==0 && assoc_clears==0);
   vlib_main_t vm={0}; workers_ready=1;
+  product_dns_assoc_t tables[2]={{3},{4}};
+  product_packet_graph_main.dns_assoc[0]=&tables[0];
+  product_packet_graph_main.dns_assoc[1]=&tables[1];
   product_packet_graph_main.accepting=product_packet_graph_main.enabled=1;
   product_packet_graph_main.generation=77;
   product_packet_graph_main.dns_requests[0].active=1;
@@ -73,6 +79,7 @@ int main(void) {
   product_packet_graph_stop_external(&vm);
   assert(calls==8 && !product_packet_graph_main.accepting && !product_packet_graph_main.enabled);
   assert(dns_adapter_stops==1);
+  assert(assoc_clears==2 && !tables[0].pairs && !tables[1].pairs);
   assert(dns_stops==2 && !product_packet_graph_main.dns_requests[0].active
     && !product_packet_graph_main.dns_requests[1].active);
   assert(tcp_stops==2 && !product_packet_graph_main.dns_tcp[0].active

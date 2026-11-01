@@ -89,6 +89,7 @@ typedef struct { u8 opaque[40], opaque2[56]; } vlib_buffer_t;
 typedef struct { unsigned active; } product_dns_owner_t;
 typedef struct { unsigned active; u64 allocated_bytes; } product_dns_tcp_owner_t;
 typedef struct { u64 codec_live_bytes, active_operations; } product_dns_resources_t;
+typedef struct { unsigned pairs; } product_dns_assoc_t;
 typedef struct {
   vlib_main_t *vlib_main;
   u64 generation, trace_packets, trace_limit;
@@ -100,6 +101,7 @@ typedef struct {
   u32 lifecycle_terminal_intents, lifecycle_settlements, lifecycle_returns;
   product_dns_owner_t dns_requests[PRODUCT_GRAPH_WORKERS];
   product_dns_tcp_owner_t dns_tcp[PRODUCT_GRAPH_WORKERS];
+  product_dns_assoc_t *dns_assoc[PRODUCT_GRAPH_WORKERS];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
 static unsigned dns_stops, tcp_stops;
@@ -108,6 +110,7 @@ static void product_dns_owner_stop(product_dns_owner_t *owner) { owner->active=0
 static void product_dns_tcp_stop(product_dns_tcp_owner_t *owner) {
   owner->active=0; owner->allocated_bytes=0; ++tcp_stops;
 }
+static void product_dns_assoc_clear(product_dns_assoc_t *table) { if (table) table->pairs = 0; }
 static product_dns_resources_t product_dns_resources(void) { return (product_dns_resources_t){0}; }
 #if TEST_BATCH
 static u32 product_packet_batch_stats[4];

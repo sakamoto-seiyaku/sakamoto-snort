@@ -260,6 +260,11 @@ static void product_packet_graph_dns_response_prepare(vlib_main_t *vm,u32 index,
   (void)vm;(void)index;(void)snapshot;(void)response;
   assert(lease->facts.source_port!=53);*observed=0;
 }
+static void product_packet_graph_dns_associate(vlib_main_t *vm,const product_packet_lease_t *lease,
+  const product_dns_response_t *response,const uint8_t *wire,size_t length,
+  const product_packet_graph_policy_evaluation_t *evaluation,product_dns_assoc_admission_t *result) {
+  (void)vm;(void)lease;(void)response;(void)wire;(void)length;(void)evaluation;(void)result;assert(0);
+}
 static product_dns_identity_t product_packet_graph_dns_identity(vlib_main_t *vm,
   const product_packet_lease_t *lease) {
   (void)vm;(void)lease;assert(tcp_fixture_mode);return (product_dns_identity_t){.generation=7,.incarnation=77};

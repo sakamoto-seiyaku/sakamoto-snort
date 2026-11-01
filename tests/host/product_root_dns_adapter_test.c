@@ -12,6 +12,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "product_dns_proxy.h"
+#include "product_dns_assoc.h"
 #include "product_vpn_flow_stack.h"
 #define SAKAMOTO_PRODUCT_VPN_TUN_MTU 10000
 #include "product_root_dns_io.h"
@@ -121,6 +122,7 @@ typedef struct {
  product_dns_owner_t dns_requests[2];
  product_dns_tcp_owner_t dns_tcp[2];
  product_flow_runtime_t *flow_pools[2];
+ product_dns_assoc_t *dns_assoc[2];
 } product_packet_graph_main_t;
 static product_packet_graph_main_t product_packet_graph_main;
 typedef struct {

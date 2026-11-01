@@ -40,6 +40,7 @@ prefix = r"""
 #include <string.h>
 #include "product_dns_tcp.h"
 #include "product_dns_proxy.h"
+#include "product_dns_assoc.h"
 #include "product_flow_entry.h"
 #include "sakamoto_product_observation.h"
 typedef uint8_t u8;
@@ -76,6 +77,7 @@ typedef struct {
  bank_t *bank;
  struct {u64 generation,revision,snapshot_hash;} identity;
  unsigned trace;
+ product_dns_assoc_admission_t assoc;
 } product_policy_snapshot_t;
 typedef struct {
  u64 generation,revision,snapshot_hash,rule_id;
@@ -88,6 +90,13 @@ typedef struct {
 #define clib_memset memset
 #define clib_memcpy_fast memcpy
 static unsigned vlib_get_worker_index(unsigned thread) {assert(thread==1);return 0;}
+/* Every TCP answer event reaches the association owner. */
+static void product_packet_graph_dns_associate(vlib_main_t *vm,const product_packet_lease_t *lease,
+ const product_dns_response_t *response,const uint8_t *wire,size_t length,
+ const product_packet_graph_policy_evaluation_t *evaluation,product_dns_assoc_admission_t *result) {
+ (void)vm;(void)lease;(void)response;(void)evaluation;(void)wire;(void)length;
+ result->admitted=1;
+}
 static double vlib_time_now(vlib_main_t *v) {assert(v==&vm);return (double)clock_us/1000000.0;}
 static vlib_buffer_t *vlib_get_buffer(vlib_main_t *v,u32 index) {assert(v==&vm && index==3);return &buffer;}
 static void *vlib_buffer_get_current(vlib_buffer_t *b) {return b->bytes;}

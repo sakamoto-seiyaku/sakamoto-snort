@@ -101,7 +101,7 @@ for mode in off on; do
   "$repo_root/src/product/vpp/product_flow_udp.c" \
   "$repo_root/src/product/vpp/product_flow_icmp.c" \
   "$repo_root/src/product/vpp/product_flow_tcp.c" \
-  "$source" "$repo_root/src/product/vpp/product_flow_sni.c" \
+  "$source" "$repo_root/src/product/vpp/product_flow_sni.c" "$repo_root/src/product/vpp/product_flow_dtls.c" \
   "$repo_root/src/product/vpp/product_flow_quic.c" "$test_source" \
   "$fixture_root/build/third_party/mbedtls/libsakamoto_quic_crypto.a" \
   -o "$fixture_root/product-flow-entry-test-$mode"

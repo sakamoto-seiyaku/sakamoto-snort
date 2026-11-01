@@ -858,7 +858,7 @@ static void domain_opcode_contract(void)
   packet.sni_result = PRODUCT_SNI_NAME;
   packet.domain_lists = 1;
   product_l4_policy_match_result_t result;
-  const uint32_t supplemental_only[] = {1010, 1016, 1020}; /* FTPS, STUN, DTLS. */
+  const uint32_t supplemental_only[] = {1010, 1016}; /* FTPS, STUN. */
   for (unsigned i = 0; i < sizeof supplemental_only / sizeof supplemental_only[0]; ++i)
     {
       packet.protocol_set = product_protocol_bit(supplemental_only[i]);
@@ -866,6 +866,11 @@ static void domain_opcode_contract(void)
       check_no_match(&result, PRODUCT_L4_POLICY_NO_MATCH_NO_RULE,
                      "supplemental label cannot authorize a domain rule");
     }
+  /* S327: a DTLS ClientHello carries SNI, so DTLS authorizes a domain rule. */
+  packet.protocol_set = product_protocol_bit(1020);
+  result = match(&view, &packet);
+  check_result_match(&result, 1800, 1, 2, PRODUCT_L4_POLICY_VERDICT_DROP,
+                     "DTLS SNI authorizes a domain rule");
   packet.protocol_set = product_protocol_bit(1004) | product_protocol_bit(1016);
   result = match(&view, &packet);
   check_result_match(&result, 1800, 1, 2, PRODUCT_L4_POLICY_VERDICT_DROP,

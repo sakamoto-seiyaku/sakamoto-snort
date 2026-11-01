@@ -101,7 +101,7 @@ def ordered_reference(rules, facts):
     effective = sorted((r for r in rules if facts['uid'] == r['uid']),
                        key=lambda r: (r['priority'], r['order'], r['id']))
     for rank, rule in enumerate(effective, start=1):
-        if contains_sni(rule['expr']) and not ({1003,1004} & (facts.get('lpi') or set())):
+        if contains_sni(rule['expr']) and not ({1003,1004,1020} & (facts.get('lpi') or set())):
             continue
         if logical_truth(rule['expr'], facts) is True:
             return dict(rule_id=rule['id'], winner_rank=rank, action=rule['action'],
