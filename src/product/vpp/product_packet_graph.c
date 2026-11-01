@@ -1866,8 +1866,8 @@ VLIB_NODE_FN (product_packet_policy_node)
         {
           /* The resolver owns VPN App identity; the graph writes the packet's facts back. */
           if (lease.terminal_intent == PRODUCT_PACKET_INTENT_NONE &&
-              product_vpn_uid_resolver_identify(vm,
-                graph->flow_pools[vlib_get_worker_index(vm->thread_index)],
+              product_vpn_uid_resolver_identify (vm,
+                graph->flow_pools[vlib_get_worker_index (vm->thread_index)],
                 &lease.assignment, &lease.facts, &lease.platform, metadata.generation))
             product_packet_graph_set_platform_facts(buffer, &lease.platform,
                                                     metadata.generation);
@@ -5211,7 +5211,7 @@ product_packet_graph_policy_on_owner (
     }
 #ifndef SAKAMOTO_PRODUCT_HOST_EVIDENCE
   if (result == PRODUCT_PACKET_OK)
-    product_vpn_uid_resolver_flow_processed (vm,
+    product_vpn_uid_resolver_query (vm,
       graph->flow_pools[vlib_get_worker_index (vm->thread_index)], &lease->assignment,
       &lease->facts, &lease->platform, graph->generation,
       observation.entry ? observation.entry->incarnation : 0);

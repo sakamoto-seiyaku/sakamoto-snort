@@ -106,11 +106,11 @@ static void processed(vlib_main_t *vm,product_flow_runtime_t *pool,
   product_owner_assignment_t *assignment,product_packet_facts_t *facts,u64 observed) {
   product_platform_packet_facts_t platform={.provenance=PRODUCT_PACKET_PROVENANCE_VPN_TUN,
     .direction=PRODUCT_PACKET_DIRECTION_OUTPUT};
-  product_vpn_uid_resolver_flow_processed(vm,pool,assignment,facts,&platform,live_generation,observed);
+  product_vpn_uid_resolver_query(vm,pool,assignment,facts,&platform,live_generation,observed);
 }
-static int nothing_sent(int peer) {
+static int sent(int peer) {
   uid_request_t request;
-  return recv(peer,&request,sizeof(request),MSG_DONTWAIT)<0 && (errno==EAGAIN||errno==EWOULDBLOCK);
+  return !(recv(peer,&request,sizeof(request),MSG_DONTWAIT)<0 && (errno==EAGAIN||errno==EWOULDBLOCK));
 }
 int main(void) {
   int channels[2][2];
@@ -134,7 +134,7 @@ int main(void) {
   /* A packet dropped before any Flow exists creates no query state and sends nothing. */
   u64 admitted=incarnation; incarnation=0;
   processed(&vm,&pool,&assignment,&facts,0);
-  assert(nothing_sent(channels[0][1]));
+  assert(!sent(channels[0][1]));
   incarnation=admitted;
   product_platform_packet_facts_t cold=lookup(&vm,&pool,&assignment,&facts);
   assert(!cold.availability); /* Lookup neither waits nor initiates work. */
@@ -195,10 +195,28 @@ int main(void) {
   respond(channels[0][1],request,10123);
   assert(lookup(&vm,&pool,&assignment,&established).uid==10123);
   assert(!lookup(&vm,&pool,&assignment,&tcp).availability);
-  /* A Flow observed on this packet is used as is; without one the current admitted Flow is. */
+  /* Accepted UDP limit: a live UDP tuple reused by another App keeps the cached identity until
+   * the next query answers; the resolver does not claim strict App isolation for it. */
+  product_packet_facts_t udp=facts; udp.protocol=17;
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&udp,incarnation);
+  request=receive_request(channels[0][1]);
+  respond(channels[0][1],request,10123);
+  assert(lookup(&vm,&pool,&assignment,&udp).uid==10123);
+  assert(lookup(&vm,&pool,&assignment,&udp).uid==10123);   /* a reusing App is not detected per packet */
+  /* Without an observed Flow the current admitted Flow is queried. */
   timestamp+=UINT64_C(300000000);
   processed(&vm,&pool,&assignment,&facts,0);
-  assert(!nothing_sent(channels[0][1]));
+  request=receive_request(channels[0][1]);
+  respond(channels[0][1],request,10123);
+  /* A packet observed on a retired incarnation never queries for it. */
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&facts,incarnation+1);
+  assert(!sent(channels[0][1]));
+  /* The packet's observed Flow is used when it is the current one. */
+  timestamp+=UINT64_C(300000000);
+  processed(&vm,&pool,&assignment,&facts,incarnation);
+  assert(sent(channels[0][1]));
   product_vpn_uid_resolver_stop();
   assert(closed_count==2 && !product_vpn_uid_resolver_ready());
   /* Without a broker a controlled provider's UID is still recorded on the current Flow. */

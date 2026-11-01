@@ -218,13 +218,16 @@ static uid_tuple_t tuple_for (const product_packet_facts_t *facts)
   return key;
 }
 
-static void cached_identity (vlib_main_t *vm,
+/* The Flow runtime's clock: VPP time in microseconds. */
+static u64 flow_us(vlib_main_t *vm) { return (u64)(vlib_time_now(vm) * 1000000.0); }
+
+static void read_identity (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
   u64 generation)
 {
   uid_owner_t *owner;
-  if (!platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) return;
+  if (!platform) return;   /* product_vpn_uid_resolver_identify checked provenance */
   /* TUN ingress alone supplies no original DNS caller. Only this owner's
    * current Android tuple result may qualify a later packet; an old flag,
    * diagnostic UID or a system resolver socket must never qualify it. */
@@ -235,7 +238,7 @@ static void cached_identity (vlib_main_t *vm,
   uid_cache_slot_t *slot = &owner->cache[index_in_cache];
   u64 now = now_ns();
   u64 incarnation = product_flow_entry_current_incarnation(pool, assignment,
-      generation, (u64)(vlib_time_now(vm) * 1000000.0));
+      generation, flow_us(vm));
   /* A fresh TCP SYN starts a new candidate even if an old tuple still exists. */
   if (facts->protocol == 6 && (facts->tcp_flags & 0x02) &&
       !(facts->tcp_flags & 0x10)) return;
@@ -264,14 +267,14 @@ static void cached_identity (vlib_main_t *vm,
   }
 }
 
-static void request_identity (vlib_main_t *vm,
+static void query_identity (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, u64 generation, u64 incarnation)
 {
   uid_owner_t *owner;
   if (!incarnation || !owner_for(vm, pool, assignment, facts, generation, &owner) ||
       product_flow_entry_current_incarnation(pool, assignment, generation,
-        (u64)(vlib_time_now(vm) * 1000000.0)) != incarnation) return;
+        flow_us(vm)) != incarnation) return;
   uid_tuple_t key = tuple_for(facts);
   u32 index_in_cache = slot_index(&key);
   uid_cache_slot_t *slot = &owner->cache[index_in_cache];
@@ -314,15 +317,20 @@ int product_vpn_uid_resolver_identify (vlib_main_t *vm,
   const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
   u64 generation)
 {
-  if (!vm || !platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN) return 0;
-  /* Product mode identifies device-origin packets only; graph validation identifies every
-   * TUN packet with its controlled UID. */
-  if (product_vpn_tun_product_mode() && platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT) return 0;
-  cached_identity(vm, pool, assignment, facts, platform, generation);
-  /* A known UID, from this owner's Android result or a controlled provider, belongs to
-   * the Flow incarnation that is current for this tuple now, never to a retired one. */
-  if ((platform->availability & PRODUCT_PLATFORM_UID_KNOWN) && pool && assignment && assignment->valid) {
-    u64 now_us = (u64)(vlib_time_now(vm) * 1000000.0);
+  if (!vm || !platform || platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN)
+    return 0;
+  /* Product mode identifies device-origin packets only; graph validation identifies
+   * every TUN packet with its controlled UID. */
+  if (product_vpn_tun_product_mode() &&
+      platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT) return 0;
+  read_identity(vm, pool, assignment, facts, platform, generation);
+  /* A known UID, from this owner's Android result or a controlled provider, belongs
+   * to the Flow incarnation that is current for this tuple now, never to a retired
+   * one. A conflicting UID is retired inside the Flow runtime itself, so this packet
+   * keeps the facts it was identified with and the result needs no handling here. */
+  if ((platform->availability & PRODUCT_PLATFORM_UID_KNOWN) &&
+      pool && assignment && assignment->valid) {
+    u64 now_us = flow_us(vm);
     (void) product_flow_entry_enrich_uid(pool, assignment, generation,
       product_flow_entry_current_incarnation(pool, assignment, generation, now_us),
       platform->uid, now_us);
@@ -330,7 +338,7 @@ int product_vpn_uid_resolver_identify (vlib_main_t *vm,
   return 1;
 }
 
-void product_vpn_uid_resolver_flow_processed (vlib_main_t *vm,
+void product_vpn_uid_resolver_query (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, const product_platform_packet_facts_t *platform,
   u64 generation, u64 observed_incarnation)
@@ -338,12 +346,13 @@ void product_vpn_uid_resolver_flow_processed (vlib_main_t *vm,
   if (!vm || !pool || !platform || !assignment || !assignment->valid ||
       platform->provenance != PRODUCT_PACKET_PROVENANCE_VPN_TUN ||
       platform->direction != PRODUCT_PACKET_DIRECTION_OUTPUT) return;
-  /* The packet's own Flow if it was observed, otherwise the current admitted Flow for the
-   * tuple. A packet dropped before any Flow exists has none, and creates no query state. */
+  /* The packet's own Flow if it was observed, otherwise the current admitted Flow
+   * for the tuple. A packet dropped before any Flow exists has none, and creates no
+   * query state. query_identity revalidates the incarnation against the Flow runtime. */
   u64 incarnation = observed_incarnation ? observed_incarnation
     : product_flow_entry_current_incarnation(pool, assignment, generation,
-        (u64)(vlib_time_now(vm) * 1000000.0));
-  request_identity(vm, pool, assignment, facts, generation, incarnation);
+        flow_us(vm));
+  query_identity(vm, pool, assignment, facts, generation, incarnation);
 }
 
 void product_vpn_uid_resolver_stop (void)

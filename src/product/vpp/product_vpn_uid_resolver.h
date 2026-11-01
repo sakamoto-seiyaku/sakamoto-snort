@@ -19,11 +19,12 @@ int product_vpn_uid_resolver_identify (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, product_platform_packet_facts_t *platform,
   u64 generation);
-/* After Flow processing of a successfully processed packet. observed_incarnation is
+/* After Flow processing of a successfully processed packet: start or refresh the
+ * Android UID query for its admitted Flow. observed_incarnation is
  * the Flow this packet was observed on, or 0. The resolver selects and validates the
  * incarnation; only an admitted Flow may initiate or refresh Android metadata, so a
  * packet dropped before any Flow exists creates no query state. */
-void product_vpn_uid_resolver_flow_processed (vlib_main_t *vm,
+void product_vpn_uid_resolver_query (vlib_main_t *vm,
   product_flow_runtime_t *pool, const product_owner_assignment_t *assignment,
   const product_packet_facts_t *facts, const product_platform_packet_facts_t *platform,
   u64 generation, u64 observed_incarnation);
