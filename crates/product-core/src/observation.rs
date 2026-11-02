@@ -93,6 +93,14 @@ impl Serialize for ObservationHealth {
     }
 }
 
+/// Native target facts are the same local little-endian block as observation v12.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NativeFlowNames(pub [u8; 1032]);
+impl Default for NativeFlowNames {
+    fn default() -> Self { Self([0; 1032]) }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiveFlowEntry {
@@ -125,6 +133,7 @@ pub struct LiveFlowEntry {
     pub protocols_available: u8,
     pub addresses: [u8; 32],
     pub attribution: [LiveFlowAttribution; 2],
+    pub target_names: NativeFlowNames,
 }
 
 #[repr(C)]
@@ -244,6 +253,7 @@ impl LiveFlowEntry {
             "protocols_available":self.protocols_available != 0,
             "protocol_set":self.protocols.to_string(),"protocol_labels":labels,
             "lpi_stop":self.lpi_stop,"sni_result":self.sni_result,"sni_stop":self.sni_stop,
+            "target_names":TargetNames::decode(&self.target_names.0),
             "policy_generation":self.policy_generation.to_string(),"policy_revision":self.policy_revision.to_string(),
             "policy_hash":self.policy_hash.to_string(),"winner":self.winner.to_string(),
             "attribution":[self.attribution[0].json(),self.attribution[1].json()]
@@ -295,6 +305,117 @@ pub struct Attribution {
     pub protocols_available: bool,
 }
 
+/// A retained latest fact, not a complete request history or delivery assertion.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TargetValue {
+    pub index: u64,
+    pub kind: u8,
+    pub reason: u8,
+    pub via_host_field: bool,
+    pub connect: bool,
+    pub port: u16,
+    pub address: Vec<u8>,
+    pub name: Option<String>,
+    pub source: u8,
+}
+/// Only contemporaneous rule facts: no packet segment or invented App identity.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TargetRule {
+    #[serde(deserialize_with = "target_rule_identity")]
+    pub policy_generation: String,
+    #[serde(deserialize_with = "target_rule_identity")]
+    pub policy_revision: String,
+    #[serde(deserialize_with = "target_rule_identity")]
+    pub policy_hash: String,
+    #[serde(deserialize_with = "target_rule_identity")]
+    pub winner: String,
+    pub name: String,
+    pub declared_action: u8,
+    pub actual_action: u8,
+    pub mode: u8,
+    pub valid: bool,
+}
+fn target_rule_identity<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Identity { Number(u64), Text(String) }
+    match Identity::deserialize(d)? {
+        Identity::Number(value) => Ok(value.to_string()),
+        Identity::Text(value) => value.parse::<u64>().map(|v| v.to_string()).map_err(serde::de::Error::custom),
+    }
+}
+impl From<Attribution> for TargetRule {
+    fn from(a: Attribution) -> Self {
+        Self { policy_generation: a.policy_generation.to_string(),
+            policy_revision: a.policy_revision.to_string(), policy_hash: a.policy_hash.to_string(),
+            winner: a.winner.to_string(), name: a.name, declared_action: a.declared_action,
+            actual_action: a.actual_action, mode: a.mode, valid: a.valid }
+    }
+}
+impl Default for TargetRule {
+    fn default() -> Self { Attribution::default().into() }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TargetNames {
+    pub available: bool,
+    pub sni: TargetValue,
+    pub request: TargetValue,
+    pub denied: TargetValue,
+    pub denied_rule: TargetRule,
+    pub request_available: bool,
+    pub request_mode: u8,
+    pub request_stop: u8,
+    pub request_reason: u8,
+    pub sni_result: u8,
+    pub sni_stop: u8,
+}
+
+fn decode_attribution(data: &[u8], offset: usize) -> Option<Attribution> {
+    let u32_at = |n| u32::from_le_bytes(data[n..n + 4].try_into().unwrap());
+    let u64_at = |n| u64::from_le_bytes(data[n..n + 8].try_into().unwrap());
+    let name = &data[offset + 76..offset + 140];
+    let end = name.iter().position(|b| *b == 0)?;
+    if name[end..].iter().any(|b| *b != 0)
+        || data[offset + 140..offset + 144] != [0; 4]
+        || data[offset + 152] > 1
+        || data[offset + 153..offset + 160] != [0; 7]
+        || data[offset + 75] > 1 { return None; }
+    Some(Attribution {
+        segment: u64_at(offset), start_packets: u64_at(offset + 8),
+        start_bytes: u64_at(offset + 16), activity_utc_us: u64_at(offset + 24),
+        policy_generation: u64_at(offset + 32), policy_revision: u64_at(offset + 40),
+        policy_hash: u64_at(offset + 48), winner: u64_at(offset + 56),
+        uid: u32_at(offset + 64), network: u32_at(offset + 68),
+        declared_action: data[offset + 72], actual_action: data[offset + 73],
+        mode: data[offset + 74], valid: data[offset + 75] != 0,
+        name: std::str::from_utf8(&name[..end]).ok()?.into(),
+        protocol_set: u64_at(offset + 144), protocols_available: data[offset + 152] != 0,
+    })
+}
+impl TargetNames {
+    fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() != 1032 || data[1024] != 1 || data[1025] > 1
+            || data[1031] != 0 { return None; }
+        let target = |offset: usize| -> Option<TargetValue> {
+            let d = &data[offset..offset + 288];
+            let length = u16::from_le_bytes(d[14..16].try_into().unwrap()) as usize;
+            if length > 253 || d[8] > 3 || d[286] > 8 || d[287] != 0
+                || d[10] > 1 || d[11] > 1 || d[32 + length] != 0 { return None; }
+            Some(TargetValue {
+                index: u64::from_le_bytes(d[..8].try_into().unwrap()),
+                kind: d[8], reason: d[9], via_host_field: d[10] != 0, connect: d[11] != 0,
+                port: u16::from_le_bytes(d[12..14].try_into().unwrap()),
+                address: match d[8] { 2 => d[16..20].to_vec(), 3 => d[16..32].to_vec(), _ => vec![] },
+                name: if d[8] == 1 { Some(std::str::from_utf8(&d[32..32+length]).ok()?.into()) } else { None },
+                source: d[286],
+            })
+        };
+        Some(Self { available: true, sni: target(0)?, request: target(288)?, denied: target(576)?,
+            denied_rule: decode_attribution(data, 864)?.into(), request_available: data[1025] != 0,
+            request_mode: data[1026], request_stop: data[1027], request_reason: data[1030], sni_result: data[1028], sni_stop: data[1029] })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FlowRecord {
     #[serde(default)]
@@ -325,6 +446,8 @@ pub struct FlowRecord {
     pub winner: u64,
     #[serde(default)]
     pub attribution: [Attribution; 2],
+    #[serde(default)]
+    pub target_names: Option<TargetNames>,
 }
 
 impl FlowRecord {
@@ -350,46 +473,15 @@ impl FlowRecord {
             6 => 32,
             _ => return None,
         };
-        if length != 448 + address_bytes
+        if length != (if data[2] == 12 { 1512 } else { 448 + address_bytes })
             || data.len() < length
-            || !matches!(data[2], 5 | 6 | 7 | 8)
+            || !matches!(data[2], 5 | 6 | 7 | 8 | 12)
             || data[3] & !15 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
         {
             return None;
         }
-        let decode_attribution = |offset: usize| -> Option<Attribution> {
-            let name = &data[offset + 76..offset + 140];
-            let end = name.iter().position(|b| *b == 0)?;
-            if name[end..].iter().any(|b| *b != 0)
-                || data[offset + 140..offset + 144] != [0; 4]
-                || data[offset + 152] > 1
-                || data[offset + 153..offset + 160] != [0; 7]
-                || data[offset + 75] > 1
-            {
-                return None;
-            }
-            Some(Attribution {
-                segment: u64_at(offset),
-                start_packets: u64_at(offset + 8),
-                start_bytes: u64_at(offset + 16),
-                activity_utc_us: u64_at(offset + 24),
-                policy_generation: u64_at(offset + 32),
-                policy_revision: u64_at(offset + 40),
-                policy_hash: u64_at(offset + 48),
-                winner: u64_at(offset + 56),
-                uid: u32_at(offset + 64),
-                network: u32_at(offset + 68),
-                declared_action: data[offset + 72],
-                actual_action: data[offset + 73],
-                mode: data[offset + 74],
-                valid: data[offset + 75] != 0,
-                name: std::str::from_utf8(&name[..end]).ok()?.into(),
-                protocol_set: u64_at(offset + 144),
-                protocols_available: data[offset + 152] != 0,
-            })
-        };
         let record = Self {
             blocked: data[3] & 8 != 0,
             generation: u64_at(16),
@@ -413,10 +505,11 @@ impl FlowRecord {
             last_flow_direction: data[116],
             end_reason: data[117],
             ports: [u16_at(108), u16_at(110)],
-            addresses: data[448..length].to_vec(),
+            addresses: data[448..448 + address_bytes].to_vec(),
             policy_revision: u64_at(88),
             winner: u64_at(96),
-            attribution: [decode_attribution(128)?, decode_attribution(288)?],
+            attribution: [decode_attribution(data, 128)?, decode_attribution(data, 288)?],
+            target_names: if data[2] == 12 { Some(TargetNames::decode(&data[480..1512])?) } else { None },
         };
         (record.kind_attribution_valid()
             && record.attribution.iter().all(|a| {
@@ -583,7 +676,7 @@ pub fn saved_observation_page_json(path: &std::path::Path) -> String {
 }
 
 fn unavailable_activity_facts() -> serde_json::Value {
-    serde_json::json!({"target_names":"unavailable", "recognition_sequence":"unavailable",
+    serde_json::json!({"target_names":"per_record", "recognition_sequence":"unavailable",
         "recognition_payload_packets":"unavailable"})
 }
 
@@ -749,6 +842,88 @@ mod live_flow_query_tests {
     use super::*;
 
     #[test]
+    fn target_names_survive_normal_decode_commit_and_saved_query() {
+        let mut wire = vec![0u8; 1512];
+        wire[..2].copy_from_slice(&1512u16.to_le_bytes());
+        wire[2] = 12; wire[3] = 1; wire[16..24].copy_from_slice(&33u64.to_le_bytes());
+        wire[24..32].copy_from_slice(&7u64.to_le_bytes());
+        wire[32..40].copy_from_slice(&1u64.to_le_bytes());
+        wire[56..64].copy_from_slice(&2u64.to_le_bytes()); wire[112] = 4;
+        wire[120..128].copy_from_slice(&1_000_000u64.to_le_bytes());
+        // Existing producer target layout: request index, kind, reason, Host, CONNECT,
+        // port, name length, address, name; source occupies the former tail padding.
+        let request = 480 + 288;
+        wire[request..request+8].copy_from_slice(&4u64.to_le_bytes());
+        wire[request+8] = 1;
+        wire[request+14..request+16].copy_from_slice(&12u16.to_le_bytes());
+        wire[request+32..request+44].copy_from_slice(b"allowed.test");
+        wire[request+286] = 4;
+        let denied = 480 + 576;
+        wire[denied+8] = 1;
+        wire[denied+14..denied+16].copy_from_slice(&12u16.to_le_bytes());
+        wire[denied+32..denied+44].copy_from_slice(b"blocked.test");
+        wire[denied+286] = 5;
+        let rule = 480 + 864;
+        wire[rule+32..rule+40].copy_from_slice(&33u64.to_le_bytes());
+        wire[rule+40..rule+48].copy_from_slice(&91u64.to_le_bytes());
+        wire[rule+56..rule+64].copy_from_slice(&u64::MAX.to_le_bytes());
+        wire[rule+73] = 2; wire[rule+75] = 1;
+        wire[rule+76..rule+85].copy_from_slice(b"deny rule");
+        wire[480+1024] = 1; // new fact schema present
+        wire[480+1025] = 0; // a later unavailable request invalidated current eligibility
+        let record = FlowRecord::decode(&wire).expect("new normal observation version");
+        let mut numeric_names = serde_json::to_value(&record.target_names).unwrap();
+        numeric_names["denied_rule"]["winner"] = serde_json::json!(u64::MAX);
+        assert_eq!(serde_json::from_value::<TargetNames>(numeric_names).unwrap().denied_rule.winner,
+            "18446744073709551615");
+        let mut page = LiveFlowPage { generation: 33, owner_count: 1, count: 1,
+            ..Default::default() };
+        page.entries[0].target_names.0.copy_from_slice(&wire[480..]);
+        assert_eq!(page.json()["entries"][0]["target_names"], serde_json::to_value(&record.target_names).unwrap());
+        let mut legacy = wire[..456].to_vec();
+        legacy[..2].copy_from_slice(&456u16.to_le_bytes()); legacy[2] = 8;
+        assert!(FlowRecord::decode(&legacy).unwrap().target_names.is_none());
+        let mut old_json = serde_json::to_value(&record).unwrap();
+        old_json.as_object_mut().unwrap().remove("target_names");
+        assert!(serde_json::from_value::<FlowRecord>(old_json).unwrap().target_names.is_none());
+
+        let root = std::env::temp_dir().join(format!("s331-names-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        store.begin_generation(33).unwrap(); store.consume(&[record], 1_000_000).unwrap();
+        store.close().unwrap(); drop(store);
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        let recent = reply["consumer"]["persistent"]["recent"].as_object().unwrap();
+        let names = &recent.values().next().unwrap()["record"]["target_names"];
+        assert_eq!(names["request"]["name"], "allowed.test");
+        assert_eq!(names["request"]["source"], 4);
+        assert_eq!(names["request"]["index"], 4);
+        assert_eq!(names["request_available"], false);
+        assert_eq!(names["denied"]["name"], "blocked.test");
+        assert_eq!(names["denied_rule"]["winner"], "18446744073709551615");
+        assert_eq!(names["denied_rule"]["policy_revision"], "91");
+        assert_eq!(names["denied_rule"]["name"], "deny rule");
+        assert!(names["denied_rule"].get("uid").is_none());
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        store.begin_generation(34).unwrap();
+        let mut record = FlowRecord::decode(&wire).unwrap();
+        record.generation = 34;
+        // Maximum producer names and rule metadata must still commit under the
+        // existing per-row and database budgets. No new domain aggregate is made.
+        let n = record.target_names.as_mut().unwrap();
+        for target in [&mut n.sni, &mut n.request, &mut n.denied] {
+            target.kind = 1; target.name = Some("a".repeat(253));
+        }
+        n.denied_rule.name = "r".repeat(63);
+        store.consume(&[record], 2_000_000).unwrap(); store.close().unwrap(); drop(store);
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        assert_eq!(reply["consumer"]["persistent"]["recent_count"], 2);
+        assert_eq!(reply["consumer"]["persistent"]["packets"], serde_json::json!([4,0]));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn saved_query_reads_committed_history_without_starting_a_generation() {
         let root = std::env::temp_dir().join(format!("s330-saved-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -809,7 +984,7 @@ mod live_flow_query_tests {
             assert_eq!(blocked["record"]["attribution"][0]["interpretation"]["conditions"]["status"], "unavailable");
             assert_eq!(reply["consumer"]["persistent"]["coverage"]["recoveries"], before["coverage"]["recoveries"]);
             assert_eq!(reply["consumer"]["persistent"]["open_session"], false);
-            assert_eq!(reply["fact_availability"]["target_names"], "unavailable");
+            assert_eq!(reply["fact_availability"]["target_names"], "per_record");
             assert_eq!(std::fs::read(path.with_extension("sqlite3")).unwrap(), bytes);
         }
         let mut restarted = crate::observation_store::ObservationStore::open(&path).unwrap();
@@ -899,8 +1074,8 @@ mod live_flow_query_tests {
     #[test]
     fn native_page_layout_and_published_facts_keep_their_identity() {
         assert_eq!(std::mem::size_of::<LiveFlowAttribution>(), 160);
-        assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 496);
-        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 9704);
+        assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 1528);
+        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 26216);
         let mut page = LiveFlowPage { generation: 19, owner_count: 2,
             count: 1, scanned: 2, next_cursor: 2,
             ..LiveFlowPage::default() };

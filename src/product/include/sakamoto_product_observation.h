@@ -4,8 +4,11 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "sakamoto_product_limits.h"
+#include "sakamoto_product_target.h"
 
 #define PRODUCT_OBSERVATION_VERSION 8
+#define PRODUCT_FLOW_NAMES_VERSION 12
+#define PRODUCT_OBSERVATION_TRANSPORT_VERSION 12
 #define PRODUCT_DNS_OBSERVATION_VERSION 9
 #define PRODUCT_DNS_TLS_OBSERVATION_VERSION 10
 /* DoH keeps the 1032-byte TLS record and names its former reserved bytes. */
@@ -20,7 +23,7 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 1032
+#define PRODUCT_OBSERVATION_MAX_RECORD 1512
 #define PRODUCT_DNS_PROXY_RECORD 1U
 #define PRODUCT_DNS_PROXY_TRUNCATED 2U
 #define PRODUCT_DNS_PROXY_UPSTREAM_ANSWER 4U
@@ -49,6 +52,16 @@ typedef struct {
 } product_observation_attribution_t;
 _Static_assert (sizeof (product_observation_attribution_t) == 160, "attribution ABI");
 
+/* Facts belong to the sampled cumulative boundary, independent of policy segments.
+ * No request timeline or DNS association is represented here. */
+typedef struct {
+  product_target_value_t sni, request, denied;
+  product_observation_attribution_t denied_rule;
+  uint8_t available, request_available, request_mode, request_stop;
+  uint8_t sni_result, sni_stop, request_reason, reserved;
+} product_flow_names_t;
+_Static_assert (sizeof (product_flow_names_t) == 1032, "Flow names ABI");
+
 /* Local little-endian x86-64/ARM64 wire ABI; no pointer or packet payload.
  * IPv4 omits the final 24 bytes and places its two addresses in address[0..8]. */
 typedef struct {
@@ -70,6 +83,12 @@ typedef struct {
 } product_observation_record_t;
 _Static_assert (sizeof (product_observation_record_t) == 480, "observation record ABI");
 _Static_assert (offsetof (product_observation_record_t, address) == 448, "record addresses");
+
+typedef struct {
+  product_observation_record_t flow; /* v12 always retains all 32 address bytes */
+  product_flow_names_t names;
+} product_named_observation_record_t;
+_Static_assert (sizeof (product_named_observation_record_t) == 1512, "named Flow ABI");
 
 /* DNS query decisions share the existing owner channel and storage budget.
  * The original-path policy intent is recorded before Adapter Completion;

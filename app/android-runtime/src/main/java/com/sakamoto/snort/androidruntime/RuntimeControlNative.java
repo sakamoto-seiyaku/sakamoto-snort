@@ -3,7 +3,7 @@ package com.sakamoto.snort.androidruntime;
 /** JNI facade for the Rust-owned Product Core control session. */
 public final class RuntimeControlNative {
     public static final int CONTROL_ABI_VERSION = 1;
-    public static final int PRODUCT_ABI_VERSION = 5;
+    public static final int PRODUCT_ABI_VERSION = 6;
     public static final int POLICY_MUTATION_FAULT_NONE = 0;
     public static final int POLICY_MUTATION_FAULT_OMIT_CALLBACK = 1;
     public static final int POLICY_MUTATION_FAULT_PRE_SUBMIT_NOT_SENT = 2;

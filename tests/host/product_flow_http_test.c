@@ -198,20 +198,34 @@ static void denial_is_sticky_and_validated (void)
   send (&x, REQUEST);
   product_http_request_t target = http (&x)->pending[0];
   uint64_t incarnation = x.o.entry->incarnation;
-  assert (product_flow_http_deny (x.pool, x.o.slot, 7, incarnation + 1, &target) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
-  assert (product_flow_http_deny (x.pool, x.o.slot, 8, incarnation, &target) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION);
+  assert (product_flow_http_deny (x.pool, x.o.slot, 7, incarnation + 1, &target, NULL) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+  assert (product_flow_http_deny (x.pool, x.o.slot, 8, incarnation, &target, NULL) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION);
   assert (!http (&x)->has_denied);
-  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, incarnation, &target));
+  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, incarnation, &target, NULL));
   assert (http (&x)->has_denied && !strcmp (http (&x)->denied.name, "example.test"));
   product_http_request_t other = target; strcpy (other.name, "other.test");
-  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, incarnation, &other));
+  product_observation_attribution_t denied_rule = { .valid = 1, .policy_generation = 7,
+    .policy_revision = 19, .winner = 543, .actual_action = 2 };
+  memcpy (denied_rule.name, "refused target rule", 20);
+  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, incarnation, &other, &denied_rule));
   assert (!strcmp (http (&x)->denied.name, "other.test"));            /* the latest refused target is kept */
   send (&x, "GET /y HTTP/1.1\r\nHost: later.test\r\n\r\n");
   assert (http (&x)->has_denied && !strcmp (http (&x)->denied.name, "other.test"));   /* parsing never clears a refusal */
+  product_flow_names_t names;
+  product_flow_names (x.o.entry, &names);
+  assert (names.available && names.request_available);
+  assert (!strcmp (names.request.name, "later.test") && !strcmp (names.denied.name, "other.test"));
+  assert (names.request.source == PRODUCT_TARGET_HTTP_HOST);
+  assert (names.denied_rule.valid && names.denied_rule.winner == 543 && names.denied_rule.policy_revision == 19);
+  send (&x, "GET /unknown HTTP/1.1\r\n\r\n");
+  product_flow_names (x.o.entry, &names);
+  assert (!names.request_available && names.request_reason == PRODUCT_HTTP_TARGET_NO_HOST);
+  assert (!strcmp (names.request.name, "later.test")); /* latest valid name remains, eligibility does not */
+
   close_flow (&x);
   open_flow (&x, 443);
   packet (&x, 0, "\x16\x03\x01", 3, x.seq);
-  assert (product_flow_http_deny (x.pool, x.o.slot, 7, x.o.entry->incarnation, &target) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
+  assert (product_flow_http_deny (x.pool, x.o.slot, 7, x.o.entry->incarnation, &target, NULL) == PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
   close_flow (&x);
 }
 
@@ -261,7 +275,7 @@ static void socks_flows_report_the_requested_target (void)
   packet (&x, 0, s4a, 5, x.seq);
   packet (&x, 0, s4a + 5, sizeof (s4a) - 5, x.seq + 5);
   assert (http (&x)->pending_count == 1 && !strcmp (http (&x)->pending[0].name, "a.test") && http (&x)->pending[0].port == 443);
-  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, x.o.entry->incarnation, &http (&x)->pending[0]));
+  assert (!product_flow_http_deny (x.pool, x.o.slot, 7, x.o.entry->incarnation, &http (&x)->pending[0], NULL));
   assert (http (&x)->has_denied);
   close_flow (&x);
   /* Server-first bytes never decide the mode. */

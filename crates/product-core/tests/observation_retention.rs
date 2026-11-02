@@ -449,8 +449,16 @@ fn first_end_expiry_compacts_baseline_without_recounting_late_duplicate() {
     let path = test_path("ends");
     let at = 200 * DAY + MINUTE + 10_000_000;
     let mut store = ObservationStore::open(&path).unwrap();
-    let ended = record(at, 1, 1, 4, true);
+    let mut ended = record(at, 1, 1, 4, true);
+    ended.target_names = Some(sakamoto_product_core::observation::TargetNames {
+        available: true, request_available: true,
+        request: sakamoto_product_core::observation::TargetValue {
+            kind: 1, source: 4, name: Some("retained.http.test".into()), ..Default::default()
+        }, ..Default::default()
+    });
     store.consume(&[ended.clone()], at).unwrap();
+    assert_eq!(store.query()["recent"].as_object().unwrap().values().next().unwrap()
+        ["record"]["target_names"]["request"]["name"], "retained.http.test");
     store.flush().unwrap();
     store.consume(&[ended.clone()], at + HOUR).unwrap();
     assert_eq!(store.query()["recent_count"], 1);

@@ -75,3 +75,16 @@ across running owners. Read stable conservation equations after drain/pause.
 After ingestion stops, `consumer.live=false` qualifies retained overview fields
 as the last known state. They are not a claim that the stopped runtime remains
 active, nor a fabricated END for every unobserved termination.
+
+
+## S331 current record extension
+
+The original V1 sizing above is historical. The current transport handshake is
+v12. Normal named Flow records are 1512 bytes: the existing 480-byte Flow area
+(including all 32 address bytes) followed by the 1032-byte bounded names block.
+Legacy Flow/Blocked records keep their earlier 456/480-byte shape, and DNS uses
+its existing versions 8–11. The two ring classes are 456 and 1512 bytes with
+256 slots each. A named Flow fits the long class; full queues remain loss-tolerant
+and never block packet processing. The actual maximum-size capacity/full test
+uses the same native transport. [T28](T28_DASHBOARD_QUERY.md#s331-target-name-details)
+defines the current and retained name projection and availability semantics.

@@ -379,8 +379,8 @@ product_flow_entry_status_t product_flow_http_resume(product_flow_runtime_t *poo
   return PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE;
 }
 product_flow_entry_status_t product_flow_http_deny(product_flow_runtime_t *pool,uint32_t slot,uint64_t generation,
-  uint64_t incarnation,const product_http_request_t *target) {
-  (void)pool;(void)slot;(void)generation;(void)incarnation;(void)target;return PRODUCT_FLOW_ENTRY_STATUS_OK;
+  uint64_t incarnation,const product_http_request_t *target,const product_observation_attribution_t *rule) {
+  (void)pool;(void)slot;(void)generation;(void)incarnation;(void)target;(void)rule;return PRODUCT_FLOW_ENTRY_STATUS_OK;
 }
 product_flow_entry_status_t product_flow_entry_set_decision(product_flow_runtime_t *pool,
   const product_flow_entry_t *entry,const product_flow_policy_identity_t *policy,

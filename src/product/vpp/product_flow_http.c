@@ -13,6 +13,7 @@ _Static_assert (sizeof (product_http_flow_t) <= sizeof (product_tcp_byte_cache_t
 static void remember (product_http_flow_t *h, const product_http_request_t *request)
 {
   h->current = *request; h->has_current = 1;
+  if (request->kind) { h->recent_valid = *request; h->has_recent_valid = 1; }
   h->pending[h->pending_count++] = *request;   /* callers stop feeding before the batch is full */
   if (h->completed_in_packet < UINT16_MAX) ++h->completed_in_packet;
 }
@@ -134,7 +135,8 @@ product_flow_entry_status_t product_flow_http_resume (product_flow_runtime_t *po
 }
 
 product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *pool, uint32_t slot,
-  uint64_t generation, uint64_t incarnation, const product_http_request_t *target)
+  uint64_t generation, uint64_t incarnation, const product_http_request_t *target,
+  const product_observation_attribution_t *rule)
 {
   if (!pool || !target) return PRODUCT_FLOW_ENTRY_STATUS_INVALID_ARGUMENT;
   product_flow_runtime_snapshot_t runtime = product_flow_runtime_snapshot (pool);
@@ -146,5 +148,35 @@ product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *pool
   product_flow_entry_t *entry = (product_flow_entry_t *) borrowed;
   /* The latest refused target is what the rest of the connection is evaluated against. */
   entry->http.denied = *target; entry->http.has_denied = 1;
+  entry->http.denied_rule = rule ? *rule : (product_observation_attribution_t) {0};
   return PRODUCT_FLOW_ENTRY_STATUS_OK;
+}
+
+void product_flow_names (const product_flow_entry_t *entry, product_flow_names_t *out)
+{
+  memset (out, 0, sizeof (*out));
+  out->available = 1;
+  out->sni_result = entry->sni.result; out->sni_stop = entry->sni.stop;
+  if (entry->sni.result == PRODUCT_SNI_NAME) {
+    out->sni.kind = PRODUCT_HTTP_TARGET_NAME;
+    out->sni.name_length = entry->sni.name_length;
+    memcpy (out->sni.name, entry->sni.name, entry->sni.name_length);
+    out->sni.source = entry->key.protocol == 6 ? PRODUCT_TARGET_TLS_SNI
+      : entry->sni.dtls ? PRODUCT_TARGET_DTLS_SNI : PRODUCT_TARGET_QUIC_SNI;
+  }
+  if (!product_flow_direct_target (entry)) return;
+  const product_http_flow_t *h = &entry->http;
+  out->request_mode = entry->http_mode;
+  out->request_stop = entry->http_mode == PRODUCT_HTTP_SOCKS ? h->socks.stop : h->parser.stop;
+  out->request_available = h->has_current && h->current.kind && !h->unavailable;
+  out->request_reason = h->has_current ? h->current.reason : 0;
+  if (h->has_recent_valid) out->request = h->recent_valid;
+  if (h->has_denied) { out->denied = h->denied; out->denied_rule = h->denied_rule; }
+  product_target_value_t *values[] = { &out->request, &out->denied };
+  for (unsigned i = 0; i < 2; i++) if (values[i]->kind) {
+    values[i]->source = entry->http_mode == PRODUCT_HTTP_SOCKS
+      ? (h->socks.version == 4 ? PRODUCT_TARGET_SOCKS4 : PRODUCT_TARGET_SOCKS5)
+      : values[i]->connect ? PRODUCT_TARGET_HTTP_CONNECT
+      : values[i]->via_host_field ? PRODUCT_TARGET_HTTP_HOST : PRODUCT_TARGET_HTTP_ABSOLUTE;
+  }
 }

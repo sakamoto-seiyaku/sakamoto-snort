@@ -25,6 +25,7 @@ typedef struct {
   uint64_t activity_utc_us, activity_mono_us;
   uint64_t packets[2], bytes[2];
   product_observation_attribution_t attribution[2];
+  product_flow_names_t names;
   uint8_t last_direction, flow_direction;
   uint8_t clock_changed;
   uint32_t previous, next;
@@ -93,9 +94,10 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
     flags |= PRODUCT_OBSERVATION_CREATE;
   }
   if (s->sequence == UINT64_MAX) return; /* explicit lifetime cannot wrap */
+  product_named_observation_record_t named = {0};
   product_observation_record_t r = {
-    .length = entry->key.ip_family == 4 ? 456 : 480,
-    .version = PRODUCT_OBSERVATION_VERSION,
+    .length = sizeof (named),
+    .version = PRODUCT_FLOW_NAMES_VERSION,
     .flags = flags | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
     .owner = owner, .slot = slot, .uid = entry->uid,
     .generation = o->generation, .incarnation = entry->incarnation,
@@ -125,7 +127,8 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
     r.ports[0] = entry->origin_is_endpoint_a ? entry->key.transport.ports.a : entry->key.transport.ports.b;
     r.ports[1] = entry->origin_is_endpoint_a ? entry->key.transport.ports.b : entry->key.transport.ports.a;
   } else r.ports[0] = entry->key.transport.query.identifier;
-  (void) product_observation_publish (transport, owner * 2, &r, r.length);
+  named.flow = r; named.names = s->names;
+  (void) product_observation_publish (transport, owner * 2, &named, r.length);
   /* A failed attempt is lost evidence, not a retry obligation. Later real
    * growth still carries the full cumulative value; loss remains in health. */
   s->exported_packets = s->packets[0] + s->packets[1];
@@ -163,6 +166,8 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
     a->start_packets = s->packets[side]; a->start_bytes = s->bytes[side];
     if (next == UINT64_MAX) a->valid = 0; /* no identifier reuse at exhaustion */
   }
+  /* Copy only after the previous attribution boundary was exported. */
+  product_flow_names (entry, &s->names);
   memcpy (s->packets, entry->side_packets, sizeof (s->packets));
   memcpy (s->bytes, entry->side_bytes, sizeof (s->bytes));
   s->last_direction = entry->last_device_direction;

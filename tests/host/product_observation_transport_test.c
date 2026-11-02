@@ -53,8 +53,13 @@ int main (void) {
   assert (product_observation_publish (t, 0, &r, 456) == 0);
   assert (product_observation_publish (t, 0, &r, PRODUCT_OBSERVATION_MAX_RECORD + 1) == -1);
   assert (product_observation_publish (t, 1, &r, 456) == 1);
-  for (unsigned i = 0; i < 256; i++) assert (product_observation_publish (t, 2, &r, 480) == 1);
-  assert (product_observation_publish (t, 2, &r, 480) == 0);
+  product_named_observation_record_t named = {
+    .flow = { .length = sizeof (named), .version = PRODUCT_FLOW_NAMES_VERSION, .family = 4 },
+    .names = { .available = 1 },
+  };
+  for (unsigned i = 0; i < 256; i++)
+    assert (product_observation_publish (t, 2, &named, sizeof (named)) == 1);
+  assert (product_observation_publish (t, 2, &named, sizeof (named)) == 0);
   assert (product_observation_publish (t, 2, &r, 456) == 1);
   for (unsigned outcome = 0; outcome < 3; outcome++) product_observation_account (t, 0, outcome, 60 + outcome);
   product_observation_status_t s;

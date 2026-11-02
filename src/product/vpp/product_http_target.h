@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../include/sakamoto_product_target.h"
 
 /* Visible cleartext HTTP/1.x request targets (APPLICATION_DNS_SPEC section 11).
  *
@@ -20,7 +21,7 @@
  * head buffer must stay stable and untouched between calls for one connection. */
 #define PRODUCT_HTTP_HEAD_BYTES 4096U
 #define PRODUCT_HTTP_FIELDS 64U
-#define PRODUCT_HTTP_NAME_BYTES 254U /* host name plus NUL, same bound as SNI */
+
 #define PRODUCT_HTTP_STRAY_LINE_BYTES 8U
 #define PRODUCT_HTTP_TRAILER_BYTES 1024U
 
@@ -55,16 +56,7 @@ typedef enum {
   PRODUCT_HTTP_STOP_SEQUENCE,   /* the caller lost bytes */
 } product_http_target_stop_t;
 
-typedef struct {
-  uint64_t index;           /* ordinal of this request on the connection, from 0 */
-  uint8_t kind, reason;     /* kind NONE with a reason, or a usable target */
-  uint8_t via_host_field;   /* target came from Host rather than the request-target */
-  uint8_t connect;          /* CONNECT method */
-  uint16_t port;            /* 0 when absent */
-  uint16_t name_length;
-  uint8_t address[16];      /* IPv4 in the first four bytes */
-  char name[PRODUCT_HTTP_NAME_BYTES];
-} product_http_request_t;
+typedef product_target_value_t product_http_request_t;
 
 typedef struct {
   uint64_t requests;        /* heads completed so far */

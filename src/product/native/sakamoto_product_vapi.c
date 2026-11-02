@@ -115,7 +115,7 @@ static vapi_error_e observation_reply (vapi_ctx_t context, void *opaque, vapi_er
   if (reply->retval) { call->code = SAKAMOTO_PRODUCT_STALE_HANDLE; return VAPI_OK; }
   if (reply->generation != call->generation
       || reply->owners > PRODUCT_OBSERVATION_OWNERS
-      || (reply->version != 0 && reply->version != PRODUCT_OBSERVATION_VERSION)
+      || (reply->version != 0 && reply->version != PRODUCT_OBSERVATION_TRANSPORT_VERSION)
       || reply->flow_capacity > 65536 || reply->connected > 1) {
     call->invalid = true; return VAPI_OK;
   }
@@ -246,6 +246,7 @@ static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e r
       entry->ports[side] = in->ports[side];
     }
     memcpy(entry->addresses, in->addresses, sizeof entry->addresses);
+    memcpy(&entry->target_names, &in->target_names, sizeof entry->target_names);
     for (unsigned side = 0; side < 2; side++) {
       const vapi_type_product_flow_query_attribution *a = &in->attribution[side];
       product_observation_attribution_t *b = &entry->attribution[side];

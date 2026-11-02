@@ -82,10 +82,10 @@ Legacy JSON may be read and validated in memory without migration, with
 excludes a concurrent writer; running queries continue to use the consumer's
 `live_including_pending` view with committed totals and persistence errors separate.
 
-`fact_availability` explicitly marks target names, recognition sequence and actual
-recognition payload counts unavailable until their respective follow-up tickets
-provide those facts. Neither the current protocol bitmask nor total packet counts
-are used to invent them. Saved reads preserve existing records and the existing
+`fact_availability.target_names=per_record` directs callers to each detail's
+`target_names`; recognition sequence and actual recognition payload counts remain
+unavailable pending S61. Neither protocol bits, packet endpoints nor total packet
+counts are used to invent missing facts. Saved reads preserve existing records and the existing
 retention/space budgets; normal writer maintenance still owns eviction and rollup.
 
 STOP does not manufacture END records for active Flows. Recent Flow/Blocked
@@ -95,3 +95,62 @@ visible. This query adds no complete last-live-Flow snapshot at shutdown.
 
 [S330 validation](../testing/2026-11-02_S330_ACTIVITY_QUERY.md) records the shared
 Host query, real Root/VPN lifecycle coverage and their separate qualifications.
+
+
+## S331 target-name details
+
+Current Flow entries, normal consumer overview records and retained recent Flow
+records expose the same `target_names` object. Old retained records and early
+Blocked records have `target_names=null`: this means the fact schema is unavailable,
+not a confirmed absence of SNI or a fabricated endpoint/domain match.
+
+The object separates `sni`, `request` (the latest valid direct target), `denied`
+(the target whose policy evaluation refused the connection) and `denied_rule`.
+Each target contains its actual name or IP address, kind (0 unavailable, 1 hostname,
+2 IPv4, 3 IPv6), request ordinal, port and source. SNI's existing `sni_result` and
+`sni_stop` distinguish pending/unavailable, obtained name and confirmed absence.
+Request `request_available`, `request_reason` and `request_stop` describe the latest
+request's current eligibility: a later unavailable head or an untrusted stream
+can invalidate eligibility while the last valid target remains visible. The
+request ordinal identifies that retained request; it is not a complete name timeline.
+
+| Source | Meaning |
+| --- | --- |
+| 0 | No direct target source |
+| 1 / 2 / 3 | Actual TLS / QUIC / DTLS SNI |
+| 4 | HTTP Host field |
+| 5 | HTTP absolute-form authority |
+| 6 | HTTP CONNECT authority |
+| 7 / 8 | SOCKS4(a) / SOCKS5 requested target |
+
+A packet containing several HTTP heads may retain a later valid target while an
+earlier target caused DROP. `denied_rule` preserves the corresponding evaluation's
+policy generation, revision, snapshot identity, winner, contemporaneous name and
+actions. Its four 64-bit identity fields are decimal strings, matching the live
+query identity contract; unused packet-segment/App fields are not projected. It
+does not infer the denial from the last request or later rules.
+It records the latest actual refusing evaluation, including ordinary policy
+revision re-evaluation of a sticky denied target. Unavailable rule conditions are
+not reconstructed. A direct target's availability proves neither permission nor
+remote delivery. SOCKS target ports/addresses remain distinct from the outer
+connection endpoints; SNI, DNS stages and DNS association evidence stay separate.
+DNS association enforcement and cross-App/profile association use remain deferred.
+
+Names attach to the existing cumulative observation boundary, not to every counted
+packet or every request in that interval. The producer snapshots names after
+exporting a prior attribution boundary, so a later packet cannot put its name on
+that earlier record. Retention, capacity pressure, statistics and actual-END
+semantics are unchanged: details own these fields, and their eviction removes the
+names without creating long-term domain statistics or a shutdown snapshot.
+
+The shared native SDK ABI is 6. Current-flow VAPI carries the same 1032-byte local
+little-endian name block as normal Flow observation v12. The transport handshake
+is v12 and the largest record is 1512 bytes; DNS record versions 8–11 and legacy
+Flow/Blocked decoding retain their existing meanings. New Flow records always
+retain the 32-byte address area before the appended names. The fixed 256-entry
+short and long rings remain bounded; named Flow records use the long ring, as did
+large DNS records. Queue health/loss and storage budgets continue to qualify the
+retained view. Historical records missing names remain readable without backfill.
+
+[S331 validation](../testing/2026-11-02_S331_TARGET_NAMES.md) records the normal
+Root/VPN, shared Host, persistence and final projection qualifications.

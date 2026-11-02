@@ -129,7 +129,7 @@ product_observation_transport_t *product_observation_transport_create_for_owners
   t->shared = mapped;
   *t->shared = (observation_shared_t) { .magic = OBS_MAGIC, .generation = generation,
     .mapping_bytes = t->length, .queue_bytes = queue_bytes (),
-    .version = PRODUCT_OBSERVATION_VERSION, .flow_capacity = flow_capacity };
+    .version = PRODUCT_OBSERVATION_TRANSPORT_VERSION, .flow_capacity = flow_capacity };
   for (unsigned i = 0; i < t->channels; i++) {
     svm_msg_q_init (queue_base (t, i), &config);
   }
@@ -200,7 +200,7 @@ void product_observation_transport_status (product_observation_transport_t *t,
   if (!t) return;
   out->generation = t->shared->generation;
   out->mapping_bytes = t->length;
-  out->version = PRODUCT_OBSERVATION_VERSION;
+  out->version = PRODUCT_OBSERVATION_TRANSPORT_VERSION;
   out->owners = t->channels / 2;
   out->flow_capacity = t->shared->flow_capacity;
   out->blocked_capacity = t->shared->flow_capacity < 1024 ? t->shared->flow_capacity : 1024;
@@ -255,7 +255,7 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
   }
   if (received != sizeof (request) || msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)
       || count != 1 + t->channels || request.magic != OBS_MAGIC
-      || request.generation != t->shared->generation || request.version != PRODUCT_OBSERVATION_VERSION
+      || request.generation != t->shared->generation || request.version != PRODUCT_OBSERVATION_TRANSPORT_VERSION
       || request.header_bytes != OBS_HEADER || request.channels != t->channels
       || request.queue_bytes != queue_bytes () || request.mapping_bytes != t->length) goto fail;
   struct stat st;
@@ -288,7 +288,7 @@ int product_observation_offer (product_observation_transport_t *t, int fd) {
   product_observation_transport_destroy (proposal);
   observation_hello_t reply = { .magic = OBS_MAGIC, .generation = t->shared->generation,
     .mapping_bytes = t->length, .queue_bytes = queue_bytes (),
-    .version = PRODUCT_OBSERVATION_VERSION, .flow_capacity = t->shared->flow_capacity,
+    .version = PRODUCT_OBSERVATION_TRANSPORT_VERSION, .flow_capacity = t->shared->flow_capacity,
     .header_bytes = OBS_HEADER, .channels = t->channels };
   return send (fd, &reply, sizeof (reply), MSG_NOSIGNAL | MSG_DONTWAIT) == sizeof (reply) ? 0 : -1;
 fail:
@@ -340,7 +340,7 @@ product_observation_transport_t *product_observation_connect_for_owners (
   if (getsockopt (t->socket, SOL_SOCKET, SO_PEERCRED, &server, &server_length)
       || server_length != sizeof (server) || (server.uid != geteuid () && server.uid != 0)) goto fail;
   observation_hello_t hello = { .magic = OBS_MAGIC, .generation = generation,
-    .version = PRODUCT_OBSERVATION_VERSION, .mapping_bytes = t->length,
+    .version = PRODUCT_OBSERVATION_TRANSPORT_VERSION, .mapping_bytes = t->length,
     .queue_bytes = queue_bytes (), .header_bytes = OBS_HEADER, .channels = t->channels };
   union { struct cmsghdr alignment;
     char bytes[CMSG_SPACE (sizeof (int) * (1 + PRODUCT_OBSERVATION_CHANNELS))]; } control = {0};
@@ -357,7 +357,7 @@ product_observation_transport_t *product_observation_connect_for_owners (
   if (sendmsg (t->socket, &msg, MSG_NOSIGNAL) != sizeof (hello)) goto fail;
   ssize_t received = recv (t->socket, &hello, sizeof (hello), MSG_TRUNC);
   if (received != sizeof (hello) || hello.magic != OBS_MAGIC
-      || hello.generation != generation || hello.version != PRODUCT_OBSERVATION_VERSION
+      || hello.generation != generation || hello.version != PRODUCT_OBSERVATION_TRANSPORT_VERSION
       || hello.header_bytes != OBS_HEADER || hello.channels != t->channels
       || hello.queue_bytes != queue_bytes () || !hello.flow_capacity || hello.flow_capacity > 65536
       || hello.mapping_bytes != OBS_HEADER + t->channels * queue_bytes ()) goto fail;
@@ -366,7 +366,7 @@ product_observation_transport_t *product_observation_connect_for_owners (
   t->shared = mapped;
   if (t->shared->magic != OBS_MAGIC || t->shared->generation != generation
       || t->shared->mapping_bytes != t->length || t->shared->queue_bytes != queue_bytes ()
-      || t->shared->version != PRODUCT_OBSERVATION_VERSION
+      || t->shared->version != PRODUCT_OBSERVATION_TRANSPORT_VERSION
       || t->shared->flow_capacity != hello.flow_capacity) goto fail;
   /* Validate layout before the pinned attach function follows any offsets. */
   for (unsigned i = 0; i < t->channels; i++) {

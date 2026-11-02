@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "product_packet.h"
+#include "../include/sakamoto_product_observation.h"
 #include "product_flow_tracker.h"
 #include "product_lpi.h"
 #include "product_sni.h"
@@ -117,7 +118,9 @@ typedef struct {
   /* current: last head seen; denied: the first target the policy refused, kept so the
    * rest of the connection keeps being evaluated against it. pending: heads finished
    * by the latest packet, for per-request evaluation. */
-  product_http_request_t current, denied;
+  product_http_request_t current, denied, recent_valid;
+  uint8_t has_recent_valid;
+  product_observation_attribution_t denied_rule;
   product_http_request_t pending[PRODUCT_HTTP_PENDING];
 } product_http_flow_t;
 
@@ -353,9 +356,13 @@ product_flow_entry_status_t product_flow_http_resume (product_flow_runtime_t *, 
   int give_up);
 /* Sticky connection-level denial; validated like identify. */
 product_flow_entry_status_t product_flow_http_deny (product_flow_runtime_t *, uint32_t slot,
-  uint64_t generation, uint64_t incarnation, const product_http_request_t *);
+  uint64_t generation, uint64_t incarnation, const product_http_request_t *,
+  const product_observation_attribution_t *);
 void product_flow_sni_observe (product_flow_entry_t *, const product_packet_facts_t *,
                                const uint8_t *, uint32_t);
+
+/* Shared read-only projection for live queries and normal observation snapshots. */
+void product_flow_names (const product_flow_entry_t *, product_flow_names_t *);
 
 int product_flow_entry_select_vpn_dns_tcp(product_flow_runtime_t *, uint32_t slot,
   uint64_t generation, uint64_t incarnation, int local);

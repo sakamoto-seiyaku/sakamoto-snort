@@ -23,6 +23,7 @@ typedef struct {
   uint8_t protocols_available;
   uint8_t addresses[32];
   product_observation_attribution_t attribution[2];
+  product_flow_names_t target_names;
 } sakamoto_product_flow_entry_t;
 
 typedef struct {
@@ -41,11 +42,11 @@ typedef struct {
 #else
 #define SAKAMOTO_FLOW_ASSERT _Static_assert
 #endif
-SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_entry_t) == 496,
+SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_entry_t) == 1528,
                       "flow query entry ABI");
 SAKAMOTO_FLOW_ASSERT (offsetof (sakamoto_product_flow_page_t, entries) == 1768,
                       "flow query page ABI");
-SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_page_t) == 9704,
+SAKAMOTO_FLOW_ASSERT (sizeof (sakamoto_product_flow_page_t) == 26216,
                       "flow query page size");
 #undef SAKAMOTO_FLOW_ASSERT
 

@@ -290,7 +290,7 @@ pub struct ProductStatus {
     pub product_graph_tun_io_worker_index: u32,
 }
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 #[repr(C)]
 pub struct ProductNetworkDns {

@@ -5003,8 +5003,18 @@ product_packet_graph_http_targets (
       decided |= result;
       if (refused)
         {
-          if (refused_target)
-            (void) product_flow_http_deny (pool, observation->slot, generation, entry->incarnation, refused_target);
+          if (refused_target) {
+            product_observation_attribution_t rule = {
+              .policy_generation = generation, .policy_revision = snapshot->identity.revision,
+              .policy_hash = snapshot->identity.snapshot_hash, .winner = chosen->rule_id,
+              .declared_action = chosen->action, .actual_action = chosen->actual_action,
+              .mode = chosen->mode, .valid = 1,
+            };
+            if (chosen->rule_index < snapshot->bank->view.rule_count)
+              memcpy (rule.name, snapshot->bank->view.rules[chosen->rule_index].source.name, sizeof (rule.name));
+            (void) product_flow_http_deny (pool, observation->slot, generation, entry->incarnation,
+              refused_target, &rule);
+          }
           return 1;
         }
       if (!entry->http.more) return decided;
@@ -6308,6 +6318,7 @@ int product_packet_graph_flow_query (uint64_t generation, uint32_t cursor,
       memcpy (r->addresses, e->key.address_a, 16);
       memcpy (r->addresses + 16, e->key.address_b, 16);
       product_observation_current (worker, slot, e->incarnation, r->attribution);
+      product_flow_names (e, &r->target_names);
     }
   out->done = position == total;
   out->next_cursor = out->done ? 0 : position;

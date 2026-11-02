@@ -494,6 +494,7 @@ typedef product_flow_query_entry {
   u8 last_flow_direction; u8 protocols_available;
   u8 addresses[32];
   vl_api_product_flow_query_attribution_t attribution[2];
+  u8 target_names[1032]; /* local little-endian names ABI, same as observation v12 */
 };
 define product_core_flow_query {
   u32 client_index; u32 context; u64 generation; u32 cursor;

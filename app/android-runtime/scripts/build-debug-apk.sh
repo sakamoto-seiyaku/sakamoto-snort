@@ -351,7 +351,7 @@ build_native_stage() {
     die "source product artifact identity has an invalid format"
   [[ "$product_api_identity" =~ ^[^[:space:]=]+$ ]] || \
     die "source product API identity has an invalid format"
-  [[ "$product_abi_version" == 5 && "$product_api_version" == 1 ]] || \
+  [[ "$product_abi_version" == 6 && "$product_api_version" == 1 ]] || \
     die "source product ABI/API versions must be 5/1"
 
   [[ -n "$vpp_source_dir" ]] || \
@@ -1115,7 +1115,7 @@ build_apk_only() {
   [[ "$product_api_identity" =~ ^product_core\.api/1\.0\.0@[[:xdigit:]]{8}$ ]] || \
     die "source product API identity has an invalid CRC marker"
   product_api_crc="${product_api_identity##*@}"
-  [[ "$product_abi_version" == 5 && "$product_api_version" == 1 ]] || \
+  [[ "$product_abi_version" == 6 && "$product_api_version" == 1 ]] || \
     die "source product ABI/API versions must be 5/1"
   require_product_manifest_line "artifactId=$product_artifact_id"
   require_product_manifest_line "apiIdentity=$product_api_identity"
