@@ -456,9 +456,17 @@ fn first_end_expiry_compacts_baseline_without_recounting_late_duplicate() {
             kind: 1, source: 4, name: Some("retained.http.test".into()), ..Default::default()
         }, ..Default::default()
     });
+    ended.recognition = Some(sakamoto_product_core::observation::Recognition {
+        state: "identified".into(), payload_packets: [1, 0], stop_reason: 3,
+        sequence: vec![sakamoto_product_core::observation::RecognitionResult {
+            id: 1002, payload_packet: 1, flow_direction: 1,
+        }],
+    });
     store.consume(&[ended.clone()], at).unwrap();
     assert_eq!(store.query()["recent"].as_object().unwrap().values().next().unwrap()
         ["record"]["target_names"]["request"]["name"], "retained.http.test");
+    assert_eq!(store.query()["recent"].as_object().unwrap().values().next().unwrap()
+        ["record"]["recognition"]["sequence"][0]["id"], 1002);
     store.flush().unwrap();
     store.consume(&[ended.clone()], at + HOUR).unwrap();
     assert_eq!(store.query()["recent_count"], 1);

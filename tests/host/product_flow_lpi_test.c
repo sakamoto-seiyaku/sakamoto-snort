@@ -52,6 +52,12 @@ static void dns_budget (void)
   assert (product_flow_entry_identify (pool,o.slot,7,o.entry->incarnation,&f,dns,sizeof dns) == 0);
   assert (o.entry->lpi.available && o.entry->lpi.protocols==product_protocol_bit(1001));
   assert (o.entry->lpi.attempts==1 && !o.entry->lpi.stop_reason);
+  product_flow_recognition_t recognition;
+  product_flow_recognition (o.entry, &recognition);
+  assert (recognition.available && recognition.count == 1);
+  assert (recognition.payload_packets[0] == 1 && recognition.payload_packets[1] == 0);
+  assert (recognition.sequence[0].id == 1001 && recognition.sequence[0].payload_packet == 1
+          && recognition.sequence[0].flow_direction == PRODUCT_FLOW_DIRECTION_ORIG);
   product_packet_facts_t wrong=f;
   wrong.destination_port=54;
   assert (product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&wrong,dns,sizeof dns)
@@ -68,6 +74,9 @@ static void dns_budget (void)
   assert (o.entry->lpi.attempts==20 && o.entry->lpi.stop_reason==PRODUCT_LPI_STOP_PACKET_BUDGET);
   assert (product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation,&f,dns,sizeof dns)==0);
   assert (o.entry->lpi.attempts==20 && o.entry->lpi.protocols==product_protocol_bit(1001));
+  product_flow_recognition (o.entry, &recognition);
+  assert (recognition.count == 1 && recognition.payload_packets[0] == 20
+          && recognition.stop_reason == PRODUCT_LPI_STOP_PACKET_BUDGET);
   assert (product_flow_entry_identify(pool,o.slot,8,o.entry->incarnation,&f,dns,sizeof dns)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_GENERATION);
   assert (product_flow_entry_identify(pool,o.slot,7,o.entry->incarnation+1,&f,dns,sizeof dns)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
   product_flow_runtime_destroy(pool);
@@ -99,25 +108,34 @@ static void multi_result_and_reuse (void)
   assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,NULL,0)==0);
   assert (!o.entry->lpi.attempts && !o.entry->lpi.available);
   const uint8_t dns[]={0x12,0x34,1,0,0,1,0,0,0,0,0,0,0,0,1,0,1};
-  f.transport_length=8+sizeof dns;
-  assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,dns,sizeof dns)==0);
-  assert (o.entry->lpi.protocols==product_protocol_bit(1001));
   /* Header-only RFC 9000 fixture: deliberately no cryptographic claim. */
   uint8_t initial[1200]={0xc0,0,0,0,1,8,1,2,3,4,5,6,7,8,0,0,0x44,0x9e};
   f.transport_length=8+sizeof initial;
   assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,initial,sizeof initial)==0);
+  f.transport_length=8+sizeof dns;
+  assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,dns,sizeof dns)==0);
   assert (o.entry->lpi.protocols==(product_protocol_bit(1001)|product_protocol_bit(1004)));
+  product_flow_recognition_t recognition;
+  product_flow_recognition (o.entry, &recognition);
+  assert (recognition.count == 2 && recognition.sequence[0].id == 1004
+          && recognition.sequence[0].payload_packet == 1
+          && recognition.sequence[1].id == 1001 && recognition.sequence[1].payload_packet == 2);
   uint64_t published=o.entry->lpi.protocols;
   uint8_t tiny=0xfe;
   f.transport_length=9;
   assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,&tiny,1)==0);
   assert (o.entry->lpi.available && o.entry->lpi.protocols==published);
   assert (product_flow_runtime_close(pool,o.slot,9,instance,PRODUCT_FLOW_END_CLOSED)==0);
+  product_flow_recognition (o.entry, &recognition);
+  assert (recognition.count == 2 && recognition.payload_packets[0] == 3
+          && recognition.stop_reason == PRODUCT_LPI_STOP_FLOW_END);
   assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,&tiny,1)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
   assert (product_flow_runtime_release_end(pool,o.slot,9,instance,PRODUCT_FLOW_END_CLOSED)==0);
   ++p.timestamp;
   assert (product_flow_entry_observe(pool,&assignment,&p,0,&o)==0);
   assert (o.entry->incarnation!=instance && !o.entry->lpi.available && !o.entry->lpi.attempts);
+  product_flow_recognition (o.entry, &recognition);
+  assert (recognition.count == 0 && !recognition.payload_packets[0] && !recognition.payload_packets[1]);
   assert (product_flow_entry_identify(pool,o.slot,9,instance,&f,&tiny,1)==PRODUCT_FLOW_ENTRY_STATUS_WRONG_STATE);
   /* A version-unknown or malformed Initial is not a comparable Unknown. */
   initial[4]=3; f.transport_length=8+sizeof initial;
@@ -177,6 +195,16 @@ static void tls_upgrade (void)
     assert (product_flow_entry_identify(pool,observation.slot,11,observation.entry->incarnation,
                                        &facts,payloads[step],lengths[step])==0);
     sequence[side]+=lengths[step];
+    product_flow_recognition_t recognition;
+    product_flow_recognition (observation.entry, &recognition);
+    assert (recognition.payload_packets[0] == (step+2)/2
+            && recognition.payload_packets[1] == (step+1)/2);
+    assert (recognition.sequence[0].id == 1002 && recognition.sequence[0].payload_packet == 1
+            && recognition.sequence[0].flow_direction == PRODUCT_FLOW_DIRECTION_ORIG);
+    if (step == 3)
+      assert (recognition.count == 2 && recognition.sequence[1].id == 1003
+              && recognition.sequence[1].payload_packet == 4
+              && recognition.sequence[1].flow_direction == PRODUCT_FLOW_DIRECTION_REPLY);
     uint64_t expected=product_protocol_bit(1002);
     if (step==3) expected|=product_protocol_bit(1003);
     assert (observation.entry->lpi.available && observation.entry->lpi.protocols==expected);

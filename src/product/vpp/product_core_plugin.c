@@ -725,6 +725,7 @@ vl_api_product_core_flow_query_t_handler (vl_api_product_core_flow_query_t *mp)
             out->protocols_available = in->protocols_available;
             memcpy (out->addresses, in->addresses, sizeof out->addresses);
             memcpy (&out->target_names, &in->target_names, sizeof out->target_names);
+            memcpy (&out->recognition, &in->recognition, sizeof out->recognition);
             for (unsigned side = 0; side < 2; side++)
               {
                 const product_observation_attribution_t *a = &in->attribution[side];

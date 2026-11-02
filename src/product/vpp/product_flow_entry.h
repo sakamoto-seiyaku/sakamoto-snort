@@ -363,6 +363,7 @@ void product_flow_sni_observe (product_flow_entry_t *, const product_packet_fact
 
 /* Shared read-only projection for live queries and normal observation snapshots. */
 void product_flow_names (const product_flow_entry_t *, product_flow_names_t *);
+void product_flow_recognition (const product_flow_entry_t *, product_flow_recognition_t *);
 
 int product_flow_entry_select_vpn_dns_tcp(product_flow_runtime_t *, uint32_t slot,
   uint64_t generation, uint64_t incarnation, int local);

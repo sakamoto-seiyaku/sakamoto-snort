@@ -54,8 +54,9 @@ int main (void) {
   assert (product_observation_publish (t, 0, &r, PRODUCT_OBSERVATION_MAX_RECORD + 1) == -1);
   assert (product_observation_publish (t, 1, &r, 456) == 1);
   product_named_observation_record_t named = {
-    .flow = { .length = sizeof (named), .version = PRODUCT_FLOW_NAMES_VERSION, .family = 4 },
+    .flow = { .length = sizeof (named), .version = PRODUCT_FLOW_RECOGNITION_VERSION, .family = 4 },
     .names = { .available = 1 },
+    .recognition = { .available = 1 },
   };
   for (unsigned i = 0; i < 256; i++)
     assert (product_observation_publish (t, 2, &named, sizeof (named)) == 1);

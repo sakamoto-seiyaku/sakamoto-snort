@@ -102,6 +102,13 @@ impl Default for NativeFlowNames {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NativeRecognition(pub [u8; 176]);
+impl Default for NativeRecognition {
+    fn default() -> Self { Self([0; 176]) }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct LiveFlowEntry {
     pub incarnation: u64,
@@ -134,6 +141,7 @@ pub struct LiveFlowEntry {
     pub addresses: [u8; 32],
     pub attribution: [LiveFlowAttribution; 2],
     pub target_names: NativeFlowNames,
+    pub recognition: NativeRecognition,
 }
 
 #[repr(C)]
@@ -254,6 +262,7 @@ impl LiveFlowEntry {
             "protocol_set":self.protocols.to_string(),"protocol_labels":labels,
             "lpi_stop":self.lpi_stop,"sni_result":self.sni_result,"sni_stop":self.sni_stop,
             "target_names":TargetNames::decode(&self.target_names.0),
+            "recognition":Recognition::decode(&self.recognition.0),
             "policy_generation":self.policy_generation.to_string(),"policy_revision":self.policy_revision.to_string(),
             "policy_hash":self.policy_hash.to_string(),"winner":self.winner.to_string(),
             "attribution":[self.attribution[0].json(),self.attribution[1].json()]
@@ -370,6 +379,47 @@ pub struct TargetNames {
     pub sni_stop: u8,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecognitionResult {
+    pub id: u32,
+    pub payload_packet: u8,
+    pub flow_direction: u8,
+}
+
+/// Submitted payload counters use Flow ORIG/REPLY, independent of endpoint order.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Recognition {
+    pub state: String,
+    pub payload_packets: [u32; 2],
+    pub stop_reason: u8,
+    pub sequence: Vec<RecognitionResult>,
+}
+impl Recognition {
+    fn decode(data: &[u8]) -> Option<Self> {
+        if data.len() != 176 || data[10] != 1 || data[8] > 20 || data[9] > 4
+            || data[11..16] != [0; 5] { return None; }
+        let payload_packets = [u32::from_le_bytes(data[0..4].try_into().unwrap()),
+            u32::from_le_bytes(data[4..8].try_into().unwrap())];
+        let submitted = u64::from(payload_packets[0]) + u64::from(payload_packets[1]);
+        if submitted > 20 { return None; }
+        let mut sequence: Vec<RecognitionResult> = Vec::new();
+        for i in 0..usize::from(data[8]) {
+            let at = 16 + i * 8;
+            let id = u32::from_le_bytes(data[at..at+4].try_into().unwrap());
+            let payload_packet = data[at+4];
+            let flow_direction = data[at+5];
+            if !(0..64).any(|bit| protocol_label(bit).is_some_and(|(known, _)| known == id))
+                || sequence.iter().any(|r| r.id == id || r.payload_packet > payload_packet)
+                || u64::from(payload_packet) > submitted || !(1..=2).contains(&flow_direction)
+                || data[at+6..at+8] != [0; 2] { return None; }
+            sequence.push(RecognitionResult { id, payload_packet, flow_direction });
+        }
+        Some(Self { state: if !sequence.is_empty() { "identified" } else if data[9] == 0 {
+            "detecting" } else { "unidentified" }.into(), payload_packets,
+            stop_reason: data[9], sequence })
+    }
+}
+
 fn decode_attribution(data: &[u8], offset: usize) -> Option<Attribution> {
     let u32_at = |n| u32::from_le_bytes(data[n..n + 4].try_into().unwrap());
     let u64_at = |n| u64::from_le_bytes(data[n..n + 8].try_into().unwrap());
@@ -448,6 +498,8 @@ pub struct FlowRecord {
     pub attribution: [Attribution; 2],
     #[serde(default)]
     pub target_names: Option<TargetNames>,
+    #[serde(default)]
+    pub recognition: Option<Recognition>,
 }
 
 impl FlowRecord {
@@ -473,9 +525,9 @@ impl FlowRecord {
             6 => 32,
             _ => return None,
         };
-        if length != (if data[2] == 12 { 1512 } else { 448 + address_bytes })
+        if length != (match data[2] { 13 => 1688, 12 => 1512, _ => 448 + address_bytes })
             || data.len() < length
-            || !matches!(data[2], 5 | 6 | 7 | 8 | 12)
+            || !matches!(data[2], 5 | 6 | 7 | 8 | 12 | 13)
             || data[3] & !15 != 0
             || data[6..8] != [0, 0]
             || data[118..120] != [0, 0]
@@ -509,7 +561,8 @@ impl FlowRecord {
             policy_revision: u64_at(88),
             winner: u64_at(96),
             attribution: [decode_attribution(data, 128)?, decode_attribution(data, 288)?],
-            target_names: if data[2] == 12 { Some(TargetNames::decode(&data[480..1512])?) } else { None },
+            target_names: if matches!(data[2], 12 | 13) { Some(TargetNames::decode(&data[480..1512])?) } else { None },
+            recognition: if data[2] == 13 { Some(Recognition::decode(&data[1512..1688])?) } else { None },
         };
         (record.kind_attribution_valid()
             && record.attribution.iter().all(|a| {
@@ -676,8 +729,8 @@ pub fn saved_observation_page_json(path: &std::path::Path) -> String {
 }
 
 fn unavailable_activity_facts() -> serde_json::Value {
-    serde_json::json!({"target_names":"per_record", "recognition_sequence":"unavailable",
-        "recognition_payload_packets":"unavailable"})
+    serde_json::json!({"target_names":"per_record", "recognition_sequence":"per_record",
+        "recognition_payload_packets":"per_record"})
 }
 
 impl ProductCore {
@@ -842,6 +895,67 @@ mod live_flow_query_tests {
     use super::*;
 
     #[test]
+    fn ordered_recognition_reaches_saved_query_without_inventing_legacy_facts() {
+        let mut wire = vec![0u8; 1688];
+        wire[..2].copy_from_slice(&1688u16.to_le_bytes());
+        wire[2] = 13; wire[3] = 1;
+        wire[16..24].copy_from_slice(&61u64.to_le_bytes());
+        wire[24..32].copy_from_slice(&9u64.to_le_bytes());
+        wire[32..40].copy_from_slice(&1u64.to_le_bytes());
+        wire[56..64].copy_from_slice(&12u64.to_le_bytes());
+        wire[64..72].copy_from_slice(&7u64.to_le_bytes());
+        wire[112] = 4;
+        wire[120..128].copy_from_slice(&1_000_000u64.to_le_bytes());
+        wire[480+1024] = 1;
+        // Three real submissions (ORIG=1, REPLY=2) among nineteen total packets.
+        // FTP precedes HTTP even though its catalog bit is greater.
+        wire[1512..1516].copy_from_slice(&1u32.to_le_bytes());
+        wire[1516..1520].copy_from_slice(&2u32.to_le_bytes());
+        wire[1520] = 2; wire[1521] = 3; wire[1522] = 1;
+        wire[1528..1532].copy_from_slice(&1008u32.to_le_bytes());
+        wire[1532] = 1; wire[1533] = 2;
+        wire[1536..1540].copy_from_slice(&1002u32.to_le_bytes());
+        wire[1540] = 3; wire[1541] = 1;
+        let record = FlowRecord::decode(&wire).expect("normal v13 recognition facts");
+        let mut page = LiveFlowPage { generation: 61, owner_count: 1, count: 1, ..Default::default() };
+        page.entries[0].recognition.0.copy_from_slice(&wire[1512..]);
+        assert_eq!(page.json()["entries"][0]["recognition"], serde_json::to_value(&record.recognition).unwrap());
+        let mut old_json = serde_json::to_value(&record).unwrap();
+        old_json.as_object_mut().unwrap().remove("recognition");
+        assert!(serde_json::from_value::<FlowRecord>(old_json).unwrap().recognition.is_none());
+        let root = std::env::temp_dir().join(format!("s61-query-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        store.begin_generation(61).unwrap();
+        store.consume(&[record], 1_000_000).unwrap();
+        store.close().unwrap(); drop(store);
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        let rows = reply["consumer"]["persistent"]["recent"].as_object().unwrap();
+        let fact = &rows.values().next().unwrap()["record"]["recognition"];
+        assert_eq!(fact["state"], "identified");
+        assert_eq!(fact["payload_packets"], serde_json::json!([1, 2]));
+        assert_eq!(fact["sequence"], serde_json::json!([
+            {"id":1008,"payload_packet":1,"flow_direction":2},
+            {"id":1002,"payload_packet":3,"flow_direction":1}
+        ]));
+        assert_eq!(fact["stop_reason"], 3);
+        let mut legacy = wire[..1512].to_vec();
+        legacy[..2].copy_from_slice(&1512u16.to_le_bytes()); legacy[2] = 12;
+        assert_eq!(serde_json::to_value(FlowRecord::decode(&legacy).unwrap()).unwrap()["recognition"], serde_json::Value::Null);
+        // Missing live schema is unavailable, and is never projected as unidentified.
+        assert!(LiveFlowEntry::default().json()["recognition"].is_null());
+        wire[1520] = 0; wire[1521] = 0;
+        assert_eq!(FlowRecord::decode(&wire).unwrap().recognition.unwrap().state, "detecting");
+        wire[1521] = 1;
+        assert_eq!(FlowRecord::decode(&wire).unwrap().recognition.unwrap().state, "unidentified");
+        // A mapped result remains identified while recognition continues.
+        wire[1520] = 1; wire[1521] = 0;
+        assert_eq!(FlowRecord::decode(&wire).unwrap().recognition.unwrap().state, "identified");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn target_names_survive_normal_decode_commit_and_saved_query() {
         let mut wire = vec![0u8; 1512];
         wire[..2].copy_from_slice(&1512u16.to_le_bytes());
@@ -878,7 +992,7 @@ mod live_flow_query_tests {
             "18446744073709551615");
         let mut page = LiveFlowPage { generation: 33, owner_count: 1, count: 1,
             ..Default::default() };
-        page.entries[0].target_names.0.copy_from_slice(&wire[480..]);
+        page.entries[0].target_names.0.copy_from_slice(&wire[480..1512]);
         assert_eq!(page.json()["entries"][0]["target_names"], serde_json::to_value(&record.target_names).unwrap());
         let mut legacy = wire[..456].to_vec();
         legacy[..2].copy_from_slice(&456u16.to_le_bytes()); legacy[2] = 8;
@@ -887,7 +1001,8 @@ mod live_flow_query_tests {
         old_json.as_object_mut().unwrap().remove("target_names");
         assert!(serde_json::from_value::<FlowRecord>(old_json).unwrap().target_names.is_none());
 
-        let root = std::env::temp_dir().join(format!("s331-names-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("s331-names-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("overall.json");
         let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
@@ -912,14 +1027,43 @@ mod live_flow_query_tests {
         // Maximum producer names and rule metadata must still commit under the
         // existing per-row and database budgets. No new domain aggregate is made.
         let n = record.target_names.as_mut().unwrap();
+        let maximum_name = format!("{}.{}.{}.{}", "a".repeat(63), "b".repeat(63),
+            "c".repeat(63), "d".repeat(61));
         for target in [&mut n.sni, &mut n.request, &mut n.denied] {
-            target.kind = 1; target.name = Some("a".repeat(253));
+            target.kind = 1; target.name = Some(maximum_name.clone());
         }
         n.denied_rule.name = "r".repeat(63);
+        n.denied_rule.policy_generation = "34".into();
+        n.denied_rule.policy_revision = u64::MAX.to_string();
+        n.denied_rule.policy_hash = u64::MAX.to_string();
+        n.denied_rule.declared_action = 2;
+        record.packets = [10, 10];
+        record.recognition = Some(Recognition { state: "identified".into(), payload_packets: [10, 10],
+            stop_reason: 1, sequence: (0..20).map(|i| RecognitionResult {
+                id: 1001 + i, payload_packet: (i + 1) as u8, flow_direction: (i % 2 + 1) as u8,
+            }).collect() });
+        record.bytes = [1000, 1000]; record.family = 6; record.protocol = 6; record.addresses = vec![255; 32];
+        record.policy_revision = u64::MAX; record.winner = u64::MAX;
+        record.attribution = std::array::from_fn(|_| Attribution {
+            segment: 1, activity_utc_us: 1_000_000, policy_generation: 34, policy_revision: u64::MAX,
+            policy_hash: u64::MAX, winner: u64::MAX, name: "r".repeat(63),
+            uid: u32::MAX, network: u32::MAX, declared_action: 1, actual_action: 1,
+            valid: true, protocols_available: true, protocol_set: protocol_mask(),
+            ..Default::default()
+        });
+        println!("maximum named recognition record JSON bytes={}", serde_json::to_vec(&record).unwrap().len());
+        let expected = serde_json::to_value(&record).unwrap();
         store.consume(&[record], 2_000_000).unwrap(); store.close().unwrap(); drop(store);
         let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
         assert_eq!(reply["consumer"]["persistent"]["recent_count"], 2);
-        assert_eq!(reply["consumer"]["persistent"]["packets"], serde_json::json!([4,0]));
+        assert_eq!(reply["consumer"]["persistent"]["packets"], serde_json::json!([12,10]));
+        let recent = reply["consumer"]["persistent"]["recent"].as_object().unwrap();
+        let maximum = recent.values().find(|r| r["record"]["generation"] == 34).unwrap();
+        assert_eq!(maximum["record"]["recognition"], expected["recognition"]);
+        assert_eq!(maximum["record"]["target_names"], expected["target_names"]);
+        let old = recent.values().find(|r| r["record"]["generation"] == 33).unwrap();
+        assert!(old["record"]["recognition"].is_null());
+        assert_eq!(old["record"]["target_names"]["request"]["name"], "allowed.test");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1074,8 +1218,8 @@ mod live_flow_query_tests {
     #[test]
     fn native_page_layout_and_published_facts_keep_their_identity() {
         assert_eq!(std::mem::size_of::<LiveFlowAttribution>(), 160);
-        assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 1528);
-        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 26216);
+        assert_eq!(std::mem::size_of::<LiveFlowEntry>(), 1704);
+        assert_eq!(std::mem::size_of::<LiveFlowPage>(), 29032);
         let mut page = LiveFlowPage { generation: 19, owner_count: 2,
             count: 1, scanned: 2, next_cursor: 2,
             ..LiveFlowPage::default() };

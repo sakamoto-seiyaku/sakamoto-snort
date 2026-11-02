@@ -17,7 +17,7 @@ extern "C" {
 /* ABI 3 appends ordered actual owner affinity to status. JNI, Rust and VAPI are always
  * published together in one content-verified Product artifact/APK; callers
  * must never mix native libraries from different artifact generations. */
-#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(6)
+#define SAKAMOTO_PRODUCT_ABI_VERSION UINT32_C(7)
 #define SAKAMOTO_PRODUCT_API_VERSION UINT32_C(1)
 #define SAKAMOTO_PRODUCT_ARTIFACT_ID_MAX UINT32_C(96)
 #define SAKAMOTO_PRODUCT_API_IDENTITY_MAX UINT32_C(96)

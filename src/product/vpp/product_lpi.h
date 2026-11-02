@@ -2,6 +2,7 @@
 #ifndef SAKAMOTO_PRODUCT_LPI_H
 #define SAKAMOTO_PRODUCT_LPI_H
 #include <stdint.h>
+#include "../include/sakamoto_product_observation.h"
 #define PRODUCT_LPI_MAX_ATTEMPTS 20U
 #define PRODUCT_LPI_MAX_BYTES 32768U
 
@@ -25,6 +26,9 @@ typedef struct {
   uint32_t bytes;
   uint16_t client_port, server_port;
   uint8_t attempts, available, stop_reason, last_outcome;
+  uint32_t payload_packets[2];
+  product_recognition_result_t sequence[PRODUCT_RECOGNITION_RESULTS];
+  uint8_t result_count;
   /* Direction is the existing ORIG/REPLY observation, never inferred from port. */
   uint8_t mail_pending, mail_side, ftps_stage, ftps_side;
   uint8_t socks_version, socks_side, socks_methods[32];

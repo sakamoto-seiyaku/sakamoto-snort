@@ -752,7 +752,21 @@ fn put_row(
     key: &str,
     value: &impl Serialize,
 ) -> Result<(), String> {
-    let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+    let bytes = if matches!(kind, 1 | 2) {
+        // Flow detail rows keep the existing 4096-byte ceiling, including
+        // maximum names and recognition. Only the stored representation is
+        // compact; normal/query JSON still exposes named result fields.
+        let mut row = serde_json::to_value(value).map_err(|e| e.to_string())?;
+        if let Some(sequence) = row.pointer_mut("/record/recognition/sequence")
+            .and_then(serde_json::Value::as_array_mut) {
+            for result in sequence {
+                *result = serde_json::json!([result["id"], result["payload_packet"], result["flow_direction"]]);
+            }
+        }
+        serde_json::to_vec(&row).map_err(|e| e.to_string())?
+    } else {
+        serde_json::to_vec(value).map_err(|e| e.to_string())?
+    };
     if key.len() > 192 || bytes.len() > 4096 {
         return Err("observation_row_capacity".into());
     }

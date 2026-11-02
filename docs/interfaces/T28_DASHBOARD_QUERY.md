@@ -83,8 +83,8 @@ excludes a concurrent writer; running queries continue to use the consumer's
 `live_including_pending` view with committed totals and persistence errors separate.
 
 `fact_availability.target_names=per_record` directs callers to each detail's
-`target_names`; recognition sequence and actual recognition payload counts remain
-unavailable pending S61. Neither protocol bits, packet endpoints nor total packet
+`target_names`; the recognition availability fields likewise direct callers to
+each detail's `recognition`. Neither protocol bits, packet endpoints nor total packet
 counts are used to invent missing facts. Saved reads preserve existing records and the existing
 retention/space budgets; normal writer maintenance still owns eviction and rollup.
 
@@ -154,3 +154,42 @@ retained view. Historical records missing names remain readable without backfill
 
 [S331 validation](../testing/2026-11-02_S331_TARGET_NAMES.md) records the normal
 Root/VPN, shared Host, persistence and final projection qualifications.
+
+## S61 ordered recognition facts
+
+Current Flow entries, normal consumer records and recent Flow details expose
+`recognition`. `null` means this record has no recognition fact schema (including
+legacy Flow and early Blocked records); it is not `unidentified`.
+
+The object contains `payload_packets=[ORIG,REPLY]`, numeric `stop_reason` and
+`sequence=[{id,payload_packet,flow_direction}, ...]`. Directions are Flow ORIG=1
+and REPLY=2, independent of canonical endpoint order or device INPUT/OUTPUT.
+Counters advance only when a payload-bearing packet is actually submitted to
+libprotoident. Zero-payload packets, invalid submissions and packets after a
+budget stop do not advance them. `payload_packet` is the cumulative number of
+submissions when that mapped ID first appeared, rather than the Flow's total
+packet count. IDs are appended directly when published, never sorted from the
+protocol mask; later repeats do not replace that first ordinal or direction.
+The fixed 20-entry sequence holds the current 20-ID catalog; unmapped aliases
+do not invent IDs. Independent bounded SNI completion can still publish its
+existing protocol fact after LPI stops; that result retains the submitted count
+at that time without counting an unsubmitted packet. Same-ordinal results retain
+their publication order.
+
+`state=identified` means at least one mapped result, even while LPI continues.
+With no result, stop 0 means `detecting`; a terminal stop means `unidentified`.
+Stops retain the existing meanings: 0 running, 1 packet budget, 2 byte budget,
+3 Flow end, 4 unsupported transport. Budget exhaustion and normal stop keep
+their existing no-retry behavior. No Recognition Hold, Packet Decision Cutoff,
+policy-mask semantics and the identification engine are unchanged.
+
+The current SDK is ABI7, API CRC `58b40081`. Current-flow VAPI appends the
+176-byte local little-endian recognition block. Normal Flow observation and
+transport negotiation are v13, with a maximum record of 1688 bytes; v12 names
+and older Flow/Blocked/DNS records remain decodable. Fixed ring slot counts,
+query page limits, detail retention and storage budgets are unchanged. SQLite
+stores only the new sequence entries as compact `[id,ordinal,direction]` triplets
+within its existing 4096-byte row bound; readers accept both object and triplet
+storage and always return named objects in product queries. The complete sequence,
+counts and names survive commit/close/reopen; detail expiry removes them together.
+No shutdown END, long-term recognition timeline or new aggregate is created.

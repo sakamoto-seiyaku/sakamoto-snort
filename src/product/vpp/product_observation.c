@@ -26,6 +26,7 @@ typedef struct {
   uint64_t packets[2], bytes[2];
   product_observation_attribution_t attribution[2];
   product_flow_names_t names;
+  product_flow_recognition_t recognition;
   uint8_t last_direction, flow_direction;
   uint8_t clock_changed;
   uint32_t previous, next;
@@ -97,7 +98,7 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
   product_named_observation_record_t named = {0};
   product_observation_record_t r = {
     .length = sizeof (named),
-    .version = PRODUCT_FLOW_NAMES_VERSION,
+    .version = PRODUCT_FLOW_RECOGNITION_VERSION,
     .flags = flags | (s->clock_changed ? PRODUCT_OBSERVATION_CLOCK_CHANGED : 0),
     .owner = owner, .slot = slot, .uid = entry->uid,
     .generation = o->generation, .incarnation = entry->incarnation,
@@ -127,7 +128,9 @@ static void export_record (unsigned owner, const product_flow_entry_t *entry,
     r.ports[0] = entry->origin_is_endpoint_a ? entry->key.transport.ports.a : entry->key.transport.ports.b;
     r.ports[1] = entry->origin_is_endpoint_a ? entry->key.transport.ports.b : entry->key.transport.ports.a;
   } else r.ports[0] = entry->key.transport.query.identifier;
-  named.flow = r; named.names = s->names;
+  named.flow = r; named.names = s->names; named.recognition = s->recognition;
+  if (flags & PRODUCT_OBSERVATION_END)
+    named.recognition.stop_reason = entry->lpi.stop_reason;
   (void) product_observation_publish (transport, owner * 2, &named, r.length);
   /* A failed attempt is lost evidence, not a retry obligation. Later real
    * growth still carries the full cumulative value; loss remains in health. */
@@ -168,6 +171,7 @@ void product_observation_observed (vlib_main_t *vm, const product_flow_entry_t *
   }
   /* Copy only after the previous attribution boundary was exported. */
   product_flow_names (entry, &s->names);
+  product_flow_recognition (entry, &s->recognition);
   memcpy (s->packets, entry->side_packets, sizeof (s->packets));
   memcpy (s->bytes, entry->side_bytes, sizeof (s->bytes));
   s->last_direction = entry->last_device_direction;

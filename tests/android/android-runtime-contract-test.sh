@@ -60,7 +60,8 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/tests/android/RuntimeEvidenceFormatterTest.java" \
   "$repo_root/tests/android/RootFaultEventContractTest.java" \
   "$repo_root/tests/android/RootFaultDeliveryContractTest.java"
-java -cp "$out_dir" AndroidRuntimeContractTest
+java -cp "$out_dir" AndroidRuntimeContractTest \
+  "$repo_root/src/product/vpp/product-vpp-artifact.properties"
 java -cp "$out_dir" WorkerCpuPlacementTest
 java -cp "$out_dir" com.sakamoto.snort.androidruntime.RuntimeEvidenceFormatterTest
 java -cp "$out_dir" com.sakamoto.snort.androidruntime.RootFaultEventContractTest

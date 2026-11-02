@@ -77,9 +77,9 @@ as the last known state. They are not a claim that the stopped runtime remains
 active, nor a fabricated END for every unobserved termination.
 
 
-## S331 current record extension
+## S331 named record extension
 
-The original V1 sizing above is historical. The current transport handshake is
+The original V1 sizing above is historical. S331 introduced transport handshake
 v12. Normal named Flow records are 1512 bytes: the existing 480-byte Flow area
 (including all 32 address bytes) followed by the 1032-byte bounded names block.
 Legacy Flow/Blocked records keep their earlier 456/480-byte shape, and DNS uses
@@ -88,3 +88,14 @@ its existing versions 8–11. The two ring classes are 464 and 1512 bytes with
 and never block packet processing. The actual maximum-size capacity/full test
 uses the same native transport. [T28](T28_DASHBOARD_QUERY.md#s331-target-name-details)
 defines the current and retained name projection and availability semantics.
+
+## S61 recognition record extension
+
+The current transport handshake and normal Flow record are v13. A Flow retains
+the v12 1512-byte prefix and appends a 176-byte bounded recognition block, giving
+1688 bytes. The two fixed 256-slot ring classes are 464/1688 bytes; queue loss
+and health remain explicit. Older Flow/Blocked/DNS shapes retain their meaning.
+Recognition is sampled at the same cumulative boundary as names, after exporting
+any preceding attribution boundary. Actual END updates its normal stop reason;
+STOP still does not manufacture END. [T28](T28_DASHBOARD_QUERY.md#s61-ordered-recognition-facts)
+defines the current, retained, missing-fact and storage compatibility semantics.

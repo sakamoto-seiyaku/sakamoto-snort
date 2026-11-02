@@ -5,6 +5,29 @@
 #include "../../../third_party/libprotoident/adapter.h"
 #include <string.h>
 
+_Static_assert (PRODUCT_PROTOCOL_CATALOG_COUNT <= PRODUCT_RECOGNITION_RESULTS,
+                "recognition sequence holds every mapped catalog result");
+
+static void record_result (product_lpi_state_t *state, uint32_t id, unsigned side)
+{
+  if (!id) return;
+  for (unsigned i = 0; i < state->result_count; ++i)
+    if (state->sequence[i].id == id) return;
+  state->sequence[state->result_count++] = (product_recognition_result_t) {
+    .id = id, .payload_packet = state->attempts,
+    .flow_direction = side ? PRODUCT_FLOW_DIRECTION_REPLY : PRODUCT_FLOW_DIRECTION_ORIG,
+  };
+}
+
+void product_flow_recognition (const product_flow_entry_t *entry,
+                               product_flow_recognition_t *out)
+{
+  *out = (product_flow_recognition_t) { .available = 1,
+    .count = entry->lpi.result_count, .stop_reason = entry->lpi.stop_reason };
+  memcpy (out->payload_packets, entry->lpi.payload_packets, sizeof out->payload_packets);
+  memcpy (out->sequence, entry->lpi.sequence, sizeof out->sequence);
+}
+
 int product_lpi_init (void)
 {
   int rc=sakamoto_lpi_init ();
@@ -609,16 +632,22 @@ product_flow_entry_status_t product_flow_entry_identify (
   product_flow_runtime_features_changed (pool, slot);
   /* TLS has its own bounded lifetime. Reassembly can finish after recognition
    * stops on duplicate wire traffic; publish its valid evidence independently. */
-  if (entry->sni.result) {
-    state->protocols |= product_protocol_bit (facts->protocol==17 ? (entry->sni.dtls ? 1020 : 1004) : 1003);
+  uint32_t sni_id = entry->sni.result
+    ? (facts->protocol==17 ? (entry->sni.dtls ? 1020 : 1004) : 1003) : 0;
+  unsigned side = entry->last_flow_direction == PRODUCT_FLOW_DIRECTION_REPLY;
+  if (sni_id) {
+    state->protocols |= product_protocol_bit (sni_id);
     state->available = 1;
   }
-  if (state->stop_reason || !length) return PRODUCT_FLOW_ENTRY_STATUS_OK;
-  if (length > PRODUCT_LPI_MAX_BYTES - state->bytes) {
-    state->stop_reason = PRODUCT_LPI_STOP_BYTE_BUDGET;
+  if (state->stop_reason || !length) {
+    record_result (state, sni_id, side);
     return PRODUCT_FLOW_ENTRY_STATUS_OK;
   }
-  unsigned side = entry->last_flow_direction == PRODUCT_FLOW_DIRECTION_REPLY;
+  if (length > PRODUCT_LPI_MAX_BYTES - state->bytes) {
+    state->stop_reason = PRODUCT_LPI_STOP_BYTE_BUDGET;
+    record_result (state, sni_id, side);
+    return PRODUCT_FLOW_ENTRY_STATUS_OK;
+  }
   if (!state->attempts) {
     state->client_port = side ? facts->destination_port : facts->source_port;
     state->server_port = side ? facts->source_port : facts->destination_port;
@@ -633,10 +662,14 @@ product_flow_entry_status_t product_flow_entry_identify (
   state->observed[side] += length;
   state->bytes += length;
   ++state->attempts;
+  ++state->payload_packets[side];
+  record_result (state, sni_id, side);
   const char *alias = sakamoto_lpi_guess (state->payload,state->lengths,state->observed,
     state->ips,state->client_port,state->server_port,facts->protocol);
   const char *companion=NULL;
   alias = resolve_guess (alias,facts,payload,length,&companion,state,side);
+  record_result (state, product_protocol_provider_id (alias), side);
+  record_result (state, product_protocol_provider_id (companion), side);
   uint64_t result = product_protocol_bit (product_protocol_provider_id (alias))
     | product_protocol_bit (product_protocol_provider_id (companion));
   if (entry->sni.result) result |= product_protocol_bit (facts->protocol==17 ? (entry->sni.dtls ? 1020 : 1004) : 1003);

@@ -194,9 +194,9 @@ if(NOT "${SAKAMOTO_PRODUCT_MANIFEST_VPP_REVISION}"
   message(FATAL_ERROR
     "artifact manifest VPP revision does not match pinned-vpp-revision.txt")
 endif()
-if(NOT "${SAKAMOTO_PRODUCT_ABI_VERSION}" STREQUAL "6"
+if(NOT "${SAKAMOTO_PRODUCT_ABI_VERSION}" STREQUAL "7"
    OR NOT "${SAKAMOTO_PRODUCT_API_VERSION}" STREQUAL "1")
-  message(FATAL_ERROR "the Host Product Core requires ABI 6 and API 1")
+  message(FATAL_ERROR "the Host Product Core requires ABI 7 and API 1")
 endif()
 if(NOT "${SAKAMOTO_PRODUCT_PLUGIN}" STREQUAL "product_core_plugin.so")
   message(FATAL_ERROR "the product manifest must allow exactly product_core_plugin.so")

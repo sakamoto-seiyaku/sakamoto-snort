@@ -55,6 +55,13 @@ import java.util.Map;
 /** Public-seam tests for the production Android runtime incubator. */
 public final class AndroidRuntimeContractTest {
     public static void main(String[] args) throws Exception {
+        java.util.Properties manifest = new java.util.Properties();
+        try (java.io.InputStream input = Files.newInputStream(java.nio.file.Paths.get(args[0]))) {
+            manifest.load(input);
+        }
+        check(Integer.parseInt(manifest.getProperty("product.abi.version"))
+                        == RuntimeControlNative.PRODUCT_ABI_VERSION,
+                "normal RuntimeService manifest gate accepts the shipped Product ABI");
         requestRoundTripIsVersionedAndProfileAware();
         productMutationRequestsAreVersionedServiceRequests();
         lifecycleRequestOrderingRejectsDelayedStarts();

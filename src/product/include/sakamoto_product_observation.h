@@ -8,7 +8,8 @@
 
 #define PRODUCT_OBSERVATION_VERSION 8
 #define PRODUCT_FLOW_NAMES_VERSION 12
-#define PRODUCT_OBSERVATION_TRANSPORT_VERSION 12
+#define PRODUCT_FLOW_RECOGNITION_VERSION 13
+#define PRODUCT_OBSERVATION_TRANSPORT_VERSION 13
 #define PRODUCT_DNS_OBSERVATION_VERSION 9
 #define PRODUCT_DNS_TLS_OBSERVATION_VERSION 10
 /* DoH keeps the 1032-byte TLS record and names its former reserved bytes. */
@@ -23,7 +24,7 @@
 #define PRODUCT_OBSERVATION_BLOCKED 8
 #define PRODUCT_OBSERVATION_DNS 16
 #define PRODUCT_OBSERVATION_END_IDLE 2 /* blocked END shares Flow EXPIRED value */
-#define PRODUCT_OBSERVATION_MAX_RECORD 1512
+#define PRODUCT_OBSERVATION_MAX_RECORD 1688
 #define PRODUCT_DNS_PROXY_RECORD 1U
 #define PRODUCT_DNS_PROXY_TRUNCATED 2U
 #define PRODUCT_DNS_PROXY_UPSTREAM_ANSWER 4U
@@ -62,6 +63,21 @@ typedef struct {
 } product_flow_names_t;
 _Static_assert (sizeof (product_flow_names_t) == 1032, "Flow names ABI");
 
+/* One entry per mapped catalog ID, in actual publication order. The packet
+ * ordinal is the number of payloads submitted so far, not total Flow packets.
+ * Independent SNI completion may publish after LPI stops without a new submit. */
+#define PRODUCT_RECOGNITION_RESULTS 20U
+typedef struct {
+  uint32_t id;
+  uint8_t payload_packet, flow_direction, reserved[2];
+} product_recognition_result_t;
+typedef struct {
+  uint32_t payload_packets[2]; /* Flow ORIG, REPLY */
+  uint8_t count, stop_reason, available, reserved[5];
+  product_recognition_result_t sequence[PRODUCT_RECOGNITION_RESULTS];
+} product_flow_recognition_t;
+_Static_assert (sizeof (product_flow_recognition_t) == 176, "Flow recognition ABI");
+
 /* Local little-endian x86-64/ARM64 wire ABI; no pointer or packet payload.
  * IPv4 omits the final 24 bytes and places its two addresses in address[0..8]. */
 typedef struct {
@@ -85,10 +101,11 @@ _Static_assert (sizeof (product_observation_record_t) == 480, "observation recor
 _Static_assert (offsetof (product_observation_record_t, address) == 448, "record addresses");
 
 typedef struct {
-  product_observation_record_t flow; /* v12 always retains all 32 address bytes */
+  product_observation_record_t flow; /* v12+ always retains all 32 address bytes */
   product_flow_names_t names;
+  product_flow_recognition_t recognition;
 } product_named_observation_record_t;
-_Static_assert (sizeof (product_named_observation_record_t) == 1512, "named Flow ABI");
+_Static_assert (sizeof (product_named_observation_record_t) == 1688, "named Flow ABI");
 
 /* DNS query decisions share the existing owner channel and storage budget.
  * The original-path policy intent is recorded before Adapter Completion;

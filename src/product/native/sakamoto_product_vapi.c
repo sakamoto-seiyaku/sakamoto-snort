@@ -247,6 +247,7 @@ static vapi_error_e flow_reply (vapi_ctx_t context, void *opaque, vapi_error_e r
     }
     memcpy(entry->addresses, in->addresses, sizeof entry->addresses);
     memcpy(&entry->target_names, &in->target_names, sizeof entry->target_names);
+    memcpy(&entry->recognition, &in->recognition, sizeof entry->recognition);
     for (unsigned side = 0; side < 2; side++) {
       const vapi_type_product_flow_query_attribution *a = &in->attribution[side];
       product_observation_attribution_t *b = &entry->attribution[side];
