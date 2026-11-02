@@ -59,5 +59,6 @@ java -cp "$out_dir" WorkerCpuPlacementTest
 java -cp "$out_dir" com.sakamoto.snort.androidruntime.RuntimeEvidenceFormatterTest
 java -cp "$out_dir" com.sakamoto.snort.androidruntime.RootFaultEventContractTest
 java -cp "$out_dir" com.sakamoto.snort.androidruntime.RootFaultDeliveryContractTest
+python3 "$repo_root/tests/android/s332_runner_ownership_test.py"
 
 echo "android runtime contract seam: PASS"

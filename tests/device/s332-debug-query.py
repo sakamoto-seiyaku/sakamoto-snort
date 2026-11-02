@@ -37,6 +37,8 @@ class Acceptance:
         self.out.mkdir(parents=True, exist_ok=True)
         self.owned, self.moved, self.original, self.peers = [], [], {}, []
         self.active = False
+        self.selector_owned = False
+        self.ui_dump_owned = False
         self.result = {"status": "HOLD", "runs": [], "source": "normal Root/VPN Product queries"}
 
     def save(self, name, value):
@@ -109,6 +111,7 @@ class Acceptance:
     def dump(self):
         remote = "/sdcard/s332-ui.xml"
         self.adb("shell", "uiautomator", "dump", remote)
+        self.ui_dump_owned = True
         raw = self.adb("exec-out", "cat", remote)
         return raw, list(ET.fromstring(raw).iter("node"))
 
@@ -301,6 +304,7 @@ class Acceptance:
                     connection.close()
 
         try:
+            self.shell("sh", "-c", shlex.quote("test ! -e files/observation/t27-test.enabled"))
             assert self.state("stopped")["mayBeActive"] == "false"
             self.original = {path: self.app(path, binary=True) for path in
                              ["files/observation/overall.json", "files/observation/overall.sqlite3",
@@ -317,6 +321,7 @@ class Acceptance:
                 self.moved.append((path, backup))
             self.shell("mkdir", "-p", "files/rule-configuration", "files/observation/t27-test")
             self.shell("touch", "files/observation/t27-test.enabled")
+            self.selector_owned = True
             directory = self.out / "peer-http"
             directory.mkdir()
             peer = HttpPeer([endpoint], directory, time.monotonic() + 900, port=18080)
@@ -454,9 +459,11 @@ class Acceptance:
                     errors.append("stop " + repr(error))
             for peer in self.peers:
                 peer.close()
-            if not self.active:
+            if not self.active and (self.original or self.moved or self.owned
+                                    or self.selector_owned or self.ui_dump_owned):
                 try:
-                    self.shell("rm", "-f", "files/observation/t27-test.enabled")
+                    if self.selector_owned:
+                        self.shell("rm", "-f", "files/observation/t27-test.enabled")
                     for path, backup in reversed(self.moved):
                         self.shell("rm", "-rf", path)
                         self.shell("mv", backup, path)
@@ -464,7 +471,8 @@ class Acceptance:
                         assert self.app(path, binary=True) == original, path + " changed"
                     for path in self.owned:
                         self.shell("rm", "-f", path, check=False)
-                    self.adb("shell", "rm", "-f", "/sdcard/s332-ui.xml")
+                    if self.ui_dump_owned:
+                        self.adb("shell", "rm", "-f", "/sdcard/s332-ui.xml")
                     self.result["restoration"] = dict(original_bytes_unchanged=True,
                         directories_restored=True, final_state=self.state("stopped"))
                 except BaseException as error:
