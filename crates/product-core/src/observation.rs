@@ -553,6 +553,40 @@ impl Overview {
     }
 }
 
+/// Saved-history branch of the shared activity query. It has no native session
+/// and cannot start capture or an observation consumer.
+pub fn saved_observation_page_json(path: &std::path::Path) -> String {
+    let mut reply = serde_json::json!({
+        "schema": 1, "capture_state": "stopped", "persistent_history": true,
+        "current_flows": {"source":"vpp", "state":"stopped", "entries":[],
+            "done":true, "next_cursor":0},
+        "health": {"source":"vpp", "state":"unavailable", "reason":"capture_stopped"},
+        "vpp": {"source":"vpp", "state":"stopped", "protection_running":false},
+        "policy_source": {"source":"vpp", "state":"unavailable", "reason":"capture_stopped"},
+        "fact_availability": unavailable_activity_facts(),
+    });
+    match crate::observation_store::ObservationStore::query_saved(path) {
+        Ok(persistent) => {
+            reply["consumer"] = serde_json::json!({"source":"rust_saved_store", "live":false,
+                "query_fresh":true, "query_error":null, "store_error":null, "persistent":persistent});
+            crate::history::annotate(&mut reply["consumer"], Err("capture_stopped"));
+        }
+        Err(error) => {
+            reply["error"] = if error == "observation_history_unavailable" {
+                "history_unavailable".into()
+            } else { "history_query_failed".into() };
+            reply["consumer"] = serde_json::json!({"source":"rust_saved_store", "live":false,
+                "query_fresh":false, "query_error":error, "persistent":null});
+        }
+    }
+    reply.to_string()
+}
+
+fn unavailable_activity_facts() -> serde_json::Value {
+    serde_json::json!({"target_names":"unavailable", "recognition_sequence":"unavailable",
+        "recognition_payload_packets":"unavailable"})
+}
+
 impl ProductCore {
     pub fn query_live_flows(&mut self, cursor: u32) -> Result<LiveFlowPage, ProductError> {
         let session = self.session.ok_or(ProductError::Native {
@@ -574,11 +608,18 @@ impl ProductCore {
     pub fn observation_page_json(&mut self, cursor: u32) -> String {
         let mut reply: serde_json::Value = serde_json::from_str(&self.observation_json())
             .expect("observation JSON");
+        reply["fact_availability"] = unavailable_activity_facts();
         reply["current_flows"] = match self.query_live_flows(cursor) {
             Ok(page) => page.json(),
             Err(error) => serde_json::json!({"source":"vpp","error":format!("{error:?}")}),
         };
-        reply["vpp"] = match self.query() {
+        let runtime = self.query();
+        reply["capture_state"] = match &runtime {
+            Ok(status) if status.protection_running => "running",
+            Ok(_) => "not_running",
+            Err(_) => "unavailable",
+        }.into();
+        reply["vpp"] = match runtime {
             Ok(status) => serde_json::json!({
                 "source":"vpp","generation":status.generation,
                 "core_ready":status.core_ready,
@@ -706,6 +747,154 @@ impl ProductCore {
 #[cfg(test)]
 mod live_flow_query_tests {
     use super::*;
+
+    #[test]
+    fn saved_query_reads_committed_history_without_starting_a_generation() {
+        let root = std::env::temp_dir().join(format!("s330-saved-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        store.begin_generation(17).unwrap();
+        store.consume(&[FlowRecord {
+            generation: 17, slot: 0, incarnation: 3, sequence: 1,
+            first_seen: 100, last_seen: 200, activity_utc_us: 1_000_000,
+            packets: [2, 1], bytes: [120, 60], ended: true,
+            ..Default::default()
+        }, FlowRecord {
+            generation: 17, slot: 0, incarnation: 3, sequence: 1,
+            first_seen: 100, last_seen: 200, activity_utc_us: 1_000_000,
+            blocked: true, packets: [1, 0], bytes: [60, 0], ended: true, end_reason: 2,
+            attribution: [Attribution {
+                segment: 1, activity_utc_us: 1_000_000, policy_generation: 17,
+                policy_revision: 1, policy_hash: 1, uid: 42, winner: 65537,
+                declared_action: 2, actual_action: 2, valid: true,
+                ..Default::default()
+            }, Attribution::default()],
+            ..Default::default()
+        }], 1_000_000).unwrap();
+        store.consume_dns(&[crate::dns_observation::DnsRecord {
+            generation: 17, token: 1, mono_us: 100, activity_utc_us: 1_000_000,
+            policy_generation: 17, policy_revision: 1, policy_hash: 1,
+            uid: 42, network: u32::MAX, slot: u32::MAX,
+            id: 1, query_flags: 0x0100, qtype: 1, qclass: 1,
+            source_port: 40000, resolver_port: 53, family: 4, protocol: 17,
+            direction: 3, availability: 1, coverage: 1,
+            declared_action: 1, actual_action: 1, stage: 1,
+            source_address: [192,168,1,2,0,0,0,0,0,0,0,0,0,0,0,0],
+            resolver_address: [192,168,1,53,0,0,0,0,0,0,0,0,0,0,0,0],
+            name: "example.com".into(), ..Default::default()
+        }], 1_000_000).unwrap();
+        store.close().unwrap();
+        let before = store.query();
+        drop(store);
+        let bytes = std::fs::read(path.with_extension("sqlite3")).unwrap();
+        for _ in 0..2 {
+            let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+            assert_eq!(reply["capture_state"], "stopped");
+            assert_eq!(reply["current_flows"]["state"], "stopped");
+            assert_eq!(reply["consumer"]["persistent"]["packets"], serde_json::json!([3, 1]));
+            assert_eq!(reply["consumer"]["persistent"]["blocked"]["packets"], serde_json::json!([1, 0]));
+            assert_eq!(reply["consumer"]["persistent"]["dns"]["retained_count"], 1);
+            let recent = reply["consumer"]["persistent"]["recent"].as_object().unwrap();
+            assert_eq!(recent.len(), 2);
+            for (key, baseline) in before["recent"].as_object().unwrap() {
+                let saved = &recent[key]["record"];
+                for field in ["generation", "owner", "slot", "incarnation", "sequence",
+                    "first_seen", "last_seen", "packets", "bytes", "blocked", "ended"] {
+                    assert_eq!(saved[field], baseline["record"][field], "{key}:{field}");
+                }
+            }
+            let blocked = recent.values().find(|row| row["record"]["blocked"] == true).unwrap();
+            assert_eq!(blocked["record"]["attribution"][0]["winner"], 65537);
+            assert_eq!(blocked["record"]["attribution"][0]["interpretation"]["conditions"]["status"], "unavailable");
+            assert_eq!(reply["consumer"]["persistent"]["coverage"]["recoveries"], before["coverage"]["recoveries"]);
+            assert_eq!(reply["consumer"]["persistent"]["open_session"], false);
+            assert_eq!(reply["fact_availability"]["target_names"], "unavailable");
+            assert_eq!(std::fs::read(path.with_extension("sqlite3")).unwrap(), bytes);
+        }
+        let mut restarted = crate::observation_store::ObservationStore::open(&path).unwrap();
+        restarted.begin_generation(18).unwrap();
+        restarted.consume(&[FlowRecord {
+            generation: 18, slot: 0, incarnation: 3, sequence: 1,
+            first_seen: 1, last_seen: 2, activity_utc_us: 2_000_000,
+            packets: [1, 0], bytes: [60, 0], ended: true,
+            ..Default::default()
+        }], 2_000_000).unwrap();
+        restarted.close().unwrap();
+        drop(restarted);
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        let history = &reply["consumer"]["persistent"];
+        assert_eq!(history["packets"], serde_json::json!([4, 1]));
+        assert_eq!(history["dns"], before["dns"]);
+        let rows = history["recent"].as_object().unwrap();
+        assert_eq!(rows.len(), 3);
+        let generations: std::collections::BTreeSet<_> = rows.values()
+            .map(|row| row["record"]["generation"].as_u64().unwrap()).collect();
+        assert_eq!(generations, [17, 18].into_iter().collect());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saved_query_reports_interrupted_coverage_without_recovering_the_store() {
+        let root = std::env::temp_dir().join(format!("s330-interrupted-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        store.begin_generation(19).unwrap();
+        store.flush().unwrap();
+        let recoveries = store.query()["coverage"]["recoveries"].clone();
+        drop(store); // No close: the committed session remains open.
+        let bytes = std::fs::read(path.with_extension("sqlite3")).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        let persistent = &reply["consumer"]["persistent"];
+        assert_eq!(persistent["open_session"], true);
+        assert_eq!(persistent["coverage"]["incomplete"], true);
+        assert_eq!(persistent["coverage"]["recoveries"], recoveries);
+        assert_eq!(persistent["visibility"], "saved_committed");
+        assert_eq!(std::fs::read(path.with_extension("sqlite3")).unwrap(), bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saved_query_distinguishes_missing_empty_busy_and_corrupt_history() {
+        let root = std::env::temp_dir().join(format!("s330-errors-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let query = || serde_json::from_str::<serde_json::Value>(&saved_observation_page_json(&path)).unwrap();
+        assert_eq!(query()["error"], "history_unavailable");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let mut store = crate::observation_store::ObservationStore::open(&path).unwrap();
+        assert_eq!(query()["consumer"]["query_error"], "observation_store_busy");
+        store.close().unwrap();
+        drop(store);
+        let empty = query();
+        assert!(empty.get("error").is_none());
+        assert_eq!(empty["consumer"]["persistent"]["recent_count"], 0);
+        assert_eq!(empty["consumer"]["persistent"]["packets"], serde_json::json!([0, 0]));
+        std::fs::write(path.with_extension("sqlite3"), b"broken SQLite history").unwrap();
+        assert_eq!(query()["error"], "history_query_failed");
+        assert_eq!(std::fs::read(path.with_extension("sqlite3")).unwrap(), b"broken SQLite history");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saved_legacy_history_does_not_create_a_database() {
+        let root = std::env::temp_dir().join(format!("s330-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("overall.json");
+        let legacy = br#"{"schema":1,"baselines":{},"recent":{},"minutes":{},
+            "totals":{"packets":[0,0],"bytes":[0,0]},"ended":0,"accepted":0,
+            "rejected":0,"gaps":0,"clock_changes":0,"open_session":false,
+            "recoveries":0,"first_activity_us":null,"last_activity_us":null}"#;
+        std::fs::write(&path, legacy).unwrap();
+        let reply: serde_json::Value = serde_json::from_str(&saved_observation_page_json(&path)).unwrap();
+        assert!(reply.get("error").is_none(), "{reply}");
+        assert_eq!(reply["consumer"]["persistent"]["packets"], serde_json::json!([0, 0]));
+        assert_eq!(reply["consumer"]["persistent"]["storage"], "legacy_json");
+        assert!(!path.with_extension("sqlite3").exists());
+        assert_eq!(std::fs::read(&path).unwrap(), legacy);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_page_layout_and_published_facts_keep_their_identity() {

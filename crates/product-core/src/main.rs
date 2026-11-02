@@ -68,7 +68,7 @@ fn print_status(label: &str, status: &Status) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sakamoto-product-core-host <query|dashboard-query|rule-query|rule-clear|rule-export> <api-socket> <generation> [cursor]\n       sakamoto-product-core-host rule-import <api-socket> <generation> <expected-saved> <json-file>\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
+    eprintln!("usage: sakamoto-product-core-host <query|dashboard-query|rule-query|rule-clear|rule-export> <api-socket> <generation> [cursor]\n       sakamoto-product-core-host saved-history <observation-store-path>\n       sakamoto-product-core-host rule-import <api-socket> <generation> <expected-saved> <json-file>\n       sakamoto-product-core-host rule-replace <api-socket> <generation> <expected-saved> <uid> <src-ipv4> <dst-ipv4> <src-port> <dst-port> <allow|drop>");
     std::process::exit(2);
 }
 
@@ -78,6 +78,12 @@ fn main() {
     let Some(socket) = arguments.next() else {
         usage()
     };
+    if command == "saved-history" {
+        if arguments.next().is_some() { usage(); }
+        println!("dashboard.response={}",
+            sakamoto_product_core::observation::saved_observation_page_json(Path::new(&socket)));
+        return;
+    }
     let Some(generation) = arguments.next() else {
         usage()
     };

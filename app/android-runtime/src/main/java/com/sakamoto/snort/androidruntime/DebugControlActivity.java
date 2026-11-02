@@ -1099,14 +1099,17 @@ public class DebugControlActivity extends Activity {
                 .append(" / root verdict failures=").append(vpp.optString("root_verdict_failed_definite"))
                 .append('\n');
         JSONObject source = reply.optJSONObject("policy_source");
-        if (source == null || source.has("error")) text.append("Saved policy: unavailable\n");
+        if (source == null || source.has("error") || "unavailable".equals(source.optString("state")))
+            text.append("Saved policy: unavailable\n");
         else text.append("Saved policy: revision=").append(source.optString("saved_revision"))
                 .append(" · applied=").append(source.optString("active_revision"))
                 .append(" · save error=").append(source.optString("save_error"))
                 .append(" · compile error=").append(source.optString("compile_error"))
                 .append('\n');
         JSONObject health = reply.optJSONObject("health");
-        if (health == null) text.append("Export: unavailable ").append(reply.optString("error")).append('\n');
+        if (health == null || "unavailable".equals(health.optString("state")))
+            text.append("Export: unavailable ").append(health == null ? reply.optString("error")
+                    : health.optString("reason")).append('\n');
         else {
             text.append("Export: connected=").append(health.optInt("connected"))
                     .append(" · mapping bytes=").append(health.optString("mapping_bytes"))
@@ -1150,6 +1153,8 @@ public class DebugControlActivity extends Activity {
         JSONObject flows = reply.optJSONObject("current_flows");
         if (flows == null || flows.has("error"))
             text.append("Current flows: unavailable ").append(flows == null ? "" : flows.optString("error"));
+        else if ("stopped".equals(flows.optString("state")))
+            text.append("Current flows: stopped\n");
         else {
             text.append("Current flows: active=").append(flows.optJSONArray("active"))
                     .append(" · capacity=").append(flows.optJSONArray("capacity"))
@@ -1239,9 +1244,16 @@ public class DebugControlActivity extends Activity {
     private static String renderHistory(JSONObject reply) {
         JSONObject consumer = reply.optJSONObject("consumer");
         JSONObject history = consumer == null ? null : consumer.optJSONObject("persistent");
-        if (history == null) return "History query unavailable";
+        if (history == null) return "History query " + reply.optString("error", "unavailable")
+                + (consumer == null ? "" : ": " + consumer.optString("query_error"));
         StringBuilder text = new StringBuilder("Recent history · query ");
         text.append(consumer.optBoolean("query_fresh") ? "fresh" : "cached").append('\n');
+        text.append("Visibility: ").append(history.optString("visibility"))
+                .append(" · packets ").append(history.optJSONArray("packets"))
+                .append(" · recent ").append(history.optInt("recent_count"))
+                .append(" · DNS ").append(history.optJSONObject("dns") == null ? "unavailable"
+                        : history.optJSONObject("dns").optInt("retained_count"))
+                .append('\n');
         JSONObject recent = history.optJSONObject("recent");
         if (recent != null) {
             ArrayList<String> keys = new ArrayList<>();

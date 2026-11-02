@@ -178,6 +178,37 @@ pub unsafe extern "C" fn sakamoto_product_core_observation_query(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn sakamoto_product_core_observation_saved_query(
+    store_path: ProductBytes,
+    reply: *mut u8,
+    reply_capacity: u32,
+    out_length: *mut u32,
+) -> c_uint {
+    if reply.is_null() || out_length.is_null() || reply_capacity == 0 {
+        return ErrorCode::InvalidArgument.raw();
+    }
+    unsafe { *out_length = 0; }
+    match catch_unwind(AssertUnwindSafe(|| {
+        let path = match socket_path(store_path) {
+            Ok(path) => path,
+            Err(_) => return ErrorCode::InvalidArgument.raw(),
+        };
+        let response = crate::observation::saved_observation_page_json(Path::new(&path));
+        if response.len() > reply_capacity as usize {
+            return ErrorCode::AllocationFailed.raw();
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(response.as_ptr(), reply, response.len());
+            *out_length = response.len() as u32;
+        }
+        0
+    })) {
+        Ok(code) => code,
+        Err(_) => ErrorCode::InternalError.raw(),
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sakamoto_product_core_observation_page_query(
     handle: *mut ProductCoreHandle,
     generation: u64,

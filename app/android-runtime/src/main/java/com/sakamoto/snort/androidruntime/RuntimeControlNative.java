@@ -289,6 +289,14 @@ public final class RuntimeControlNative {
     private static native String[] nativeConnect(String apiSocket, long generation);
     private static native byte[] nativeObservationQuery(long handle, long generation, int operation);
     private static native byte[] nativeObservationPageQuery(long handle, long generation, int operation, int cursor);
+    private static native byte[] nativeObservationSavedQuery(String storePath);
+
+    public static String savedObservationPageQuery(String storePath) {
+        if (!LOADED) return "{\"error\":\"native_query_unavailable\"}";
+        byte[] reply = nativeObservationSavedQuery(storePath);
+        return reply == null ? "{\"error\":\"native_query_failed\"}"
+                : new String(reply, java.nio.charset.StandardCharsets.UTF_8);
+    }
 
     private static native String[] nativeQuery(long handle, long generation);
     private static native int nativeObservationStart(long handle, long generation, String storePath,

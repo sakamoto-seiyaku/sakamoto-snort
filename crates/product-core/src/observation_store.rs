@@ -1556,23 +1556,48 @@ impl ObservationStore {
     }
 
     pub fn open_with_boot_count(path: &Path, boot_count: Option<u32>) -> Result<Self, String> {
+        Self::open_mode(path, boot_count, false)
+    }
+
+    /// Read committed history without creating a store or changing its session.
+    /// The shared store lock excludes the live writer; running callers must use
+    /// its normal snapshot so already received pending increments stay visible.
+    pub fn query_saved(path: &Path) -> Result<serde_json::Value, String> {
+        let store = Self::open_mode(path, None, true)?;
+        let mut reply = store.query();
+        if store.db.path() == Some("") {
+            reply["storage"] = "legacy_json".into();
+        }
+        reply["visibility"] = "saved_committed".into();
+        Ok(reply)
+    }
+
+    fn open_mode(path: &Path, boot_count: Option<u32>, saved: bool) -> Result<Self, String> {
         let (limits, scaled_test) = RetentionLimits::load(path)?;
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        match std::fs::create_dir(parent) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && parent.is_dir() => {}
-            Err(e) => return Err(e.to_string()),
+        if !saved {
+            match std::fs::create_dir(parent) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && parent.is_dir() => {}
+                Err(e) => return Err(e.to_string()),
+            }
         }
         let containing = parent
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        File::open(containing)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
+        if !saved {
+            File::open(containing).and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+        }
+        let database = path.with_extension("sqlite3");
+        let database_exists = database.try_exists().map_err(|e| e.to_string())?;
+        if saved && !database_exists
+            && !path.try_exists().map_err(|e| e.to_string())? {
+            return Err("observation_history_unavailable".into());
+        }
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -1580,28 +1605,29 @@ impl ObservationStore {
             .mode(0o600)
             .open(path.with_extension("lock"))
             .map_err(|e| e.to_string())?;
-        if unsafe { flock(lock.as_raw_fd(), 2 | 4) } != 0 {
+        if unsafe { flock(lock.as_raw_fd(), (if saved { 1 } else { 2 }) | 4) } != 0 {
             return Err("observation_store_busy".into());
         }
         // Keep the legacy input path stable at the ABI boundary. SQLite is a
         // sibling file; a committed metadata row is the migration marker.
-        let database = path.with_extension("sqlite3");
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .open(&database)
-            .map_err(|e| e.to_string())?;
-        if std::fs::metadata(&database)
+        if !saved {
+            OpenOptions::new().write(true).create(true).mode(0o600)
+                .open(&database).map_err(|e| e.to_string())?;
+        }
+        if database.exists() && std::fs::metadata(&database)
             .map_err(|e| e.to_string())?
             .len()
             > limits.database_limit()
         {
             return Err("observation_database_capacity".into());
         }
-        let db = Connection::open(&database).map_err(|e| e.to_string())?;
+        let db = if saved && !database_exists {
+            Connection::open_in_memory()
+        } else if saved {
+            Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        } else { Connection::open(&database) }.map_err(|e| e.to_string())?;
         db.busy_timeout(Duration::ZERO).map_err(|e| e.to_string())?;
-        db.execute_batch(
+        if !saved || !database_exists { db.execute_batch(
             "PRAGMA page_size=4096; PRAGMA cache_size=-2048; PRAGMA mmap_size=0;
             PRAGMA synchronous=FULL; PRAGMA auto_vacuum=FULL; PRAGMA cache_spill=OFF;
             CREATE TABLE IF NOT EXISTS observation (kind INTEGER NOT NULL, key TEXT NOT NULL,
@@ -1609,7 +1635,7 @@ impl ObservationStore {
         )
         .map_err(|e| e.to_string())?;
         let max_pages = (limits.database_limit() / 4096) as i64;
-        db.pragma_update(None, "max_page_count", max_pages).map_err(|e| e.to_string())?;
+        db.pragma_update(None, "max_page_count", max_pages).map_err(|e| e.to_string())?; }
         let page_size: i64 = db
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
@@ -1815,6 +1841,12 @@ impl ObservationStore {
             stale_generations_pending,
             receipt_now,
         };
+        if saved {
+            // An interrupted writer is evidence of a possible missing tail,
+            // but reading alone must neither recover nor start a new session.
+            store.uncertain = store.state.meta.open_session;
+            return Ok(store);
+        }
         if meta.is_none() {
             store.migrate()?;
         }
@@ -2992,6 +3024,7 @@ impl ObservationStore {
                 "first_activity_us": self.state.meta.first_activity_us,
                 "last_activity_us": self.state.meta.last_activity_us },
             "open_session": self.state.meta.open_session, "legacy_input_limit_bytes": MAX_SNAPSHOT });
+        response["recent_query_truncated"] = (self.state.recent.len() > 128).into();
         // Root packet tokens advance independently per lane. Their numeric
         // order cannot select the newest decisions across owners/lanes.
         let mut dns_recent: Vec<_> = self.state.dns.iter().collect();

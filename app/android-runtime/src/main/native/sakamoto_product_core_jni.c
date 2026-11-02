@@ -13,6 +13,29 @@
 #include <string.h>
 
 JNIEXPORT jbyteArray JNICALL
+Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationSavedQuery(
+    JNIEnv *env, jclass type, jstring store_path) {
+    (void) type;
+    if (!store_path) return NULL;
+    const char *path = (*env)->GetStringUTFChars(env, store_path, NULL);
+    if (!path) return NULL;
+    uint8_t *reply = malloc(SAKAMOTO_OBSERVATION_REPLY_BYTES);
+    if (!reply) { (*env)->ReleaseStringUTFChars(env, store_path, path); return NULL; }
+    uint32_t length = 0;
+    uint32_t code = sakamoto_product_core_observation_saved_query(
+        (sakamoto_product_bytes_t){.data=(const uint8_t *)path,
+            .length=(uint32_t)(*env)->GetStringUTFLength(env, store_path)},
+        reply, SAKAMOTO_OBSERVATION_REPLY_BYTES, &length);
+    (*env)->ReleaseStringUTFChars(env, store_path, path);
+    if (code) length = (uint32_t)snprintf((char *)reply, SAKAMOTO_OBSERVATION_REPLY_BYTES,
+        "{\"error\":\"observation_saved_query_failed\",\"code\":%" PRIu32 "}", code);
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)length);
+    if (result) (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (jbyte *)reply);
+    free(reply);
+    return result;
+}
+
+JNIEXPORT jbyteArray JNICALL
 Java_com_sakamoto_snort_androidruntime_RuntimeControlNative_nativeObservationQuery(
     JNIEnv *env, jclass type, jlong handle, jlong generation, jint operation) {
     (void) type;

@@ -49,3 +49,49 @@ nonempty Flow page. The diagnostic Activity has Query health and Next flows
 buttons and renders these fields without parsing logs. Its temporary query
 file is removed after display; an ADB Activity intent with an explicit nonce
 can retain the raw response for acceptance evidence.
+
+## S330 saved-history query
+
+The same Android observation action, Query history and Query health buttons now
+read saved history when the RuntimeService has no Product Core session. They call
+the shared Rust saved-query branch through JNI; they do not connect to VPP,
+start a consumer, start capture or change the runtime generation. Host callers use
+`sakamoto-product-core-host saved-history <observation/overall.json>` without a
+socket or generation. The C entry is `sakamoto_product_core_observation_saved_query`.
+
+The response retains `consumer.persistent` with the existing bounded recent
+Flow/Blocked records, independent DNS stage records, application/rule/protocol
+windows, minute/hour/day aggregates, coverage, storage budget and truncation
+fields. `recent_query_truncated` explicitly qualifies the shared 128-record
+recent page. Flow identity remains generation/owner/slot/incarnation, separately
+from Blocked and DNS identities. Native first/last activity is generation-local
+monotonic time; `activity_utc_us`, receipt clocks and bucket UTC seconds retain
+their existing meanings. History is a retained observation view, not a current
+connection sample or complete long-term access log.
+
+Saved queries report `capture_state=stopped`, `current_flows.state=stopped` and
+`visibility=saved_committed`; live-only health and policy-source lookups report
+unavailable. Rule conditions without their matching live source remain unavailable.
+The stored `open_session` and recovery counters are read without changing them;
+an interrupted session qualifies coverage as incomplete. An existing empty store
+is a successful empty result. A missing store reports `history_unavailable`, while
+busy, corrupt or unreadable history reports `history_query_failed` with the
+original `consumer.query_error`. Missing history never creates an empty database.
+Legacy JSON may be read and validated in memory without migration, with
+`storage=legacy_json` rather than `sqlite`. The store lock
+excludes a concurrent writer; running queries continue to use the consumer's
+`live_including_pending` view with committed totals and persistence errors separate.
+
+`fact_availability` explicitly marks target names, recognition sequence and actual
+recognition payload counts unavailable until their respective follow-up tickets
+provide those facts. Neither the current protocol bitmask nor total packet counts
+are used to invent them. Saved reads preserve existing records and the existing
+retention/space budgets; normal writer maintenance still owns eviction and rollup.
+
+STOP does not manufacture END records for active Flows. Recent Flow/Blocked
+history keeps its existing actual-END meaning; received DNS facts and committed
+statistics remain readable, and the existing shutdown coverage gap remains
+visible. This query adds no complete last-live-Flow snapshot at shutdown.
+
+[S330 validation](../testing/2026-11-02_S330_ACTIVITY_QUERY.md) records the shared
+Host query, real Root/VPN lifecycle coverage and their separate qualifications.

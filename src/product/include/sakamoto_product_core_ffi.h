@@ -30,6 +30,11 @@ uint32_t sakamoto_product_core_observation_query(
 uint32_t sakamoto_product_core_observation_page_query(
     sakamoto_product_core_handle_t *, uint64_t generation, uint32_t operation,
     uint32_t cursor, uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
+/* Committed history only, with no native session or capture startup. Missing
+ * history and read errors are distinct JSON results; no store is created. */
+uint32_t sakamoto_product_core_observation_saved_query(
+    sakamoto_product_bytes_t store_path,
+    uint8_t *reply, uint32_t reply_capacity, uint32_t *out_length);
 
 uint32_t sakamoto_product_core_sni_query(
     sakamoto_product_core_handle_t *, uint64_t, uint32_t, uint32_t, uint64_t,

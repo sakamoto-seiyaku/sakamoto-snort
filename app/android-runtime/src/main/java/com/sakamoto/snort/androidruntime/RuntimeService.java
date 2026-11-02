@@ -399,6 +399,14 @@ public final class RuntimeService extends VpnService {
         enqueueLifecycle(() -> refreshProductCatalogProjection("service_create"));
     }
 
+    private File observationStorePath() {
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                && new File(getFilesDir(), "observation/t27-test.enabled").isFile()) {
+            return new File(getFilesDir(), "observation/t27-test/overall.json");
+        }
+        return new File(getFilesDir(), "observation/overall.json");
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         latestStartId = Math.max(latestStartId, startId);
@@ -465,6 +473,8 @@ public final class RuntimeService extends VpnService {
                 String response = "{\"error\":\"management_unavailable\"}";
                 try {
                     if (productCoreSession != null) response = productCoreSession.observationPageQuery(operation, cursor);
+                    else if (operation == 0) response = RuntimeControlNative.savedObservationPageQuery(
+                            observationStorePath().getAbsolutePath());
                 } catch (RuntimeException error) { response = "{\"error\":\"query_failed\"}"; }
                 try {
                     // Validate the native document, then append our own section
@@ -1325,11 +1335,7 @@ public final class RuntimeService extends VpnService {
                 return;
             }
             status = reconciled;
-            File observationStore = new File(getFilesDir(), "observation/overall.json");
-            if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                    && new File(getFilesDir(), "observation/t27-test.enabled").isFile()) {
-                observationStore = new File(getFilesDir(), "observation/t27-test/overall.json");
-            }
+            File observationStore = observationStorePath();
             int observationBootCount = -1;
             try {
                 observationBootCount = Math.max(-1, android.provider.Settings.Global.getInt(
