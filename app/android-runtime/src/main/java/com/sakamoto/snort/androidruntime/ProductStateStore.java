@@ -12,7 +12,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
 
-/** Atomic policy/config product-state repository. Bounded Activity uses a different repository. */
+/** Atomic policy/config product-state repository. Observation history is owned by the Rust SQLite store. */
 public final class ProductStateStore {
     private static final String DIRECTORY = "product-state";
     private static final String FILE = "product.properties";

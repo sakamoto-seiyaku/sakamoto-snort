@@ -1,6 +1,6 @@
 package com.sakamoto.snort.androidruntime;
 
-/** Product-facing authoring draft, including Activity-derived L4 prefill. */
+/** Product-facing manual authoring draft. */
 public final class RuleDraft {
     public final ApplicationSubjectId subjectId;
     public final AuthoringPolicyBundle.IpFamily family;
@@ -41,21 +41,12 @@ public final class RuleDraft {
                 ? "manual" : source);
     }
 
-    public static RuleDraft fromActivityL4RuleDraft(ActivityL4RuleDraft draft) {
-        if (draft == null) {
-            return null;
-        }
-        return new RuleDraft(draft.subjectId, draft.family, draft.destinationCidr,
-                draft.destinationPorts.first, draft.ipProtocol, draft.direction,
-                draft.networkContext, draft.action, "activity");
-    }
-
     public AuthoringPolicyBundle.L4Rule toL4Rule() {
         return AuthoringPolicyBundle.L4Rule.create(subjectId, family,
                 null, destinationCidr, null,
                 AuthoringPolicyBundle.PortRange.exact(destinationPort),
                 ipProtocol, direction, networkContext, action,
-                ActivityL4RuleDraft.DEFAULT_PRIORITY, ActivityL4RuleDraft.DEFAULT_ORDER);
+                10, 0);
     }
 
     private static String bounded(String value) {

@@ -1,39 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-matrix="$repo_root/tests/device/s52-root-l4-product-matrix.sh"
-
-test -x "$matrix"
-grep -q './dev/adb' "$matrix"
-grep -q 'SAKAMOTO-52-root-l4-product-matrix' "$matrix"
-grep -q 'debugSetL4RuleSubject' "$matrix"
-grep -q 'debugSetL4RuleFamily' "$matrix"
-grep -q 'debugSetL4RuleDestinationCidr' "$matrix"
-grep -q 'debugSetL4RuleDestinationPortFirst' "$matrix"
-grep -q 'debugSetL4RuleAction' "$matrix"
-grep -q 'debugSetL4RuleSourceCidr' "$matrix"
-grep -q 'debugSetL4RuleDestinationCidr' "$matrix"
-grep -q 'priority/order/ruleId' "$matrix"
-grep -q 'block_real_tcp_traffic' "$matrix"
-grep -q 'open_restore_tcp' "$matrix"
-grep -q 'ipv6_tcp_vector' "$matrix"
-grep -q 'source_cidr_vector' "$matrix"
-grep -q 'udp_vector' "$matrix"
-grep -q 'icmp_vector' "$matrix"
-grep -q 'other_protocol_vector' "$matrix"
-grep -q 'POLICY.EVALUATE' "$matrix"
-grep -q 'NFQUEUE.STATUS' "$matrix"
-grep -q 'policyDropActivity' "$matrix"
-grep -q 'allowedFlowActivity' "$matrix"
-grep -q 'allowed_activity_value' "$matrix"
-grep -q 'lastPolicyRevision' "$matrix"
-grep -q 'debugL4PrefillFromActivity' "$matrix"
-grep -q 'l4Prefill' "$matrix"
-grep -q 'matrix.s52Done.*not_claimed' "$matrix"
-grep -q 'ActivityL4RuleDraft' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
-grep -q 'debugL4PrefillFromActivity' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/DebugControlActivity.java"
-grep -q 'L4 prefill:' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ActivityL4RuleDraft.java"
-grep -q 'l4RuleCount' "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCatalogFormatter.java"
-
-echo "s52 root l4 product matrix static contract: PASS"
+# Historical entry kept for links and callers; never claim current Product PASS.
+printf '%s\n' 'RETIRED: the old Activity channel has no current producer.' \
+  'Original runner: tests/archive/activity-channel-20261102/android/s52-root-l4-product-matrix-contract-test.sh (historical, non-runnable).' \
+  'Current query/lifecycle acceptance: tests/device/s332-debug-query.py; see docs/testing/2026-11-02_S332_DEBUG_QUERY.md.' >&2
+exit 77

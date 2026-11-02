@@ -5,12 +5,29 @@ import java.util.Arrays;
 /** Exact-output tests at the package-private formatter interface. */
 public final class RuntimeEvidenceFormatterTest {
     public static void main(String[] args) {
+        queryDisplayKeepsExactUnsignedFactsAndJsonContent();
         nullMutationUsesCapturedGeneration();
         populatedMutationPreservesFieldsAndUnsignedValues();
         readbackUsesNativeOrPreservedDetail();
         faultOutputPreservesTrailingBlankLine();
         propertyTokensRemainBounded();
         System.out.println("runtime evidence formatter: PASS");
+    }
+
+    private static void queryDisplayKeepsExactUnsignedFactsAndJsonContent() {
+        // Real S332 Root3047 rule identities included this unsigned winner;
+        // Android org.json originally displayed it as a rounded Double.
+        equal("{\"winner\":\"12745810480509353985\",\"packets\":[2,1]}",
+                RuntimeEvidenceFormatter.queryDisplayDocument(
+                        "{\"winner\":12745810480509353985,\"packets\":[2,1]}"));
+        equal("[0,9223372036854775807,\"9223372036854775808\",\"18446744073709551615\","
+                        + "-9223372036854775808,1.8446744073709552e19,-1.5E+20]",
+                RuntimeEvidenceFormatter.queryDisplayDocument(
+                        "[0,9223372036854775807,9223372036854775808,18446744073709551615,"
+                                + "-9223372036854775808,1.8446744073709552e19,-1.5E+20]"));
+        String quoted = "{\"name\":\"18446744073709551615 \\\"quoted\\\" \\\\ path\","
+                + "\"already_string\":\"9223372036854775808\",\"array\":[null,true,false]}";
+        equal(quoted, RuntimeEvidenceFormatter.queryDisplayDocument(quoted));
     }
 
     private static void nullMutationUsesCapturedGeneration() {

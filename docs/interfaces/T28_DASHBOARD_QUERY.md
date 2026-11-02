@@ -193,3 +193,21 @@ within its existing 4096-byte row bound; readers accept both object and triplet
 storage and always return named objects in product queries. The complete sequence,
 counts and names survive commit/close/reopen; detail expiry removes them together.
 No shutdown END, long-term recognition timeline or new aggregate is created.
+
+## S332 validation entry and retired Activity channel
+
+The Android validation buttons read this shared query exclusively: history shows
+bounded recent Flow/independent Blocked and DNS records, names/recognition, existing
+application/rule/protocol and minute/hour/day aggregates, persistence and coverage.
+Health/current-flow output includes identities, monotonic times, directions and
+page consistency. Display truncation is distinct from query/store truncation;
+missing facts and query errors remain explicit. This is a debug display, not the
+formal Product Activity UI. The UI preserves large unsigned integers as decimal
+strings before Android JSON parsing; the original shared response is unchanged.
+
+The producerless Java Activity ingestor, bounded memory store, file projection,
+recognition models and their old consumers are retired. App/rule/health models,
+RuntimeService ownership, rule configuration and desensitized diagnostics remain.
+Historical files and evidence are not rewritten or reclassified as current PASS.
+See [S332 entry/lifecycle qualification](../testing/2026-11-02_S332_DEBUG_QUERY.md)
+and the [retired test record](../../tests/archive/activity-channel-20261102/README.md).

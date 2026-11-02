@@ -1,0 +1,893 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SNORT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+export ADB="$SNORT_ROOT/dev/adb"
+source "$SNORT_ROOT/dev/dev-android-device-lib.sh"
+
+PACKAGE="${PACKAGE:-com.sakamoto.snort.androidruntime}"
+ACTIVITY="${ACTIVITY:-$PACKAGE/.DebugControlActivity}"
+DEBUG_TRAFFIC_PROBE_RESULT_PATH="files/debug/traffic-probe.properties"
+VNEXT_PORT="${VNEXT_PORT:-60607}"
+SNORT_CTL="${SNORT_CTL:-}"
+IPV6_OUTPUT_HOST="${IPV6_OUTPUT_HOST:-2606:4700:4700::1111}"
+IPV6_OUTPUT_PORT="${IPV6_OUTPUT_PORT:-80}"
+INPUT_LISTEN_PORT="${INPUT_LISTEN_PORT:-18080}"
+INPUT_TIMEOUT_MILLIS="${INPUT_TIMEOUT_MILLIS:-5000}"
+KEEP_FORWARD=0
+RUN_RESTART=1
+RUN_FAULT=1
+RUN_CONTROL_TIMEOUT=1
+S68_FAIL_ON_UNMANAGED_RESIDUE="${S68_FAIL_ON_UNMANAGED_RESIDUE:-0}"
+MATRIX_RC=0
+
+usage() {
+  cat <<EOF
+Usage: $0 [--serial <serial>] [--ctl <path>] [--keep-forward] [--skip-restart] [--skip-fault] [--skip-control-timeout]
+
+Runs a minimal SAKAMOTO-68 Root/NFQUEUE device matrix slice:
+  - real installed package UID evidence
+  - IPv6 OUTPUT representative via APK debug traffic
+  - IPv4 INPUT representative via APK one-shot listener + host peer connect
+  - restart/no-residue checks
+  - bounded QUIT cleanup/no-residue checks
+  - SIGKILL fault immediate residue + recovery cleanup evidence
+  - control socket half-frame/disconnect smoke
+
+Environment overrides:
+  PACKAGE, VNEXT_PORT, SNORT_CTL, IPV6_OUTPUT_HOST, IPV6_OUTPUT_PORT,
+  INPUT_LISTEN_PORT, INPUT_TIMEOUT_MILLIS, S68_FAIL_ON_UNMANAGED_RESIDUE
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --serial)
+      ADB_SERIAL="$2"
+      export ADB_SERIAL
+      shift 2
+      ;;
+    --ctl)
+      SNORT_CTL="$2"
+      shift 2
+      ;;
+    --keep-forward)
+      KEEP_FORWARD=1
+      shift
+      ;;
+    --skip-restart)
+      RUN_RESTART=0
+      shift
+      ;;
+    --skip-fault)
+      RUN_FAULT=0
+      shift
+      ;;
+    --skip-control-timeout)
+      RUN_CONTROL_TIMEOUT=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+section() {
+  printf '\n## %s\n' "$1"
+}
+
+kv() {
+  printf '%s=%s\n' "$1" "$2"
+}
+
+cleanup() {
+  if [[ $KEEP_FORWARD -eq 0 ]]; then
+    remove_control_vnext_forward "$VNEXT_PORT"
+  fi
+}
+trap cleanup EXIT
+
+find_snort_ctl() {
+  if [[ -n "$SNORT_CTL" ]]; then
+    [[ -x "$SNORT_CTL" ]] || {
+      echo "BLOCKED: SNORT_CTL is not executable: $SNORT_CTL" >&2
+      return 77
+    }
+    printf '%s\n' "$SNORT_CTL"
+    return 0
+  fi
+  local candidates=(
+    "$SNORT_ROOT/build-output/cmake/dev-debug/tests/host/sucre-snort-ctl"
+    "$SNORT_ROOT/build-output/cmake/dev-relwithdebinfo/tests/host/sucre-snort-ctl"
+    "$SNORT_ROOT/build-output/cmake/host-asan-clang/tests/host/sucre-snort-ctl"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "BLOCKED: missing sucre-snort-ctl; build dev-debug target sucre-snort-ctl or pass --ctl" >&2
+  return 77
+}
+
+ctl() {
+  local cmd="$1"
+  local args="${2:-}"
+  if [[ -n "$args" ]]; then
+    "$SNORT_CTL" --tcp "127.0.0.1:$VNEXT_PORT" --compact "$cmd" "$args"
+  else
+    "$SNORT_CTL" --tcp "127.0.0.1:$VNEXT_PORT" --compact "$cmd"
+  fi
+}
+
+json_ok() {
+  python3 -c 'import json,sys
+try:
+    ok = json.load(sys.stdin).get("ok") is True
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)'
+}
+
+json_result() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+path = sys.argv[1].split(".")
+obj = json.loads(sys.argv[2])
+for part in path:
+    obj = obj[part]
+print(obj)
+PY
+}
+
+status_delta() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+before = json.loads(sys.argv[1])["result"]
+after = json.loads(sys.argv[2])["result"]
+label = sys.argv[3]
+keys = [
+    "packetsSeen",
+    "acceptedPackets",
+    "droppedPackets",
+    "parsePassThroughPackets",
+    "capacityPassThroughPackets",
+    "ownerFaultPassThroughPackets",
+    "verdictSendFailures",
+    "fragmentBufferedPackets",
+    "fragmentReassembledPackets",
+    "uidMetadataPresentPackets",
+    "uidMetadataMissingPackets",
+]
+print(f"{label}.before={json.dumps(before, sort_keys=True, separators=(',', ':'))}")
+print(f"{label}.after={json.dumps(after, sort_keys=True, separators=(',', ':'))}")
+for key in keys:
+    print(f"{label}.{key}Delta={int(after.get(key, 0)) - int(before.get(key, 0))}")
+for key in [
+    "lastObservedLinuxUid",
+    "lastObservedUidKnown",
+    "lastObservedNetworkContext",
+    "lastObservedHook",
+    "lastObservedInputInterfaceIndex",
+    "lastObservedOutputInterfaceIndex",
+    "lastObservedResult",
+]:
+    print(f"{label}.{key}={after.get(key)}")
+PY
+}
+
+delta_value() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+before = json.loads(sys.argv[1])["result"]
+after = json.loads(sys.argv[2])["result"]
+key = sys.argv[3]
+print(int(after.get(key, 0)) - int(before.get(key, 0)))
+PY
+}
+
+field_value() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+doc = json.loads(sys.argv[1])["result"]
+print(doc.get(sys.argv[2], ""))
+PY
+}
+
+policy_apply_l4_drop() {
+  local uid="$1"
+  local revision="$2"
+  local family="$3"
+  local direction="$4"
+  local port="$5"
+  local rule_id="$6"
+  local reason_id="$7"
+  python3 - "$uid" "$revision" "$family" "$direction" "$port" "$rule_id" "$reason_id" <<'PY'
+import json
+import sys
+
+uid, revision, family, direction, port, rule_id, reason_id = sys.argv[1:]
+payload = {
+    "revision": int(revision),
+    "subjects": [{
+        "linuxUid": int(uid),
+        "networkGate": {},
+        "l4Rules": [{
+            "ruleId": int(rule_id),
+            "reasonId": int(reason_id),
+            "priority": 10,
+            "order": 0,
+            "action": "drop",
+            "match": {
+                "family": family,
+                "direction": direction,
+                "ipProtocol": 6,
+                "destinationPorts": {
+                    "first": int(port),
+                    "last": int(port),
+                },
+            },
+        }],
+    }],
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+policy_apply_unknown_l4_drop() {
+  local revision="$1"
+  local family="$2"
+  local direction="$3"
+  local port="$4"
+  local rule_id="$5"
+  local reason_id="$6"
+  python3 - "$revision" "$family" "$direction" "$port" "$rule_id" "$reason_id" <<'PY'
+import json
+import sys
+
+revision, family, direction, port, rule_id, reason_id = sys.argv[1:]
+payload = {
+    "revision": int(revision),
+    "subjects": [{
+        "uidKnown": False,
+        "networkGate": {},
+        "l4Rules": [{
+            "ruleId": int(rule_id),
+            "reasonId": int(reason_id),
+            "priority": 10,
+            "order": 0,
+            "action": "drop",
+            "match": {
+                "family": family,
+                "direction": direction,
+                "ipProtocol": 6,
+                "destinationPorts": {
+                    "first": int(port),
+                    "last": int(port),
+                },
+            },
+        }],
+    }],
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+policy_evaluate() {
+  local uid="$1"
+  local family="$2"
+  local direction="$3"
+  local source_port="$4"
+  local destination_port="$5"
+  python3 - "$uid" "$family" "$direction" "$source_port" "$destination_port" <<'PY'
+import json
+import sys
+
+uid, family, direction, source_port, destination_port = sys.argv[1:]
+print(json.dumps({
+    "linuxUid": int(uid),
+    "networkContext": 0,
+    "family": family,
+    "direction": direction,
+    "ipProtocol": 6,
+    "sourcePort": int(source_port),
+    "destinationPort": int(destination_port),
+    "portsAvailable": True,
+}, separators=(",", ":")))
+PY
+}
+
+policy_evaluate_unknown() {
+  local family="$1"
+  local direction="$2"
+  local source_port="$3"
+  local destination_port="$4"
+  python3 - "$family" "$direction" "$source_port" "$destination_port" <<'PY'
+import json
+import sys
+
+family, direction, source_port, destination_port = sys.argv[1:]
+print(json.dumps({
+    "uidKnown": False,
+    "networkContext": 0,
+    "family": family,
+    "direction": direction,
+    "ipProtocol": 6,
+    "sourcePort": int(source_port),
+    "destinationPort": int(destination_port),
+    "portsAvailable": True,
+}, separators=(",", ":")))
+PY
+}
+
+package_uid() {
+  local line uid
+  line="$(adb_cmd shell cmd package list packages -U "$PACKAGE" 2>/dev/null | tr -d '\r' | awk -v p="package:$PACKAGE " '$0 ~ "^package:" {print; exit}')"
+  uid="$(printf '%s\n' "$line" | sed -n 's/.* uid:\([0-9][0-9]*\).*/\1/p')"
+  if [[ "$uid" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$uid"
+    return 0
+  fi
+  uid="$(adb_cmd shell run-as "$PACKAGE" id -u 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$uid" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$uid"
+    return 0
+  fi
+  return 1
+}
+
+app_file_path() {
+  printf '/data/user/0/%s/%s\n' "$PACKAGE" "$1"
+}
+
+app_file_cat() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" cat "$relative_path" 2>/dev/null \
+    || adb_su "cat $(shell_single_quote "$(app_file_path "$relative_path")") 2>/dev/null" \
+    || true
+}
+
+app_file_rm() {
+  local relative_path="$1"
+  adb_cmd shell run-as "$PACKAGE" rm -f "$relative_path" >/dev/null 2>&1 \
+    || adb_su "rm -f $(shell_single_quote "$(app_file_path "$relative_path")")" \
+      >/dev/null 2>&1 \
+    || true
+}
+
+am_start_debug_traffic() {
+  local host="$1"
+  local port="$2"
+  app_file_rm "$DEBUG_TRAFFIC_PROBE_RESULT_PATH"
+  adb_cmd shell am start -n "$ACTIVITY" \
+    --ez debugTraffic true \
+    --es debugTrafficHost "$host" \
+    --ei debugTrafficPort "$port" \
+    --ei debugTrafficTimeoutMillis 1500 >/dev/null
+}
+
+wait_debug_traffic_probe_result() {
+  local expected_host="$1"
+  for _ in $(seq 1 20); do
+    if app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
+        | tr -d '\r' \
+        | grep -Fxq "host=${expected_host}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+record_debug_traffic_probe_result() {
+  local label="$1"
+  app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
+    | tr -d '\r' \
+    | sed "s/^/${label}.debugTraffic./" || true
+}
+
+debug_traffic_probe_value() {
+  local key="$1"
+  app_file_cat "$DEBUG_TRAFFIC_PROBE_RESULT_PATH" \
+    | tr -d '\r' \
+    | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); found=1 } END { if (!found) exit 1 }'
+}
+
+am_start_listener() {
+  local port="$1"
+  local timeout="$2"
+  adb_cmd shell am start -n "$ACTIVITY" \
+    --ez debugListen true \
+    --ei debugListenPort "$port" \
+    --ei debugListenTimeoutMillis "$timeout" >/dev/null
+}
+
+host_connect() {
+  local host="$1"
+  local port="$2"
+  local timeout_seconds="$3"
+  python3 - "$host" "$port" "$timeout_seconds" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+timeout = float(sys.argv[3])
+sock = socket.create_connection((host, port), timeout=timeout)
+sock.close()
+PY
+}
+
+control_vnext_forward_residue() {
+  local serial
+  serial="$(adb_target_desc)"
+  adb_cmd forward --list 2>/dev/null | tr -d '\r' \
+    | awk -v serial="$serial" -v port="tcp:$VNEXT_PORT" '
+        $1 == serial && $2 == port && $3 == "localabstract:sucre-snort-control-vnext"
+      '
+}
+
+device_ipv4_for_host_peer() {
+  adb_cmd shell "ip -o -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.][0-9.]*\\).*/\\1/p' | head -1" \
+    | tr -d '\r\n'
+}
+
+check_no_residue() {
+  local label="$1"
+  local forwards procs ipt ip6t
+  forwards="$(control_vnext_forward_residue || true)"
+  procs="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
+  ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+
+  kv "$label.forwardCheck.command" "./dev/adb forward --list | awk '\$2==\"tcp:$VNEXT_PORT\" && \$3==\"localabstract:sucre-snort-control-vnext\"'"
+  kv "$label.processCheck.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+  kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
+  kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
+  if [[ -z "$forwards" && -z "$procs" && -z "$ipt" && -z "$ip6t" ]]; then
+    kv "$label.result" "PASS"
+    return 0
+  else
+    kv "$label.result" "FAIL"
+    [[ -n "$forwards" ]] && kv "$label.forwardResidue" "$forwards"
+    [[ -n "$procs" ]] && kv "$label.processResidue" "$procs"
+    [[ -n "$ipt" ]] && kv "$label.iptablesResidue" "$ipt"
+    [[ -n "$ip6t" ]] && kv "$label.ip6tablesResidue" "$ip6t"
+    return 1
+  fi
+}
+
+record_unmanaged_fault_residue() {
+  local label="$1"
+  local forwards procs ipt ip6t
+  forwards="$(control_vnext_forward_residue || true)"
+  procs="$(adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r')"
+  ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+
+  kv "$label.forwardCheck.command" "./dev/adb forward --list | awk '\$2==\"tcp:$VNEXT_PORT\" && \$3==\"localabstract:sucre-snort-control-vnext\"'"
+  kv "$label.processCheck.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+  kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
+  kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
+  if [[ -z "$forwards" && -z "$procs" && -z "$ipt" && -z "$ip6t" ]]; then
+    kv "$label.result" "NO_RESIDUE_OBSERVED"
+    return 0
+  fi
+
+  kv "$label.result" "RESIDUE_OBSERVED"
+  [[ -n "$forwards" ]] && kv "$label.forwardResidue" "$forwards"
+  [[ -n "$procs" ]] && kv "$label.processResidue" "$procs"
+  [[ -n "$ipt" ]] && kv "$label.iptablesResidue" "$ipt"
+  [[ -n "$ip6t" ]] && kv "$label.ip6tablesResidue" "$ip6t"
+  return 1
+}
+
+daemon_pids() {
+  adb_su "pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" | tr -d '\r'
+}
+
+wait_no_daemon_process() {
+  local pids=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pids="$(daemon_pids)"
+    if [[ -z "$pids" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+check_hooks_present() {
+  local label="$1"
+  local ipt ip6t
+  ipt="$(adb_su "iptables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  ip6t="$(adb_su "ip6tables -S 2>/dev/null | grep sucre-snort || true" | tr -d '\r')"
+  kv "$label.iptablesCheck.command" "./dev/adb shell su 0 sh -c 'iptables -S | grep sucre-snort'"
+  kv "$label.ip6tablesCheck.command" "./dev/adb shell su 0 sh -c 'ip6tables -S | grep sucre-snort'"
+  if [[ -n "$ipt" || -n "$ip6t" ]]; then
+    kv "$label.result" "PASS"
+    [[ -n "$ipt" ]] && kv "$label.iptablesHooks" "$ipt"
+    [[ -n "$ip6t" ]] && kv "$label.ip6tablesHooks" "$ip6t"
+    return 0
+  fi
+  kv "$label.result" "FAIL"
+  kv "$label.reason" "expected sucre-snort NFQUEUE hooks before fault injection"
+  return 1
+}
+
+stop_root_daemon_for_cleanup() {
+  local label="$1"
+  kv "$label.quit.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact QUIT"
+  ctl QUIT >/dev/null 2>&1 || true
+  wait_no_daemon_process || {
+    kv "$label.kill.command" "./dev/adb shell su 0 sh -c 'killall sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+    adb_su "killall sucre-snort-dev libsucre_snortd.so sucre-snort-ndk 2>/dev/null || true" >/dev/null
+    wait_no_daemon_process || true
+  }
+  remove_control_vnext_forward "$VNEXT_PORT"
+}
+
+redeploy_root_daemon() {
+  local serial
+  serial="$(adb_target_desc)"
+  kv "${1:-restart}.redeploy.command" "CONTROL_FORWARD_PORT=$VNEXT_PORT bash dev/dev-deploy.sh --serial $serial --no-clear-log"
+  CONTROL_FORWARD_PORT="$VNEXT_PORT" bash "$SNORT_ROOT/dev/dev-deploy.sh" \
+    --serial "$serial" --no-clear-log >/dev/null
+}
+
+stage_only_root_daemon() {
+  local label="$1"
+  local serial
+  serial="$(adb_target_desc)"
+  kv "$label.stageOnly.command" "CONTROL_FORWARD_PORT=$VNEXT_PORT bash dev/dev-deploy.sh --serial $serial --no-clear-log --stage-only"
+  CONTROL_FORWARD_PORT="$VNEXT_PORT" bash "$SNORT_ROOT/dev/dev-deploy.sh" \
+    --serial "$serial" --no-clear-log --stage-only >/dev/null
+  remove_control_vnext_forward "$VNEXT_PORT"
+}
+
+kill_daemon_hard() {
+  local label="$1"
+  local pids
+  pids="$(daemon_pids)"
+  kv "$label.pidof.command" "./dev/adb shell su 0 sh -c 'pidof sucre-snort-dev libsucre_snortd.so sucre-snort-ndk'"
+  kv "$label.pids" "${pids:-}"
+  if [[ -z "$pids" ]]; then
+    kv "$label.result" "BLOCKED"
+    kv "$label.reason" "daemon process not found before SIGKILL"
+    return 77
+  fi
+  kv "$label.kill.command" "./dev/adb shell su 0 sh -c 'kill -KILL $pids'"
+  adb_su "kill -KILL $pids 2>/dev/null || true" >/dev/null
+  wait_no_daemon_process || true
+  return 0
+}
+
+control_half_frame_disconnect() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+sock.settimeout(1)
+sock.sendall(b'128:{"id":680501,"cmd":"HELLO","args":{}')
+time.sleep(0.25)
+sock.close()
+PY
+}
+
+control_idle_disconnect() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+sock.settimeout(1)
+time.sleep(0.5)
+sock.close()
+PY
+}
+
+section "preflight"
+device_preflight || {
+  echo "BLOCKED: device_preflight failed; need one rooted Android target"
+  exit 77
+}
+if ! check_control_vnext_forward "$VNEXT_PORT"; then
+  setup_control_vnext_forward "$VNEXT_PORT"
+fi
+SNORT_CTL="$(find_snort_ctl)"
+export SNORT_CTL
+hello="$(ctl HELLO || true)"
+printf 'HELLO=%s\n' "$hello"
+if ! printf '%s\n' "$hello" | json_ok; then
+  echo "BLOCKED: HELLO failed via port $VNEXT_PORT"
+  exit 77
+fi
+uid="$(package_uid || true)"
+if [[ ! "$uid" =~ ^[0-9]+$ ]]; then
+  echo "BLOCKED: unable to read installed package UID for $PACKAGE"
+  exit 77
+fi
+kv "deviceId" "$(adb_target_desc)"
+kv "package" "$PACKAGE"
+kv "uid.command" "./dev/adb shell cmd package list packages -U $PACKAGE"
+kv "uid" "$uid"
+kv "buildFingerprint" "$(adb_cmd shell getprop ro.build.fingerprint | tr -d '\r')"
+kv "controlPort" "$VNEXT_PORT"
+kv "snortCtl" "$SNORT_CTL"
+
+section "ipv6_output"
+kv "ipv6_output.routeCheck.command" "./dev/adb shell ip -6 route get $IPV6_OUTPUT_HOST"
+ipv6_route="$(adb_cmd shell ip -6 route get "$IPV6_OUTPUT_HOST" 2>&1 | tr -d '\r' || true)"
+kv "ipv6_output.routeCheck.output" "$ipv6_route"
+if [[ "$ipv6_route" == *"unreachable"* || "$ipv6_route" == *"Network is unreachable"* \
+  || "$ipv6_route" != *" dev "* ]]; then
+  kv "ipv6_output.result" "BLOCKED"
+  kv "ipv6_output.reason" "device has no usable IPv6 route to $IPV6_OUTPUT_HOST"
+else
+  revision=680201
+  apply_args="$(policy_apply_l4_drop "$uid" "$revision" ipv6 output "$IPV6_OUTPUT_PORT" 680201 680201)"
+  eval_args="$(policy_evaluate "$uid" ipv6 output 40000 "$IPV6_OUTPUT_PORT")"
+  kv "ipv6_output.POLICY.APPLY.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.APPLY '$apply_args'"
+  apply_resp="$(ctl POLICY.APPLY "$apply_args")"
+  printf 'ipv6_output.POLICY.APPLY=%s\n' "$apply_resp"
+  kv "ipv6_output.POLICY.EVALUATE.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.EVALUATE '$eval_args'"
+  eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
+  printf 'ipv6_output.POLICY.EVALUATE=%s\n' "$eval_resp"
+  before="$(ctl NFQUEUE.STATUS)"
+  kv "ipv6_output.probe.command" "./dev/adb shell am start -n $ACTIVITY --ez debugTraffic true --es debugTrafficHost $IPV6_OUTPUT_HOST --ei debugTrafficPort $IPV6_OUTPUT_PORT --ei debugTrafficTimeoutMillis 1500"
+  am_start_debug_traffic "$IPV6_OUTPUT_HOST" "$IPV6_OUTPUT_PORT" || true
+  wait_debug_traffic_probe_result "$IPV6_OUTPUT_HOST" || true
+  record_debug_traffic_probe_result "ipv6_output"
+  after="$(ctl NFQUEUE.STATUS)"
+  status_delta "$before" "$after" "ipv6_output"
+  drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+  last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
+  last_result="$(field_value "$after" lastObservedResult)"
+  probe_uid="$(debug_traffic_probe_value uid || true)"
+  eval_verdict="$(json_result result.verdict "$eval_resp")"
+  eval_stage="$(json_result result.stage "$eval_resp")"
+  eval_revision="$(json_result result.revision "$eval_resp")"
+  kv "ipv6_output.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$probe_uid" == "$uid" ]]; then
+    kv "ipv6_output.result" "PASS"
+  else
+    kv "ipv6_output.result" "FAIL"
+    kv "ipv6_output.reason" "expected DROP evaluation plus dropped NFQUEUE delta from debugTraffic uid=$uid"
+    MATRIX_RC=1
+  fi
+fi
+
+section "input_ipv4"
+device_ip="$(device_ipv4_for_host_peer)"
+kv "input_ipv4.deviceIp.command" "./dev/adb shell ip -o -4 route get 1.1.1.1"
+kv "input_ipv4.deviceIp" "${device_ip:-}"
+if [[ -z "$device_ip" ]]; then
+  kv "input_ipv4.result" "BLOCKED"
+  kv "input_ipv4.reason" "unable to discover device IPv4 address for host peer traffic"
+else
+  revision=680301
+  apply_args="$(policy_apply_l4_drop "$uid" "$revision" ipv4 input "$INPUT_LISTEN_PORT" 680301 680301)"
+  eval_args="$(policy_evaluate "$uid" ipv4 input 40001 "$INPUT_LISTEN_PORT")"
+  kv "input_ipv4.POLICY.APPLY.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.APPLY '$apply_args'"
+  apply_resp="$(ctl POLICY.APPLY "$apply_args")"
+  printf 'input_ipv4.POLICY.APPLY=%s\n' "$apply_resp"
+  kv "input_ipv4.POLICY.EVALUATE.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.EVALUATE '$eval_args'"
+  eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
+  printf 'input_ipv4.POLICY.EVALUATE=%s\n' "$eval_resp"
+  before="$(ctl NFQUEUE.STATUS)"
+  kv "input_ipv4.listener.command" "./dev/adb shell am start -n $ACTIVITY --ez debugListen true --ei debugListenPort $INPUT_LISTEN_PORT --ei debugListenTimeoutMillis $INPUT_TIMEOUT_MILLIS"
+  am_start_listener "$INPUT_LISTEN_PORT" "$INPUT_TIMEOUT_MILLIS" || true
+  sleep 1
+  kv "input_ipv4.peer.command" "python3 socket.create_connection(($device_ip,$INPUT_LISTEN_PORT), timeout=3)"
+  peer_output="$(host_connect "$device_ip" "$INPUT_LISTEN_PORT" 3 2>&1 || true)"
+  [[ -n "$peer_output" ]] && kv "input_ipv4.peer.output" "$peer_output"
+  sleep 1
+  after="$(ctl NFQUEUE.STATUS)"
+  status_delta "$before" "$after" "input_ipv4"
+  drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+  packet_delta="$(delta_value "$before" "$after" packetsSeen)"
+  last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
+  last_result="$(field_value "$after" lastObservedResult)"
+  last_hook="$(field_value "$after" lastObservedHook)"
+  eval_verdict="$(json_result result.verdict "$eval_resp")"
+  eval_stage="$(json_result result.stage "$eval_resp")"
+  eval_revision="$(json_result result.revision "$eval_resp")"
+  kv "input_ipv4.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 && "$last_uid" == "$uid" && "$last_uid_known" == "True" && "$last_result" == "FlowDropped" ]]; then
+    kv "input_ipv4.result" "PASS"
+    kv "input_ipv4.hookObserved" "$last_hook"
+  elif [[ "$packet_delta" -gt 0 && "$last_uid_known" == "False" ]]; then
+    kv "input_ipv4.result" "UID_UNAVAILABLE"
+    kv "input_ipv4.reason" "NFQUEUE observed INPUT packets without NFQA_UID; contract maps them to Unknown Application, not package uid=$uid or Linux uid 0"
+    kv "input_ipv4.hookObserved" "$last_hook"
+  elif [[ "$packet_delta" -gt 0 && "$last_uid" != "$uid" ]]; then
+    kv "input_ipv4.result" "INVALID"
+    kv "input_ipv4.reason" "NFQUEUE observed packets with unexpected known UID attribution for INPUT; expected uid=$uid or uidKnown=false"
+    kv "input_ipv4.hookObserved" "$last_hook"
+    MATRIX_RC=1
+  else
+    kv "input_ipv4.result" "FAIL"
+    kv "input_ipv4.reason" "expected INPUT packet and dropped NFQUEUE delta for uid=$uid"
+    MATRIX_RC=1
+  fi
+
+  section "input_ipv4_unknown_application"
+  revision=680302
+  apply_args="$(policy_apply_unknown_l4_drop "$revision" ipv4 input "$INPUT_LISTEN_PORT" 680302 680302)"
+  eval_args="$(policy_evaluate_unknown ipv4 input 40001 "$INPUT_LISTEN_PORT")"
+  kv "input_ipv4_unknown.POLICY.APPLY.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.APPLY '$apply_args'"
+  apply_resp="$(ctl POLICY.APPLY "$apply_args")"
+  printf 'input_ipv4_unknown.POLICY.APPLY=%s\n' "$apply_resp"
+  kv "input_ipv4_unknown.POLICY.EVALUATE.command" "$SNORT_CTL --tcp 127.0.0.1:$VNEXT_PORT --compact POLICY.EVALUATE '$eval_args'"
+  eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
+  printf 'input_ipv4_unknown.POLICY.EVALUATE=%s\n' "$eval_resp"
+  before="$(ctl NFQUEUE.STATUS)"
+  kv "input_ipv4_unknown.listener.command" "./dev/adb shell am start -n $ACTIVITY --ez debugListen true --ei debugListenPort $INPUT_LISTEN_PORT --ei debugListenTimeoutMillis $INPUT_TIMEOUT_MILLIS"
+  am_start_listener "$INPUT_LISTEN_PORT" "$INPUT_TIMEOUT_MILLIS" || true
+  sleep 1
+  kv "input_ipv4_unknown.peer.command" "python3 socket.create_connection(($device_ip,$INPUT_LISTEN_PORT), timeout=3)"
+  peer_output="$(host_connect "$device_ip" "$INPUT_LISTEN_PORT" 3 2>&1 || true)"
+  [[ -n "$peer_output" ]] && kv "input_ipv4_unknown.peer.output" "$peer_output"
+  sleep 1
+  after="$(ctl NFQUEUE.STATUS)"
+  status_delta "$before" "$after" "input_ipv4_unknown"
+  drop_delta="$(delta_value "$before" "$after" droppedPackets)"
+  packet_delta="$(delta_value "$before" "$after" packetsSeen)"
+  last_uid="$(field_value "$after" lastObservedLinuxUid)"
+  last_uid_known="$(field_value "$after" lastObservedUidKnown)"
+  last_result="$(field_value "$after" lastObservedResult)"
+  last_hook="$(field_value "$after" lastObservedHook)"
+  drop_last_uid="$(json_result result.policyDropActivity.lastLinuxUid "$after")"
+  drop_last_uid_known="$(json_result result.policyDropActivity.lastUidKnown "$after")"
+  drop_last_stage="$(json_result result.policyDropActivity.lastStage "$after")"
+  eval_verdict="$(json_result result.verdict "$eval_resp")"
+  eval_stage="$(json_result result.stage "$eval_resp")"
+  eval_revision="$(json_result result.revision "$eval_resp")"
+  kv "input_ipv4_unknown.evaluateWinner" "$eval_verdict/$eval_stage/revision=$eval_revision"
+  if [[ "$eval_verdict" == "DROP" && "$drop_delta" -gt 0 \
+      && "$drop_last_uid_known" == "False" && "$drop_last_stage" == "L4" ]]; then
+    kv "input_ipv4_unknown.result" "PASS"
+    kv "input_ipv4_unknown.hookObserved" "$last_hook"
+    kv "input_ipv4_unknown.dropActivityUidKnown" "$drop_last_uid_known"
+    kv "input_ipv4_unknown.dropActivityUid" "$drop_last_uid"
+  elif [[ "$packet_delta" -gt 0 && "$drop_last_uid_known" != "False" ]]; then
+    kv "input_ipv4_unknown.result" "INVALID"
+    kv "input_ipv4_unknown.reason" "expected Unknown Application INPUT drop activity evidence but observed uidKnown=$drop_last_uid_known uid=$drop_last_uid"
+    kv "input_ipv4_unknown.hookObserved" "$last_hook"
+    MATRIX_RC=1
+  else
+    kv "input_ipv4_unknown.result" "FAIL"
+    kv "input_ipv4_unknown.reason" "expected explicit Unknown Application INPUT policy drop evidence"
+    MATRIX_RC=1
+  fi
+fi
+
+if [[ $RUN_CONTROL_TIMEOUT -eq 1 ]]; then
+  section "control_socket_timeout_disconnect"
+  kv "control_socket_timeout.scope" "control socket half-frame/idle disconnect smoke; not packet lease timeout evidence"
+  kv "control_socket_timeout.halfFrame.command" "python3 open tcp 127.0.0.1:$VNEXT_PORT, send incomplete netstring, close"
+  half_output="$(control_half_frame_disconnect "$VNEXT_PORT" 2>&1 || true)"
+  [[ -n "$half_output" ]] && kv "control_socket_timeout.halfFrame.output" "$half_output"
+  kv "control_socket_timeout.idleDisconnect.command" "python3 open tcp 127.0.0.1:$VNEXT_PORT, send no request, close"
+  idle_output="$(control_idle_disconnect "$VNEXT_PORT" 2>&1 || true)"
+  [[ -n "$idle_output" ]] && kv "control_socket_timeout.idleDisconnect.output" "$idle_output"
+  hello_timeout="$(ctl HELLO || true)"
+  status_timeout="$(ctl NFQUEUE.STATUS || true)"
+  printf 'control_socket_timeout.HELLO=%s\n' "$hello_timeout"
+  printf 'control_socket_timeout.NFQUEUE.STATUS=%s\n' "$status_timeout"
+  if [[ -z "$half_output" && -z "$idle_output" ]] \
+    && printf '%s\n' "$hello_timeout" | json_ok \
+    && printf '%s\n' "$status_timeout" | json_ok; then
+    kv "control_socket_timeout.result" "PASS"
+  else
+    kv "control_socket_timeout.result" "FAIL"
+    kv "control_socket_timeout.reason" "daemon should survive incomplete/idle control socket disconnects and continue serving HELLO/NFQUEUE.STATUS"
+    MATRIX_RC=1
+  fi
+fi
+
+if [[ $RUN_RESTART -eq 1 ]]; then
+  section "restart_no_residue"
+  stop_root_daemon_for_cleanup "restart.stop"
+  check_no_residue "restart.afterStop" || true
+  redeploy_root_daemon "restart"
+  setup_control_vnext_forward "$VNEXT_PORT"
+  hello2="$(ctl HELLO || true)"
+  printf 'restart.HELLO=%s\n' "$hello2"
+  if printf '%s\n' "$hello2" | json_ok; then
+    kv "restart.helloResult" "PASS"
+  else
+    kv "restart.helloResult" "FAIL"
+    MATRIX_RC=1
+  fi
+  before="$(ctl NFQUEUE.STATUS)"
+  apply_args="$(policy_apply_l4_drop "$uid" 680401 ipv4 output 80 680401 680401)"
+  eval_args="$(policy_evaluate "$uid" ipv4 output 40000 80)"
+  apply_resp="$(ctl POLICY.APPLY "$apply_args")"
+  eval_resp="$(ctl POLICY.EVALUATE "$eval_args")"
+  printf 'restart.POLICY.APPLY=%s\n' "$apply_resp"
+  printf 'restart.POLICY.EVALUATE=%s\n' "$eval_resp"
+  am_start_debug_traffic 1.1.1.1 80 || true
+  wait_debug_traffic_probe_result 1.1.1.1 || true
+  record_debug_traffic_probe_result "restart.probe"
+  after="$(ctl NFQUEUE.STATUS)"
+  status_delta "$before" "$after" "restart.probe"
+  stop_root_daemon_for_cleanup "restart.finalStop"
+  check_no_residue "restart.finalCleanup" || MATRIX_RC=1
+fi
+
+if [[ $RUN_FAULT -eq 1 ]]; then
+  section "sigkill_fault_no_residue"
+  redeploy_root_daemon "sigkill_fault"
+  setup_control_vnext_forward "$VNEXT_PORT"
+  fault_hello="$(ctl HELLO || true)"
+  printf 'sigkill_fault.HELLO=%s\n' "$fault_hello"
+  if ! printf '%s\n' "$fault_hello" | json_ok; then
+    kv "sigkill_fault.result" "BLOCKED"
+    kv "sigkill_fault.reason" "daemon did not answer HELLO after redeploy"
+  elif ! check_hooks_present "sigkill_fault.hooksBefore"; then
+    kv "sigkill_fault.result" "BLOCKED"
+    kv "sigkill_fault.reason" "cannot inject fault without confirmed NFQUEUE hook residue target"
+  else
+    if kill_daemon_hard "sigkill_fault.kill"; then
+      remove_control_vnext_forward "$VNEXT_PORT"
+      if record_unmanaged_fault_residue "sigkill_fault.unmanagedResidue"; then
+        kv "sigkill_fault.unmanagedFaultEvidence" "NO_RESIDUE_OBSERVED"
+      else
+        kv "sigkill_fault.unmanagedFaultEvidence" "RESIDUE_OBSERVED"
+        if [[ "$S68_FAIL_ON_UNMANAGED_RESIDUE" == "1" ]]; then
+          kv "sigkill_fault.unmanagedResidue.legacyHardFail" "FAIL"
+          MATRIX_RC=1
+        fi
+      fi
+      kv "sigkill_fault.unmanagedFaultReason" "direct SIGKILL bypasses daemon-owned NFQUEUE hook cleanup; recovery/final cleanup is the formal no-residue gate"
+
+      redeploy_root_daemon "sigkill_fault.recovery"
+      setup_control_vnext_forward "$VNEXT_PORT"
+      recovery_hello="$(ctl HELLO || true)"
+      printf 'sigkill_fault.recovery.HELLO=%s\n' "$recovery_hello"
+      if printf '%s\n' "$recovery_hello" | json_ok; then
+        kv "sigkill_fault.recovery.result" "PASS"
+      else
+        kv "sigkill_fault.recovery.result" "FAIL"
+        MATRIX_RC=1
+      fi
+      stop_root_daemon_for_cleanup "sigkill_fault.recoveryStop"
+      stage_only_root_daemon "sigkill_fault.recoveryStageOnly"
+      check_no_residue "sigkill_fault.finalCleanup" || MATRIX_RC=1
+    fi
+  fi
+fi
+
+section "final_cleanup"
+stop_root_daemon_for_cleanup "final.stop"
+check_no_residue "final.noResidue" || MATRIX_RC=1
+
+exit "$MATRIX_RC"

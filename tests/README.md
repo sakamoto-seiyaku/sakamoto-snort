@@ -40,3 +40,11 @@ failed attempts.
 POC source, historical recipes and reference-tool retirement are classified in
 the [experiment catalog](../experiments/README.md). Its checks inspect paths and
 guards only; they do not run historical experiments.
+
+The [S332 shared-query acceptance](device/s332-debug-query.py) exercises the normal
+Root/VPN validation UI, independent Flow/Blocked/DNS facts, saved history and Host
+shared reads. Its [dated report](../docs/testing/2026-11-02_S332_DEBUG_QUERY.md)
+records prerequisites and the reuse of prior qualifications. Producerless Java
+Activity checks are [preserved as historical records](archive/activity-channel-20261102/README.md);
+the old command paths return77 (retired), not Product PASS. Lifecycle, online rules
+and desensitized diagnostics retain their current Java/native checks.

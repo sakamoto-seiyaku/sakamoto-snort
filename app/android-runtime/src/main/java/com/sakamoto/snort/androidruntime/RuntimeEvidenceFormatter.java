@@ -1,8 +1,41 @@
 package com.sakamoto.snort.androidruntime;
 
-/** Pure, bounded S194 evidence formatting; RuntimeService owns capture and I/O. */
+/** Pure runtime/query evidence formatting; callers own capture, limits and I/O. */
 final class RuntimeEvidenceFormatter {
     private RuntimeEvidenceFormatter() {}
+
+    /** Android JSON otherwise rounds u64 facts beyond signed long to Double.
+     * Keep those original decimal tokens as display strings; the query response
+     * itself remains untouched. Quoted JSON content and ordinary numbers retain
+     * their original representation.
+     */
+    static String queryDisplayDocument(String document) {
+        StringBuilder text = new StringBuilder(document.length());
+        boolean quoted = false, escaped = false;
+        for (int i = 0; i < document.length();) {
+            char value = document.charAt(i);
+            if (quoted) {
+                text.append(value); ++i;
+                if (escaped) escaped = false;
+                else if (value == '\\') escaped = true;
+                else if (value == '"') quoted = false;
+            } else if (value == '"') {
+                quoted = true; text.append(value); ++i;
+            } else if (value == '-' || (value >= '0' && value <= '9')) {
+                int end = i + 1;
+                while (end < document.length()
+                        && "0123456789.eE+-".indexOf(document.charAt(end)) >= 0) ++end;
+                String token = document.substring(i, end);
+                boolean large = token.length() >= 19 && token.matches("[0-9]+")
+                        && (token.length() > 19 || token.compareTo("9223372036854775807") > 0);
+                if (large) text.append('"');
+                text.append(token);
+                if (large) text.append('"');
+                i = end;
+            } else { text.append(value); ++i; }
+        }
+        return text.toString();
+    }
 
     static String productMutation(RuntimeControlNative.Status status, long generation,
                                   String stage, String errorCode, String errorMessage) {

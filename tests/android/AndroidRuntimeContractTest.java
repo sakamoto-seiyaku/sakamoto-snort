@@ -13,7 +13,6 @@ import com.sakamoto.snort.androidruntime.ApplicationSubjectId;
 import com.sakamoto.snort.androidruntime.ApplicationProtocolCatalog;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogEntry;
 import com.sakamoto.snort.androidruntime.ApplicationCatalogProvider;
-import com.sakamoto.snort.androidruntime.ActivityL4RuleDraft;
 import com.sakamoto.snort.androidruntime.AuthoringPolicyBundle;
 import com.sakamoto.snort.androidruntime.AuthoringPolicyCompiler;
 import com.sakamoto.snort.androidruntime.ProductStateSnapshot;
@@ -22,12 +21,9 @@ import com.sakamoto.snort.androidruntime.ProductStore;
 import com.sakamoto.snort.androidruntime.ProductPacketAdapterContract;
 import com.sakamoto.snort.androidruntime.ProductCoreLifecycle;
 import com.sakamoto.snort.androidruntime.ProductCoreOwner;
-import com.sakamoto.snort.androidruntime.BoundedActivityStore;
 import com.sakamoto.snort.androidruntime.LocalProductBackend;
 import com.sakamoto.snort.androidruntime.ProductCatalogFormatter;
 import com.sakamoto.snort.androidruntime.ProductCatalogProjectionStore;
-import com.sakamoto.snort.androidruntime.ProductActivityProjectionStore;
-import com.sakamoto.snort.androidruntime.ProductNativeActivityIngestor;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactions;
 import com.sakamoto.snort.androidruntime.ProductPolicyTransactionStore;
 import com.sakamoto.snort.androidruntime.CapabilitySet;
@@ -38,8 +34,6 @@ import com.sakamoto.snort.androidruntime.AppDetail;
 import com.sakamoto.snort.androidruntime.ReleaseDiagnosticsExport;
 import com.sakamoto.snort.androidruntime.RuleDraft;
 import com.sakamoto.snort.androidruntime.RuleView;
-import com.sakamoto.snort.androidruntime.ActivityItem;
-import com.sakamoto.snort.androidruntime.ProtocolRecognitionSequence;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,12 +104,6 @@ public final class AndroidRuntimeContractTest {
         localProductBackendAppliesL4PolicyBeforePersistingBundle();
         localProductBackendPersistsPolicyTransactionsAroundProductState();
         localProductBackendExposesPolicyImportExportAndRestore();
-        boundedActivityStoreIsSeparateFromProductState();
-        localProductBackendOwnsBoundedActivityStoreWriter();
-        productActivityProjectionStoreRoundTripsAppDetail();
-        productActivityProjectionStoresProtocolRecognitionState();
-        productNativeActivityIngestorMapsRuntimeDropEvidence();
-        activityL4RuleDraftPrefillsFromPolicyDropEvidence();
         productCatalogFormatterKeepsUidIdentitySeparateFromMetadata();
         selectableCatalogRowsKeepBindingIdentityOutOfMetadata();
         localProductBackendProjectsCatalogWithoutOwningMetadataIdentity();
@@ -2756,353 +2744,6 @@ public final class AndroidRuntimeContractTest {
                 "failed backend restore leaves durable ProductState unchanged");
     }
 
-    private static void boundedActivityStoreIsSeparateFromProductState() throws Exception {
-        Path files = Files.createTempDirectory("sakamoto-50-activity-store");
-        ProductStore product = new ProductStore(files.toFile());
-        ApplicationSubjectId app = ApplicationSubjectId.fromUid(10001);
-        product.bindApplication(app);
-
-        BoundedActivityStore activity = new BoundedActivityStore(2);
-        activity.append(new BoundedActivityStore.Record(1L, app, "allow", "default"));
-        activity.append(new BoundedActivityStore.Record(2L, app, "drop", "gate"));
-        activity.append(new BoundedActivityStore.Record(3L, app, "drop", "l4"));
-        check(activity.records().size() == 2, "activity store is bounded");
-        check(activity.activityItems().size() == 2,
-                "activity store keeps ActivityItem projections bounded");
-        check(activity.evictedRecords() == 1L,
-                "activity detail eviction is observable and lossy");
-
-        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
-        check(restored.boundApplications.contains(app),
-                "bounded Activity eviction cannot change policy/config state");
-        check(ProductStateStore.stateFile(files.toFile()).getPath().contains("product-state"),
-                "policy/config state has its own repository path");
-        check(!ProductStateStore.stateFile(files.toFile()).getPath()
-                        .contains(BoundedActivityStore.REPOSITORY_DIRECTORY),
-                "bounded Activity repository path is not policy/config state");
-    }
-
-    private static void localProductBackendOwnsBoundedActivityStoreWriter() throws Exception {
-        Path files = Files.createTempDirectory("sakamoto-58-activity-writer");
-        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
-        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
-                () -> Arrays.asList(new ApplicationCatalogEntry(app,
-                        "com.example.mail", "Mail", "icon:mail/u10",
-                        app.userId, "Work", true)),
-                json -> LocalProductBackend.PolicyApplyResult.ok());
-        backend.bindApplication(app);
-        backend.setNetworkGate(app, AuthoringPolicyBundle.NetworkContextId.WIFI, true);
-
-        ActivityItem drop = ActivityItem.policyDrop(app, "Mail", "com.example.mail",
-                1000L, "1.1.1.1", "tcp", 443, "output", 7L,
-                "NetworkGate", 0x5100000000000001L, 0x51000001);
-        ActivityItem allowed = ActivityItem.allowedFlow(app, "Mail", "com.example.mail",
-                1001L, "1.1.1.1", "tcp", 443, "output", "orig",
-                5L, 2048L, 8L, "None");
-        backend.ingestActivity(drop);
-        backend.ingestActivity(allowed);
-
-        check(backend.activityStore().capacity() == BoundedActivityStore.DEFAULT_CAPACITY,
-                "LocalProductBackend owns the bounded Activity Store capacity");
-        check(backend.recentActivity(app, 10).size() == 2,
-                "LocalProductBackend is the Activity Store append/query seam");
-        AppDetail detail = backend.appDetail(app,
-                RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(RuntimeProfile.ROOT,
-                        "control-vnext", "1", "runtime", "arm64", "ok", 9L),
-                        CapabilitySet.androidL4(true, true)), 10);
-        check(detail.app != null && detail.app.subjectId.equals(app),
-                "AppDetail reads app identity from backend catalog projection");
-        check(detail.activity.size() == 2 && detail.rules.size() >= 1,
-                "AppDetail combines backend-owned activity and rules");
-        check(detail.prefillDraft != null,
-                "backend app detail keeps Activity-derived L4 prefill available");
-
-        ProductStateSnapshot restored = ProductStateStore.read(files.toFile());
-        check(restored.boundApplications.contains(app),
-                "Activity ingestion cannot mutate product binding state");
-        check(restored.authoringPolicyBundle.gateEntryCount == 1,
-                "Activity ingestion cannot mutate authoring policy state");
-    }
-
-    private static void productActivityProjectionStoreRoundTripsAppDetail() throws Exception {
-        Path files = Files.createTempDirectory("sakamoto-58-activity-projection");
-        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
-        LocalProductBackend backend = new LocalProductBackend(files.toFile(),
-                () -> Arrays.asList(new ApplicationCatalogEntry(app,
-                        "com.example.mail", "Mail", "icon:mail/u10",
-                        app.userId, "Work", true)),
-                json -> LocalProductBackend.PolicyApplyResult.ok());
-        backend.bindApplication(app);
-        backend.setL4Rule(l4Rule(app, "1.1.1.1/32", 6, 10, 0,
-                AuthoringPolicyBundle.L4Action.DROP));
-        backend.ingestActivity(ActivityItem.policyDrop(app, "Mail", "com.example.mail",
-                1000L, "1.1.1.1", "tcp", 443, "output", 7L,
-                "L4", 0x5200000000000001L, 0x52000001));
-        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(
-                RuntimeProfile.ROOT, "control-vnext", "1", "runtime", "arm64",
-                "ok", 9L), CapabilitySet.androidL4(true, true));
-        AppDetail published = backend.refreshProductActivityProjection(app, runtime, 10);
-        AppDetail restored = ProductActivityProjectionStore.read(files.toFile());
-
-        check(ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
-                        .contains("product-activity-projection"),
-                "Activity projection uses its own UI/evidence repository");
-        check(published.activity.size() == 1 && restored.activity.size() == 1,
-                "Activity projection round-trips recent ActivityItem rows");
-        check(restored.rules.size() == 1
-                        && restored.rules.get(0).policyRevision
-                        == published.rules.get(0).policyRevision,
-                "Activity projection round-trips RuleView revision");
-        check(restored.displayText.contains("Activity: 1")
-                        && restored.displayText.contains("L4 prefill: available"),
-                "Activity projection is directly renderable by the UI");
-        check(backend.productActivityProjection().activity.size() == 1,
-                "LocalProductBackend exposes the durable Activity projection read seam");
-        check(!ProductActivityProjectionStore.projectionFile(files.toFile()).getPath()
-                        .contains("product-state"),
-                "Activity projection is separate from policy/config state");
-    }
-
-    private static void productActivityProjectionStoresProtocolRecognitionState()
-            throws Exception {
-        Path files = Files.createTempDirectory("sakamoto-61-protocol-activity");
-        ApplicationSubjectId app = ApplicationSubjectId.fromUid(1010001);
-        ActivityItem detecting = ActivityItem.protocolRecognition(app, "Mail",
-                "com.example.mail", 2000L, "93.184.216.34", "tcp", 443,
-                "output", "orig", 2L, 256L, 7L,
-                ActivityItem.PROTOCOL_RECOGNITION_DETECTING, "", "",
-                "", 2);
-        ActivityItem identified = ActivityItem.protocolRecognition(app, "Mail",
-                "com.example.mail", 2500L, "93.184.216.34", "tcp", 443,
-                "output", "reply", 4L, 1024L, 7L,
-                ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED, "quic", "web",
-                "1:http:orig,3:quic:reply", 3);
-        ActivityItem unidentified = ActivityItem.protocolRecognition(app, "Mail",
-                "com.example.mail", 3000L, "192.0.2.44", "udp", 5353,
-                "output", "orig", 1L, 80L, 7L,
-                ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED, "", "",
-                "", 20);
-        ActivityItem malformedSequence = ActivityItem.protocolRecognition(app, "Mail",
-                "com.example.mail", 3500L, "192.0.2.55", "tcp", 443,
-                "output", "orig", 3L, 384L, 7L,
-                ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED, "tls", "web",
-                "bad-token,5:tls:orig,nope:quic:reply", 5);
-        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(RuntimeSnapshot.running(
-                RuntimeProfile.VPN, "control-vnext", "1", "runtime", "arm64",
-                "ok", 9L), CapabilitySet.androidL4(true, true));
-        AppDetail detail = AppDetail.normal(new AppSummary(app, "com.example.mail",
-                "Mail", "Work", app.userId, app.uid, true, true,
-                false, false, false, 0), runtime,
-                Collections.emptyList(), Arrays.asList(detecting, identified, unidentified,
-                        malformedSequence));
-        ProductActivityProjectionStore.write(files.toFile(), detail);
-        AppDetail restored = ProductActivityProjectionStore.read(files.toFile());
-
-        check(restored.activity.size() == 4,
-                "Activity projection preserves protocol recognition rows");
-        ActivityItem restoredIdentified = restored.activity.get(1);
-        ProtocolRecognitionSequence identifiedSequence =
-                restoredIdentified.protocolRecognition.recognitionSequence;
-        check(ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED.equals(
-                        restoredIdentified.protocolRecognitionState)
-                        && "quic".equals(restoredIdentified.applicationProtocolKey)
-                        && "web".equals(restoredIdentified.applicationProtocolCategory)
-                        && "1:http:orig,3:quic:reply".equals(
-                        restoredIdentified.protocolRecognitionSequence)
-                        && restoredIdentified.protocolPayloadPackets == 3,
-                "identified Activity row round-trips latest exact result and full sequence");
-        check(identifiedSequence.entries.size() == 2,
-                "identified Activity row exposes typed protocol recognition sequence entries");
-        ProtocolRecognitionSequence.Entry firstIdentifiedEntry =
-                identifiedSequence.entries.get(0);
-        ProtocolRecognitionSequence.Entry secondIdentifiedEntry =
-                identifiedSequence.entries.get(1);
-        check(firstIdentifiedEntry.payloadPacketSequence == 1L
-                        && "http".equals(firstIdentifiedEntry.protocolKey)
-                        && "orig".equals(firstIdentifiedEntry.flowDirection)
-                        && secondIdentifiedEntry.payloadPacketSequence == 3L
-                        && "quic".equals(secondIdentifiedEntry.protocolKey)
-                        && "reply".equals(secondIdentifiedEntry.flowDirection),
-                "identified Activity row exposes typed protocol recognition sequence fields");
-        ActivityItem restoredDetecting = restored.activity.get(0);
-        check(ActivityItem.PROTOCOL_RECOGNITION_DETECTING.equals(
-                        restoredDetecting.protocolRecognitionState)
-                        && restoredDetecting.protocolRecognition.recognitionSequence
-                        .entries.isEmpty()
-                        && ActivityItem.PROTOCOL_RECOGNITION_UNIDENTIFIED.equals(
-                        restored.activity.get(2).protocolRecognitionState),
-                "Activity rows can represent detecting, empty sequence and unidentified states");
-        ActivityItem restoredMalformed = restored.activity.get(3);
-        ProtocolRecognitionSequence malformedTypedSequence =
-                restoredMalformed.protocolRecognition.recognitionSequence;
-        check("bad-token,5:tls:orig,nope:quic:reply".equals(
-                        restoredMalformed.protocolRecognitionSequence)
-                        && malformedTypedSequence.entries.size() == 1,
-                "malformed protocol recognition sequence preserves wire and skips bad entries");
-        ProtocolRecognitionSequence.Entry malformedEntry =
-                malformedTypedSequence.entries.get(0);
-        check(malformedEntry.payloadPacketSequence == 5L
-                        && "tls".equals(malformedEntry.protocolKey)
-                        && "orig".equals(malformedEntry.flowDirection),
-                "malformed protocol recognition sequence keeps parseable typed fields");
-        check(restored.displayText.contains("recognition=identified")
-                        && restored.displayText.contains("appProtocol=quic")
-                        && restored.displayText.contains("category=web")
-                        && restored.displayText.contains("lpiSequence=1:http:orig,3:quic:reply")
-                        && restored.displayText.contains("payloadPackets=3"),
-                "AppDetail renders protocol recognition state, latest protocol, category and sequence");
-    }
-
-    private static void productNativeActivityIngestorMapsRuntimeDropEvidence() {
-        ProductNativeActivityIngestor.NativePolicyDropRecord rootDrop =
-                new ProductNativeActivityIngestor.NativePolicyDropRecord(
-                        3L, true, 1010001, true, 7,
-                        "10.0.0.1", "192.0.2.1", 6, 40000, 443,
-                        true, "output", "NetworkGate", 91, 7001L, 69L);
-        check(ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.ROOT,
-                        null, -1L, 4L, 0L),
-                "first native policy drop activity is ingested");
-        check(!ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.ROOT,
-                        RuntimeProfile.ROOT, 4L, 4L, 3L),
-                "same native policy drop total is not duplicated");
-        check(ProductNativeActivityIngestor.shouldIngest(rootDrop, RuntimeProfile.VPN,
-                        RuntimeProfile.ROOT, 4L, 4L, 3L),
-                "profile switch resets native activity de-duplication");
-        ActivityItem item = ProductNativeActivityIngestor.toActivityItem(rootDrop,
-                RuntimeProfile.ROOT, 1234L);
-        check(item.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
-                        && "drop".equals(item.verdict)
-                        && "NetworkGate".equals(item.winner)
-                        && "192.0.2.1".equals(item.remoteIp)
-                        && "tcp".equals(item.protocol)
-                        && item.remotePort == 443
-                        && item.policyRevision == 69L
-                        && item.ruleId == 7001L
-                        && "native_policy_drop_activity".equals(item.evidenceSource)
-                        && item.detailLossy,
-                "native policyDropActivity maps to a product ActivityItem");
-
-        ProductNativeActivityIngestor.NativePolicyDropRecord unknown =
-                new ProductNativeActivityIngestor.NativePolicyDropRecord(
-                        1L, true, 0, false, 0, "198.51.100.58", "10.111.0.2",
-                        17, 53, 45658, true, "input", "L4", 17, 42L, 7L);
-        ActivityItem unknownItem = ProductNativeActivityIngestor.toActivityItem(unknown,
-                RuntimeProfile.VPN, 1235L);
-        check("Unknown Application".equals(unknownItem.appLabel)
-                        && "vpn_input".equals(
-                        unknownItem.devicePacketDirection)
-                        && "udp".equals(unknownItem.protocol)
-                        && "198.51.100.58".equals(unknownItem.remoteIp)
-                        && unknownItem.remotePort == 53,
-                "unknown native attribution remains explicit in ActivityItem");
-
-        ProductNativeActivityIngestor.NativeAllowedFlowRecord allowed =
-                new ProductNativeActivityIngestor.NativeAllowedFlowRecord(
-                        4L, true, 1010001, true, 7,
-                        "10.0.0.1", "192.0.2.1", 6,
-                        40000, 443, true, "output", "orig",
-                        70L, 3L, 4500L, "", "", "", "", 0);
-        check(ProductNativeActivityIngestor.shouldIngest(allowed, RuntimeProfile.ROOT,
-                        RuntimeProfile.ROOT, 4L, 4L, 3L),
-                "new native allowed FlowEntry total is ingested");
-        ActivityItem allowedItem = ProductNativeActivityIngestor.toActivityItem(
-                allowed, RuntimeProfile.ROOT, 1236L);
-        check(allowedItem.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
-                        && "pass_next".equals(allowedItem.verdict)
-                        && "flow_entry".equals(allowedItem.evidenceSource)
-                        && !allowedItem.detailLossy
-                        && "192.0.2.1".equals(allowedItem.remoteIp)
-                        && allowedItem.remotePort == 443
-                        && "tcp".equals(allowedItem.protocol)
-                        && "output".equals(allowedItem.devicePacketDirection)
-                        && "orig".equals(allowedItem.flowDirection)
-                        && allowedItem.policyRevision == 70L
-                        && allowedItem.packets == 3L
-                        && allowedItem.bytes == 4500L,
-                "native allowed FlowEntry maps to a product ActivityItem");
-
-        ProductNativeActivityIngestor.NativeAllowedFlowRecord recognized =
-                new ProductNativeActivityIngestor.NativeAllowedFlowRecord(
-                        5L, true, 1010001, true, 7,
-                        "10.0.0.1", "192.0.2.1", 17,
-                        53000, 443, true, "output", "reply",
-                        71L, 4L, 5200L,
-                        ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED,
-                        "quic", "web", "1:http:orig,4:quic:reply", 4);
-        ActivityItem recognizedItem = ProductNativeActivityIngestor.toActivityItem(
-                recognized, RuntimeProfile.VPN, 1237L);
-        check(recognizedItem.subjectId.equals(ApplicationSubjectId.fromUid(1010001))
-                        && "pass_next".equals(recognizedItem.verdict)
-                        && "flow_entry_lpi_recognition".equals(
-                        recognizedItem.evidenceSource)
-                        && ActivityItem.PROTOCOL_RECOGNITION_IDENTIFIED.equals(
-                        recognizedItem.protocolRecognitionState)
-                        && "quic".equals(recognizedItem.applicationProtocolKey)
-                        && "web".equals(recognizedItem.applicationProtocolCategory)
-                        && "1:http:orig,4:quic:reply".equals(
-                        recognizedItem.protocolRecognitionSequence)
-                        && recognizedItem.protocolPayloadPackets == 4
-                        && "udp".equals(recognizedItem.protocol)
-                        && "vpn_output".equals(recognizedItem.devicePacketDirection)
-                        && "reply".equals(recognizedItem.flowDirection),
-                "native allowed FlowEntry recognition state maps to protocol ActivityItem");
-    }
-
-    private static void activityL4RuleDraftPrefillsFromPolicyDropEvidence() {
-        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromPolicyDropActivity(
-                "1.1.1.1", 443, ActivityL4RuleDraft.TCP_PROTOCOL, 1010001, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
-        check(draft != null, "L4 policy drop Activity can create an L4 prefill draft");
-        check(draft.subjectId.equals(ApplicationSubjectId.fromUid(1010001)),
-                "L4 prefill draft preserves complete UID subject");
-        check(draft.family == AuthoringPolicyBundle.IpFamily.IPV4
-                        && "1.1.1.1/32".equals(draft.destinationCidr),
-                "L4 prefill draft derives IPv4 destination CIDR from probe host");
-        check(draft.destinationPorts.first == 443 && draft.destinationPorts.last == 443,
-                "L4 prefill draft derives exact destination port from probe");
-        check(draft.ipProtocol == ActivityL4RuleDraft.TCP_PROTOCOL
-                        && draft.direction == AuthoringPolicyBundle.PacketDirection.OUTPUT
-                        && draft.action == AuthoringPolicyBundle.L4Action.DROP,
-                "L4 prefill draft sets TCP/output/drop defaults from the probe context");
-        check(draft.networkContext == AuthoringPolicyBundle.NetworkContextId.WIFI,
-                "L4 prefill draft maps Activity network context to Product context");
-        AuthoringPolicyBundle.L4Rule rule = draft.toRule();
-        check(rule.subjectId.equals(draft.subjectId)
-                        && "1.1.1.1/32".equals(rule.destinationCidr)
-                        && rule.destinationPorts.first == 443,
-                "L4 prefill draft materializes as a Product L4Rule");
-        check(draft.summary().contains("L4 prefill: subject=android.uid:1010001")
-                        && draft.summary().contains("destinationPort=443"),
-                "L4 prefill draft renders an actionable UI summary");
-
-        ActivityL4RuleDraft udp = ActivityL4RuleDraft.fromPolicyDropActivity(
-                "1.1.1.1", 53, ActivityL4RuleDraft.UDP_PROTOCOL, 1010001, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
-        check(udp != null && udp.ipProtocol == ActivityL4RuleDraft.UDP_PROTOCOL
-                        && udp.destinationPorts.first == 53
-                        && udp.summary().contains("ipProtocol=17"),
-                "L4 prefill draft supports UDP policy drop Activity evidence");
-
-        ActivityL4RuleDraft v6 = ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                "2606:4700:4700::1111", 80, 1010001, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
-        check(v6 != null && v6.family == AuthoringPolicyBundle.IpFamily.IPV6
-                        && "2606:4700:4700::1111/128".equals(v6.destinationCidr),
-                "L4 prefill draft derives IPv6 destination CIDR from probe host");
-        check(ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                "1.1.1.1", 443, 1010001, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "NetworkGate") == null,
-                "NetworkGate Activity does not masquerade as an L4 prefill");
-        check(ActivityL4RuleDraft.fromTcpPolicyDropActivity(
-                "1.1.1.1", 443, 1010001, false,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4") == null,
-                "unknown UID Activity cannot create an application-scoped L4 prefill");
-        check(ActivityL4RuleDraft.fromPolicyDropActivity(
-                "1.1.1.1", 443, 1, 1010001, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4") == null,
-                "unsupported protocol Activity cannot create an L4 prefill");
-    }
-
     private static void productCatalogFormatterKeepsUidIdentitySeparateFromMetadata() {
         ApplicationSubjectId primary = ApplicationSubjectId.fromUid(10001);
         ApplicationSubjectId work = ApplicationSubjectId.fromUid(1010001);
@@ -3943,36 +3584,12 @@ public final class AndroidRuntimeContractTest {
                         && "l4".equals(l4.family),
                 "RuleView exposes stable family/action/revision instead of compiler details");
 
-        ActivityItem drop = ActivityItem.policyDrop(subject, "Mail",
-                "com.example.mail", 1234L, "1.1.1.1", "tcp", 443,
-                "output", bundle.revision, "L4", l4.ruleId, 42);
-        ActivityItem allowed = ActivityItem.allowedFlow(subject, "Mail",
-                "com.example.mail", 1235L, "1.1.1.1", "tcp", 443,
-                "output", "orig", 7L, 4096L, bundle.revision, "None");
-        check(drop.detailLossy
-                        && "bounded_activity_accumulator".equals(drop.evidenceSource)
-                        && drop.canPrefillL4Rule()
-                        && !allowed.detailLossy
-                        && "flow_entry".equals(allowed.evidenceSource)
-                        && allowed.packets == 7L && allowed.bytes == 4096L,
-                "ActivityItem separates bounded DROP detail from allowed FlowEntry evidence");
-
-        ActivityL4RuleDraft activityDraft = ActivityL4RuleDraft.fromPolicyDropActivity(
-                "1.1.1.1", 443, ActivityL4RuleDraft.TCP_PROTOCOL, subject.uid, true,
-                AuthoringPolicyBundle.NetworkContextId.WIFI.wireId, "L4");
-        RuleDraft draft = RuleDraft.fromActivityL4RuleDraft(activityDraft);
-        check(draft != null && draft.subjectId.equals(subject)
-                        && "activity".equals(draft.source)
-                        && draft.toL4Rule().subjectId.equals(subject),
-                "RuleDraft can prefill an L4 rule from Activity evidence");
-
         AppDetail detail = AppDetail.normal(app, summary,
-                Arrays.asList(gate, l4), Arrays.asList(drop, allowed));
+                Arrays.asList(gate, l4));
         check(AppDetail.STATE_NORMAL.equals(detail.state)
                         && detail.rules.size() == 2
-                        && detail.activity.size() == 2
-                        && detail.prefillDraft != null,
-                "AppDetail combines app, rules, activity, health, and prefill state");
+,
+                "AppDetail combines app, rules and health");
         check(AppDetail.loading(summary).rules.isEmpty()
                         && AppDetail.error(summary, applyFailure).healthIssue.blocking,
                 "AppDetail covers loading and actionable error states");
@@ -3980,15 +3597,14 @@ public final class AndroidRuntimeContractTest {
                 RuntimeSnapshot.STATE_STARTING, "starting", "unavailable",
                 false, true, false, false, capabilities, HealthIssue.none());
         check(AppDetail.STATE_EMPTY.equals(AppDetail.normal(null, summary,
-                        Collections.emptyList(), Collections.emptyList()).state)
+                        Collections.emptyList()).state)
                         && AppDetail.STATE_LOADING.equals(AppDetail.normal(app,
-                        loadingSummary, Collections.emptyList(),
-                        Collections.emptyList()).state),
+                        loadingSummary, Collections.emptyList()).state),
                 "AppDetail distinguishes empty and loading product states");
         for (RuntimeSummary issueSummary : Arrays.asList(permission, transport,
                 runtimeFault, recovery, paused)) {
             AppDetail issueDetail = AppDetail.normal(app, issueSummary,
-                    Collections.emptyList(), Collections.emptyList());
+                    Collections.emptyList());
             check(AppDetail.STATE_ERROR.equals(issueDetail.state)
                             && issueDetail.healthIssue.present()
                             && issueDetail.displayText.contains(
@@ -4020,14 +3636,9 @@ public final class AndroidRuntimeContractTest {
                 "control-vnext", "1", "runtime-arm64", "arm64", "ok", 4242L, 9L);
         RuntimeSummary summary = RuntimeSummary.fromSnapshot(runtime,
                 CapabilitySet.androidL4(true, true));
-        AppDetail detail = AppDetail.normal(AppSummary.fromCatalogRow(row), summary,
-                Arrays.asList(RuleView.l4(bundle.l4Rules.get(0), bundle.revision)),
-                Arrays.asList(ActivityItem.policyDrop(subject, "Mail",
-                        "com.example.mail", 1234L, "1.1.1.1", "tcp", 443,
-                        "output", bundle.revision, "L4",
-                        bundle.l4Rules.get(0).ruleId, 42)));
 
-        String export = ReleaseDiagnosticsExport.format(runtime, projection, detail, row,
+
+        String export = ReleaseDiagnosticsExport.format(runtime, projection, row,
                 123456789L);
         check(export.contains("schema=sakamoto.android_l4.release_diagnostics.v1"),
                 "release diagnostics schema is stable");
@@ -4039,7 +3650,7 @@ public final class AndroidRuntimeContractTest {
                         && export.contains("runtime.coreHealth=ok")
                         && export.contains("runtime.abi=arm64")
                         && export.contains("selected.subject=" + subject.encode())
-                        && export.contains("appDetail.activity=1"),
+                        && export.contains("health.category="),
                 "release diagnostics includes bounded troubleshooting facts");
         check(export.contains("feedback.bug=Bug report")
                         && export.contains("feedback.compatibility=Compatibility report")

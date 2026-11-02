@@ -15,58 +15,32 @@ public final class AppDetail {
     public final String state;
     public final RuntimeSummary runtime;
     public final List<RuleView> rules;
-    public final List<ActivityItem> activity;
     public final HealthIssue healthIssue;
-    public final RuleDraft prefillDraft;
     public final String displayText;
 
     public AppDetail(AppSummary app, String state, RuntimeSummary runtime,
-                     List<RuleView> rules, List<ActivityItem> activity,
-                     HealthIssue healthIssue, RuleDraft prefillDraft) {
+                     List<RuleView> rules, HealthIssue healthIssue) {
         this.app = app;
         this.state = bounded(state == null || state.trim().isEmpty()
                 ? STATE_EMPTY : state);
         this.runtime = runtime;
         this.rules = immutableRules(rules);
-        this.activity = immutableActivity(activity);
         this.healthIssue = healthIssue == null ? HealthIssue.none() : healthIssue;
-        this.prefillDraft = prefillDraft;
         this.displayText = buildDisplayText();
     }
 
     public static AppDetail normal(AppSummary app, RuntimeSummary runtime,
-                                   List<RuleView> rules, List<ActivityItem> activity) {
-        RuleDraft prefill = null;
-        if (activity != null) {
-            for (ActivityItem item : activity) {
-                if (item != null && item.canPrefillL4Rule()) {
-                    prefill = new RuleDraft(item.subjectId,
-                            item.remoteIp.indexOf(':') >= 0
-                                    ? AuthoringPolicyBundle.IpFamily.IPV6
-                                    : AuthoringPolicyBundle.IpFamily.IPV4,
-                            item.remoteIp + (item.remoteIp.indexOf(':') >= 0
-                                    ? "/128" : "/32"),
-                            item.remotePort,
-                            "udp".equalsIgnoreCase(item.protocol) ? 17 : 6,
-                            AuthoringPolicyBundle.PacketDirection.OUTPUT,
-                            null, AuthoringPolicyBundle.L4Action.DROP, "activity");
-                    break;
-                }
-            }
-        }
+                                   List<RuleView> rules) {
         HealthIssue issue = runtime == null ? HealthIssue.none() : runtime.healthIssue;
-        return new AppDetail(app, stateFor(app, runtime, issue),
-                runtime, rules, activity, issue, prefill);
+        return new AppDetail(app, stateFor(app, runtime, issue), runtime, rules, issue);
     }
 
     public static AppDetail loading(RuntimeSummary runtime) {
-        return new AppDetail(null, STATE_LOADING, runtime, Collections.emptyList(),
-                Collections.emptyList(), HealthIssue.none(), null);
+        return new AppDetail(null, STATE_LOADING, runtime, Collections.emptyList(), HealthIssue.none());
     }
 
     public static AppDetail error(RuntimeSummary runtime, HealthIssue issue) {
-        return new AppDetail(null, STATE_ERROR, runtime, Collections.emptyList(),
-                Collections.emptyList(), issue, null);
+        return new AppDetail(null, STATE_ERROR, runtime, Collections.emptyList(), issue);
     }
 
     private static List<RuleView> immutableRules(List<RuleView> rules) {
@@ -75,18 +49,6 @@ public final class AppDetail {
             for (RuleView rule : rules) {
                 if (rule != null) {
                     values.add(rule);
-                }
-            }
-        }
-        return Collections.unmodifiableList(values);
-    }
-
-    private static List<ActivityItem> immutableActivity(List<ActivityItem> activity) {
-        ArrayList<ActivityItem> values = new ArrayList<>();
-        if (activity != null) {
-            for (ActivityItem item : activity) {
-                if (item != null) {
-                    values.add(item);
                 }
             }
         }
@@ -139,35 +101,6 @@ public final class AppDetail {
                     .append(rule.action).append(" ")
                     .append(rule.label)
                     .append(" revision=").append(rule.policyRevision);
-        }
-        out.append('\n').append("Activity: ").append(activity.size());
-        for (ActivityItem item : activity) {
-            out.append('\n').append("- ")
-                    .append(item.appLabel.isEmpty() ? item.subjectId.encode() : item.appLabel)
-                    .append(" ").append(item.protocol)
-                    .append("/").append(item.remotePort)
-                    .append(" remote=").append(item.remoteIp)
-                    .append(" deviceDir=").append(item.devicePacketDirection)
-                    .append(" flowDir=").append(item.flowDirection)
-                    .append(" packets=").append(item.packets)
-                    .append(" bytes=").append(item.bytes)
-                    .append(" verdict=").append(item.verdict)
-                    .append(" winner=").append(item.winner)
-                    .append(" revision=").append(item.policyRevision)
-                    .append(" source=").append(item.evidenceSource);
-            ProtocolRecognitionProjection recognition = item.protocolRecognition;
-            if (recognition.present()) {
-                out.append(" recognition=").append(recognition.state)
-                        .append(" appProtocol=").append(recognition.key)
-                        .append(" category=").append(recognition.category)
-                        .append(" lpiSequence=")
-                        .append(recognition.recognitionSequence.wire())
-                        .append(" payloadPackets=").append(recognition.payloadPackets);
-            }
-        }
-        if (prefillDraft != null) {
-            out.append('\n').append("L4 prefill: available from ")
-                    .append(prefillDraft.source);
         }
         return out.toString();
     }

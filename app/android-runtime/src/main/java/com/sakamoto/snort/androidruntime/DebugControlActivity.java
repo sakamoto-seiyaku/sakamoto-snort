@@ -97,8 +97,6 @@ public class DebugControlActivity extends Activity {
     private static final String EXTRA_DEBUG_DOWNLOAD_MAX_BYTES = "debugDownloadMaxBytes";
     private static final String EXTRA_DEBUG_APPLY_GATE_AND_PROBE = "debugApplyGateAndProbe";
     private static final String EXTRA_DEBUG_APPLY_EMPTY_POLICY = "debugApplyEmptyPolicy";
-    private static final String EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY =
-            "debugL4PrefillFromActivity";
     private static final String EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS =
             "debugExportReleaseDiagnostics";
     private static final String EXTRA_DEBUG_LISTEN = "debugListen";
@@ -161,8 +159,6 @@ public class DebugControlActivity extends Activity {
             "debug/udp-listener.properties";
     private static final String DEBUG_DOWNLOAD_PROBE_RESULT_PATH =
             "debug/download-probe.properties";
-    private static final String DEBUG_L4_PREFILL_RESULT_PATH =
-            "debug/l4-prefill.properties";
     private static final String DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH =
             "debug/release-diagnostics.properties";
     private static final String DEBUG_TRAFFIC_HOST = "1.1.1.1";
@@ -531,7 +527,6 @@ public class DebugControlActivity extends Activity {
                 || intent.getBooleanExtra(EXTRA_DEBUG_UDP_TRAFFIC, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_DOWNLOAD, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)
-                || intent.getBooleanExtra(EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_LISTEN, false)
                 || intent.getBooleanExtra(EXTRA_DEBUG_UDP_LISTEN, false)
@@ -733,17 +728,6 @@ public class DebugControlActivity extends Activity {
         if (intent.getBooleanExtra(EXTRA_DEBUG_APPLY_GATE_AND_PROBE, false)) {
             main.post(this::runDebugApplyGateAndProbe);
         }
-        if (intent.getBooleanExtra(EXTRA_DEBUG_L4_PREFILL_FROM_ACTIVITY, false)) {
-            String host = intent.getStringExtra(EXTRA_DEBUG_TRAFFIC_HOST);
-            if (host == null || host.isEmpty()) {
-                host = DEBUG_TRAFFIC_HOST;
-            }
-            int port = boundedPort(intent.getIntExtra(
-                    EXTRA_DEBUG_TRAFFIC_PORT, DEBUG_TRAFFIC_PORT), DEBUG_TRAFFIC_PORT);
-            final String prefillHost = host;
-            final int prefillPort = port;
-            main.post(() -> runDebugL4PrefillFromActivity(prefillHost, prefillPort));
-        }
         if (intent.getBooleanExtra(EXTRA_DEBUG_EXPORT_RELEASE_DIAGNOSTICS, false)) {
             main.post(this::exportReleaseDiagnostics);
         }
@@ -865,7 +849,6 @@ public class DebugControlActivity extends Activity {
         root.addView(historyQuery, fillWrap());
         historyView = new TextView(this);
         historyView.setContentDescription("History result");
-        root.addView(historyView, fillWrap());
 
         LinearLayout dashboardButtons = new LinearLayout(this);
         Button dashboardQuery = new Button(this);
@@ -884,6 +867,7 @@ public class DebugControlActivity extends Activity {
         });
         dashboardButtons.addView(nextFlows, weighted());
         root.addView(dashboardButtons, fillWrap());
+        root.addView(historyView, fillWrap());
         dashboardView = new TextView(this);
         dashboardView.setContentDescription("Health and flow result");
         root.addView(dashboardView, fillWrap());
@@ -1048,7 +1032,8 @@ public class DebugControlActivity extends Activity {
                             count += read;
                         }
                         if (count == bytes.length) {
-                            reply = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+                            reply = new JSONObject(RuntimeEvidenceFormatter.queryDisplayDocument(
+                                    new String(bytes, StandardCharsets.UTF_8)));
                             break;
                         }
                     } catch (IOException | JSONException ignored) {
@@ -1160,6 +1145,12 @@ public class DebugControlActivity extends Activity {
                     .append(" · capacity=").append(flows.optJSONArray("capacity"))
                     .append(" · misses=").append(flows.optJSONArray("capacity_misses"))
                     .append(" · allocated bytes=").append(flows.optJSONArray("allocated_bytes"))
+                    .append(" · source=").append(queryFact(flows, "source"))
+                    .append(" · page limit=").append(queryFact(flows, "page_limit"))
+                    .append(" · scanned=").append(queryFact(flows, "scanned"))
+                    .append('/').append(queryFact(flows, "scan_limit"))
+                    .append(" · cross-page snapshot consistent=")
+                    .append(queryFact(flows, "snapshot_consistent_across_pages"))
                     .append(" · cursor=").append(flows.optInt("cursor"))
                     .append(" → ").append(flows.optInt("next_cursor"))
                     .append(flows.optBoolean("done") ? " · end" : " · more")
@@ -1168,20 +1159,30 @@ public class DebugControlActivity extends Activity {
             if (entries != null) for (int i = 0; i < entries.length(); ++i) {
                 JSONObject flow = entries.optJSONObject(i);
                 if (flow == null) continue;
-                text.append("Flow ").append(flow.optInt("worker")).append(':').append(flow.optInt("slot"))
+                text.append("Flow ").append(flow.optString("generation", flows.optString("generation")))
+                        .append(':').append(flow.optInt("worker")).append(':').append(flow.optInt("slot"))
+                        .append(':').append(flow.optString("incarnation"))
                         .append(" · ").append(flow.optString("canonical_a"))
                         .append(':').append(flow.optString("port_a"))
                         .append(" ↔ ").append(flow.optString("canonical_b"))
                         .append(':').append(flow.optString("port_b"))
                         .append(" · UID ").append(flow.optString("uid"))
                         .append(" · network ").append(flow.optString("network"))
+                        .append(" · first/last seen monotonic µs ")
+                        .append(queryFact(flow, "first_seen_monotonic_us")).append('/')
+                        .append(queryFact(flow, "last_seen_monotonic_us"))
+                        .append(" · device direction=").append(queryFact(flow, "last_device_direction"))
+                        .append(" · Flow direction=").append(queryFact(flow, "last_flow_direction"))
                         .append(" · packets ").append(flow.optJSONArray("packets"))
+                        .append(" · bytes ").append(flow.optJSONArray("bytes"))
                         .append(" · L7 ").append(flow.optBoolean("protocols_available")
                                 ? flow.optJSONArray("protocol_labels") : "unavailable")
                         .append(" · LPI stop=").append(lpiStopName(flow.optInt("lpi_stop", -1)))
                         .append(" · SNI result=").append(sniResultName(flow.optInt("sni_result", -1)))
                         .append(" stop=").append(sniStopName(flow.optInt("sni_stop", -1)))
                         .append('\n');
+                text.append("  Target names: ").append(queryFact(flow, "target_names")).append('\n')
+                        .append("  Recognition: ").append(queryFact(flow, "recognition")).append('\n');
                 JSONArray attribution = flow.optJSONArray("attribution");
                 if (attribution != null) for (int side = 0; side < Math.min(2, attribution.length()); ++side) {
                     JSONObject fact = attribution.optJSONObject(side);
@@ -1224,68 +1225,79 @@ public class DebugControlActivity extends Activity {
         return code >= 0 && code < names.length ? names[code] : "unknown(" + code + ")";
     }
 
-    private static void appendHistoryLine(StringBuilder text, String label,
-                                          JSONObject interpretation, JSONObject counts) {
-        if (interpretation == null || interpretation.isNull("version")) return;
-        String name = interpretation.isNull("name") ? "name unavailable"
-                : interpretation.optString("name", "name unavailable");
-        JSONObject conditions = interpretation.optJSONObject("conditions");
-        String conditionStatus = conditions == null ? "unavailable"
-                : conditions.optString("status", "unavailable");
-        text.append(label).append(" · v").append(interpretation.optString("version"))
-                .append(" · ").append(name)
-                .append(" · action ").append(interpretation.optInt("actual_action"))
-                .append(" · conditions ").append(conditionStatus);
-        if (counts != null && counts.has("packets"))
-            text.append(" · packets ").append(counts.opt("packets"));
-        text.append('\n');
+    private static String queryFact(JSONObject object, String key) {
+        return object == null || object.isNull(key) ? "unavailable" : object.opt(key).toString();
+    }
+
+    /** Render the existing bounded query records without inventing missing facts. */
+    private static void appendQueryRecords(StringBuilder text, String label, JSONObject rows,
+                                           int displayLimit) {
+        text.append(label).append(": ");
+        if (rows == null) { text.append("unavailable\n"); return; }
+        ArrayList<String> keys = new ArrayList<>();
+        for (java.util.Iterator<String> it = rows.keys(); it.hasNext();) keys.add(it.next());
+        keys.sort(java.util.Collections.reverseOrder());
+        int shown = Math.min(displayLimit, keys.size());
+        text.append("showing ").append(shown).append('/').append(keys.size())
+                .append(" returned records").append(shown < keys.size() ? " · display truncated" : "")
+                .append('\n');
+        for (int i = 0; i < shown; ++i)
+            text.append(keys.get(i)).append(" = ").append(rows.opt(keys.get(i))).append('\n');
     }
 
     private static String renderHistory(JSONObject reply) {
+        if (reply.has("error")) return "History query error: " + reply.opt("error");
         JSONObject consumer = reply.optJSONObject("consumer");
         JSONObject history = consumer == null ? null : consumer.optJSONObject("persistent");
-        if (history == null) return "History query " + reply.optString("error", "unavailable")
-                + (consumer == null ? "" : ": " + consumer.optString("query_error"));
+        if (history == null) return "History query unavailable: " + queryFact(consumer, "query_error");
         StringBuilder text = new StringBuilder("Recent history · query ");
         text.append(consumer.optBoolean("query_fresh") ? "fresh" : "cached").append('\n');
-        text.append("Visibility: ").append(history.optString("visibility"))
-                .append(" · packets ").append(history.optJSONArray("packets"))
-                .append(" · recent ").append(history.optInt("recent_count"))
-                .append(" · DNS ").append(history.optJSONObject("dns") == null ? "unavailable"
-                        : history.optJSONObject("dns").optInt("retained_count"))
-                .append('\n');
-        JSONObject recent = history.optJSONObject("recent");
-        if (recent != null) {
-            ArrayList<String> keys = new ArrayList<>();
-            for (java.util.Iterator<String> it = recent.keys(); it.hasNext();) keys.add(it.next());
-            keys.sort(java.util.Collections.reverseOrder());
-            for (int i = 0; i < Math.min(4, keys.size()); ++i) {
-                JSONObject record = recent.optJSONObject(keys.get(i));
-                record = record == null ? null : record.optJSONObject("record");
-                JSONArray sides = record == null ? null : record.optJSONArray("attribution");
-                if (sides == null) continue;
-                for (int side = 0; side < Math.min(2, sides.length()); ++side) {
-                    JSONObject attribution = sides.optJSONObject(side);
-                    JSONObject interpretation = attribution == null ? null
-                            : attribution.optJSONObject("interpretation");
-                    appendHistoryLine(text, "END " + (side == 0 ? "ORIG" : "REPLY"),
-                            interpretation, interpretation == null ? null
-                                    : interpretation.optJSONObject("segment_counts"));
-                }
-            }
+        if (!consumer.isNull("query_error"))
+            text.append("Query error: ").append(consumer.opt("query_error")).append('\n');
+        text.append("Visibility: ").append(queryFact(history, "visibility"))
+                .append(" · source ").append(queryFact(history, "history_source"))
+                .append(" · persistence ").append(queryFact(history, "persistence"))
+                .append(" · save error ").append(history.isNull("save_error") ? "none" : history.opt("save_error")).append('\n')
+                .append("Coverage: ").append(queryFact(history, "coverage")).append('\n')
+                .append("Retention limits: ").append(queryFact(history, "limits")).append('\n')
+                .append("Storage: ").append(queryFact(history, "storage_space")).append('\n')
+                .append("Totals: packets ").append(queryFact(history, "packets"))
+                .append(" · bytes ").append(queryFact(history, "bytes"))
+                .append(" · ended ").append(queryFact(history, "ended"))
+                .append(" · blocked ").append(queryFact(history, "blocked")).append('\n')
+                .append("Recent Flow / independent Blocked: count ").append(queryFact(history, "recent_count"))
+                .append(" · query limit ").append(queryFact(history, "recent_query_limit"))
+                .append(" · query truncated ").append(queryFact(history, "recent_query_truncated"))
+                .append(" · Target names / Recognition are per record; null = unavailable\n");
+        appendQueryRecords(text, "Recent details", history.optJSONObject("recent"), 8);
+        JSONObject dns = history.optJSONObject("dns");
+        text.append("DNS: ").append(dns == null ? "unavailable" :
+                "retained " + queryFact(dns, "retained_count") + " · query limit "
+                + queryFact(dns, "query_limit") + " · query truncated " + queryFact(dns, "query_truncated")
+                + " · delivery scope " + queryFact(dns, "delivery_scope") + " · evicted "
+                + queryFact(dns, "evicted")).append('\n');
+        appendQueryRecords(text, "DNS details", dns == null ? null : dns.optJSONObject("recent"), 8);
+        String[][] sections = {{"Minute statistics", "minutes", "minute_query_truncated"},
+                {"Application statistics", "application_windows", "application_query_truncated"},
+                {"Rule statistics", "rule_windows", "rule_query_truncated"},
+                {"Protocol statistics", "protocol_windows", "protocol_query_truncated"}};
+        for (String[] section : sections) {
+            text.append(section[0]).append(" · query truncated ")
+                    .append(queryFact(history, section[2])).append('\n');
+            appendQueryRecords(text, section[0], history.optJSONObject(section[1]), 8);
         }
-        JSONObject windows = history.optJSONObject("rule_windows");
-        if (windows != null) {
-            ArrayList<String> keys = new ArrayList<>();
-            for (java.util.Iterator<String> it = windows.keys(); it.hasNext();) keys.add(it.next());
-            keys.sort(java.util.Collections.reverseOrder());
-            for (int i = 0; i < Math.min(8, keys.size()); ++i) {
-                JSONObject window = windows.optJSONObject(keys.get(i));
-                if (window != null) appendHistoryLine(text, "Rule window",
-                        window.optJSONObject("interpretation"), window.optJSONObject("counts"));
-            }
+        for (String grain : new String[]{"hour", "day"}) {
+            JSONObject windows = history.optJSONObject(grain + "_windows");
+            text.append(grain).append(" statistics: bucket width ")
+                    .append(queryFact(windows, "bucket_width_sec")).append(" · counts ")
+                    .append(queryFact(windows, "counts")).append(" · truncated ")
+                    .append(queryFact(windows, "truncated"))
+                    .append(" · query limit ").append(queryFact(windows, "query_limit")).append('\n');
+            for (String section : new String[]{"overall", "application_windows", "rule_windows", "protocol_windows"})
+                appendQueryRecords(text, grain + " " + section,
+                        windows == null ? null : windows.optJSONObject(section), 4);
         }
-        if (text.indexOf(" · v") < 0) text.append("No recent rule effects");
+        text.append("Statistics are aggregates; expired visit details cannot be reconstructed.");
         return text.toString();
     }
 
@@ -1635,8 +1647,7 @@ public class DebugControlActivity extends Activity {
                                          boolean updateSelector) {
         productProjection = projection;
         if (productView != null) {
-            AppDetail detail = ProductActivityProjectionStore.read(getFilesDir());
-            setTextIfChanged(productView, projection.displayText + "\n\n" + detail.displayText);
+            setTextIfChanged(productView, projection.displayText);
         }
         if (updateSelector) renderApplicationSelector(projection);
     }
@@ -1948,27 +1959,6 @@ public class DebugControlActivity extends Activity {
             main.post(() -> action(display));
         }, "sakamoto-debug-policy-probe");
         probe.start();
-    }
-
-    private void runDebugL4PrefillFromActivity(String host, int port) {
-        action("Debug L4 prefill requested.");
-        Thread prefill = new Thread(() -> {
-            String result;
-            try (ControlVNextDebugClient client = new ControlVNextDebugClient()) {
-                RuntimeSnapshot current = backend.query(this);
-                RuntimeProfile profile = current.isActive()
-                        ? current.profile : profileFromSpinner();
-                JSONObject status = client.call(1, debugPacketStatusCommand(profile),
-                        new JSONObject());
-                result = formatActivityL4Prefill(status.optJSONObject("policyDropActivity"));
-            } catch (IOException | JSONException | RuntimeException error) {
-                result = "L4 prefill: failed " + boundedError(error);
-            }
-            writeDebugL4PrefillResult(host, port, result);
-            final String display = result;
-            main.post(() -> action(display));
-        }, "sakamoto-debug-l4-prefill");
-        prefill.start();
     }
 
     private JSONObject debugPolicyApplyArgs(int uid) throws JSONException {
@@ -2461,31 +2451,12 @@ public class DebugControlActivity extends Activity {
         }
     }
 
-    private void writeDebugL4PrefillResult(String host, int port, String result) {
-        File file = new File(getFilesDir(), DEBUG_L4_PREFILL_RESULT_PATH);
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            return;
-        }
-        String text = "host=" + propertyValue(host) + "\n"
-                + "port=" + port + "\n"
-                + "result=" + (result != null && result.startsWith("L4 prefill: subject=")
-                ? "available" : "unavailable") + "\n"
-                + "summary=" + propertyValue(result) + "\n";
-        try (FileOutputStream out = new FileOutputStream(file, false)) {
-            out.write(text.getBytes(StandardCharsets.UTF_8));
-        } catch (IOException ignored) {
-            // Debug evidence must never change product control behavior.
-        }
-    }
-
     private void exportReleaseDiagnostics() {
         RuntimeSnapshot runtime = backend.query(this);
         ProductCatalogFormatter.Projection projection = ProductCatalogProjectionStore.read(
                 getFilesDir());
-        AppDetail detail = ProductActivityProjectionStore.read(getFilesDir());
         ProductCatalogFormatter.EntryRow row = selectedApplicationRow();
-        String text = ReleaseDiagnosticsExport.format(runtime, projection, detail, row,
+        String text = ReleaseDiagnosticsExport.format(runtime, projection, row,
                 System.currentTimeMillis());
         File file = new File(getFilesDir(), DEBUG_RELEASE_DIAGNOSTICS_RESULT_PATH);
         File parent = file.getParentFile();
@@ -2686,83 +2657,7 @@ public class DebugControlActivity extends Activity {
                 + countersAfter.optLong("lastObservedLinuxUid", -1L)
                 + " lastObservedResult="
                 + countersAfter.optString("lastObservedResult", "unknown")
-                + "\nPolicy drop activity: "
-                + formatPolicyDropActivity(countersAfter.optJSONObject("policyDropActivity"))
-                + "\nAllowed flow activity: "
-                + formatAllowedFlowActivity(countersAfter.optJSONObject("allowedFlowActivity"))
-                + "\n" + formatActivityL4Prefill(
-                countersAfter.optJSONObject("policyDropActivity"))
                 + "\nProbe: " + probeResult;
-    }
-
-    private String formatPolicyDropActivity(JSONObject activity) {
-        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
-            return "none";
-        }
-        return "records=" + activity.optLong("records", 0L)
-                + "/" + activity.optLong("capacity", 0L)
-                + " total=" + activity.optLong("totalRecords", 0L)
-                + " evicted=" + activity.optLong("evictedRecords", 0L)
-                + " uid=" + activity.optLong("lastLinuxUid", -1L)
-                + " uidKnown=" + activity.optBoolean("lastUidKnown", false)
-                + " context=" + activity.optLong("lastNetworkContext", -1L)
-                + " remote=" + remoteEndpoint(activity)
-                + " protocol=" + activity.optLong("lastIpProtocol", -1L)
-                + " deviceDir=" + activity.optString("lastDeviceDirection", "unknown")
-                + " stage=" + activity.optString("lastStage", "unknown")
-                + " reason=" + activity.optLong("lastReasonId", -1L)
-                + " rule=" + activity.optLong("lastRuleId", -1L)
-                + " revision=" + activity.optLong("lastRevision", -1L);
-    }
-
-    private String formatAllowedFlowActivity(JSONObject activity) {
-        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
-            return "none";
-        }
-        return "records=" + activity.optLong("records", 0L)
-                + "/" + activity.optLong("capacity", 0L)
-                + " total=" + activity.optLong("totalRecords", 0L)
-                + " evicted=" + activity.optLong("evictedRecords", 0L)
-                + " uid=" + activity.optLong("lastLinuxUid", -1L)
-                + " uidKnown=" + activity.optBoolean("lastUidKnown", false)
-                + " context=" + activity.optLong("lastNetworkContext", -1L)
-                + " remote=" + remoteEndpoint(activity)
-                + " protocol=" + activity.optLong("lastIpProtocol", -1L)
-                + " deviceDir=" + activity.optString("lastDeviceDirection", "unknown")
-                + " flowDir=" + activity.optString("lastFlowDirection", "unknown")
-                + " packets=" + activity.optLong("lastPackets", 0L)
-                + " bytes=" + activity.optLong("lastBytes", 0L)
-                + " revision=" + activity.optLong("lastPolicyRevision", -1L);
-    }
-
-    private String remoteEndpoint(JSONObject activity) {
-        return remoteHost(activity) + ":" + remotePort(activity);
-    }
-
-    private String remoteHost(JSONObject activity) {
-        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
-        return input ? activity.optString("lastSourceAddress", "")
-                : activity.optString("lastDestinationAddress", "");
-    }
-
-    private int remotePort(JSONObject activity) {
-        boolean input = "input".equals(activity.optString("lastDeviceDirection", ""));
-        return (int) (input ? activity.optLong("lastSourcePort", 0L)
-                : activity.optLong("lastDestinationPort", 0L));
-    }
-
-    private String formatActivityL4Prefill(JSONObject activity) {
-        if (activity == null || !activity.optBoolean("hasLastRecord", false)) {
-            return "L4 prefill: unavailable";
-        }
-        ActivityL4RuleDraft draft = ActivityL4RuleDraft.fromPolicyDropActivity(
-                remoteHost(activity), remotePort(activity),
-                (int) activity.optLong("lastIpProtocol", 0L),
-                (int) activity.optLong("lastLinuxUid", -1L),
-                activity.optBoolean("lastUidKnown", false),
-                (int) activity.optLong("lastNetworkContext", -1L),
-                activity.optString("lastStage", ""));
-        return draft == null ? "L4 prefill: unavailable" : draft.summary();
     }
 
     private String boundedError(Throwable error) {

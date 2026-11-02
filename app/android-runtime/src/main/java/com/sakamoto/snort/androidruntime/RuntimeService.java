@@ -355,12 +355,6 @@ public final class RuntimeService extends VpnService {
     private long s192ProbeBaselineMatchRecords;
     private long s192ProbeBaselineNoMatchRecords;
     private long s192ProbeBaselineDropRecords;
-    private RuntimeProfile lastNativePolicyDropActivityProfile;
-    private long lastNativePolicyDropActivityGeneration = -1L;
-    private long lastNativePolicyDropActivityTotalRecords;
-    private RuntimeProfile lastNativeAllowedFlowActivityProfile;
-    private long lastNativeAllowedFlowActivityGeneration = -1L;
-    private long lastNativeAllowedFlowActivityTotalRecords;
 
     @Override
     public void onCreate() {
@@ -815,7 +809,6 @@ public final class RuntimeService extends VpnService {
             try {
                 reconcileDurableRuntime(true, revision);
                 refreshProductCatalogProjection("query");
-                refreshProductActivityProjection("query", null);
                 appendLog("health_query=result revision=" + revision);
                 stopIfInactive(requestStartId);
             } finally {
@@ -7305,147 +7298,6 @@ public final class RuntimeService extends VpnService {
                         || "missing".equals(projection.productStateStatus) ? ""
                         : " product_state=" + projection.productStateStatus
                                 + " product_error=" + projection.productStateErrorCode));
-    }
-
-    private void refreshProductActivityProjection(String reason,
-                                                  ApplicationSubjectId preferredSubject) {
-        if (productBackend == null) {
-            return;
-        }
-        ingestLatestNativeActivity(reason);
-        ApplicationSubjectId subject = preferredSubject;
-        if (subject == null) {
-            ProductStateSnapshot state = productBackend.productState();
-            subject = state.boundApplications.isEmpty()
-                    ? null : state.boundApplications.iterator().next();
-        }
-        RuntimeSummary runtime = RuntimeSummary.fromSnapshot(
-                snapshot == null ? RuntimeSnapshot.stopped(activeProfile, generation) : snapshot,
-                CapabilitySet.androidL4(true, true));
-        AppDetail detail = productBackend.refreshProductActivityProjection(subject, runtime, 32);
-        appendLog("product_activity_projection=published reason=" + reason
-                + " subject=" + (subject == null ? "(none)" : subject.encode())
-                + " activity=" + detail.activity.size()
-                + " rules=" + detail.rules.size()
-                + " state=" + detail.state);
-    }
-
-    private void ingestLatestNativeActivity(String reason) {
-        RuntimeSnapshot current = snapshot;
-        if (current == null || !current.isActive()) {
-            return;
-        }
-        RuntimeProfile profile = current.profile == null ? RuntimeProfile.ROOT : current.profile;
-        RuntimeControlFdClient.AttachResult status = RuntimeControlFdClient.callJson(58,
-                profile == RuntimeProfile.VPN ? "VPN_TUN.STATUS" : "NFQUEUE.STATUS",
-                new JSONObject());
-        if (!status.ok) {
-            appendLog("product_activity_native_status=unavailable reason=" + reason
-                    + " profile=" + profile.wireName
-                    + " code=" + status.errorCode);
-            return;
-        }
-        JSONObject activity = status.result.optJSONObject("policyDropActivity");
-        ProductNativeActivityIngestor.NativePolicyDropRecord record =
-                nativePolicyDropRecord(activity);
-        if (!ProductNativeActivityIngestor.shouldIngest(record, profile,
-                lastNativePolicyDropActivityProfile, lastNativePolicyDropActivityGeneration,
-                current.generation, lastNativePolicyDropActivityTotalRecords)) {
-            record = null;
-        }
-        ActivityItem item = ProductNativeActivityIngestor.toActivityItem(record, profile,
-                System.currentTimeMillis());
-        if (item != null) {
-            productBackend.ingestActivity(item);
-            lastNativePolicyDropActivityProfile = profile;
-            lastNativePolicyDropActivityGeneration = current.generation;
-            lastNativePolicyDropActivityTotalRecords = record.totalRecords;
-            appendLog("product_activity_native_ingest=ok reason=" + reason
-                    + " profile=" + profile.wireName
-                    + " kind=policy_drop"
-                    + " totalRecords=" + record.totalRecords
-                    + " subject=" + item.subjectId.encode()
-                    + " winner=" + item.winner
-                    + " revision=" + item.policyRevision);
-        }
-
-        JSONObject allowedActivity = status.result.optJSONObject("allowedFlowActivity");
-        ProductNativeActivityIngestor.NativeAllowedFlowRecord allowedRecord =
-                nativeAllowedFlowRecord(allowedActivity);
-        if (!ProductNativeActivityIngestor.shouldIngest(allowedRecord, profile,
-                lastNativeAllowedFlowActivityProfile, lastNativeAllowedFlowActivityGeneration,
-                current.generation, lastNativeAllowedFlowActivityTotalRecords)) {
-            return;
-        }
-        ActivityItem allowed = ProductNativeActivityIngestor.toActivityItem(
-                allowedRecord, profile, System.currentTimeMillis());
-        if (allowed == null) {
-            return;
-        }
-        productBackend.ingestActivity(allowed);
-        lastNativeAllowedFlowActivityProfile = profile;
-        lastNativeAllowedFlowActivityGeneration = current.generation;
-        lastNativeAllowedFlowActivityTotalRecords = allowedRecord.totalRecords;
-        appendLog("product_activity_native_ingest=ok reason=" + reason
-                + " profile=" + profile.wireName
-                + " kind=allowed_flow"
-                + " totalRecords=" + allowedRecord.totalRecords
-                + " subject=" + allowed.subjectId.encode()
-                + " remote=" + allowed.remoteIp + ":" + allowed.remotePort
-                + " revision=" + allowed.policyRevision);
-    }
-
-    private static ProductNativeActivityIngestor.NativePolicyDropRecord nativePolicyDropRecord(
-            JSONObject activity) {
-        if (activity == null) {
-            return null;
-        }
-        return new ProductNativeActivityIngestor.NativePolicyDropRecord(
-                activity.optLong("totalRecords", 0L),
-                activity.optBoolean("hasLastRecord", false),
-                (int) activity.optLong("lastLinuxUid", 0L),
-                activity.optBoolean("lastUidKnown", false),
-                (int) activity.optLong("lastNetworkContext", 0L),
-                activity.optString("lastSourceAddress", ""),
-                activity.optString("lastDestinationAddress", ""),
-                (int) activity.optLong("lastIpProtocol", 0L),
-                (int) activity.optLong("lastSourcePort", 0L),
-                (int) activity.optLong("lastDestinationPort", 0L),
-                activity.optBoolean("lastPortsAvailable", false),
-                activity.optString("lastDeviceDirection", ""),
-                activity.optString("lastStage", ""),
-                (int) activity.optLong("lastReasonId", 0L),
-                activity.optLong("lastRuleId", 0L),
-                activity.optLong("lastRevision", 0L));
-    }
-
-    private static ProductNativeActivityIngestor.NativeAllowedFlowRecord nativeAllowedFlowRecord(
-            JSONObject activity) {
-        if (activity == null) {
-            return null;
-        }
-        return new ProductNativeActivityIngestor.NativeAllowedFlowRecord(
-                activity.optLong("totalRecords", 0L),
-                activity.optBoolean("hasLastRecord", false),
-                (int) activity.optLong("lastLinuxUid", 0L),
-                activity.optBoolean("lastUidKnown", false),
-                (int) activity.optLong("lastNetworkContext", 0L),
-                activity.optString("lastSourceAddress", ""),
-                activity.optString("lastDestinationAddress", ""),
-                (int) activity.optLong("lastIpProtocol", 0L),
-                (int) activity.optLong("lastSourcePort", 0L),
-                (int) activity.optLong("lastDestinationPort", 0L),
-                activity.optBoolean("lastPortsAvailable", false),
-                activity.optString("lastDeviceDirection", ""),
-                activity.optString("lastFlowDirection", ""),
-                activity.optLong("lastPolicyRevision", 0L),
-                activity.optLong("lastPackets", 0L),
-                activity.optLong("lastBytes", 0L),
-                activity.optString("lastProtocolRecognitionState", ""),
-                activity.optString("lastApplicationProtocolKey", ""),
-                activity.optString("lastApplicationProtocolCategory", ""),
-                activity.optString("lastProtocolRecognitionSequence", ""),
-                (int) activity.optLong("lastProtocolPayloadPackets", 0L));
     }
 
     private void publishProductMutationFailure(String fallbackCode,

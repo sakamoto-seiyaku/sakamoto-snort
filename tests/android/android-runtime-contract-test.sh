@@ -22,13 +22,8 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationProtocolCatalog.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationCatalogEntry.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ApplicationCatalogProvider.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ActivityL4RuleDraft.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProtocolRecognitionSequence.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProtocolRecognitionProjection.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCatalogFormatter.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductCatalogProjectionStore.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductActivityProjectionStore.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductNativeActivityIngestor.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPolicyTransactions.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductPolicyTransactionStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/CapabilitySet.java" \
@@ -39,13 +34,11 @@ javac -source 8 -target 8 -d "$out_dir" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ReleaseDiagnosticsExport.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuleDraft.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuleView.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ActivityItem.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AuthoringPolicyBundle.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/AuthoringPolicyCompiler.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductStateSnapshot.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductStateStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/ProductStore.java" \
-  "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/BoundedActivityStore.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/LocalProductBackend.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeSnapshot.java" \
   "$repo_root/app/android-runtime/src/main/java/com/sakamoto/snort/androidruntime/RuntimeOwnershipReconciliation.java" \

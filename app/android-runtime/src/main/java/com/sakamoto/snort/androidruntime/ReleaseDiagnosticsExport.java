@@ -15,15 +15,13 @@ public final class ReleaseDiagnosticsExport {
 
     public static String format(RuntimeSnapshot runtime,
                                 ProductCatalogFormatter.Projection catalog,
-                                AppDetail detail,
                                 ProductCatalogFormatter.EntryRow selectedRow,
                                 long exportedAtMillis) {
         RuntimeSnapshot runtimeValue = runtime == null ? RuntimeSnapshot.stopped() : runtime;
         ProductCatalogFormatter.Projection catalogValue = catalog == null
                 ? ProductCatalogFormatter.loading(ProductStateSnapshot.empty()) : catalog;
-        AppDetail detailValue = detail == null ? AppDetail.loading(
-                RuntimeSummary.fromSnapshot(runtimeValue, CapabilitySet.androidL4(true, true)))
-                : detail;
+        HealthIssue health = RuntimeSummary.fromSnapshot(runtimeValue,
+                CapabilitySet.androidL4(true, true)).healthIssue;
 
         StringBuilder out = new StringBuilder();
         line(out, "schema", SCHEMA);
@@ -73,14 +71,9 @@ public final class ReleaseDiagnosticsExport {
                     selectedRow.vpnGateBlocked ? "blocked" : "open");
         }
 
-        line(out, "appDetail.state", detailValue.state);
-        line(out, "appDetail.rules", Integer.toString(detailValue.rules.size()));
-        line(out, "appDetail.activity", Integer.toString(detailValue.activity.size()));
-        line(out, "appDetail.health.category", detailValue.healthIssue.category);
-        line(out, "appDetail.health.code", detailValue.healthIssue.code);
-        line(out, "appDetail.health.action", detailValue.healthIssue.action);
-        line(out, "appDetail.l4PrefillAvailable",
-                Boolean.toString(detailValue.prefillDraft != null));
+        line(out, "health.category", health.category);
+        line(out, "health.code", health.code);
+        line(out, "health.action", health.action);
 
         line(out, "feedback.bug", FEEDBACK_BUG);
         line(out, "feedback.compatibility", FEEDBACK_COMPATIBILITY);

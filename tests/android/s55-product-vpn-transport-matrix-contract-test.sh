@@ -1,45 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-matrix="$repo_root/tests/device/s55-product-vpn-transport-matrix.sh"
-
-grep -q 'SAKAMOTO-55-product-vpn-transport' "$matrix"
-grep -q 'export ADB="${repo_root}/dev/adb"' "$matrix"
-grep -q 'S55_APK_VARIANT' "$matrix"
-grep -q 'ANDROID_RUNTIME_APK_VARIANT' "$matrix"
-grep -q 'build-release-candidate-apk.sh' "$matrix"
-grep -q 'build-final-release-apk.sh' "$matrix"
-grep -q 'sakamoto-runtime-release-candidate.apk' "$matrix"
-grep -q 'sakamoto-runtime-release.apk' "$matrix"
-grep -q 'android-build-socks5-smoke-server.sh' "$matrix"
-grep -q 'sakamoto-s55-socks5-smoke' "$matrix"
-grep -q 'socks5.udpInTcpRelay' "$matrix"
-grep -q 'runtimeStart true --es runtimeProfile vpn' "$matrix"
-grep -q 'profile=vpn' "$matrix"
-grep -q 'vpn_tun_control_ready=ok' "$matrix"
-grep -q 'vpn_tun_control_attach=ok adapter=vpn-tun-fd-compat' "$matrix"
-grep -q 'vpn_hev_transport=ok' "$matrix"
-grep -q 'protect fd=\[0-9\]+ result=1' "$matrix"
-grep -q 'VPN_TUN.STATUS' "$matrix"
-grep -q 'allowedFlowActivity' "$matrix"
-grep -q 'allowedFlowActivity.vpnEvidence' "$matrix"
-grep -q 'POLICY.STATUS' "$matrix"
-grep -q 'HELLO' "$matrix"
-grep -q 'packet-adapter-vpn-tun-fd-compat' "$matrix"
-grep -q 'vpn-tun-fd-handoff' "$matrix"
-grep -q 'vpn-tun-transport-fd-handoff' "$matrix"
-grep -q 'toybox nc -4 -z' "$matrix"
-grep -q 'toybox nc -6 -z' "$matrix"
-grep -q 'toybox nc -u' "$matrix"
-grep -q 'udp_dns.responseBytes' "$matrix"
-grep -q 'packetsSeen 3' "$matrix"
-grep -q 'forwardedPackets 3' "$matrix"
-grep -q 'transportSucceededPackets 3' "$matrix"
-grep -q 'transportReturnPackets 1' "$matrix"
-grep -q 'policyDrop.notUsedForTransportFailure' "$matrix"
-grep -q 'transportOutcome.nominalSuccess' "$matrix"
-grep -q 'icmpEchoCapability" "not_claimed"' "$matrix"
-grep -q 'matrix.s55TransportEvidence" "claimed"' "$matrix"
-
-echo "s55 product vpn transport matrix static contract: PASS"
+# Historical entry kept for links and callers; never claim current Product PASS.
+printf '%s\n' 'RETIRED: the old Activity channel has no current producer.' \
+  'Original runner: tests/archive/activity-channel-20261102/android/s55-product-vpn-transport-matrix-contract-test.sh (historical, non-runnable).' \
+  'Current query/lifecycle acceptance: tests/device/s332-debug-query.py; see docs/testing/2026-11-02_S332_DEBUG_QUERY.md.' >&2
+exit 77

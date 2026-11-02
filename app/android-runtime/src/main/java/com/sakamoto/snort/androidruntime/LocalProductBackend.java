@@ -12,7 +12,6 @@ import java.util.List;
 public final class LocalProductBackend {
     private final File filesDir;
     private final ProductStore productStore;
-    private final BoundedActivityStore activityStore;
     private final ApplicationCatalogProvider catalogProvider;
     private final PolicyApplyTransport policyApplyTransport;
     private final ProductPolicyTransactionStore.Writer policyTransactionWriter;
@@ -84,7 +83,6 @@ public final class LocalProductBackend {
                                ProductPolicyTransactionStore.Writer policyTransactionWriter) {
         this.filesDir = filesDir;
         this.productStore = new ProductStore(filesDir);
-        this.activityStore = new BoundedActivityStore(BoundedActivityStore.DEFAULT_CAPACITY);
         this.catalogProvider = catalogProvider;
         this.policyApplyTransport = policyApplyTransport == null
                 ? json -> PolicyApplyResult.error("product_policy_runtime_unavailable",
@@ -113,48 +111,14 @@ public final class LocalProductBackend {
         return policyTransactions.status();
     }
 
-    public BoundedActivityStore activityStore() {
-        return activityStore;
-    }
-
-    public void ingestActivity(ActivityItem item) {
-        activityStore.append(item);
-    }
-
-    public List<ActivityItem> recentActivity(ApplicationSubjectId subjectId, int limit) {
+    public AppDetail appDetail(ApplicationSubjectId subjectId, RuntimeSummary runtime) {
         if (subjectId == null) {
-            return activityStore.activityItems();
-        }
-        return activityStore.activityItemsFor(subjectId, limit);
-    }
-
-    public AppDetail appDetail(ApplicationSubjectId subjectId, RuntimeSummary runtime,
-                               int activityLimit) {
-        if (subjectId == null) {
-            return AppDetail.normal(null, runtime, Collections.emptyList(),
-                    Collections.emptyList());
+            return AppDetail.normal(null, runtime, Collections.emptyList());
         }
         ProductStateSnapshot state = productStore.snapshot();
         AppSummary app = appSummary(subjectId);
         List<RuleView> rules = ruleViewsFor(state.authoringPolicyBundle, subjectId);
-        List<ActivityItem> recent = activityStore.activityItemsFor(subjectId, activityLimit);
-        return AppDetail.normal(app, runtime, rules, recent);
-    }
-
-    public AppDetail refreshProductActivityProjection(ApplicationSubjectId subjectId,
-                                                      RuntimeSummary runtime,
-                                                      int activityLimit) {
-        AppDetail detail = appDetail(subjectId, runtime, activityLimit);
-        try {
-            ProductActivityProjectionStore.write(filesDir, detail);
-        } catch (java.io.IOException ignored) {
-            // Activity projection is bounded UI evidence, not policy/config authority.
-        }
-        return detail;
-    }
-
-    public AppDetail productActivityProjection() {
-        return ProductActivityProjectionStore.read(filesDir);
+        return AppDetail.normal(app, runtime, rules);
     }
 
     public PolicyTextResult exportCommittedPolicy() {
