@@ -174,7 +174,11 @@ class Device:
         self.target = object.__new__(transport.Target); self.target.pixel = True
 
     def save(self, name, value):
-        (self.out / name).write_text(value)
+        recorder = getattr(self, 'local_adb_recorder', None)
+        if recorder is not None:
+            recorder.save_capture(self.out / name, value.encode())
+        else:
+            (self.out / name).write_text(value)
         return value
 
     def adb(self, *command, check=True):
@@ -388,8 +392,13 @@ class Device:
         nonce = 's312-' + str(time.time_ns())
         self.save(label + '-observation-request.txt', self.action('--es', 'observationNonce', nonce,
                                                                '--ei', 'observationOperation', '0'))
-        return self.wait(label + '-observation', 'files/product-state/observation-' + nonce + '.json',
+        remote = 'files/product-state/observation-' + nonce + '.json'
+        result = self.wait(label + '-observation', remote,
             lambda c: c.get('consumer', {}).get('query_fresh') is True, timeout=15, json_value=True)
+        # wait() has already persisted the complete qualifying reply locally.
+        # Retire this exact generated nonce only; never sweep older App data.
+        self.adb('shell', 'run-as', PKG, 'rm', '--', remote)
+        return result
 
     def launch(self, label, address, source, wires, *, timeout=1500, preserve_ui=False):
         assert 100 <= timeout <= 3000  # Existing ordinary App probe contract.

@@ -3,10 +3,12 @@ import base64
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 
 
@@ -71,7 +73,30 @@ class AdbTrace:
         self.nonce = 's314-control-' + str(time.monotonic_ns())
         self.remote = remote_parent + '/' + self.nonce
         self.items, self.retired, self.unreaped, self.created, self.closed, self.next_number = [], [], {}, False, False, 1
+        self.last_outputs = []
         self.output.joinpath('source-s314_adb_trace.py').write_bytes(Path(__file__).read_bytes())
+
+    def save_capture(self, path, data, source=None):
+        """Keep existing evidence paths, sharing only complete immutable bytes."""
+        path = Path(path)
+        candidates = [(data, Path(source))] if source is not None else self.last_outputs
+        fd, temporary = tempfile.mkstemp(prefix='.capture-', dir=path.parent)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                candidate = next((p for value, p in candidates if value == data
+                                  and p.is_file() and not p.is_symlink()
+                                  and not p.stat().st_mode & 0o222
+                                  and p.read_bytes() == data), None)
+                if candidate is None:
+                    stream.write(data)
+                    stream.flush()
+                    os.fchmod(stream.fileno(), 0o444)
+            if candidate is not None:
+                os.unlink(temporary)
+                os.link(candidate, temporary)
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     @staticmethod
     def handles(command):
@@ -132,12 +157,15 @@ class AdbTrace:
                           completed_monotonic_ns=time.monotonic_ns(), argv=list(map(str, original)), wire_argv=list(map(str, wire)),
                           local_pid=process.pid if process else None, code=process.returncode if process else None,
                           trace_kind=kind, local_reaped=process is None or process.returncode is not None)
+            outputs = []
             for label, data in (('stdout', stdout), ('stderr', stderr)):
                 if isinstance(data, str):
                     data = data.encode()
                 path = 'adb-trace-host-' + str(monotonic) + '.' + label
-                self.output.joinpath(path).write_bytes(data)
+                self.save_capture(self.output / path, data)
+                outputs.append((data, self.output / path))
                 record[label + '_path'] = path
+            self.last_outputs = outputs
             if failure:
                 record.update(outcome='timeout' if isinstance(failure, subprocess.TimeoutExpired) else 'cancelled-or-error',
                               error=repr(failure), timeout_seconds=timeout,
@@ -169,8 +197,8 @@ class AdbTrace:
                 command = ['exec-out', 'cat', item['remote_stem'] + '.' + suffix]
                 try:
                     stdout, stderr, code, record = self.execute(command, command, 5, check=False, kind='trace-witness-read')
-                    self.output.joinpath(name + '.stdout').write_bytes(stdout)
-                    self.output.joinpath(name + '.stderr').write_bytes(stderr)
+                    self.save_capture(self.output / (name + '.stdout'), stdout)
+                    self.save_capture(self.output / (name + '.stderr'), stderr)
                     item['remote_' + suffix] = dict(code=code, text=stdout.decode(errors='replace'))
                 except Exception as error:
                     item['remote_' + suffix] = dict(read_error=repr(error))

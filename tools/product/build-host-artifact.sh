@@ -380,6 +380,8 @@ cp "$repo_root/src/product/vpp/product-vpp-artifact.properties" \
   echo "rust.core.artifact=target/release/sakamoto-product-core-host"
 } >> "$artifact_root/product-vpp-artifact.properties"
 
+python3 "$repo_root/tools/product/output_storage.py" "$artifact_root"
+
 echo "artifact=$artifact_root"
 echo "vpp=$vpp_bin"
 echo "plugin=$plugin"

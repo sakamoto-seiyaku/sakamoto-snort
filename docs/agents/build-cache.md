@@ -1,100 +1,32 @@
-# Compilation cache and artifact retention
+# 编译缓存与空间
 
-These are build workflow constraints. They apply before new Root/VPN experiments,
-repeated acceptance builds, and local build/test helpers.
+## 编译
 
-## Reuse compilation, isolate publication
+- 使用 Android／Host Product builders；共享缓存为 `build-output/product-build-cache/`，Host 测试复用 `build-output/host-tests`。不逐任务／轮次新建 `CARGO_TARGET_DIR`、CMake `-B` 或 SDK/NDK 副本。
+- 缓存按 checkout、平台／ABI／API、工具链、VPP 身份及编译环境隔离；不以完整业务源码身份或发布路径分键。源文件、生成头和选项变化交由 Ninja／Cargo 跟踪，缓存命中不跳过现有输入与产物校验。
+- 只构建受影响目标；不例行 `cargo clean`、`--clean-first` 或删除缓存。冷构建仅用于明确的失效诊断／隔离测试，限定目录并说明原因。
+- 保持 HEV 编译输入、生成 VAPI 路径及未变文件时间戳稳定；复用现有 APK 字节码、VPP 生成与配置缓存。
+- 同缓存写入串行；Android stage 原子发布，strip 仅作用于发布副本。相同发布文件由 `output_storage.py` 共享只读副本，更新用新文件原子替换，不链接可变编译输出。
+- 自定义缓存仅可位于本 checkout 的 `build-output` 下，遵守 `build-cache.py` 的归属与路径校验。
 
-- Use the current Android and Host Product builders. Their default compilation
-  cache is `build-output/product-build-cache/`, owned and keyed by
-  [`build-cache.py`](../../tools/product/build-cache.py). Do not put ordinary
-  CMake or Cargo intermediates in a per-run `/tmp`, APK stage, or evidence folder.
-- A fresh experiment/output directory isolates published artifacts and raw
-  results; it must not force recompiling the unchanged dependency graph. Do not
-  set a fresh `CARGO_TARGET_DIR` or CMake `-B` for each run just to isolate results.
-  The standalone Host CMake suite uses the stable `build-output/host-tests` tree.
-- Cache identities include the checkout, platform/ABI/API, compiler and Rust
-  toolchain, verified VPP stage/source identity, and compiler flag environment.
-  Android and Host are separate. Do not key compilation by the full Product
-  source hash or by the unique distribution path: Ninja and Cargo track source
-  changes within the cache. CMake options, including batch/verdict mode, are
-  checked every invocation. Changed command options or an altered `CMakeCache`
-  force configuration; unchanged builds retain CMake/Ninja's automatic dependency
-  checks without rerunning every compiler-capability probe.
-- APK Java/DEX compilation has a separate `apk/` cache keyed by Android API,
-  Android SDK stub, JDK module image/tools and D8. Within that tree, validate the
-  Java source set, build pipeline and compiled-output hashes before reuse.
-  Source deletion, changed inputs, missing or modified output must rebuild the
-  component. Version-code allocation, manifest packaging and signing still run
-  for each APK publication.
-- The Android VPP runtime builder uses `android-vpp/` in the same owned cache,
-  keyed by the immutable pinned VPP/core/profile patch closure and NDK target.
-  It prepares and verifies source separately from its persistent CMake tree.
-  Reuse the repository API depfile wrapper and cached configure identity so an
-  unchanged repeat does not rebuild API consumers or compiler-capability probes.
-- HEV keeps immutable source snapshots for artifact identity and a separate
-  owned `compile-inputs/source` under each compatible build cache. Staging
-  replaces only changed files there; unchanged dependency paths and timestamps
-  survive Product glue edits. Do not compile directly from a whole-source-hash
-  snapshot path or modify a frozen snapshot.
-- Keep generated VAPI paths stable. Cargo must track changes to owned/VPP/generated
-  headers and compiler selections, as well as source files; a cache hit never
-  bypasses input validation, VPP closure checks or artifact identity checks.
-- Serialize writers to the same compilation cache. Keep atomic Android stage
-  publication separate, and strip/copy only distribution files. Do not link a
-  mutable compiler output directly into frozen evidence or strip it in place.
-- `SAKAMOTO_PRODUCT_BUILD_CACHE_DIR` may select another owned real directory below
-  this checkout's `build-output`. Symlink paths, unowned nonempty directories,
-  and overlap with a distribution are rejected. Never clear the cache as routine
-  build cleanup or delete all of `build-output`.
+## 复验
 
-## Verify reuse before repeating expensive work
+仅构建／缓存机制、缓存身份变化或复用异常时，验证受影响平台：相同输入、不同发布目录，第二次零 Rust 编译、零 Ninja 构建动作，编译文件时间戳及原生产物内容不变。同一机制与身份的有效证明直接复用，不逐票／逐轮重做。
 
-After changing build/cache logic, run the real native builder twice against the
-same validated inputs and different distribution directories. The repeat must
-have zero Rust compilations, zero Ninja build actions, unchanged compiled-file
-timestamps and byte-identical native payload. Cache-directory existence or a
-fast-looking run alone is not proof. Use:
+复用检查入口：`tests/host/product_build_cache_test.py`、`tests/android/check_build_cache.py`、`tests/android/check_apk_build_cache.py`；所需 VPP/NDK 输入按当前 builder 提供，只运行受影响项。
+
+## 保留与清理
+
+- 每任务一个输出根；复用已有产物和采集，不重复保存完整 stdout、累计日志或整仓快照。源码优先用提交与必要差异回溯。
+- 验收、诊断及恢复未完成前保留必要原件；完成后默认仅留命令、源码／工具链身份、结论、关键测量与失败原因，以及 Git 未覆盖的必要源码。
+- 当前交付及依赖、有效编译缓存及依赖、协调锁、一份有效原始数据恢复基线保留。额外原件须有未闭合问题、明确复核或用户要求。
+- 默认清理本任务已结束的临时二进制、符号副本、抓包、测试数据库、全量导出与重复备份；不以“证据”为由永久累积。精简文本摘要不承诺历史原始数据的离线重验。
+- 使用 `clean-build-output.py`，先预览，再对同一范围加 `--apply`；同根目录中的当前交付及恢复基线须显式 `--keep PATH`。跨任务清理须有相应授权，禁止整删 `build-output`。
 
 ```sh
-rtk proxy python3 tests/host/product_build_cache_test.py
-# Supply the validated VPP/NDK environment documented by the Android builder.
-rtk proxy python3 tests/android/check_build_cache.py \
-  --output build-output/cache-reuse-<unique-check>
-rtk proxy python3 tests/android/check_apk_build_cache.py \
-  --stage build-output/cache-reuse-<unique-check>/stage-repeat \
-  --output build-output/apk-cache-reuse-<unique-check>
+rtk proxy python3 tools/product/clean-build-output.py --root build-output/TASK --finished --keep build-output/TASK/DELIVERABLE --keep build-output/TASK/BASELINE
 ```
 
-A deliberate cold-build/cache-isolation test is an exception: state why it needs
-an empty cache, give it a bounded output directory, and retain its result. An
-ordinary Product test or new benchmark cell does not require a cold dependency
-build. Fixture ABI transports use a separate cache identity from Product builds.
+仅在产生／清理输出时测量相关目录的实际分配空间；异常增长先定位。权限受限时保留已完成结果，报告具体路径及处理命令，不追加全盘扫描、重复构建或审计材料。
 
-## Retain evidence without unbounded copies
-
-- Share installed SDK/NDK and Gradle/toolchain dependencies. Pin their versions;
-  do not unpack another complete toolchain under each experiment or `/tmp`.
-- Keep one reusable compilation tree per compatible toolchain/target identity.
-  Retain final APKs, exact matching symbols, source identities, logs and raw
-  results needed by verifiers. Intermediate object trees are not independent
-  acceptance evidence.
-- Freeze binaries by exact content identity and reuse sealed identical copies
-  rather than copying hundreds of MiB of debug executables for every case.
-  Deduplicate only verified immutable artifacts; never hard-link a mutable build
-  cache to archived witnesses. Preserve artifact paths/bytes and verifier inputs.
-  Shared frozen aliases are read-only. Any later replacement must use a new file
-  and atomic rename; never make an alias writable and modify its shared inode.
-- Control failed-test log growth. Keep the diagnostic result and necessary raw
-  evidence; do not allow a recursive sanitizer failure to stream without a bound.
-- Before cleanup, distinguish active caches, reproducible intermediates, frozen
-  artifacts and raw observations. Check actual allocated blocks/inodes, verify
-  exact hashes, retain a cleanup manifest, and measure released space afterward.
-  Do not delete other projects' results by matching only their directory names.
-
-The October 21 read-only inventory is in
-[`storage-audit-20261021/findings.json`](../../build-output/storage-audit-20261021/findings.json).
-It is a dated observation, not permission to delete every listed directory.
-
-The [October 21 cache and storage verification](../testing/2026-10-21_BUILD_CACHE_AND_STORAGE.md)
-records actual cold/warm builds, invalidation checks and the lossless cleanup.
+依据：[Cargo 缓存](https://doc.rust-lang.org/cargo/reference/build-cache.html)、[CMake 构建](https://cmake.org/cmake/help/latest/manual/cmake.1.html#build-a-project)、[GitHub 缓存与产物](https://docs.github.com/en/actions/concepts/workflows-and-actions/dependency-caching#artifacts-versus-dependency-caching)。任务结束后的保留范围为本仓库约定。

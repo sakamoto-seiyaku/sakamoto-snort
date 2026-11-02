@@ -19,14 +19,14 @@
 - 用户暂停时停止新增调度，安全收束在途操作并保留现场；既有生命周期、数据安全与信号安全约束继续有效。
 - 按变化范围检查、构建；输入未变的通过证据复用，构件遵守下文缓存规则。注释等无行为修正不重启完整审核；仅实质设计缺口需用户决策。
 
-### Build cache and disk usage
+### 编译与空间
 
-Compilation caches must be reused across repeated builds and experiment output
-directories. Use the Product builders' persistent cache; do not create fresh
-CMake/Cargo dependency builds under each `/tmp` or evidence directory. Verify an
-unchanged second build has no compilation before repeating expensive work.
-Preserve raw evidence and exact artifact identities during cleanup. See
-`docs/agents/build-cache.md` for cache isolation, verification and retention rules.
+- 复用 Product 共享缓存和稳定 Host 构建树；禁止逐任务／轮次重建依赖树、复制 SDK/NDK 或例行清缓存。
+- 只构建受影响目标。零编译复跑仅用于构建机制、缓存身份变化或复用异常；已有有效证明直接复用。
+- 每任务一个输出根；发布复用只读副本，同缓存写入串行，不链接可变编译输出。
+- 原始采集仅供当前验收／诊断；任务结束默认只留精简结果与可回溯源码，清理本任务临时二进制、抓包、数据库及重复备份。
+- 保护缓存及其依赖、当前交付和一份有效恢复基线；未闭合问题、明确复核或用户要求所需原件保留。
+- 用 `tools/product/clean-build-output.py` 预览后清理，保护项显式 `--keep`；只量相关目录，权限阻塞及时报告，不反复扫描。见[细则](docs/agents/build-cache.md)。
 
 ### Issue tracker
 

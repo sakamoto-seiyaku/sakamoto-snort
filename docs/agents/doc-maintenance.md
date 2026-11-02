@@ -27,8 +27,8 @@ entry; [the documentation map](../README.md) routes everything else.
   as cosmetic cleanup. Their paths and bytes are part of acceptance provenance.
 - Preserve unrelated uncommitted changes. Large overlapping documents may be
   reclassified through navigation without rewriting or staging the user's edits.
-- Never delete all `build-output/` as a “cache cleanup”: it contains frozen source,
-  artifacts, raw evidence and retained failed attempts as well as generated output.
+- 按[保留规则](build-cache.md)清理已结束任务输出；保留结论与可回溯源码，
+  保护缓存及依赖、当前交付和一份恢复基线；禁止整目录删除 `build-output/`。
 - OpenSpec remains an explicitly requested historical source only.
 
 ## Work tracking

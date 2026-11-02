@@ -500,7 +500,9 @@ class Device(support.Device):
         # query_fresh acknowledges a real API query, not that asynchronous
         # producer export has caught up. Retain each result and copy the first
         # qualifying snapshot verbatim; never merge synthetic recent rows.
-        (self.out/(label+'-observation.json')).write_bytes((self.out/attempts[-1]).read_bytes())
+        capture = self.out / attempts[-1]
+        self.transport_recorder().save_capture(self.out / (label+'-observation.json'),
+                                               capture.read_bytes(), source=capture)
         self.save(label+'-observation-captures.json',json.dumps(attempts,indent=2)+'\n')
         return observed
 

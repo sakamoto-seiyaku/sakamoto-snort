@@ -907,6 +907,8 @@ if renameat2(
 PY
   }
 
+  python3 "$repo_root/tools/product/output_storage.py" "$product_stage_candidate"
+
   # Revalidate the exact ownership marker while holding the publisher lock,
   # then publish without removing an existing public stage first.
   if [[ -e "$product_stage" || -L "$product_stage" ]]; then
