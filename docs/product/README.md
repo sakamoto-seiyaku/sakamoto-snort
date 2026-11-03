@@ -11,6 +11,29 @@
 
 ## 当前入口
 
+核对日期：2026-11-02。先按主题读取正式合同；实现情况见[当前主线](../current/README.md)，
+详细来源与验收限制见[测试索引](../testing/README.md)，优先级、依赖与结项由 Plane 管理。
+
+| 主题 | 入口与用途 |
+| --- | --- |
+| 产品定位与已确认交互方向 | [产品愿景](NETWORK_CONTROL_PRODUCT_VISION.md)、[规则创建流程](RULE_CREATION_INTERACTION_DRAFT.md)；已确认范围与尚在讨论的方案分别保留 |
+| 统一规则、配置和观测 | [统一规则规格](UNIFIED_RULE_ENGINE_SPEC.md)、[ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)；实现与分项验收已推进，不再按“整个后端待实现”理解 |
+| Root／VPN DNS 和直接域名事实 | [DNS 执行规格](APPLICATION_DNS_SPEC.md)、[ADR-0011](../adr/0011-application-dns-filtering-root-and-vpn.md)；[S328](../testing/2026-11-01_S328_DNS_COMBINED.md)记录已接受范围与明确未覆盖项 |
+| 产品 UI 与平台语义 | [Android L4 产品计划](ANDROID_L4_PRODUCT_PLAN.md)；保留 Android/Linux 共同设计方向，当前 Java 验证界面和 HTML 原型不等于正式 Tauri 产品 UI |
+| Activity 数据可用版 | [正式规格 S329](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/6c736721-8779-4888-8853-d57881ac146d)：补齐已交付能力的数据出口、名称/识别事实、停止后历史读取，复用留存与预算；正式 UI 后置。[断链与访谈记录](../reviews/2026-11-01_ACTIVITY_CHANNEL_GAP.md)保留来源，S61 承接其中的识别事实 |
+| 发布资格与内容 | [L4 release gate](ANDROID_L4_RELEASE_GATE.md)、[release notes 草稿](ANDROID_L4_RELEASE_NOTES_DRAFT.md)；包含历史执行证据，不是当前 VPP 产品的发布通过证明 |
+| Root 性能规格 | [整链批量执行规格](VPP_ROOT_BATCH_EXECUTION_SPEC.md)；[后来采用的默认值](../testing/2026-10-13_ROOT_COMPOSITE_DEFAULTS.md)与整链 CPU 收益验收分别理解 |
+
+DNS 19 张子票已完成，父规格 [S309](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/0b382ead-4049-4448-8d4a-149a05aef43e)
+保留整体范围；关联执法和跨 App/profile 使用范围仍后置。S328 的观察背压、换网和 N>1
+视图／语义／容量矩阵未覆盖项不记为通过，也不因本次整理自动成为重跑要求。
+KSU/libnetd、应用自带加密 DNS 的解密或自动阻断，均不在当前已交付能力之内。
+
+## 设计过程与阶段资料
+
+以下摘要按原讨论日期保留，用于追溯取舍；其中“未实施”“待定义”描述当时阶段。
+现行 DNS 合同以 10-22 规格为准，当前能力以上方现状与证据入口为准；旧方案不因留在索引中恢复为候选。
+
 - [2026-10-22 Root／VPN 应用 DNS、代理与域名证据规格](APPLICATION_DNS_SPEC.md)：
   依据完整产品决定及 PM 独立研究收敛执行合同，先完成 Root／VPN 普通 UDP／TCP DNS 原路径过滤、观察和停止，再接可选代理、缓存与普通／加密上游。原路径政策拒绝保持 DROP，完整消息代理采用 REFUSED，解析故障为 SERVFAIL；关联跨应用范围继续暂缓。下列较早 DNS 资料保留阶段历史，当前拒绝答复和详细合同以本规格及 ADR-0011 的后续适配为准。规格不代表已实施或验收，工作与验收状态见 [SAKAMOTO-309](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/0b382ead-4049-4448-8d4a-149a05aef43e)。
 - [2026-10-11 Root 整链 VPP 批量执行与预取规格](VPP_ROOT_BATCH_EXECUTION_SPEC.md)：
@@ -102,7 +125,7 @@
   上一轮重审独立控制线，以网络、编写、深入检查组织能力；整体结构已由2026-10-01体验裁决续审替代，本文保留过程；附健康Debug、大量编写、整体兼容、等价反案、API边界与已核对参考板，当前产品原型未改版。
 - [UNIFIED_RULE_ENGINE_SPEC.md](UNIFIED_RULE_ENGINE_SPEC.md)：2026-09-24 已确认的统一规则后端、
   VPP 在线配置管理与常态观测规格；取代旧计划中冲突的规则分阶段优先级、保存职责和观测存储口径。
-  这是待实现的产品设计，具体 UI 与 debug 交互仍后置，Plane 管理工作与验收状态。
+  这是产品设计合同，分项实现与验证见[测试索引](../testing/README.md)；具体 UI 与 debug 交互仍后置，Plane 管理工作与验收状态。
   已发布规格：[SAKAMOTO-251](http://192.168.4.22:2080/work/projects/f55a54bf-1693-42a3-9e38-50128f4b3a7e/issues/28bb5f21-f21c-4018-a3c6-60a5dbfdb82e)。
 - `ANDROID_L4_PRODUCT_PLAN.md`：Android L4 产品版、后续 libprotoident 阶段、UI 归属、
   信息架构、内容建设和发布完成标准。
@@ -139,7 +162,7 @@
 当前规划采用同仓库产品层，避免 UI、Rust 产品控制面和 VPP 数据面分别漂移：
 
 - `docs/product/` 保存产品定位、用户流程、低保真线框、文案、帮助和发布标准；
-- 未来顶层 `app/` 保存 Tauri UI、Rust 产品控制面、设计 tokens、可运行原型和 UI 测试；
+- 顶层 `app/` 已保存 Android Runtime 和可运行 HTML 原型；共享 Tauri 产品 UI 仍是待实现方向；
 - VPP plugin、Packet Capture Adapter 和 Android platform bridge 不拥有产品 UI；
 - 外部设计工具可以辅助讨论，但不能成为唯一真相；关键流程、状态和文案必须回到仓库。
 

@@ -1,7 +1,12 @@
-# 当前实现 Roadmap（Tooling + 功能主线）
+# 实现 Roadmap 历史上下文（Tooling + 功能主线）
 
 更新时间：2026-09-02
-状态：当前共识（以仓库内 code + tests + docs/decisions + `docs/INTERFACE_SPECIFICATION.md` 为准；开放工作以 Plane `Sakamoto` / `SAKAMOTO` 为准；OpenSpec 仅作历史归档）
+状态：截至上述日期的累计规划与执行记录，保留阶段语境。
+
+2026-11-02 导航校准：[当前实现、功能与代码职责](current/README.md)是现状入口，
+[验收索引](testing/README.md)保存后续 DNS、统一规则和拓扑等结果，开放工作以
+Plane `Sakamoto` / `SAKAMOTO` 为准。下文“当前”“下一步”、旧命令和完成状态均按原日期理解，
+不再充当当前任务队列；OpenSpec 仅作历史归档。
 
 > **2026-08-26 reset:** ADR-0008 removed every Snort C++ implementation,
 > host test, NDK/APK daemon artifact, and archive. Any `[DONE]` item below

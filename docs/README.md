@@ -4,6 +4,11 @@ Begin with [the current mainline](current/README.md), then read only the materia
 needed for the task. Implementation facts, product goals and historical evidence
 are different kinds of authority.
 
+The current map was reconciled after DNS acceptance on 2026-11-02. It groups
+capabilities, code responsibilities and Plane topic links; per-ticket results
+remain in [testing](testing/README.md). The [Activity channel audit](reviews/2026-11-01_ACTIVITY_CHANNEL_GAP.md)
+explains why backend observation data does not yet populate AppDetail.
+
 | Need | Entry | Meaning |
 | --- | --- | --- |
 | Current implementation and limits | [Current mainline](current/README.md) | Short dated baseline, source map and explicit acceptance limits |
@@ -12,7 +17,7 @@ are different kinds of authority.
 | Interfaces | [Interface map](INTERFACE_SPECIFICATION.md) | Routes to current typed source contracts |
 | Tests and evidence | [Testing](testing/README.md), [test source map](../tests/README.md) | Runbooks and dated, bounded observations |
 | Build / device operations | [Tooling](tooling/README.md), [dev helpers](../dev/README.md) | Current commands and safety boundaries |
-| Agent workflow | [Domain routing](agents/domain.md), [document maintenance](agents/doc-maintenance.md) | Task-specific reading and classification |
+| Agent workflow | [Domain routing](agents/domain.md), [document maintenance](agents/doc-maintenance.md), [STS default Guard](agents/stop-that-shit.md) | Task-specific reading, classification and global agent constraints |
 
 ## Long-form context and history
 

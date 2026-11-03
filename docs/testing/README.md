@@ -5,7 +5,18 @@ The former C++ daemon/model suite was removed by ADR-0008.
 
 ## Current acceptance entry
 
-Start with the [2026-09-13 foundation joint report](2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md):
+Use the [current capability map](../current/README.md) to choose a dated report.
+No single report qualifies every later Product revision or release requirement.
+
+| Current topic | Qualification and limits |
+| --- | --- |
+| DNS completion | [S328](2026-11-01_S328_DNS_COMBINED.md): user-accepted combined Root/VPN N1/N3 runs on one artifact across two generations, plus scoped capability runs. Observation backpressure, handover, N>1 view/semantics/capacity and association enforcement remain uncovered. S310–S327 below retain their own artifact scopes. |
+| Subsequent VPN UID refactor | [S290](2026-11-01_S290_VPN_UID_RESOLVER.md): real Pixel VPN N1 run before review fixes; later fixes compiled and covered by Host checks. Corrected Host result is 132/132 excluding the external-artifact-dependent contract, not a fresh device or N3 qualification. |
+| Product Activity display | [Channel audit](../reviews/2026-11-01_ACTIVITY_CHANNEL_GAP.md): Rust observation queries have current data, while old AppDetail ingestion has no Product producer. Backend evidence does not qualify that UI path. |
+
+## Foundation evidence
+
+The [2026-09-13 foundation joint report](2026-09-13_FOUNDATION_JOINT_ACCEPTANCE.md) records
 `PASS_WITH_EXPLICIT_LIMITS`, with independent Linux Root / Pixel Root / controlled
 VPN checks, source-bound artifacts, 64 Pixel generations and retained failures.
 This is not a release gate or ordinary-user VPN protection claim.

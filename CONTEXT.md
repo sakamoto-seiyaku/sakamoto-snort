@@ -824,6 +824,10 @@ _Avoid_: single shared policy/history database, remote storage service, UI-owned
 The bounded Rust-owned normal observation store containing recent overview/attribution and longer-lived traffic aggregates. It is separate from rule configuration, excludes packet payloads and remains independent of frontend lifecycle.
 _Avoid_: VPP-written analytics database, raw packet archive, complete permanent configuration archive
 
+**Activity Query**:
+A product-facing read of current connections, recent network facts and maintained traffic views, preserving their identities, provenance, time scope and coverage. Its meaning is independent of how a frontend presents those results.
+_Avoid_: Android Activity lifecycle, raw telemetry stream, a particular page layout
+
 **Metrics**:
 Pull-style low-cardinality counters and health/performance summaries.
 _Avoid_: using metrics for Top-K, history, timeline, or high-cardinality destination analytics

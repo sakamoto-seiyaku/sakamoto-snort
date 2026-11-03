@@ -1,5 +1,10 @@
 # Android L4 产品计划与 UI 基线
 
+**2026-11-02 现状入口：** 本文保留产品目标和阶段演变；当前代码、DNS 完成范围与证据见
+[当前主线](../current/README.md)。Activity/AppDetail 的旧输入已无产品产生者，
+[断链记录](../reviews/2026-11-01_ACTIVITY_CHANNEL_GAP.md)及 Plane S61 管理接通工作，
+不能把已有观察存储或旧 UI 验收当作当前产品展示已完成。
+
 **2026-09-24 设计更新：** [统一规则后端与常态观测规格](UNIFIED_RULE_ENGINE_SPEC.md)及
 [ADR-0009](../adr/0009-unified-rules-and-vpp-owned-configuration.md)取代本文冲突的
 Gate 特权、分阶段优先级、固定规则族、配置保存职责、单一物理 Product Store 与观测窗口设计。
@@ -25,7 +30,8 @@ TLS / QUIC SNI 和域名条件已列入这次规则后端规格；具体 UI 与 
 范围：第一个 Android L4 产品版、第二阶段 libprotoident 阶段性发版，以及两阶段共同使用的
 产品 UI、内容、帮助、发布和社区反馈体系。
 
-架构事实和 POC 证据仍以 `docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` 为准；per-worker
+当前架构以[决策入口](../decisions/README.md)和[实现入口](../current/README.md)为准；
+`docs/ANDROID_VPP_CURRENT_STATE_HANDOFF.md` 保留 POC 与架构演变证据。per-worker
 flow ownership 以 `docs/decisions/PER_WORKER_FLOW_OWNERSHIP.md` 为准；VPN Direct Egress 以
 ADR-0007 及 SAKAMOTO-114..117 evidence frontier 为准；新的规则设计以 ADR-0009 和上链规格为准，
 ADR-0001 保留尚未被取代的基础约束与旧实现语境。本文不定义底层 VPP Interface

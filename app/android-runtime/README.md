@@ -1,5 +1,10 @@
 # Android Runtime incubator
 
+Current capabilities and qualification are mapped in [the current mainline](../../docs/current/README.md).
+The stage/build instructions below remain the Android entrypoint. The old
+Activity/AppDetail ingestion has no current Product producer; see the
+[channel audit](../../docs/reviews/2026-11-01_ACTIVITY_CHANNEL_GAP.md) before reusing its UI tests.
+
 > **Current state:** ADR-0008 removed the C++ daemon and its APK artifact.
 > S171-S196 now provide the VPP-native Product Core runtime and lifecycle
 > contract. `build-debug-apk.sh` stages `libvpp_runtime.so` with

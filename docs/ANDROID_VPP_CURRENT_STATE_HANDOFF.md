@@ -1,9 +1,14 @@
 # Android / VPP 当前现状与架构交接
 
-状态：当前权威交接文档；Android/VPP 历史基线 2026-07-19，current-head 更新于
+状态：累计架构与 POC 交接记录；Android/VPP 历史基线 2026-07-19，current-head 更新于
 2026-09-02；handoff POC 决策更新于
 2026-08-10，protocol-identification pre-decision 证据更新于 2026-08-12，VPN Direct Egress
 fixed-spec 与 evidence frontier 更新于 2026-08-14。
+
+2026-11-02 导航校准：当前实现与资格范围以[现状入口](current/README.md)、
+[接受的决策](decisions/README.md)及[后续验收报告](testing/README.md)为准。
+本文中的“current-head”、未完成 frontier 和 worker-dispatch 限制保留其原日期，
+不能替代后来共享 graph、HEV/lwIP、统一规则、可配置拓扑及 DNS 的实现证据。
 
 > **2026-08-26 current-head reset (authoritative):** ADR-0008 removed the
 > entire Snort C++ mainline: active daemon/host sources, host tests, NDK/APK

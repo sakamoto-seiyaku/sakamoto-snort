@@ -2,9 +2,11 @@
 
 This directory contains point-in-time audits, verification notes, and review prompts.
 
-Reviews are evidence, not standing authority. Accepted findings must be promoted into `docs/decisions/`, active runbooks, or Plane project `SNORT` before future agents treat them as current work.
+Reviews are evidence, not standing authority. Accepted findings must be promoted into `docs/decisions/`, active runbooks, or Plane project `SAKAMOTO` before future agents treat them as current work.
 
 Use reviews to recover reasoning, reproduce a past audit, or inspect risk categories. Do not use review TODOs as an issue tracker.
+
+- [2026-11-01 Activity channel gap](2026-11-01_ACTIVITY_CHANNEL_GAP.md): the old Java Activity/AppDetail input has no Product producer; current observations exist through Rust history/current-flow queries. S61 tracks recognition-to-Activity integration; the report does not choose a complete UI redesign.
 
 - [2026-10-08 CCP / Coralflow rule-matching source research](2026-10-08_CCP_CORALFLOW_RULE_MATCHING_SOURCE_RESEARCH.md): pinned remote tengine/cross/classifier/RUPS source, current C-mainline comparison, bounded local probes and adoption limits.
 - [2026-10-08 rule compiler, SIMD and VPP batch research](2026-10-08_RULE_COMPILER_SIMD_AND_VPP_BATCH_RESEARCH.md): pinned VPP/DPDK execution and compilation mechanisms, current ARM64 code-generation evidence and semantic adaptation boundaries.
